@@ -1,0 +1,46 @@
+# .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Poetry
+# poetry.lock
+
+# Виртуальное окружение
+.venv/
+
+# Переменные окружения (секреты)
+.env
+.env.dev
+.env.prod
+.env.local
+.env.*.local
+
+# Логи
+logs/
+*.log
+
+# Редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+
+# Сборка и дистрибутивы
+build/
+dist/
+*.egg-info/
+*.egg

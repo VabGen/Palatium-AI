@@ -1,0 +1,159 @@
+[project]
+name = "palatium-ai"
+version = "0.1.0"
+description = "Intellectual office assistant"
+readme = "README.md"
+# dynamic = ["classifiers"]
+license = "MIT"
+# license-files = [
+#     "*-LICENSE",
+#     "CONTRIBUTORS",
+#     "MY-SPECIAL-LICENSE-DIR/**/*"
+# ]
+authors = [ {name = "VabGen",email = "VabGen@gmail.com"} ]
+# maintainers = [
+#     { name = "John Smith", email = "johnsmith@example.org" },
+#     { name = "Jane Smith", email = "janesmith@example.org" },  
+# ]
+keywords = [ "ai", "edms", "automation", "assistant" ]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = "~=3.14"
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === poetry remove 
+# === === === === === === A B C D E F G H I J K L M N O P Q R S T U V W X Y Z === === === === === === === === === poetry add 
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === 
+# ===============================================================================================================
+dependencies = [
+    "asyncpg (>=0.30.0,<0.40.0)",
+    "colorama (>=0.4.6,<0.5.0)",  
+    "fastapi (>=0.140.0,<0.150.0)",
+    "langgraph (>=1.2.10,<2.0.0)",
+    "pydantic (>=2.13.0,<3.0.0)",
+    "pydantic-settings (>=2.15.0,<3.0.0)",
+    "redis (>=8.0.0,<9.0.0)",
+    "sqlalchemy[asyncio] (>=2.0.50,<3.0.0)",
+    "structlog (>=26.1.0,<27.0.0)",                                 
+    "uvicorn[standard] (>=0.50.0,<0.60.0)",                                 
+]
+
+[project.optional-dependencies]
+mysql = ["mysqlclient>=2.2.0,<3.0.0"]
+pgsql = ["psycopg2>=2.9,<3.0"]
+databases = ["mysqlclient>=2.2.0,<3.0.0", "psycopg2>=2.9,<3.0"]
+
+[dependency-groups]
+test = [
+    "pytest (>=9.0.0,<10.0.0)",
+]
+lint = [
+    "ruff (>=0.16.0,<0.17.0)",
+]
+type-check = [
+    "mypy (>=2.0.0,<3.0.0)",
+    "types-requests (>=2.32.0,<3.0.0)",
+    "types-PyYAML (>=6.0.0,<7.0.0)",
+    "types-toml (>=0.10.0,<0.11.0)",
+]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+    { include-group = "type-check" },
+    "tox (>=4.60.0,<5.0.0)",
+]
+
+[tool.poetry]
+packages = [ {include = "palatium_ai", from = "src"} ]
+
+[project.urls]
+homepage = "https://github.com/your-org/palatium-ai"
+repository = "https://github.com/your-org/palatium-ai"
+documentation = "https://github.com/your-org/palatium-ai/docs/"
+"Bug Tracker" = "https://github.com/your-org/palatium-ai/issues"
+
+# [project.scripts]
+# my_package_cli = 'my_package.console:run'
+
+# [project.gui-scripts]
+# my_package_gui = 'my_package.gui:run'
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+# ===============================================================================================================
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "C90",                                           # базовые ошибки и сложность
+    "I",                                                            # сортировка импортов
+    "UP",                                                           # pyupgrade
+    "B", "SIM", "S",                                                # bugbear, simplify, безопасность
+    "D",                                                            # pydocstyle
+    "N",                                                            # именование
+    "TCH",                                                          # typing
+]
+ignore = ["D100", "D104", "D107", "D203", "D211", "D212", "D213"]   # пропустить docstring правила
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-wrap-aliases = true
+lines-between-types = 1
+
+# ===============================================================================================================
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+exclude = ["tests/", "build/", "dist/", ".venv/"]
+mypy_path = "src"
+explicit_package_bases = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# [[tool.mypy.overrides]]
+# module = "langgraph"
+# ignore_missing_imports = true
+# 
+# [[tool.mypy.overrides]]
+# module = "fastapi.*" 
+# ignore_missing_imports = true
+
+# ===============================================================================================================
+
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
+# === Линтинг и проверка форматирования - poetry run ruff check .                                          ~~ ===
+# === Автоисправление линтинга - poetry run ruff check --fix .                                             ~~ ===
+# === Форматирование кода - poetry run ruff format .                                                       ~~ ===
+# === Проверка типов - poetry run mypy .                                                                   ~~ ===
+# === Запуск тестов - poetry run pytest . || poetry run pytest --cov=palatium_ai --cov-report=term-missing ~~ ===
+# === poetry.lock poetry & install --with dev || poetry sync                                               ~~ ===
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === 
