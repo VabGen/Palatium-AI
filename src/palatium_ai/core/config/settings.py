@@ -5,7 +5,7 @@
 from functools import lru_cache
 
 from .app import AppConfig
-from .database import DatabaseConfig
+from .database import DatabaseConfig, RedisConfig
 from .logging import LoggingConfig
 from .secrets import SecretsConfig
 
@@ -14,6 +14,7 @@ class Settings(
     AppConfig,
     LoggingConfig,
     DatabaseConfig,
+    RedisConfig,
     SecretsConfig,
 ):
     """Объединённый класс всех конфигураций приложения."""

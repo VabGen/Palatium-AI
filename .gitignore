@@ -19,11 +19,12 @@ venv.bak/
 .venv/
 
 # Переменные окружения (секреты)
-.env
-.env.dev
-.env.prod
-.env.local
-.env.*.local
+env/.env
+env/.env.dev
+env/.env.prod
+env/.env.staging
+env/.env.local
+env/.env.*.local
 
 # Логи
 logs/

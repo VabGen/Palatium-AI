@@ -15,9 +15,9 @@ class LoggingConfig(BaseConfig):
     LOG_JSON_FILE: str | None = Field(default=None)
     LOG_SUPPRESS_MODULES: str = Field(
         default="urllib3,asyncio,httpx",
-        description="Модули, уровень которых ставится WARNING (через запятую)",
+        description="Модули, уровень которых ставится WARNING",
     )
     LOG_FILTER_MODULES: str = Field(
         default="",
-        description="Модули, логи которых полностью игнорируются (через запятую)",
+        description="Модули, логи которых полностью игнорируются",
     )
