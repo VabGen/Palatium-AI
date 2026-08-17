@@ -2,47 +2,48 @@
 
 """Модуль database содержит класс DatabaseConfig, который наследуется от BaseConfig и содержит настройки базы данных."""
 
-from pydantic import Field, computed_field
+from pydantic import Field, model_validator
 
 from .base import BaseConfig
 
 
 class DatabaseConfig(BaseConfig):
-    """Настройки PostgreSQL."""
+    """Настройки базы данных."""
 
-    POSTGRES_HOST: str = Field(default="localhost", alias="POSTGRES_HOST")
-    POSTGRES_PORT: int = Field(default=5432, alias="POSTGRES_PORT")
-    POSTGRES_USER: str = Field(alias="POSTGRES_USER")
-    POSTGRES_PASSWORD: str = Field(alias="POSTGRES_PASSWORD")
-    POSTGRES_DB: str = Field(alias="POSTGRES_DB")
-    POSTGRES_SCHEMA: str = Field(default="public", alias="POSTGRES_SCHEMA")
+    host: str = Field(default="localhost", validation_alias="POSTGRES_HOST")
+    port: int = Field(default=5432, validation_alias="POSTGRES_PORT")
+    user: str = Field(validation_alias="POSTGRES_USER")
+    password: str = Field(validation_alias="POSTGRES_PASSWORD")
+    db: str = Field(validation_alias="POSTGRES_DB")
+    db_schema: str = Field(default="public", validation_alias="POSTGRES_SCHEMA")
+    pool_size: int = Field(default=10, validation_alias="DB_POOL_SIZE")
+    max_overflow: int = Field(default=20, validation_alias="DB_MAX_OVERFLOW")
+    echo: bool = Field(default=False, validation_alias="DB_ECHO")
 
-    DB_POOL_SIZE: int = Field(default=10, alias="DB_POOL_SIZE")
-    DB_MAX_OVERFLOW: int = Field(default=20, alias="DB_MAX_OVERFLOW")
-    DB_ECHO: bool = Field(default=False, alias="DB_ECHO")
+    async_dsn: str = ""
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def DATABASE_URL(self) -> str:  # noqa: N802
-        """Формирует URL для подключения к БД."""
-        return (
-            f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
-            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        )
+    @model_validator(mode="after")
+    def set_dsn(self) -> DatabaseConfig:
+        """Устанавливает асинхронный DSN для PostgreSQL."""
+        self.async_dsn = f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.db}"
+        return self
 
 
 class RedisConfig(BaseConfig):
     """Настройки Redis."""
 
-    REDIS_HOST: str = Field(default="localhost", alias="REDIS_HOST")
-    REDIS_PORT: int = Field(default=6379, alias="REDIS_PORT")
-    REDIS_DB: int = Field(default=0, alias="REDIS_DB")
-    REDIS_PASSWORD: str | None = Field(default=None, alias="REDIS_PASSWORD")
+    host: str = Field(default="localhost", validation_alias="REDIS_HOST")
+    port: int = Field(default=6379, validation_alias="REDIS_PORT")
+    db: int = Field(default=0, validation_alias="REDIS_DB")
+    password: str | None = Field(default=None, validation_alias="REDIS_PASSWORD")
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def REDIS_URL(self) -> str:  # noqa: N802
-        """Формирует URL для подключения к Redis."""
-        if self.REDIS_PASSWORD:
-            return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
-        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+    dsn: str = ""
+
+    @model_validator(mode="after")
+    def set_dsn(self) -> RedisConfig:
+        """Устанавливает DSN для Redis."""
+        if self.password:
+            self.dsn = f"redis://:{self.password}@{self.host}:{self.port}/{self.db}"
+        else:
+            self.dsn = f"redis://{self.host}:{self.port}/{self.db}"
+        return self

@@ -4,28 +4,31 @@
 
 from functools import lru_cache
 
+from pydantic import Field
+
+from .ai import LLMConfig, MCPConfig
 from .app import AppConfig
+from .base import BaseConfig
 from .database import DatabaseConfig, RedisConfig
 from .logging import LoggingConfig
-from .secrets import SecretsConfig
+from .observability import ObservabilityConfig
+from .security import SecurityConfig
 
 
-class Settings(
-    AppConfig,
-    LoggingConfig,
-    DatabaseConfig,
-    RedisConfig,
-    SecretsConfig,
-):
-    """Объединённый класс всех конфигураций приложения."""
+class Settings(BaseConfig):
+    """Агрегатор всех конфигураций. Использует default_factory для инстанцирования суб-конфигов."""
 
-    pass
+    app: AppConfig = Field(default_factory=AppConfig)
+    db: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Возвращает единственный экземпляр настроек."""
+    """Провайдер настроек для FastAPI Depends."""
     return Settings()
-
-
-settings = get_settings()

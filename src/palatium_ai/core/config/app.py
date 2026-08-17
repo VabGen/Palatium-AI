@@ -12,7 +12,8 @@ from .base import BaseConfig
 class AppConfig(BaseConfig):
     """Общие настройки приложения."""
 
-    APP_NAME: str = Field(default="palatium-ai")
-    APP_VERSION: str = Field(default="0.1.0")
-    ENVIRONMENT: Literal["development", "staging", "production"] = Field(default="development")
-    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="INFO")
+    name: str = Field(default="palatium-ai", validation_alias="APP_NAME")
+    version: str = Field(default="0.1.0", validation_alias="APP_VERSION")
+    environment: Literal["development", "staging", "production"] = Field(
+        default="development", validation_alias="ENVIRONMENT"
+    )

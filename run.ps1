@@ -3,17 +3,17 @@
 # Использование: .\run.ps1 [-Command init|dev|staging|prod] [-Help]
 # == == == == == == == == == == == == == == == == == == == == == == == == == == ==
 # $PROFILE
-# notepad $PROFILE
 # . $PROFILE
-# # Алиасы для управления проектом palatium-ai
-# function dev   { .\run.ps1 dev }
-# function staging { .\run.ps1 staging }
-# function prod  { .\run.ps1 prod }
-# function init  { .\run.ps1 init }
-# function install-deps { .\run.ps1 install }
-# 
+# notepad $PROFILE
+# Алиасы для управления проектом palatium-ai
+# function dev { & "D:\project\palatium-ai\run.ps1" dev }
+# function staging { & "D:\project\palatium-ai\run.ps1" staging }
+# function prod { & "D:\project\palatium-ai\run.ps1" prod }
+# function init { & "D:\project\palatium-ai\run.ps1" init }
+# function install-deps { & "D:\project\palatium-ai\run.ps1" install }
+
 # # Дополнительно: быстрая справка
-# function prj-help { .\run.ps1 help }
+# function prj-help { & "D:\project\palatium-ai\run.ps1" help }
 # == == == == == == == == == == == == == == == == == == == == == == == == == == ==
 
 param(
@@ -28,7 +28,7 @@ function Show-Help {
   dev          - Запустить приложение в режиме разработки
   staging      - Запустить приложение в режиме стейджинга
   prod         - Запустить приложение в режиме продакшена
-  help         - Показать эту справку
+  prj-help     - Показать эту справку
 "@
 }
 

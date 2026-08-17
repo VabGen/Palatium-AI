@@ -1,0 +1,38 @@
+{
+  "changelists": [
+    {
+      "name": "Default",
+      "files": [
+        ".gitignore",
+        "env/.env",
+        "env/.env.dev",
+        "env/.env.example",
+        "env/.env.prod",
+        "env/.env.staging",
+        ".vscode/changelists.json",
+        ".vscode/launch.json",
+        ".vscode/settings.json",
+        "src/palatium_ai/infrastructure/persistence/specification/__init__.py",
+        "run.ps1",
+        "src/palatium_ai/core/config/base.py",
+        "src/palatium_ai/core/config/app.py",
+        "src/palatium_ai/core/config/secrets.py",
+        "src/palatium_ai/main.py",
+        "src/palatium_ai/core/config/security.py",
+        "src/palatium_ai/core/config/settings.py",
+        "src/palatium_ai/core/config/database.py",
+        "src/palatium_ai/core/config/ai.py",
+        "src/palatium_ai/core/config/observability.py",
+        "src/palatium_ai/core/config/__init__.py",
+        "src/palatium_ai/core/config/logging.py",
+        "src/palatium_ai/infrastructure/database/init_db.py",
+        "src/palatium_ai/core/logging/__init__.py",
+        "src/palatium_ai/core/logging/processors.py",
+        "src/palatium_ai/core/logging/decorators.py",
+        "src/palatium_ai/core/logging/setup.py",
+        "src/palatium_ai/__init__.py"
+      ]
+    }
+  ],
+  "active": "Default"
+}
