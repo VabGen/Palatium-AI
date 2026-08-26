@@ -18,7 +18,8 @@ class LoggingConfig(BaseConfig):
     json_logs: bool = Field(default=False, validation_alias="LOG_JSON")
     file: str | None = Field(default=None, validation_alias="LOG_FILE")
     json_file: str | None = Field(default=None, validation_alias="LOG_JSON_FILE")
-    filter_modules: list[str] = Field(default_factory=list, validation_alias="LOG_FILTER_MODULES")
-    suppress_modules: list[str] = Field(
-        default_factory=lambda: ["urllib3", "asyncio", "httpx"], validation_alias="LOG_SUPPRESS_MODULES"
+    filter_modules: str = Field(default="", validation_alias="LOG_FILTER_MODULES")
+    suppress_modules: str = Field(
+        default="urllib3,asyncio,httpx,httpcore,openai,LiteLLM,litellm",
+        validation_alias="LOG_SUPPRESS_MODULES",
     )

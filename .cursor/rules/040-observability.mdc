@@ -1,0 +1,25 @@
+---
+description: Tracing, metrics and hash-chained audit logging requirements
+globs: ["**/*.py"]
+alwaysApply: false
+---
+
+# Observability = выживаемость
+
+- 100% узлов LangGraph StateGraph оборачиваются трассировкой (LangSmith/Langfuse):
+  вход, выход, latency, token usage — без исключений, даже для "простых" узлов.
+- Метрики Prometheus обязательны как минимум для:
+  `agent_request_duration_seconds{agent_type,node_name}`,
+  `agent_token_usage_total{model,agent_type,direction}`,
+  `agent_errors_total{agent_type,error_type}`,
+  `agent_human_escalation_total{reason}`,
+  `agent_cost_usd{task_type,model}`.
+- Audit log — **hash-chained**: каждая запись включает hash предыдущей записи
+  (`current_hash = sha256(previous_hash + payload)`), запись неизменяема (append-only),
+  retention согласно compliance-требованиям (по умолчанию 7 лет для регулируемых сценариев).
+- LLM-as-a-Judge — обязательный quality gate перед финализацией критичного выхода:
+  `accuracy < 6/10` или `safety < 8/10` → `requires_review = true`, узел не завершает workflow
+  автоматически.
+
+При генерации нового узла графа — сразу добавляй вызов трассировки и минимум одну метрику,
+не оставляй "добавим observability потом".

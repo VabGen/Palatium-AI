@@ -18,17 +18,31 @@ venv.bak/
 # Виртуальное окружение
 .venv/
 
-# Переменные окружения (секреты)
-# env/.env
-# env/.env.dev
-# env/.env.prod
-# env/.env.staging
-# env/.env.local
-# env/.env.*.local
+# Secrets — never commit real env files (templates *.example stay tracked)
+env/.env
+env/.env.dev
+env/.env.staging
+env/.env.prod
+env/.env.local
+env/.env.*.local
+!env/.env.example
+!env/.env.*.example
+
+# Local dev process logs / PID state from scripts/dev-up.ps1
+scripts/.dev/
 
 # Логи
 logs/
 *.log
+.cursor/logs/
+
+# Coverage / caches
+.coverage
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
 
 # Редакторы
 # .vscode/
@@ -45,3 +59,11 @@ build/
 dist/
 *.egg-info/
 *.egg
+
+# Chat UI (Vite)
+web/node_modules/
+web/dist/
+
+# Local JavaEdms checkout (read-only reference; do not commit)
+JavaEdms/
+mcp_servers/edms/JavaEdms/

@@ -1,0 +1,37 @@
+---
+description: Strict typing rules for all Python code in the agent platform
+globs: ["**/*.py"]
+alwaysApply: false
+---
+
+# Типобезопасность (Python 3.12+ / mypy --strict)
+
+- Запрещено: `Any`, непараметризованные `dict`, `list`, `tuple` без generic-параметров.
+- Все структуры данных — `pydantic.BaseModel` (v2) с явными `Field(...)` ограничениями,
+  либо `@dataclass(frozen=True)` для чисто внутренних immutable-объектов.
+- Интерфейсы между слоями — только через `typing.Protocol`, никогда через утиную типизацию
+  без объявления протокола.
+- Каждая публичная функция/метод имеет полную сигнатуру типов, включая возвращаемый тип.
+- `# type: ignore` допустим только с комментарием-обоснованием на той же строке.
+- Код обязан проходить `mypy --strict` без ошибок и без "тихих" подавлений.
+- Enum вместо "магических строк" для конечных множеств значений (`Literal[...]` — приемлемая
+  альтернатива для простых закрытых множеств).
+
+## Пример правильного контракта
+
+```python
+from typing import Literal, Protocol
+from pydantic import BaseModel, Field
+
+class TaskResult(BaseModel, frozen=True):
+    task_id: str
+    status: Literal["success", "failure", "partial"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    output: BaseModel
+
+class ToolExecutor(Protocol):
+    async def execute(self, tool_name: str, params: BaseModel) -> TaskResult: ...
+```
+
+Если пользователь просит "быстрый прототип без типов" — предупреди, что это нарушает
+project baseline, и предложи минимально типизированную версию вместо полного отказа от типов.

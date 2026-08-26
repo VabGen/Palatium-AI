@@ -1,0 +1,237 @@
+# Full local stack: Postgres + Redis + Neo4j + MCP stubs + API
+#
+# From repo root:
+#   docker compose --env-file env/.env up --build
+#
+# With Graphiti SDK in the API image (optional, needs Neo4j + poetry group):
+#   docker compose --env-file env/.env build --build-arg WITH_GRAPHITI=1 api
+#   docker compose --env-file env/.env up
+#
+# Switch memory backend (default postgres):
+#   MEMORY_BACKEND=postgres|mem0|graphiti
+# Mem0 is SaaS — set MEM0_API_KEY; no local Mem0 container.
+#
+# Health:
+#   API http://localhost:8000/health
+#   Neo4j Browser http://localhost:7474
+#   MCP EDMS http://localhost:8080/docs
+#   MCP Analytics http://localhost:8081/docs
+
+name: palatium-ai
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-palatium_dev}
+    ports:
+      - "${POSTGRES_PUBLISH_PORT:-5432}:5432"
+    volumes:
+      - palatium_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-palatium_dev}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    ports:
+      - "${REDIS_PUBLISH_PORT:-6379}:6379"
+    volumes:
+      - palatium_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/palatium-neo4j}
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - palatium_neo4j:/data
+    healthcheck:
+      # Password must match NEO4J_AUTH (default neo4j/palatium-neo4j).
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -a bolt://127.0.0.1:7687 -u neo4j -p palatium-neo4j 'RETURN 1;' || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
+
+  mcp-edms:
+    build:
+      context: ./mcp_servers
+      dockerfile: Dockerfile
+      args:
+        MCP_NAME: edms
+        MCP_MODULE: edms_mcp_server
+        MCP_PORT: "8080"
+    image: palatium-mcp-edms:local
+    restart: unless-stopped
+    environment:
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+    ports:
+      - "127.0.0.1:8080:8080"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)",
+        ]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  mcp-analytics:
+    build:
+      context: ./mcp_servers
+      dockerfile: Dockerfile
+      args:
+        MCP_NAME: analytics
+        MCP_MODULE: analytics_mcp_server
+        MCP_PORT: "8081"
+    image: palatium-mcp-analytics:local
+    restart: unless-stopped
+    environment:
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+    ports:
+      - "127.0.0.1:8081:8081"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=2)",
+        ]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        APP_VERSION: ${APP_VERSION:-0.1.0}
+        UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+        WITH_GRAPHITI: ${WITH_GRAPHITI:-0}
+    image: palatium-ai:local
+    restart: unless-stopped
+    ports:
+      - "${API_PUBLISH_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      mcp-edms:
+        condition: service_healthy
+      mcp-analytics:
+        condition: service_healthy
+    env_file:
+      - ./env/.env
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      # Compose DNS — never localhost from env/.env (Poetry host profile)
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-palatium_dev}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      MCP_SERVERS: '{"edms":"http://mcp-edms:8080","analytics":"http://mcp-analytics:8081"}'
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+      MCP_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,::1,mcp-edms,mcp-analytics
+      LANGGRAPH_CHECKPOINT_POSTGRES: ${LANGGRAPH_CHECKPOINT_POSTGRES:-true}
+      MEMORY_BACKEND: ${MEMORY_BACKEND:-postgres}
+      MEMORY_EMBEDDING_RERANK: ${MEMORY_EMBEDDING_RERANK:-false}
+      GRAPHITI_NEO4J_URI: bolt://neo4j:7687
+      GRAPHITI_NEO4J_USER: ${GRAPHITI_NEO4J_USER:-neo4j}
+      GRAPHITI_NEO4J_PASSWORD: ${GRAPHITI_NEO4J_PASSWORD:-palatium-neo4j}
+      MEM0_API_KEY: ${MEM0_API_KEY:-}
+      MEM0_HOST: ${MEM0_HOST:-https://api.mem0.ai}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      AUDIT_LOG_FILE: /app/logs/audit-chain.log
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+    read_only: true
+    tmpfs:
+      - /app/tmp:size=64m,mode=1777
+      - /app/logs:size=64m,mode=1777
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  palatium_pgdata:
+  palatium_redis:
+  palatium_neo4j:

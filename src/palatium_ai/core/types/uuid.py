@@ -1,10 +1,12 @@
 # palatium_ai/core/types/uuid.py
 
+"""Модуль uuid содержит класс UUIDv7, который наследуется от UUID."""
+
 from dataclasses import dataclass
 from uuid import UUID, uuid7
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class UUIDv7:
     """Базовый неизменяемый идентификатор версии 7 (сортируется по времени)."""
 

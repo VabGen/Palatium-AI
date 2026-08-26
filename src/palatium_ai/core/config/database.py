@@ -1,8 +1,8 @@
 # src/palatium_ai/core/config/database.py
 
-"""Модуль database содержит класс DatabaseConfig, который наследуется от BaseConfig и содержит настройки базы данных."""
+"""Модуль database содержит настройки PostgreSQL и Redis."""
 
-from pydantic import Field, model_validator
+from pydantic import Field, computed_field
 
 from .base import BaseConfig
 
@@ -20,13 +20,17 @@ class DatabaseConfig(BaseConfig):
     max_overflow: int = Field(default=20, validation_alias="DB_MAX_OVERFLOW")
     echo: bool = Field(default=False, validation_alias="DB_ECHO")
 
-    async_dsn: str = ""
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def async_dsn(self) -> str:
+        """Возвращает асинхронный DSN для PostgreSQL."""
+        return f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.db}"
 
-    @model_validator(mode="after")
-    def set_dsn(self) -> DatabaseConfig:
-        """Устанавливает асинхронный DSN для PostgreSQL."""
-        self.async_dsn = f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.db}"
-        return self
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def psycopg_dsn(self) -> str:
+        """DSN for psycopg / LangGraph AsyncPostgresSaver (not SQLAlchemy)."""
+        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.db}"
 
 
 class RedisConfig(BaseConfig):
@@ -37,13 +41,10 @@ class RedisConfig(BaseConfig):
     db: int = Field(default=0, validation_alias="REDIS_DB")
     password: str | None = Field(default=None, validation_alias="REDIS_PASSWORD")
 
-    dsn: str = ""
-
-    @model_validator(mode="after")
-    def set_dsn(self) -> RedisConfig:
-        """Устанавливает DSN для Redis."""
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def dsn(self) -> str:
+        """Возвращает DSN для Redis."""
         if self.password:
-            self.dsn = f"redis://:{self.password}@{self.host}:{self.port}/{self.db}"
-        else:
-            self.dsn = f"redis://{self.host}:{self.port}/{self.db}"
-        return self
+            return f"redis://:{self.password}@{self.host}:{self.port}/{self.db}"
+        return f"redis://{self.host}:{self.port}/{self.db}"

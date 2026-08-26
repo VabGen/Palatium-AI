@@ -1,0 +1,293 @@
+# tests/unit/test_graph.py
+
+"""Тесты LangGraph пайплайна."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from palatium_ai.application.agents.context_weaver_agent import ContextWeaverAgent
+from palatium_ai.application.agents.contextualizer_agent import ContextualizerAgent
+from palatium_ai.application.agents.critic_agent import CriticAgent
+from palatium_ai.application.agents.formatter_agent import FormatterAgent
+from palatium_ai.application.agents.intent_classifier_agent import IntentClassifierAgent
+from palatium_ai.application.agents.researcher_agent import ResearcherAgent
+from palatium_ai.application.agents.supervisor_agent import SupervisorAgent
+from palatium_ai.application.orchestration.graph import build_agent_graph
+from palatium_ai.application.services.intent_service import IntentService
+from palatium_ai.domain.content import HeadingBlock
+from tests.conftest import FakeLLMPort, FakeMCPRegistry, SequentialFakeLLMPort
+
+_HITL_HMAC = "unit-test-hitl-hmac-key-32b"  # noqa: S105
+
+
+class _FakeSessionService:
+    """No-op session persistence for graph unit tests."""
+
+    async def touch_session(self, **_kwargs: object) -> None:
+        return None
+
+    async def assert_thread_access(self, **_kwargs: object) -> None:
+        return None
+
+
+def _intent_service(graph: object) -> IntentService:
+    from palatium_ai.application.services.hitl_service import HitlService
+    from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
+
+    return IntentService(
+        graph,  # type: ignore[arg-type]
+        session_service=_FakeSessionService(),  # type: ignore[arg-type]
+        hitl_service=HitlService(InMemoryHitlCardStore(), signing_secret=_HITL_HMAC),
+    )
+
+
+def _graph(**kwargs: object) -> object:
+    """build_agent_graph with a no-op contextualizer LLM (empty history → pass-through)."""
+    contextualizer = kwargs.pop("contextualizer_agent", None)
+    if contextualizer is None:
+        contextualizer = ContextualizerAgent(FakeLLMPort("{}"))
+    return build_agent_graph(contextualizer_agent=contextualizer, **kwargs)  # type: ignore[arg-type]
+
+
+def _formatter_document_json(title: str, *, locale: str = "en-US") -> str:
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "locale": locale,
+            "title": title,
+            "blocks": [
+                {"type": "heading", "level": 2, "text": title, "icon": None},
+                {"type": "paragraph", "text": title},
+            ],
+            "actions": [],
+            "meta": {
+                "confidence": 0.95,
+                "requires_review": False,
+                "source_refs": [],
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_classifies_intent_end_to_end() -> None:
+    llm_intent = FakeLLMPort(
+        '{"task_kind": "multi_step_workflow", "requires_mcp": true, "candidate_capabilities": ["orchestrate","tool_call"], "confidence": 0.88, "reasoning": "Requires multiple steps"}',
+    )
+
+    llm_researcher = FakeLLMPort(
+        '{"summary": "Prepared response", "confidence": 0.91, "sources_used": ["llm_internal_reasoning"]}',
+    )
+
+    llm_critic = FakeLLMPort(
+        '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "Looks correct"}',
+    )
+    llm_formatter = FakeLLMPort(_formatter_document_json("Final formatted answer"))
+
+    agent = IntentClassifierAgent(llm_intent)
+    researcher = ResearcherAgent(llm_researcher)
+    critic = CriticAgent(llm_critic)
+    formatter = FormatterAgent(llm_formatter)
+    supervisor = SupervisorAgent()
+    graph = _graph(
+        intent_agent=agent,
+        supervisor_agent=supervisor,
+        context_weaver_agent=ContextWeaverAgent(),
+        researcher_agent=researcher,
+        critic_agent=critic,
+        formatter_agent=formatter,
+    )
+    service = _intent_service(graph)
+
+    result = await service.classify(
+        text="Schedule a meeting with the team tomorrow",
+        thread_id="thread-graph-1",
+        task_id="task-graph-1",
+    )
+
+    assert result.status == "success"
+    assert result.output is not None
+    assert result.output.task_kind == "multi_step_workflow"
+    assert result.task_id == "task-graph-1"
+
+
+@pytest.mark.asyncio
+async def test_graph_records_node_metrics() -> None:
+    llm_intent = FakeLLMPort(
+        '{"task_kind": "knowledge_request", "requires_mcp": false, "candidate_capabilities": ["summarize"], "confidence": 0.95, "reasoning": "General chat"}',
+    )
+
+    llm_researcher = FakeLLMPort(
+        '{"summary": "Helpful answer", "confidence": 0.96, "sources_used": ["llm_internal_reasoning"]}',
+    )
+
+    llm_critic = FakeLLMPort(
+        '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "Looks correct"}',
+    )
+    llm_formatter = FakeLLMPort(_formatter_document_json("Formatted answer"))
+
+    agent = IntentClassifierAgent(llm_intent)
+    researcher = ResearcherAgent(llm_researcher)
+    critic = CriticAgent(llm_critic)
+    formatter = FormatterAgent(llm_formatter)
+    supervisor = SupervisorAgent()
+    service = _intent_service(
+        _graph(
+            intent_agent=agent,
+            supervisor_agent=supervisor,
+            context_weaver_agent=ContextWeaverAgent(),
+            researcher_agent=researcher,
+            critic_agent=critic,
+            formatter_agent=formatter,
+        )
+    )
+
+    await service.classify(text="How are you?", thread_id="m1")
+
+    from palatium_ai.core.observability.metrics import agent_metrics
+
+    assert agent_metrics.node_execution_count("intent_classifier", "intent_classifier_node") >= 1
+    assert agent_metrics.node_execution_count("researcher", "researcher_node") >= 1
+    assert agent_metrics.node_execution_count("formatter", "formatter_node") >= 1
+
+
+@pytest.mark.asyncio
+async def test_graph_skips_researcher_for_non_research_route() -> None:
+    llm_intent = FakeLLMPort(
+        '{"task_kind": "response_formatting", "requires_mcp": false, "candidate_capabilities": ["format"], "confidence": 0.9, "reasoning": "Formatting request"}',
+    )
+    llm_researcher = FakeLLMPort(
+        '{"summary": "Should not be used", "confidence": 0.2, "sources_used": []}',
+    )
+    llm_critic = FakeLLMPort(
+        '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "Looks correct"}',
+    )
+    llm_formatter = FakeLLMPort(_formatter_document_json("Formatted-only answer"))
+
+    service = _intent_service(
+        _graph(
+            intent_agent=IntentClassifierAgent(llm_intent),
+            supervisor_agent=SupervisorAgent(),
+            context_weaver_agent=ContextWeaverAgent(),
+            researcher_agent=ResearcherAgent(llm_researcher),
+            critic_agent=CriticAgent(llm_critic),
+            formatter_agent=FormatterAgent(llm_formatter),
+        )
+    )
+
+    result = await service.classify(text="Schedule a meeting tomorrow", thread_id="route-skip")
+
+    assert result.output is not None
+    assert result.output.task_kind == "response_formatting"
+    assert len(llm_researcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_graph_social_skips_researcher_and_critic_llm() -> None:
+    llm_intent = FakeLLMPort(
+        '{"task_kind": "social_conversation", "requires_mcp": false, '
+        '"candidate_capabilities": [], "confidence": 0.96, "reasoning": "Greeting"}',
+    )
+    llm_researcher = FakeLLMPort(
+        '{"summary": "Should not run", "confidence": 0.1, "sources_used": []}',
+    )
+    llm_critic = FakeLLMPort(
+        '{"accuracy_score": 1, "safety_score": 1, "requires_review": true, "summary": "should not run"}',
+    )
+    llm_formatter = FakeLLMPort(_formatter_document_json("Привет!", locale="ru-RU"))
+
+    service = _intent_service(
+        _graph(
+            intent_agent=IntentClassifierAgent(llm_intent),
+            supervisor_agent=SupervisorAgent(),
+            context_weaver_agent=ContextWeaverAgent(),
+            researcher_agent=ResearcherAgent(llm_researcher),
+            critic_agent=CriticAgent(llm_critic),
+            formatter_agent=FormatterAgent(llm_formatter),
+        )
+    )
+
+    result = await service.classify(text="привет", thread_id="social-1")
+
+    assert result.output is not None
+    assert result.output.task_kind == "social_conversation"
+    assert len(llm_researcher.calls) == 0
+    assert len(llm_critic.calls) == 0
+    assert len(llm_formatter.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_process_returns_formatter_result() -> None:
+    service = _intent_service(
+        _graph(
+            intent_agent=IntentClassifierAgent(
+                FakeLLMPort(
+                    '{"task_kind": "knowledge_request", "requires_mcp": false, "candidate_capabilities": ["summarize"], "confidence": 0.94, "reasoning": "Answer request"}',
+                )
+            ),
+            supervisor_agent=SupervisorAgent(),
+            context_weaver_agent=ContextWeaverAgent(),
+            researcher_agent=ResearcherAgent(
+                FakeLLMPort(
+                    '{"summary": "Draft answer", "confidence": 0.93, "sources_used": ["llm_internal_reasoning"]}',
+                )
+            ),
+            critic_agent=CriticAgent(
+                FakeLLMPort(
+                    '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "Ready"}',
+                )
+            ),
+            formatter_agent=FormatterAgent(
+                FakeLLMPort(_formatter_document_json("Final user answer")),
+            ),
+        )
+    )
+
+    result = await service.process(text="Explain this system", thread_id="process-1")
+
+    assert result.status == "success"
+    assert result.output is not None
+    assert result.output.title == "Final user answer"
+    assert isinstance(result.output.blocks[0], HeadingBlock)
+
+
+@pytest.mark.asyncio
+async def test_researcher_uses_mcp_registry_when_required() -> None:
+    mcp_registry = FakeMCPRegistry()
+    service = _intent_service(
+        _graph(
+            intent_agent=IntentClassifierAgent(
+                FakeLLMPort(
+                    '{"task_kind": "tool_execution", "requires_mcp": true, "candidate_capabilities": ["search"], "confidence": 0.97, "reasoning": "Need MCP search"}',
+                )
+            ),
+            supervisor_agent=SupervisorAgent(),
+            context_weaver_agent=ContextWeaverAgent(mcp_registry=mcp_registry),
+            researcher_agent=ResearcherAgent(
+                SequentialFakeLLMPort(
+                    ['{"query": "Find the contract in EDMS"}'],
+                ),
+                mcp_registry=mcp_registry,
+            ),
+            critic_agent=CriticAgent(
+                FakeLLMPort(
+                    '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "Ready"}',
+                )
+            ),
+            formatter_agent=FormatterAgent(
+                FakeLLMPort(_formatter_document_json("Formatted MCP answer")),
+            ),
+        )
+    )
+
+    result = await service.process(text="Find the contract in EDMS", thread_id="mcp-path-1")
+
+    assert result.status == "success"
+    assert len(mcp_registry.calls) == 1
+    server_name, tool_call = mcp_registry.calls[0]
+    assert server_name == "edms"
+    assert tool_call.name == "search_documents"

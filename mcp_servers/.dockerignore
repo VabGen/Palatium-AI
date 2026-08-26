@@ -1,0 +1,7 @@
+# Контекст сборки MCP stubs
+.git
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/JavaEdms
+**/Dockerfile

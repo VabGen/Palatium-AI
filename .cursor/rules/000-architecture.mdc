@@ -1,0 +1,51 @@
+---
+description: Core reference architecture for ZeroTrust Multi-Agent AI Platform
+globs:
+alwaysApply: true
+---
+
+# Архитектура платформы (обязательно к соблюдению)
+
+Ты работаешь над production-грейд мультиагентной ИИ-платформой (ZeroTrust Agent Platform).
+Перед генерацией любого кода определи, к какому слою он относится, и не нарушай направление
+зависимостей.
+
+## Слои (сверху вниз, зависимости строго вниз)
+
+```
+L6 API Gateway        Kong/Traefik · WAF · Rate Limit · OAuth2/JWT
+L5 Orchestration       LangGraph StateGraph + Temporal
+L4 Agent Layer         Supervisor · Router · 12 специализированных агентов
+L3 Protocol            MCP Client ↔ MCP Servers · A2A · SSE
+L2 Memory              Working · Redis · pgvector/Qdrant · Neo4j
+L1 Model               LiteLLM Proxy · Fallback chains · Budget caps
+L0 Observability/Sec   LangSmith · Prometheus · Guardrails · Vault · Audit
+```
+
+## Хексагональная / чистая архитектура
+
+- Domain → Application → Infrastructure → Presentation.
+- Domain-слой (контракты агентов, правила маршрутизации, бизнес-инварианты) НЕ импортирует
+  фреймворки, SDK провайдеров LLM, ORM или HTTP-клиенты напрямую.
+- Инфраструктура (LiteLLM, LangGraph checkpointer, MCP client, Postgres) реализует интерфейсы,
+  объявленные в domain/application через `typing.Protocol`.
+- Один агент = одна ответственность (SRP). Если агент делает больше одного дела — раздели его.
+
+## Реестр агентов (не добавляй новых сущностей мимо реестра без явного запроса)
+
+| # | Агент | Ответственность |
+|---|-------|-----------------|
+| 1 | TextIngestor | Чанкинг, нормализация текста |
+| 2 | IntentClassifier | Классификация, temperature=0 |
+| 3 | Supervisor | Декомпозиция и план, НИКОГДА не исполняет |
+| 4 | Reasoner | Верификация рассуждений |
+| 5 | Planner | Граф шагов, зависимости |
+| 6 | ContextWeaver | Сборка контекста (RAG) |
+| 7 | Coder | Код в sandbox (E2B) |
+| 8 | Researcher | Внешний поиск/извлечение |
+| 9 | Analyst | Анализ, тренды |
+| 10 | Critic | Контроль качества перед передачей дальше |
+| 11 | Formatter | MD/PDF/JSON форматирование |
+| 12 | MemoryKeeper | Semantic + episodic + graph память |
+
+Перед реализацией нового узла StateGraph — сверь его роль с этим реестром.

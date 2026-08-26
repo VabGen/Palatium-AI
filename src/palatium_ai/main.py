@@ -1,25 +1,35 @@
 # palatium_ai/main.py
 
-"""Основной модуль приложения."""
+"""Точка входа приложения."""
+
+from __future__ import annotations
 
 import asyncio
-import os
 
 from palatium_ai.core.config import get_settings
-from palatium_ai.core.logging import logger, setup_logging
-from palatium_ai.infrastructure.database.init_db import ensure_database_and_schema, ensure_redis_connection
+from palatium_ai.core.logging import build_uvicorn_log_config
+from palatium_ai.infrastructure.memory.checkpointer import ensure_psycopg_compatible_loop
+from palatium_ai.presentation.app import create_app
+
+# Must run before any asyncio loop is created (psycopg on Windows).
+ensure_psycopg_compatible_loop()
+
+settings = get_settings()
+app = create_app(settings)
 
 
 async def main() -> None:
-    """Запуск приложения с инициализацией БД и Redis."""
-    print(f"ENV_FILE: {os.getenv('ENV_FILE', 'не задан')}")
-    logger.info("Запуск приложения...")
+    """Запуск приложения через uvicorn."""
+    import uvicorn
 
-    settings = get_settings()
-    setup_logging(settings)
-
-    await ensure_database_and_schema(settings)
-    await ensure_redis_connection(settings)
+    uvicorn.run(
+        "palatium_ai.main:app",
+        host=settings.app.host,
+        port=settings.app.port,
+        reload=settings.app.environment == "development",
+        log_level=settings.logging.level.lower(),
+        log_config=build_uvicorn_log_config(),
+    )
 
 
 if __name__ == "__main__":

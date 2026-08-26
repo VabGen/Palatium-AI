@@ -2,12 +2,12 @@
 
 """Функция для инициализации базы данных и схемы при первом запуске."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import asyncpg
-import redis.asyncio as redis
 
-from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -48,7 +48,8 @@ async def ensure_database_and_schema(settings: Settings) -> None:
     finally:
         await sys_conn.close()
 
-    engine = create_async_engine(db_cfg.async_dsn, echo=db_cfg.echo)
+    should_echo_sql = db_cfg.echo and settings.logging.level.upper() == "DEBUG"
+    engine = create_async_engine(db_cfg.async_dsn, echo=should_echo_sql)
     try:
         async with engine.connect() as conn:
             schema_exists = await conn.execute(
@@ -64,18 +65,3 @@ async def ensure_database_and_schema(settings: Settings) -> None:
                 logger.info("Схема '%s' уже существует.", db_cfg.db_schema)
     finally:
         await engine.dispose()
-
-
-async def ensure_redis_connection(settings: Settings) -> None:
-    """Проверяет подключение к Redis."""
-    redis_cfg = settings.redis
-    client = redis.from_url(redis_cfg.dsn)
-
-    try:
-        await client.ping()
-        logger.info("Подключение к Redis успешно.")
-    except RedisError as e:
-        logger.error("Ошибка подключения к Redis: %s", e)
-        raise
-    finally:
-        await client.aclose()

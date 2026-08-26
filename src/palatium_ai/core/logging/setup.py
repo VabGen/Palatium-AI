@@ -1,11 +1,15 @@
 # src/palatium_ai/core/logging/setup.py
+
+"""Настройка логирования."""
+
 from __future__ import annotations
 
+import copy
 import logging
 import logging.handlers
 import sys
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -73,6 +77,7 @@ def setup_logging(settings: Settings) -> None:
         root_logger.removeHandler(handler)
 
     console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.terminator = "\n"
     console_handler.setFormatter(logging.Formatter("%(message)s"))
     console_handler.setLevel(getattr(logging, log_cfg.level.upper(), logging.INFO))
     root_logger.addHandler(console_handler)
@@ -81,12 +86,38 @@ def setup_logging(settings: Settings) -> None:
         file_handler = logging.handlers.RotatingFileHandler(
             log_cfg.file, maxBytes=10_485_760, backupCount=5, encoding="utf-8"
         )
+        file_handler.terminator = "\n"
         file_handler.setFormatter(logging.Formatter("%(message)s"))
         file_handler.setLevel(getattr(logging, log_cfg.level.upper(), logging.INFO))
         root_logger.addHandler(file_handler)
 
-    for mod in log_cfg.suppress_modules:
+    suppress_modules = [m.strip() for m in log_cfg.suppress_modules.split(",") if m.strip()]
+    for mod in suppress_modules:
         logging.getLogger(mod).setLevel(logging.WARNING)
 
-    if log_cfg.filter_modules:
-        root_logger.addFilter(SuppressFilter(log_cfg.filter_modules))
+    filter_modules = [m.strip() for m in log_cfg.filter_modules.split(",") if m.strip()]
+    if filter_modules:
+        root_logger.addFilter(SuppressFilter(filter_modules))
+
+
+def build_uvicorn_log_config() -> dict[str, Any]:
+    """
+    Возвращает совместимую с uvicorn конфигурацию логов для печати без сырых `%s/%d`.
+
+    Примечание: у uvicorn есть специальные поля в log records, поэтому мы берём его
+    дефолтный LOGGING_CONFIG и только отключаем use_colors.
+    """
+    from uvicorn.config import LOGGING_CONFIG
+
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    formatters = log_config.get("formatters", {})
+
+    default_formatter = formatters.get("default")
+    if isinstance(default_formatter, dict):
+        default_formatter["use_colors"] = False
+
+    access_formatter = formatters.get("access")
+    if isinstance(access_formatter, dict):
+        access_formatter["use_colors"] = False
+
+    return log_config

@@ -1,0 +1,45 @@
+# Пример: staging-деплой / smoke с секретами из GitHub Actions.
+# Скопируйте в deploy-staging.yml и заполните Secrets в репозитории.
+#
+# Нужные Secrets (Settings → Secrets and variables → Actions):
+#   POSTGRES_PASSWORD
+#   OLLAMA_API_KEY
+#   LANGCHAIN_API_KEY
+#   REDIS_PASSWORD          (опционально)
+
+name: deploy-staging (example)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install deps
+        run: poetry install --with dev
+
+      - name: Health / migrate (пример)
+        env:
+          # Каркас без секретов
+          ENV_FILE: env/.env.staging
+          # Секреты только из GitHub — перекрывают плейсхолдеры в файле
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+        run: |
+          poetry run alembic upgrade head
+          # дальше: poetry run pytest … или curl health после deploy

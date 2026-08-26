@@ -1,0 +1,53 @@
+---
+description: JavaEdms under mcp_servers/edms — read-only EDMS reference for integration
+alwaysApply: true
+---
+
+# JavaEdms — справочник СЭД (только чтение)
+
+В репозитории под `mcp_servers/edms/JavaEdms/` лежит полный проект СЭД **«Канцлер NEXT»**
+для интеграции с palatium-ai. Это **не** runtime MCP-сервер и **не** код платформы.
+
+## Назначение
+
+- Источник знаний о том, как устроены **бэкенд** и **фронтенд** СЭД.
+- Ориентир при проектировании MCP tools, контрактов и сценариев интеграции.
+- UI стенда (для сверки UX/терминов): https://next.edo.iba/home-page
+
+## Структура
+
+```
+mcp_servers/
+  edms/
+    edms_mcp_server.py      ← наш Python MCP stub (можно менять)
+    JavaEdms/               ← справочник СЭД (только чтение)
+      edms/                 ← бэкенд СЭД
+      frontend/             ← фронтенд СЭД
+```
+
+| Пакет / каталог | Роль |
+|-----------------|------|
+| `JavaEdms/edms` | Бэкенд СЭД |
+| `JavaEdms/frontend` | Фронтенд СЭД (домашняя страница /home-page) |
+
+Домен UI (для контекста): документы, поручения, статусы документооборота,
+разделы (входящие/исходящие/договоры/архив и т.д.), виджеты «в работе / просроченные».
+
+## Жёсткие запреты
+
+- **Не изменяй** файлы внутри `mcp_servers/edms/JavaEdms/` (ни бэкенд, ни frontend).
+- **Не рефакторь**, не «чисти», не переноси код Java/TS из JavaEdms в palatium-ai.
+- **Не добавляй** зависимости от JavaEdms в Python-пакет `palatium_ai`.
+- Интеграцию реализуй через **MCP-слой** платформы (`mcp_servers/edms/edms_mcp_server.py` →
+  будущий реальный MCP-адаптер), читая JavaEdms только как reference.
+
+## Что править вместо этого
+
+| Нужно | Куда |
+|-------|------|
+| MCP stub / tools list-call | `mcp_servers/edms/edms_mcp_server.py` |
+| Клиент MCP, capabilities, researcher | `src/palatium_ai/` |
+| Dev-запуск stubs | `scripts/dev-up.ps1` / `scripts/dev-down.ps1` |
+
+Если для интеграции не хватает сведений из JavaEdms (API endpoints, auth, DTO,
+статусы workflow) — **спроси пользователя**, не выдумывай контракты.

@@ -1,0 +1,50 @@
+# .dockerignore — контекст сборки образа приложения
+
+.git
+.github
+.cursor
+.vscode
+.idea
+.tox
+.ruff_cache
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+coverage.xml
+
+.venv
+venv
+env.bak
+venv.bak
+
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+dist
+build
+
+# Секреты и локальные env (в образ не кладём)
+env/.env
+env/.env.dev
+env/.env.staging
+env/.env.prod
+env/.env.local
+env/.env.*.local
+
+logs
+*.log
+scripts/.dev
+
+# Справочник СЭД / Java — не часть API-образа
+mcp_servers
+JavaEdms
+docs
+deploy
+
+# Нужны для stage test; примеры/лишнее — нет
+*.md
+!README.md
+
+# Не тащим чужие Dockerfile в контекст лишний раз
+mcp_servers/**/Dockerfile

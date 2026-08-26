@@ -1,0 +1,47 @@
+---
+description: Principled fixes — global root cause, no phrase hardcode, no workarounds
+alwaysApply: true
+---
+
+# Принципы исправлений (без хардкода и костылей)
+
+При баге от пользователя сначала ищи **глобальную причину в контрактах/политиках**,
+а не патч под один сценарий («как дела», «спасибо», конкретный язык и т.п.).
+Таких сценариев может быть множество — точечный if/список фраз не масштабируется.
+
+## Обязательный порядок
+
+1. Воспроизвести симптом → найти слой (Contextualizer / Intent / Continuity / Supervisor /
+   Planner / Critic / HITL).
+2. Спросить: это ошибка **контракта** или частный кейс? Если контракт — чинить контракт.
+3. Предложить принцип, покрывающий класс ситуаций, затем код. Не молча клеить if под фразу.
+
+## Запрещено
+
+| Костыль | Почему | Вместо этого |
+|---------|--------|--------------|
+| Списки приветствий / regex «привет\|как дела\|thanks» | Ломается на новых языках и формулировках | `task_kind` / `continuation_kind` / политика домена |
+| `if text == "..."` / special-case в Supervisor/Critic | Рост ветвлений, скрытая логика | Единая доменная политика (`ContinuityPolicy`, `CriticPolicy`, …) |
+| Continuity переписывает любой follow-up в `knowledge_request` | Ложный Researcher + Critic LLM + HITL | Continuity **обогащает** prior; remapa только history-blind ложный `clarification_needed` |
+| Промпт «answer → всегда knowledge_request» | Дублирует Continuity и смешивает оси | Intent классифицирует *ask*; hints — только зависимость от prior |
+| «Быстрый» патч только под скрин/лог пользователя | Следующий пользователь словит соседний кейс | Принцип + тесты на класс сценариев |
+
+## Контракт осей (не смешивать)
+
+| Ось | Владелец | Смысл |
+|-----|----------|--------|
+| `continuation_kind` / `refers_to_prior` | Contextualizer | Зависит ли реплика от prior |
+| `task_kind` / `requires_mcp` | Intent | Какое намерение у пользователя |
+| prior + suppress false HITL | ContinuityPolicy | Что Intent не видит без истории |
+| route / strategy | Supervisor + Planner | Куда идти при уже известном kind |
+| LLM judge vs passthrough | CriticPolicy | Нужен ли Critic LLM |
+
+Continuity **не** классифицирует social/capability/tool. Intent **не** форсит research
+из‑за наличия диалога. Critic **не** эскалирует low-risk стратегии (`ack_only`, `format_only`)
+без сигнала риска.
+
+## Если просят точечный хардкод
+
+Сначала явно откажись от хардкода фраз/костыля, назови нарушенный принцип,
+предложи исправление контракта/политики. Реализуй костыль только если пользователь
+после этого **явно** подтвердил исключение.

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "python .cursor/hooks/deny-dangerous-shell.py",
+        "failClosed": true,
+        "timeout": 10
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": ".cursor/hooks/mcp-rbac-guard.sh",
+        "matcher": ".*",
+        "failClosed": true,
+        "timeout": 10
+      }
+    ],
+    "afterFileEdit": [
+      { "command": ".cursor/hooks/secret-scan.sh", "timeout": 10 },
+      { "command": ".cursor/hooks/python-quality-gate.sh", "timeout": 30 }
+    ],
+    "stop": [
+      { "command": ".cursor/hooks/session-audit-log.sh", "timeout": 10 }
+    ]
+  }
+}

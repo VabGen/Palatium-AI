@@ -19,7 +19,6 @@ keywords = [ "ai", "edms", "automation", "assistant" ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
@@ -28,22 +27,35 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-requires-python = "~=3.14"
+# requires-python = "~=3.14"
+requires-python = ">=3.14,<3.15"
 # === === === === === === === === === === === === === === === === === === === === === === === === === === === === poetry remove 
 # === === === === === === A B C D E F G H I J K L M N O P Q R S T U V W X Y Z === === === === === === === === === poetry add 
 # === === === === === === === === === === === === === === === === === === === === === === === === === === === === 
 # ===============================================================================================================
 dependencies = [
+    "alembic (>=1.19.1,<2.0.0)",
     "asyncpg (>=0.30.0,<0.40.0)",
     "colorama (>=0.4.6,<0.5.0)",  
+    "cryptography (>=44.0.0,<47.0.0)",
     "fastapi (>=0.140.0,<0.150.0)",
+    "fpdf2 (>=2.8.8,<3.0.0)",
+    "httpx (>=0.28.0,<0.29.0)",
+    "jsonschema (>=4.25.0,<5.0.0)",
     "langgraph (>=1.2.10,<2.0.0)",
+    "langgraph-checkpoint-postgres (>=2.0.0,<4.0.0)",
+    "litellm (>=1.97.0,<2.0.0)",                                 
+    "prometheus_client (>=0.21.0,<1.0.0)",
+    "psycopg[binary,pool] (>=3.2.0,<4.0.0)",
+    "py-consul (>=1.7.1,<2.0.0)",
     "pydantic (>=2.13.0,<3.0.0)",
     "pydantic-settings (>=2.15.0,<3.0.0)",
+    "pyjwt (>=2.9.0,<3.0.0)",
     "redis (>=8.0.0,<9.0.0)",
     "sqlalchemy[asyncio] (>=2.0.50,<3.0.0)",
     "structlog (>=26.1.0,<27.0.0)",                                 
-    "uvicorn[standard] (>=0.50.0,<0.60.0)",                                 
+    "tenacity (>=9.0.0,<10.0.0)",
+    "uvicorn[standard] (>=0.50.0,<0.60.0)",
 ]
 
 [project.optional-dependencies]
@@ -53,7 +65,8 @@ databases = ["mysqlclient>=2.2.0,<3.0.0", "psycopg2>=2.9,<3.0"]
 
 [dependency-groups]
 test = [
-    "pytest (>=9.0.0,<10.0.0)",
+    "pytest (>=8.2.0,<9.0.0)",
+    "pytest-asyncio (>=0.25.0,<0.26.0)",
 ]
 lint = [
     "ruff (>=0.16.0,<0.17.0)",
@@ -106,8 +119,21 @@ select = [
     "N",                                                            # именование
     "TCH",                                                          # typing
 ]
-ignore = ["D100", "D104", "D107", "D203", "D211", "D212", "D213"]   # пропустить docstring правила
+ignore = [
+    "D100",
+    "D104",
+    "D107",
+    "D203",
+    "D211",
+    "D212",
+    "D213",
+    "TC001",
+    "TC003",
+]   # пропустить docstring правила и typing-only-import linter
 fixable = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106", "D", "E501", "TC001"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -139,6 +165,13 @@ init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "live: hits a real LLM / network; opt-in via PALATIUM_LIVE_EVAL=1",
+]
+
 # [[tool.mypy.overrides]]
 # module = "langgraph"
 # ignore_missing_imports = true
@@ -155,5 +188,5 @@ warn_required_dynamic_aliases = true
 # === Форматирование кода - poetry run ruff format .                                                       ~~ ===
 # === Проверка типов - poetry run mypy .                                                                   ~~ ===
 # === Запуск тестов - poetry run pytest . || poetry run pytest --cov=palatium_ai --cov-report=term-missing ~~ ===
-# === poetry.lock poetry & install --with dev || poetry sync                                               ~~ ===
+# === poetry.lock & poetry install --with dev || poetry sync                                               ~~ ===
 # === === === === === === === === === === === === === === === === === === === === === === === === === === === === 

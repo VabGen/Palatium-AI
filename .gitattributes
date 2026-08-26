@@ -1,0 +1,3 @@
+# Force LF for scripts used inside Linux containers (Windows CRLF breaks shebang).
+*.sh text eol=lf
+scripts/docker-entrypoint.sh text eol=lf

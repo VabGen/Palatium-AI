@@ -1,4 +1,7 @@
 # src/palatium_ai/core/logging/decorators.py
+
+"""Модуль decorators содержит декораторы для логирования времени выполнения sync/async функций."""
+
 from __future__ import annotations
 
 import time

@@ -1,0 +1,45 @@
+---
+description: Mandatory contract for every agent implementation in the platform
+globs: ["**/agents/**/*.py", "**/packages/core/**/*.py"]
+alwaysApply: false
+---
+
+# Обязательный контракт агента
+
+Каждый файл, реализующий агента (`apps/*/src/agents/**`, `packages/core/src/agents/**`),
+обязан содержать:
+
+1. `AgentConfig` (frozen Pydantic model): `name`, `role` (Literal из реестра агентов),
+   `model_tier`, `temperature`, `allowed_tools: tuple[str, ...]`, `timeout_seconds` (default 300),
+   `max_retries` (default 3), `confidence_threshold` (default 0.7).
+2. Явные Pydantic-схемы входа и выхода — никогда не принимать/возвращать сырой `dict`.
+3. Retry с экспоненциальным backoff (`2 ** attempt`), максимум `max_retries` попыток.
+4. Проверку `confidence` перед возвратом успешного результата — ниже порога → `status="partial"`
+   и сигнал на эскалацию (Critic или HITL), а не тихий возврат низкокачественного результата.
+5. Оборачивание каждого вызова LLM и каждого tool call в трассировку (LangSmith `@traceable`
+   или эквивалент) — без исключений.
+
+## Шаблон
+
+```python
+class SupervisorAgent(BaseAgent):
+    """Декомпозирует запрос на подзадачи. НИКОГДА не исполняет задачи сам."""
+
+    config = AgentConfig(
+        name="supervisor",
+        role="supervisor",
+        model_tier="frontier",
+        temperature=0.2,
+        allowed_tools=("delegate", "review", "plan"),
+        timeout_seconds=300,
+        max_retries=3,
+        confidence_threshold=0.7,
+    )
+
+    async def execute(self, task: TaskInput, context: AgentContext) -> TaskResult:
+        ...
+```
+
+Supervisor/Planner — только планирование и ревью, не должны иметь в `allowed_tools` инструменты
+исполнения (send_email, db_write, code_execute и т.п.). Такие инструменты — только у Worker-агентов
+(Coder, Researcher, Analyst) и только через `execute_tool()` с проверкой RBAC.
