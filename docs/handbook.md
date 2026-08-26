@@ -369,7 +369,15 @@ Write MCP (EDMS stub): `archive_document` — platform-pinned `write` → HITL i
 Хранилище HITL: **Redis** (in-memory запрещён в staging/production).
 Фоновый TTL sweep раз в 60с закрывает просроченные pending-карточки (CAS, не затирает resolve).
 
-#### Scenario matrix (unit DoD)
+#### Underspecification → HITL choice
+
+| `underspecification_kind` | Поведение |
+|---------------------------|-----------|
+| `none` | обычный turn |
+| `discrete_choice` | incomplete discrete slot → `requires_user_choice` + clarify; если Formatter не дал `actions`, `OptionSynthesizer` синтезирует 2–12 options → HITL cards |
+| `open_text` | свободное уточнение текстом, **без** fake-меню |
+
+Пример класса (не phrase-list): «сделай X на тему/типа/в формате» без значения слота → карточки на **первом** ходе.
 
 | ID | Сценарий | Покрытие |
 |----|----------|----------|

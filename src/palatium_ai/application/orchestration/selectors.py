@@ -143,6 +143,11 @@ def requires_user_choice(state: AgentGraphState) -> bool:
     return ensure_routing_intent(state).requires_user_choice
 
 
+def underspecification_kind(state: AgentGraphState) -> str:
+    """Form of incompleteness from ContinuityPolicy."""
+    return ensure_routing_intent(state).underspecification_kind
+
+
 def resolved_candidate_capabilities(state: AgentGraphState) -> tuple[str, ...]:
     """Capabilities из ContinuityPolicy."""
     return ensure_routing_intent(state).candidate_capabilities

@@ -27,6 +27,8 @@ Source polarity for prior_context (workers):
 continuation_kind — сигнал о *зависимости от prior*, не о *типе задачи*.
 requires_user_choice — сигнал Intent о *обязательном выборе*; Continuity форсит
 clarification_needed (кроме tool/format осей) и не глушит HITL на answer follow-up.
+underspecification_kind — форма незавершённости (none|open_text|discrete_choice);
+discrete_choice сохраняется и не remap'ится в knowledge_request.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from palatium_ai.domain.agents.intent import TaskKind
+from palatium_ai.domain.agents.intent import TaskKind, UnderspecificationKind
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
 
 if TYPE_CHECKING:
@@ -57,6 +59,7 @@ class EffectiveRoutingIntent(BaseModel):
     task_kind: TaskKind
     requires_mcp: bool = False
     requires_user_choice: bool = False
+    underspecification_kind: UnderspecificationKind = "none"
     candidate_capabilities: tuple[str, ...] = ()
     continuation_kind: ContinuationKind = "new_topic"
     prior_context: str | None = Field(default=None, max_length=16_000)
@@ -192,6 +195,9 @@ class ContinuityPolicy:
         raw_task: TaskKind = raw_intent.task_kind if raw_intent is not None else "clarification_needed"
         requires_mcp = raw_intent.requires_mcp if raw_intent is not None else False
         requires_user_choice = bool(raw_intent.requires_user_choice) if raw_intent is not None else False
+        underspec: UnderspecificationKind = (
+            raw_intent.underspecification_kind if raw_intent is not None else "none"
+        )
         caps = raw_intent.candidate_capabilities if raw_intent is not None else ()
         intent_reasoning = raw_intent.reasoning if raw_intent is not None else "no intent"
 
@@ -208,6 +214,7 @@ class ContinuityPolicy:
                 task_kind="response_formatting",
                 requires_mcp=False,
                 requires_user_choice=requires_user_choice,
+                underspecification_kind=underspec,
                 candidate_capabilities=cls._choice_caps(("format",), requires_user_choice=requires_user_choice),
                 continuation_kind=kind,
                 prior_context=prior,
@@ -224,6 +231,7 @@ class ContinuityPolicy:
                     task_kind="response_formatting",
                     requires_mcp=False,
                     requires_user_choice=requires_user_choice,
+                    underspecification_kind=underspec,
                     candidate_capabilities=cls._choice_caps(("format",), requires_user_choice=requires_user_choice),
                     continuation_kind=kind,
                     prior_context=user_prior[:16_000],
@@ -240,7 +248,7 @@ class ContinuityPolicy:
             and refers_to_prior
             and (assistant_prior is not None or cls.prior_user_content(dialog) is not None)
         ):
-            if raw_task == "clarification_needed" and not requires_user_choice:
+            if raw_task == "clarification_needed" and not requires_user_choice and underspec != "discrete_choice":
                 task_kind: TaskKind = "knowledge_request"
                 effective_caps = caps or ("summarize",)
                 reasoning = (
@@ -268,6 +276,7 @@ class ContinuityPolicy:
                 task_kind=task_kind,
                 requires_mcp=requires_mcp,
                 requires_user_choice=requires_user_choice,
+                underspecification_kind=underspec,
                 candidate_capabilities=effective_caps,
                 continuation_kind=kind,
                 prior_context=prior,
@@ -281,6 +290,9 @@ class ContinuityPolicy:
                 task_kind="clarification_needed",
                 requires_mcp=False,
                 requires_user_choice=requires_user_choice,
+                underspecification_kind=underspec if underspec != "none" else (
+                    "discrete_choice" if requires_user_choice else "open_text"
+                ),
                 candidate_capabilities=cls._choice_caps((), requires_user_choice=requires_user_choice),
                 continuation_kind=kind,
                 prior_context=assistant_prior,
@@ -301,6 +313,7 @@ class ContinuityPolicy:
             task_kind=task_kind,
             requires_mcp=requires_mcp,
             requires_user_choice=requires_user_choice,
+            underspecification_kind=underspec,
             candidate_capabilities=effective_caps,
             continuation_kind=kind,
             prior_context=assistant_prior,

@@ -23,6 +23,7 @@ from palatium_ai.application.services.intent_service import IntentService
 from palatium_ai.application.services.kill_switch import KillSwitchService
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.core.logging import logger
 from palatium_ai.infrastructure.database.repositories import McpToolCallRepository
@@ -222,6 +223,9 @@ def build_intent_service(
         llm_factory.get_client_for_agent(FormatterAgent.config),
         cost_budget=cost_budget,
     )
+    option_synthesizer = OptionSynthesizer(
+        llm_factory.get_client_for_agent(IntentClassifierAgent.config),
+    )
     researcher = ResearcherAgent(
         llm_factory.get_client_for_agent(ResearcherAgent.config),
         mcp_registry=mcp_registry,
@@ -264,6 +268,7 @@ def build_intent_service(
         dialog_turn_store=resolved_dialog_store,
         memory_port=resolved_memory,
         consolidation=consolidation,
+        option_synthesizer=option_synthesizer,
         recall_min_confidence=settings.memory.recall_min_confidence,
         recall_max_items=settings.memory.recall_max_items,
         recall_max_chars=settings.memory.recall_max_chars,

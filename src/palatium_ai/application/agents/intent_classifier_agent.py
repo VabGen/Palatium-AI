@@ -17,6 +17,7 @@ from palatium_ai.domain.agents.intent import (
     IntentClassifierOutput,
     IntentTaskResult,
     TaskKind,
+    UnderspecificationKind,
 )
 from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.llm.json_codec import loads_llm_json
@@ -75,27 +76,27 @@ Also decide:
 - requires_mcp: true ONLY when an external MCP/system tool interaction is needed
   (EDMS/search/analytics/etc.). Must be false for social_conversation, response_formatting,
   and for knowledge/rewrite that can be answered from dialog prior + model knowledge alone.
-- requires_user_choice: true when the user must select among exclusive alternatives
-  BEFORE work proceeds — via clickable HITL cards, never a text "1/2/3" menu.
-  Set true when ANY of:
-  • the primary deliverable of this turn IS a menu of alternatives (topics, types,
-    formats, analysis kinds, yes/no branches presented as options);
-  • the ask is incomplete because a discrete parameter is missing and must be
-    chosen first (e.g. generate X "on a topic" / "of a type" without naming it,
-    or "give me options/variants" for a prior incomplete ask).
-  Prefer task_kind=clarification_needed when requires_user_choice is true and the
-  menu/pick is the turn's main deliverable (not answering after a pick).
-  False for: informational multi-section guides, jokes/answers that already
-  include a completed pick, capability lists that are not exclusive selectors,
-  and HITL_CHOICE_RESUME turns (choice already made).
+- underspecification_kind (form of incompleteness — NOT a business domain label):
+  • "none" — ask is complete enough to proceed, OR choice already made (HITL_CHOICE_RESUME).
+  • "discrete_choice" — the ask names an action but omits a required *discrete* slot
+    (topic / type / format / analysis kind / exclusive branch) that should be offered
+    as clickable alternatives BEFORE work runs. Also when the user asks to present
+    exclusive options/variants for such a slot. Prefer task_kind=clarification_needed.
+  • "open_text" — missing free-form info that cannot be a short exclusive menu
+    (paste a document, provide an opaque id, unconstrained narrative detail).
+  Do NOT invent discrete_choice for fully specified asks.
+- requires_user_choice: true iff underspecification_kind is "discrete_choice"
+  OR the primary deliverable is an exclusive option menu. False for open_text,
+  completed picks, and HITL_CHOICE_RESUME. Prefer clarification_needed when true.
 - candidate_capabilities: short platform-level capability tags like
   ["search","retrieve","summarize","analyze","format","orchestrate","tool_call","mcp_discovery","user_choice"]
   Prefer ["format"] when continuation_kind=format; include "user_choice" when
   requires_user_choice is true; do not invent "search" without a tool ask.
 
 Respond ONLY with valid JSON:
-{"task_kind":"<kind>","requires_mcp":true,"requires_user_choice":false,
-"candidate_capabilities":["..."],"confidence":0.0,"reasoning":"<brief explanation>"}"""
+{"task_kind":"<kind>","requires_mcp":false,"requires_user_choice":false,
+"underspecification_kind":"none","candidate_capabilities":["..."],
+"confidence":0.0,"reasoning":"<brief explanation>"}"""
 
 
 class IntentClassifierAgent(BaseAgent):
@@ -180,6 +181,7 @@ def _parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
             task_kind=task_kind,
             requires_mcp=requires_mcp,
             requires_user_choice=_coerce_requires_user_choice(payload, capabilities),
+            underspecification_kind=_coerce_underspecification_kind(payload),
             candidate_capabilities=capabilities,
             confidence=float(payload.get("confidence", 0.0)),
             reasoning=str(payload.get("reasoning", "No reasoning provided")),
@@ -197,7 +199,15 @@ def _coerce_requires_user_choice(payload: dict[str, object], capabilities: tuple
     else:
         flagged = False
     caps = {item.strip().lower() for item in capabilities}
-    return flagged or "user_choice" in caps or "select" in caps
+    underspec = _coerce_underspecification_kind(payload)
+    return flagged or underspec == "discrete_choice" or "user_choice" in caps or "select" in caps
+
+
+def _coerce_underspecification_kind(payload: dict[str, object]) -> UnderspecificationKind:
+    raw = payload.get("underspecification_kind")
+    if isinstance(raw, str) and raw.strip() in _VALID_UNDERSPEC:
+        return cast("UnderspecificationKind", raw.strip())
+    return "none"
 
 
 def _coerce_task_kind(value: object) -> TaskKind:
@@ -218,3 +228,5 @@ _VALID_TASK_KINDS: frozenset[str] = frozenset(
         "clarification_needed",
     },
 )
+
+_VALID_UNDERSPEC: frozenset[str] = frozenset({"none", "open_text", "discrete_choice"})

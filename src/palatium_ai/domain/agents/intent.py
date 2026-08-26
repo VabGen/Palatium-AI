@@ -18,6 +18,13 @@ TaskKind = Literal[
     "clarification_needed",
 ]
 
+# Form of incompleteness — not a domain/scenario label (no phrase lists).
+UnderspecificationKind = Literal[
+    "none",
+    "open_text",  # need free-form clarify (which document id / paste payload)
+    "discrete_choice",  # missing closed/suggested slot → HITL cards before work
+]
+
 
 class IntentClassifierInput(BaseModel):
     """Вход IntentClassifier (текст + continuity hints; history не дампим)."""
@@ -42,6 +49,14 @@ class IntentClassifierOutput(BaseModel):
         description=(
             "True when the user must pick among exclusive alternatives "
             "(topic/type/option menu) before work proceeds — HITL cards, not a text list."
+        ),
+    )
+    underspecification_kind: UnderspecificationKind = Field(
+        default="none",
+        description=(
+            "none | open_text | discrete_choice. discrete_choice means a required "
+            "parameter is missing and must be chosen from suggested alternatives "
+            "via HITL cards before the main work runs."
         ),
     )
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)

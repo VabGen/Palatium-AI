@@ -87,11 +87,15 @@ Rules:
 3. Match locale to user_text language (BCP-47, e.g. ru-RU / en-US).
 4. meta.requires_review must mirror input requires_review; set confidence accordingly.
 5. Human interaction contract (mandatory):
-   - If requires_user_choice is true OR the user must pick among alternatives OR confirm/deny
-     an irreversible step, set meta.interaction="choice" (or "confirm") AND put EVERY
-     selectable option in actions[] as {action_id,label,kind,style,icon}. Never use a
-     text/list/callout menu alone as the selector ("choose 1/2/3" is forbidden).
-   - Prefer a short heading/paragraph framing only; options live in actions[], not blocks.
+   - If requires_user_choice is true OR underspecification_kind is "discrete_choice"
+     OR the user must pick among alternatives OR confirm/deny an irreversible step,
+     set meta.interaction="choice" (or "confirm") AND put EVERY selectable option in
+     actions[] as {action_id,label,kind,style,icon}. Never use a text/list/callout menu
+     alone as the selector ("choose 1/2/3" is forbidden).
+   - For discrete_choice: propose 2–12 concrete alternatives for the missing slot;
+     framing blocks only (short heading/paragraph); options live in actions[].
+   - For underspecification_kind="open_text": interaction="none", ask for free-form
+     detail in paragraphs — do not invent fake exclusive menus.
    - actions are specs only; the server turns them into clickable HITL cards.
    - For purely informational answers with no human pick, interaction="none" and actions=[].
 6. No markdown headings (##), no **bold** syntax, no \\n escapes as text — use separate blocks/items.
@@ -132,6 +136,7 @@ class FormatterAgent(BaseAgent):
             "critic_summary": task_input.critic_summary,
             "requires_review": task_input.requires_review,
             "requires_user_choice": task_input.requires_user_choice,
+            "underspecification_kind": task_input.underspecification_kind,
             "revision_feedback": task_input.revision_feedback,
         }
 
@@ -203,7 +208,9 @@ def _align_meta(document: ContentDocument, task_input: FormatterInput) -> Conten
         confidence = max(confidence, 0.7)
 
     interaction = document.meta.interaction
-    if task_input.requires_user_choice and interaction == "none":
+    if (
+        task_input.requires_user_choice or task_input.underspecification_kind == "discrete_choice"
+    ) and interaction == "none":
         interaction = "choice"
 
     return document.model_copy(

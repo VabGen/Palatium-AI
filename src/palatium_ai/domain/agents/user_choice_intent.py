@@ -1,17 +1,17 @@
-"""Normalize Intent exclusive-choice axis (code > LLM prose).
+"""Normalize Intent exclusive-choice + underspecification axes (code > LLM prose).
 
-When the classifier marks requires_user_choice (or user_choice/select caps),
-the turn's job is a menu / discrete pick — not a knowledge dump. Remap
-knowledge_request / social into clarification_needed here so Supervisor
-routes clarify even before Continuity runs.
-
-Does not use phrase lists. Does not invent choice when the flag is absent
-(structural force-mint after Formatter covers menu-shaped documents).
+discrete_choice / requires_user_choice → clarification_needed (not knowledge dump).
+open_text stays clarification without forcing HITL choice cards.
+No phrase lists.
 """
 
 from __future__ import annotations
 
-from palatium_ai.domain.agents.intent import IntentClassifierOutput, TaskKind
+from palatium_ai.domain.agents.intent import (
+    IntentClassifierOutput,
+    TaskKind,
+    UnderspecificationKind,
+)
 
 _CHOICE_REMAP_KINDS: frozenset[TaskKind] = frozenset(
     {
@@ -26,11 +26,23 @@ class UserChoiceIntentPolicy:
 
     @classmethod
     def normalize(cls, output: IntentClassifierOutput) -> IntentClassifierOutput:
-        """Ensure choice axis is coherent for routing + HITL."""
+        """Ensure choice / underspecification axes are coherent for routing + HITL."""
         _ = cls
         caps = tuple(output.candidate_capabilities)
         cap_set = {item.strip().lower() for item in caps}
-        requires_user_choice = bool(output.requires_user_choice) or "user_choice" in cap_set or "select" in cap_set
+        underspec: UnderspecificationKind = output.underspecification_kind
+        requires_user_choice = (
+            bool(output.requires_user_choice)
+            or underspec == "discrete_choice"
+            or "user_choice" in cap_set
+            or "select" in cap_set
+        )
+
+        if requires_user_choice and underspec == "none":
+            underspec = "discrete_choice"
+        if underspec == "open_text":
+            # Free-form clarify — do not invent exclusive menus.
+            requires_user_choice = False
 
         if requires_user_choice and "user_choice" not in cap_set:
             caps = (*caps, "user_choice")
@@ -43,9 +55,14 @@ class UserChoiceIntentPolicy:
             task_kind = "clarification_needed"
             requires_mcp = False
             reasoning = f"{reasoning}; user_choice_policy → clarification_needed"
+        elif underspec == "open_text" and task_kind in _CHOICE_REMAP_KINDS:
+            task_kind = "clarification_needed"
+            requires_mcp = False
+            reasoning = f"{reasoning}; open_text underspec → clarification_needed"
 
         if (
             requires_user_choice == output.requires_user_choice
+            and underspec == output.underspecification_kind
             and task_kind == output.task_kind
             and requires_mcp == output.requires_mcp
             and caps == output.candidate_capabilities
@@ -58,6 +75,7 @@ class UserChoiceIntentPolicy:
                 "task_kind": task_kind,
                 "requires_mcp": requires_mcp,
                 "requires_user_choice": requires_user_choice,
+                "underspecification_kind": underspec,
                 "candidate_capabilities": caps,
                 "reasoning": reasoning[:2000],
             }

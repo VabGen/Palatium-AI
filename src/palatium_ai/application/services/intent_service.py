@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+    from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
     from palatium_ai.application.services.session_service import SessionService
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
 
@@ -57,6 +58,7 @@ class IntentService:
         dialog_turn_store: DialogTurnStore | None = None,
         memory_port: MemoryPort | None = None,
         consolidation: MemoryConsolidationService | None = None,
+        option_synthesizer: OptionSynthesizer | None = None,
         dialog_window_size: int = _DEFAULT_DIALOG_WINDOW,
         recall_min_confidence: float = 0.7,
         recall_max_items: int = 4,
@@ -74,6 +76,7 @@ class IntentService:
         self._dialog_turn_store = dialog_turn_store
         self._memory_port = memory_port
         self._consolidation = consolidation
+        self._option_synthesizer = option_synthesizer
         self._dialog_window_size = dialog_window_size
         self._recall_min_confidence = recall_min_confidence
         self._recall_max_items = recall_max_items
@@ -501,6 +504,15 @@ class IntentService:
         resolved_requires_user_choice = bool(
             getattr(routing_intent, "requires_user_choice", False)
         ) if routing_intent is not None else False
+        resolved_underspec = (
+            str(getattr(routing_intent, "underspecification_kind", "none") or "none")
+            if routing_intent is not None
+            else "none"
+        )
+        prior_context = (
+            getattr(routing_intent, "prior_context", None) if routing_intent is not None else None
+        )
+        effective_user_text = str(final_state.get("effective_user_text") or text)
 
         if isinstance(formatted, FormatterTaskResult):
             formatted = await self._attach_hitl_cards(
@@ -510,6 +522,9 @@ class IntentService:
                 selected_strategy=selected_strategy,
                 task_kind=resolved_task_kind,
                 requires_user_choice=resolved_requires_user_choice,
+                underspecification_kind=resolved_underspec,
+                user_text=effective_user_text,
+                prior_context=prior_context if isinstance(prior_context, str) else None,
                 user_id=user_id,
                 org_id=org_id,
             )
@@ -914,6 +929,9 @@ class IntentService:
         selected_strategy: str | None = None,
         task_kind: str | None = None,
         requires_user_choice: bool = False,
+        underspecification_kind: str = "none",
+        user_text: str | None = None,
+        prior_context: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
     ) -> FormatterTaskResult:
@@ -923,6 +941,7 @@ class IntentService:
             interaction_plan_log_fields,
         )
         from palatium_ai.domain.content import parse_content_document
+        from palatium_ai.domain.hitl.option_synthesis import DiscreteChoiceSynthesisPolicy
 
         if formatted.output is None and not formatted.requires_review:
             return formatted.model_copy(update={"hitl_cards": ()})
@@ -945,6 +964,42 @@ class IntentService:
             task_kind=task_kind,
             requires_user_choice=requires_user_choice,
         )
+
+        if (
+            DiscreteChoiceSynthesisPolicy.needs_synthesis(
+                requires_user_choice=requires_user_choice,
+                underspecification_kind=underspecification_kind,
+                plan=assembled.plan,
+            )
+            and self._option_synthesizer is not None
+            and user_text
+        ):
+            synthesis = await self._option_synthesizer.synthesize(
+                user_text=user_text,
+                prior_context=prior_context,
+            )
+            logger.info(
+                "hitl.option_synthesis",
+                thread_id=thread_id,
+                task_id=task_id,
+                options=len(synthesis.actions),
+                underspecification_kind=underspecification_kind,
+            )
+            if synthesis.actions:
+                document = DiscreteChoiceSynthesisPolicy.merge_actions_into_document(
+                    document,
+                    synthesis.actions,
+                    framing_text=synthesis.framing,
+                )
+                formatted = formatted.model_copy(update={"output": document})
+                assembled = InteractionAssembler.assemble(
+                    document,
+                    requires_review=formatted.requires_review,
+                    selected_strategy=strategy if isinstance(strategy, str) else None,
+                    task_kind=task_kind,
+                    requires_user_choice=True,
+                )
+
         logger.info(
             "hitl.interaction_plan",
             thread_id=thread_id,
@@ -952,6 +1007,7 @@ class IntentService:
             task_kind=task_kind,
             selected_strategy=strategy,
             requires_user_choice=requires_user_choice,
+            underspecification_kind=underspecification_kind,
             **interaction_plan_log_fields(assembled),
         )
         if assembled.invalid:
@@ -966,6 +1022,7 @@ class IntentService:
                     "menu_shaped": str(assembled.plan.menu_shaped),
                     "promoted_from": assembled.plan.promoted_from,
                     "force_structural": str(assembled.plan.force_structural),
+                    "underspecification_kind": underspecification_kind,
                 },
             )
             return formatted.model_copy(
