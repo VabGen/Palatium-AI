@@ -369,6 +369,39 @@ Write MCP (EDMS stub): `archive_document` — platform-pinned `write` → HITL i
 Хранилище HITL: **Redis** (in-memory запрещён в staging/production).
 Фоновый TTL sweep раз в 60с закрывает просроченные pending-карточки (CAS, не затирает resolve).
 
+#### Scenario matrix (unit DoD)
+
+| ID | Сценарий | Покрытие |
+|----|----------|----------|
+| S1/S3 | Exclusive menu без Intent flag → cards | `test_hitl_scenario_matrix` + assembler |
+| S2 | Click → typed `HITL_CHOICE_RESUME` | choice_resume + matrix |
+| S4 | Required choice без options → fail-closed | matrix |
+| S5–S7 | write HITL / unknown HITL / read no HITL | tool_policy + matrix |
+| S8 | Choice axis → clarification before tools | UserChoiceIntent + Continuity |
+| S9 | TTL risk>0.5 → escalate | escalation_policy |
+| S10 | Idempotent respond replay | `test_hitl_service` |
+
+Live smoke (API up): `scripts/smoke_hitl_choice.py`, `scripts/smoke_hitl_write_step_up.py`.
+
+#### MCP tool onboarding checklist
+
+При добавлении MCP-сервера / tool (код > attestation сервера):
+
+1. Stub/server: tool + `inputSchema` (JSON Schema 2020-12).
+2. Platform pin в `domain/mcp/tool_policy.py` → `_PLATFORM_SIDE_EFFECTS`:
+   - ключ `mcp:<server>.<tool>`;
+   - `side_effect`: `read` | `write`;
+   - `schema_fingerprint` от **канонической** схемы (должна байт-в-байт совпасть
+     с discovered `inputSchema`, иначе demote → `unknown` + HITL);
+   - `risk_tier`: `low` | `medium` | `high`;
+   - `requires_hitl`: явный bool (`write`/`high` обычно `true`; `read`/`low` — `false`).
+3. Researcher ACL: `mcp:<server>.<tool>` в `RESEARCHER_CONFIG.allowed_tools`.
+4. `MCP_SERVERS` / Consul URL для сервера.
+5. Smoke: read без карточки; write/unknown → `mcp_tool_approval` card (+ step-up если risk≥0.7).
+
+Без pin: `side_effect=unknown`, `requires_hitl=true` (fail-closed). Capability index
+прокидывает эти поля в `MCPCapabilityBinding` при discover.
+
 #### Escalation lifecycle / dead-letter SLA
 
 | Состояние | Кто действует | SLA |

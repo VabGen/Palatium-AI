@@ -79,8 +79,10 @@ function HitlCard({
   const [stepUpAssertion, setStepUpAssertion] = useState("");
   const pending = local.status === "pending";
   const isChoice = local.purpose === "user_choice";
+  const isTool = local.purpose === "mcp_tool_approval";
+  const isReview = local.purpose === "quality_review";
   const Mark = isChoice ? ListChecks : ShieldAlert;
-  const mayNeedStepUp = local.purpose === "mcp_tool_approval";
+  const mayNeedStepUp = isTool;
 
   useEffect(() => {
     if (!stepUpPending?.challenge.authorize_url) return;
@@ -171,16 +173,30 @@ function HitlCard({
     }
   }
 
+  const purposeClass = isChoice
+    ? "hitl-choice"
+    : isTool
+      ? "hitl-tool"
+      : isReview
+        ? "hitl-review"
+        : "";
+
   return (
     <section
-      className={`hitl-card status-${local.status}${isChoice ? " hitl-choice" : ""}`}
+      className={`hitl-card status-${local.status}${purposeClass ? ` ${purposeClass}` : ""}`}
       aria-live="polite"
     >
       <header className="hitl-header">
         <Mark size={18} className="hitl-mark icon-animated" />
         <div>
+          <p className="hitl-kicker">
+            {isChoice ? "Choose one" : isTool ? "Tool approval" : "Review required"}
+          </p>
           <h3>{local.title}</h3>
           {local.body ? <p>{local.body}</p> : null}
+          {isChoice && pending ? (
+            <p className="hitl-choice-hint">Click a card below — typing 1/2/3 is not required.</p>
+          ) : null}
           {mayNeedStepUp ? (
             <p className="hitl-step-up-hint">
               Tool approval may require a server-issued step-up proof before the action runs.
@@ -256,18 +272,19 @@ function HitlCard({
         </div>
       ) : pending ? (
         <div
-          className="hitl-options"
+          className={`hitl-options${isChoice ? " hitl-options-choice" : ""}`}
           role="group"
           aria-label={isChoice ? "Choices" : "HITL actions"}
         >
-          {local.options.map((option) => (
+          {local.options.map((option, index) => (
             <button
               key={option.action_id}
               type="button"
-              className={`action-card action-${option.style}`}
+              className={`action-card action-${option.style}${isChoice ? " action-choice" : ""}`}
               disabled={busyAction !== null}
               onClick={() => void choose(option.action_id, option.action_token)}
             >
+              {isChoice ? <span className="action-choice-index">{index + 1}</span> : null}
               <TokenIcon token={option.icon} size={16} animated={option.style === "primary"} />
               <span>
                 {busyAction === option.action_id

@@ -101,9 +101,7 @@ def _process_choice_prompt(base: str, *, token: str, thread_id: str) -> dict[str
         "hitl_cards": cards,
         "blocks": len(blocks),
     }
-    choice_cards = [
-        card for card in cards if isinstance(card, dict) and card.get("purpose") == "user_choice"
-    ]
+    choice_cards = [card for card in cards if isinstance(card, dict) and card.get("purpose") == "user_choice"]
     summary["choice_cards"] = len(choice_cards)
     if choice_cards and isinstance(choice_cards[0], dict):
         options = choice_cards[0].get("options")
@@ -131,9 +129,7 @@ def _assert_persisted_cards_without_tokens(base: str, *, token: str, thread_id: 
     if turns_status != 200:
         raise RuntimeError(f"turns HTTP {turns_status} {turns_body}")
     items = _as_object_list(turns_body.get("items"))
-    assistant_turns = [
-        item for item in items if isinstance(item, dict) and item.get("role") == "assistant"
-    ]
+    assistant_turns = [item for item in items if isinstance(item, dict) and item.get("role") == "assistant"]
     if not assistant_turns:
         raise RuntimeError("no assistant turn persisted")
     payload = assistant_turns[-1].get("payload")

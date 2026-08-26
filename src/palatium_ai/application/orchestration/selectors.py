@@ -138,6 +138,11 @@ def resolved_requires_mcp(state: AgentGraphState) -> bool:
     return ensure_routing_intent(state).requires_mcp
 
 
+def requires_user_choice(state: AgentGraphState) -> bool:
+    """Exclusive selection axis from ContinuityPolicy (HITL cards, not text menus)."""
+    return ensure_routing_intent(state).requires_user_choice
+
+
 def resolved_candidate_capabilities(state: AgentGraphState) -> tuple[str, ...]:
     """Capabilities из ContinuityPolicy."""
     return ensure_routing_intent(state).candidate_capabilities

@@ -87,10 +87,11 @@ Rules:
 3. Match locale to user_text language (BCP-47, e.g. ru-RU / en-US).
 4. meta.requires_review must mirror input requires_review; set confidence accordingly.
 5. Human interaction contract (mandatory):
-   - If the user must pick among alternatives OR confirm/deny an irreversible step,
-     set meta.interaction="choice" (or "confirm") AND put EVERY selectable option in
-     actions[] as {action_id,label,kind,style,icon}. Never use a text/list menu alone
-     as the selector ("choose 1/2/3" is forbidden).
+   - If requires_user_choice is true OR the user must pick among alternatives OR confirm/deny
+     an irreversible step, set meta.interaction="choice" (or "confirm") AND put EVERY
+     selectable option in actions[] as {action_id,label,kind,style,icon}. Never use a
+     text/list/callout menu alone as the selector ("choose 1/2/3" is forbidden).
+   - Prefer a short heading/paragraph framing only; options live in actions[], not blocks.
    - actions are specs only; the server turns them into clickable HITL cards.
    - For purely informational answers with no human pick, interaction="none" and actions=[].
 6. No markdown headings (##), no **bold** syntax, no \\n escapes as text — use separate blocks/items.
@@ -130,6 +131,7 @@ class FormatterAgent(BaseAgent):
             "worker_summary": task_input.worker_summary,
             "critic_summary": task_input.critic_summary,
             "requires_review": task_input.requires_review,
+            "requires_user_choice": task_input.requires_user_choice,
             "revision_feedback": task_input.revision_feedback,
         }
 
@@ -200,12 +202,17 @@ def _align_meta(document: ContentDocument, task_input: FormatterInput) -> Conten
     elif confidence < 0.7:
         confidence = max(confidence, 0.7)
 
+    interaction = document.meta.interaction
+    if task_input.requires_user_choice and interaction == "none":
+        interaction = "choice"
+
     return document.model_copy(
         update={
             "meta": document.meta.model_copy(
                 update={
                     "requires_review": task_input.requires_review,
                     "confidence": confidence,
+                    "interaction": interaction,
                 }
             )
         }

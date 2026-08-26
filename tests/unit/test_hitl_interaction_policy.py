@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from palatium_ai.domain.content import (
     ActionSpec,
+    CalloutBlock,
     ContentDocument,
     DocumentMeta,
     HeadingBlock,
@@ -153,3 +154,59 @@ def test_clarification_menu_too_small_fails_closed() -> None:
     )
     assert plan.reason == "formatter_output_invalid"
     assert plan.choice_actions == ()
+
+
+def test_requires_user_choice_promotes_callout_topics() -> None:
+    doc = ContentDocument(
+        schema_version=1,
+        locale="en-US",
+        title="Topics",
+        blocks=(
+            HeadingBlock(type="heading", level=2, text="Topics", icon=None),
+            CalloutBlock(type="callout", tone="info", title="Artificial Intelligence", body="AI topic", icon="info"),
+            CalloutBlock(type="callout", tone="warning", title="Climate Change", body="Climate topic", icon="warning"),
+            CalloutBlock(type="callout", tone="info", title="Space Exploration", body="Space topic", icon="chart"),
+            CalloutBlock(type="callout", tone="info", title="Mental Health", body="Health topic", icon="shield"),
+            CalloutBlock(type="callout", tone="info", title="Blockchain Technology", body="Chain topic", icon="link"),
+        ),
+        actions=(),
+        meta=DocumentMeta(confidence=0.9, requires_review=False, source_refs=(), interaction="none"),
+    )
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=False,
+        task_kind="clarification_needed",
+        selected_strategy="clarify",
+        requires_user_choice=True,
+    )
+    assert len(plan.choice_actions) == 5
+    assert plan.choice_actions[0].label == "Artificial Intelligence"
+    framed = HitlInteractionPolicy.document_with_choice_framing(doc, choice_count=5)
+    assert all(block.type != "callout" for block in framed.blocks)
+    assert framed.meta.interaction == "choice"
+
+
+def test_requires_user_choice_without_options_fails_closed() -> None:
+    doc = ContentDocument(
+        schema_version=1,
+        locale="en-US",
+        title="Topics",
+        blocks=(ParagraphBlock(type="paragraph", text="Pick a topic somehow"),),
+        actions=(),
+        meta=DocumentMeta(confidence=0.9, requires_review=False, source_refs=(), interaction="none"),
+    )
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=False,
+        requires_user_choice=True,
+    )
+    assert plan.reason == "formatter_output_invalid"
+
+
+def test_plan_promotes_menu_reports_promoted_from_list() -> None:
+    doc = _menu_doc(items=["A", "B", "C"])
+    plan = HitlInteractionPolicy.plan(doc, requires_review=False)
+    assert plan.promoted_from == "list"
+    assert plan.menu_shaped is True
+    assert plan.force_structural is True
+    assert plan.required_choice is True

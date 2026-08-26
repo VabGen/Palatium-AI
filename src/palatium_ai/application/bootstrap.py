@@ -183,9 +183,7 @@ async def startup(settings: Settings) -> AppResources:
         signing_secret=hitl_signing,
         manager_roles=settings.security.manager_role_set,
         require_shared_store=settings.app.environment in {"staging", "production"},
-        step_up_required=settings.security.effective_hitl_step_up_required(
-            settings.app.environment
-        ),
+        step_up_required=settings.security.effective_hitl_step_up_required(settings.app.environment),
         security=settings.security,
     )
     kill_switch = KillSwitchService(redis_client=redis_client)

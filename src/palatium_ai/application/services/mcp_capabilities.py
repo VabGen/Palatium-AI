@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from palatium_ai.domain.mcp.models import MCPCapabilityBinding, MCPToolDescriptor
+from palatium_ai.domain.mcp.tool_policy import binding_hitl_metadata
 
 if TYPE_CHECKING:
     from palatium_ai.infrastructure.mcp.registry import MCPRegistry
@@ -108,12 +109,16 @@ class MCPCapabilityIndex:
 def _tool_to_bindings(server_name: str, tool: MCPToolDescriptor) -> list[MCPCapabilityBinding]:
     """Извлекает capability tags из descriptor без жёсткой keyword-map."""
     terms = _extract_tool_terms(tool)
+    side_effect, risk_tier, requires_hitl = binding_hitl_metadata(tool, server_name=server_name)
     return [
         MCPCapabilityBinding(
             capability=term,
             server_name=server_name,
             tool_name=tool.name,
             description=tool.description,
+            side_effect=side_effect,
+            risk_tier=risk_tier,
+            requires_hitl=requires_hitl,
         )
         for term in sorted(terms)
     ]

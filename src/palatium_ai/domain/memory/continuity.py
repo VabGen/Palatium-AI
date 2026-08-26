@@ -22,8 +22,11 @@ Source polarity for prior_context (workers):
 - Не переписывает task_kind в knowledge_request «потому что есть диалог».
 - Не классифицирует phatic/social/capability — это зона Intent.
 - Не эскалирует в Researcher / Critic LLM / HITL сама по себе.
+- Не снимает requires_user_choice: exclusive selection остаётся HITL-карточками.
 
 continuation_kind — сигнал о *зависимости от prior*, не о *типе задачи*.
+requires_user_choice — сигнал Intent о *обязательном выборе*; Continuity форсит
+clarification_needed (кроме tool/format осей) и не глушит HITL на answer follow-up.
 """
 
 from __future__ import annotations
@@ -53,6 +56,7 @@ class EffectiveRoutingIntent(BaseModel):
 
     task_kind: TaskKind
     requires_mcp: bool = False
+    requires_user_choice: bool = False
     candidate_capabilities: tuple[str, ...] = ()
     continuation_kind: ContinuationKind = "new_topic"
     prior_context: str | None = Field(default=None, max_length=16_000)
@@ -131,6 +135,48 @@ class ContinuityPolicy:
             return user_prior[:16_000]
         return assistant_prior
 
+    @staticmethod
+    def _choice_caps(caps: tuple[str, ...], *, requires_user_choice: bool) -> tuple[str, ...]:
+        if not requires_user_choice:
+            return caps
+        if "user_choice" in {item.strip().lower() for item in caps}:
+            return caps
+        return (*caps, "user_choice")
+
+    @classmethod
+    def _apply_user_choice_axis(
+        cls,
+        *,
+        task_kind: TaskKind,
+        requires_mcp: bool,
+        requires_user_choice: bool,
+        caps: tuple[str, ...],
+        reasoning: str,
+    ) -> tuple[TaskKind, bool, tuple[str, ...], str]:
+        """Exclusive selection is clarification UX — not a knowledge dump.
+
+        When Intent marks requires_user_choice, force clarification_needed so
+        Supervisor routes clarify and HITL mints cards. Do not remapa that into
+        knowledge_request later in this method.
+        """
+        effective_caps = cls._choice_caps(caps, requires_user_choice=requires_user_choice)
+        if not requires_user_choice:
+            return task_kind, requires_mcp, effective_caps, reasoning
+        if task_kind in {
+            "tool_execution",
+            "multi_step_workflow",
+            "response_formatting",
+            "capability_discovery",
+        }:
+            # Keep tool/format axes; HITL still mints from the flag.
+            return task_kind, requires_mcp, effective_caps, f"{reasoning}; requires_user_choice"
+        return (
+            "clarification_needed",
+            False,
+            effective_caps,
+            f"{reasoning}; requires_user_choice → clarification_needed",
+        )
+
     @classmethod
     def resolve(
         cls,
@@ -145,6 +191,7 @@ class ContinuityPolicy:
         refers_to_prior = bool(contextualizer.refers_to_prior) if contextualizer is not None else False
         raw_task: TaskKind = raw_intent.task_kind if raw_intent is not None else "clarification_needed"
         requires_mcp = raw_intent.requires_mcp if raw_intent is not None else False
+        requires_user_choice = bool(raw_intent.requires_user_choice) if raw_intent is not None else False
         caps = raw_intent.candidate_capabilities if raw_intent is not None else ()
         intent_reasoning = raw_intent.reasoning if raw_intent is not None else "no intent"
 
@@ -160,7 +207,8 @@ class ContinuityPolicy:
             return EffectiveRoutingIntent(
                 task_kind="response_formatting",
                 requires_mcp=False,
-                candidate_capabilities=("format",),
+                requires_user_choice=requires_user_choice,
+                candidate_capabilities=cls._choice_caps(("format",), requires_user_choice=requires_user_choice),
                 continuation_kind=kind,
                 prior_context=prior,
                 suppress_intent_hitl=True,
@@ -175,7 +223,8 @@ class ContinuityPolicy:
                 return EffectiveRoutingIntent(
                     task_kind="response_formatting",
                     requires_mcp=False,
-                    candidate_capabilities=("format",),
+                    requires_user_choice=requires_user_choice,
+                    candidate_capabilities=cls._choice_caps(("format",), requires_user_choice=requires_user_choice),
                     continuation_kind=kind,
                     prior_context=user_prior[:16_000],
                     suppress_intent_hitl=True,
@@ -185,12 +234,13 @@ class ContinuityPolicy:
 
         # Answer continuity: enrich with prior; correct only history-blind false clarify.
         # Do NOT remapa social / capability / tool / workflow → knowledge_request.
+        # Do NOT remapa exclusive-choice menus into knowledge_request.
         if (
             kind == "answer"
             and refers_to_prior
             and (assistant_prior is not None or cls.prior_user_content(dialog) is not None)
         ):
-            if raw_task == "clarification_needed":
+            if raw_task == "clarification_needed" and not requires_user_choice:
                 task_kind: TaskKind = "knowledge_request"
                 effective_caps = caps or ("summarize",)
                 reasoning = (
@@ -200,6 +250,13 @@ class ContinuityPolicy:
                 task_kind = raw_task
                 effective_caps = caps
                 reasoning = f"continuity=answer; trust intent task_kind={raw_task}; {intent_reasoning}"
+            task_kind, requires_mcp, effective_caps, reasoning = cls._apply_user_choice_axis(
+                task_kind=task_kind,
+                requires_mcp=requires_mcp,
+                requires_user_choice=requires_user_choice,
+                caps=effective_caps,
+                reasoning=reasoning,
+            )
             prior = cls.resolve_worker_prior(
                 assistant_prior=assistant_prior,
                 dialog=dialog,
@@ -210,10 +267,11 @@ class ContinuityPolicy:
             return EffectiveRoutingIntent(
                 task_kind=task_kind,
                 requires_mcp=requires_mcp,
+                requires_user_choice=requires_user_choice,
                 candidate_capabilities=effective_caps,
                 continuation_kind=kind,
                 prior_context=prior,
-                suppress_intent_hitl=True,
+                suppress_intent_hitl=not requires_user_choice,
                 trust_prior_for_workers=True,
                 reasoning=f"{reasoning}; prior={source}",
             )
@@ -222,7 +280,8 @@ class ContinuityPolicy:
             return EffectiveRoutingIntent(
                 task_kind="clarification_needed",
                 requires_mcp=False,
-                candidate_capabilities=(),
+                requires_user_choice=requires_user_choice,
+                candidate_capabilities=cls._choice_caps((), requires_user_choice=requires_user_choice),
                 continuation_kind=kind,
                 prior_context=assistant_prior,
                 suppress_intent_hitl=False,
@@ -230,14 +289,22 @@ class ContinuityPolicy:
                 reasoning=f"continuity=clarify; {intent_reasoning}",
             )
 
-        # new_topic, answer without refers_to_prior, or format/answer without prior: trust Intent
-        return EffectiveRoutingIntent(
+        task_kind, requires_mcp, effective_caps, reasoning = cls._apply_user_choice_axis(
             task_kind=raw_task,
             requires_mcp=requires_mcp,
-            candidate_capabilities=caps,
+            requires_user_choice=requires_user_choice,
+            caps=caps,
+            reasoning=f"continuity={kind}; trust intent: {intent_reasoning}",
+        )
+        # new_topic, answer without refers_to_prior, or format/answer without prior: trust Intent
+        return EffectiveRoutingIntent(
+            task_kind=task_kind,
+            requires_mcp=requires_mcp,
+            requires_user_choice=requires_user_choice,
+            candidate_capabilities=effective_caps,
             continuation_kind=kind,
             prior_context=assistant_prior,
             suppress_intent_hitl=False,
             trust_prior_for_workers=False,
-            reasoning=f"continuity={kind}; trust intent: {intent_reasoning}",
+            reasoning=reasoning,
         )

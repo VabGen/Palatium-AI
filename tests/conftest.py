@@ -112,7 +112,11 @@ class FakeMCPRegistry:
                         "$schema": "https://json-schema.org/draft/2020-12/schema",
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string", "minLength": 1},
+                            "query": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Search string for EDMS documents.",
+                            },
                         },
                         "required": ["query"],
                         "additionalProperties": False,

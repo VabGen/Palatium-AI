@@ -37,6 +37,13 @@ class IntentClassifierOutput(BaseModel):
 
     task_kind: TaskKind
     requires_mcp: bool
+    requires_user_choice: bool = Field(
+        default=False,
+        description=(
+            "True when the user must pick among exclusive alternatives "
+            "(topic/type/option menu) before work proceeds — HITL cards, not a text list."
+        ),
+    )
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str = Field(min_length=1)

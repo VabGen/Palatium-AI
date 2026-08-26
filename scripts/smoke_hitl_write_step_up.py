@@ -66,9 +66,7 @@ def _request_json(
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"non-JSON response for {method} {url}: HTTP {status} body={cleaned[:240]!r}"
-        ) from exc
+        raise RuntimeError(f"non-JSON response for {method} {url}: HTTP {status} body={cleaned[:240]!r}") from exc
     if isinstance(parsed, dict):
         return status, parsed
     return status, None
@@ -192,11 +190,7 @@ def main() -> int:
         if not isinstance(options, list):
             raise RuntimeError("live card missing options")
         approve = next(
-            (
-                opt
-                for opt in options
-                if isinstance(opt, dict) and opt.get("action_id") in {"approve", "allow"}
-            ),
+            (opt for opt in options if isinstance(opt, dict) and opt.get("action_id") in {"approve", "allow"}),
             None,
         )
         if not isinstance(approve, dict):

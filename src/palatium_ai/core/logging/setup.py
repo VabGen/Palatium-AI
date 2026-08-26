@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import logging
 import logging.handlers
@@ -76,11 +77,27 @@ def setup_logging(settings: Settings) -> None:
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
+    # Uvicorn --reload on Windows pipes worker stdout; without line buffering, access /
+    # turn logs stay invisible until the buffer fills or the process exits.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with contextlib.suppress(OSError, ValueError, AttributeError):
+                reconfigure(line_buffering=True)
+
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.terminator = "\n"
     console_handler.setFormatter(logging.Formatter("%(message)s"))
     console_handler.setLevel(getattr(logging, log_cfg.level.upper(), logging.INFO))
     root_logger.addHandler(console_handler)
+
+    # After rebuilding root handlers, route uvicorn through root so access lines
+    # share the same line-buffered stream (dictConfig handlers may target a stale pipe).
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uv_logger = logging.getLogger(name)
+        uv_logger.handlers.clear()
+        uv_logger.propagate = True
+        uv_logger.setLevel(getattr(logging, log_cfg.level.upper(), logging.INFO))
 
     if log_cfg.file:
         file_handler = logging.handlers.RotatingFileHandler(

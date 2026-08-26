@@ -18,6 +18,7 @@ from palatium_ai.domain.agents.intent import (
     IntentTaskResult,
     TaskKind,
 )
+from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.llm.json_codec import loads_llm_json
 from palatium_ai.domain.llm.models import ChatMessage
 
@@ -47,7 +48,9 @@ Do NOT classify into narrow business scenarios. Classify the *ask itself* into e
 - social_conversation: no actionable ask — phatic/social turn only
   (no tools/MCP, no facts/research, no formatting of prior content)
 - clarification_needed: insufficient information for an *actionable* request
-  (not for social/phatic turns)
+  OR the primary ask is to present exclusive alternatives for the user to pick
+  before the next step (topic/type/option menus). Prefer this over knowledge_request
+  when the turn's job is the menu itself, not answering after a pick.
 
 Continuity hints (from Contextualizer) describe dependence on prior dialog — they do NOT
 force a task_kind. Classify from the rewritten text:
@@ -72,13 +75,27 @@ Also decide:
 - requires_mcp: true ONLY when an external MCP/system tool interaction is needed
   (EDMS/search/analytics/etc.). Must be false for social_conversation, response_formatting,
   and for knowledge/rewrite that can be answered from dialog prior + model knowledge alone.
+- requires_user_choice: true when the user must select among exclusive alternatives
+  BEFORE work proceeds — via clickable HITL cards, never a text "1/2/3" menu.
+  Set true when ANY of:
+  • the primary deliverable of this turn IS a menu of alternatives (topics, types,
+    formats, analysis kinds, yes/no branches presented as options);
+  • the ask is incomplete because a discrete parameter is missing and must be
+    chosen first (e.g. generate X "on a topic" / "of a type" without naming it,
+    or "give me options/variants" for a prior incomplete ask).
+  Prefer task_kind=clarification_needed when requires_user_choice is true and the
+  menu/pick is the turn's main deliverable (not answering after a pick).
+  False for: informational multi-section guides, jokes/answers that already
+  include a completed pick, capability lists that are not exclusive selectors,
+  and HITL_CHOICE_RESUME turns (choice already made).
 - candidate_capabilities: short platform-level capability tags like
-  ["search","retrieve","summarize","analyze","format","orchestrate","tool_call","mcp_discovery"]
-  Prefer ["format"] when continuation_kind=format; do not invent "search" without a tool ask.
+  ["search","retrieve","summarize","analyze","format","orchestrate","tool_call","mcp_discovery","user_choice"]
+  Prefer ["format"] when continuation_kind=format; include "user_choice" when
+  requires_user_choice is true; do not invent "search" without a tool ask.
 
 Respond ONLY with valid JSON:
-{"task_kind":"<kind>","requires_mcp":true,"candidate_capabilities":["..."],
-"confidence":0.0,"reasoning":"<brief explanation>"}"""
+{"task_kind":"<kind>","requires_mcp":true,"requires_user_choice":false,
+"candidate_capabilities":["..."],"confidence":0.0,"reasoning":"<brief explanation>"}"""
 
 
 class IntentClassifierAgent(BaseAgent):
@@ -158,13 +175,29 @@ def _parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
     else:
         capabilities = tuple()
 
-    return IntentClassifierOutput(
-        task_kind=task_kind,
-        requires_mcp=requires_mcp,
-        candidate_capabilities=capabilities,
-        confidence=float(payload.get("confidence", 0.0)),
-        reasoning=str(payload.get("reasoning", "No reasoning provided")),
+    return UserChoiceIntentPolicy.normalize(
+        IntentClassifierOutput(
+            task_kind=task_kind,
+            requires_mcp=requires_mcp,
+            requires_user_choice=_coerce_requires_user_choice(payload, capabilities),
+            candidate_capabilities=capabilities,
+            confidence=float(payload.get("confidence", 0.0)),
+            reasoning=str(payload.get("reasoning", "No reasoning provided")),
+        )
     )
+
+
+def _coerce_requires_user_choice(payload: dict[str, object], capabilities: tuple[str, ...]) -> bool:
+    """Normalize requires_user_choice; capability tag user_choice is a backup signal."""
+    raw = payload.get("requires_user_choice")
+    if isinstance(raw, bool):
+        flagged = raw
+    elif isinstance(raw, str):
+        flagged = raw.strip().lower() in {"1", "true", "yes"}
+    else:
+        flagged = False
+    caps = {item.strip().lower() for item in capabilities}
+    return flagged or "user_choice" in caps or "select" in caps
 
 
 def _coerce_task_kind(value: object) -> TaskKind:

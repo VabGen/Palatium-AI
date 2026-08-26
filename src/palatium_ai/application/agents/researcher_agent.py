@@ -35,6 +35,7 @@ from palatium_ai.domain.mcp.tool_policy import (
     classify_risk_tier,
     classify_side_effect,
     requires_interrupt_before_call,
+    resolve_platform_pin,
 )
 from palatium_ai.domain.memory.tool_output import compress_worker_context, wrap_untrusted_tool_output
 
@@ -262,7 +263,8 @@ class ResearcherAgent(BaseAgent):
 
         side_effect = classify_side_effect(descriptor, server_name=server_name)
         risk_tier = classify_risk_tier(descriptor, side_effect=side_effect, server_name=server_name)
-        if requires_interrupt_before_call(side_effect):
+        pin = resolve_platform_pin(descriptor, server_name=server_name)
+        if requires_interrupt_before_call(side_effect, pin=pin):
             decision = interrupt(
                 {
                     "kind": "mcp_tool_approval",

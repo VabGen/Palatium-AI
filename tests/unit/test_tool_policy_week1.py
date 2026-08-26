@@ -18,10 +18,13 @@ from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
 from palatium_ai.domain.mcp.tool_policy import (
+    binding_hitl_metadata,
     classify_risk_tier,
     classify_side_effect,
     is_tool_invocation_allowed,
+    iter_platform_pins,
     requires_interrupt_before_call,
+    resolve_platform_pin,
 )
 
 
@@ -154,6 +157,24 @@ def test_side_effect_fail_closed_and_read_annotation() -> None:
     assert classify_side_effect(archive, server_name="edms") == "write"
     assert classify_risk_tier(archive, server_name="edms") == "high"
     assert requires_interrupt_before_call("write")
+    archive_pin = resolve_platform_pin(archive, server_name="edms")
+    assert archive_pin is not None
+    assert archive_pin.requires_hitl is True
+    assert requires_interrupt_before_call("write", pin=archive_pin) is True
+
+    search_pin = resolve_platform_pin(matching, server_name="edms")
+    assert search_pin is not None
+    assert search_pin.requires_hitl is False
+    assert requires_interrupt_before_call("read", pin=search_pin) is False
+
+    effect, tier, hitl = binding_hitl_metadata(matching, server_name="edms")
+    assert effect == "read"
+    assert tier == "low"
+    assert hitl is False
+
+    pins = dict(iter_platform_pins())
+    assert "mcp:edms.archive_document" in pins
+    assert pins["mcp:edms.archive_document"].requires_hitl is True
 
 
 @pytest.mark.asyncio

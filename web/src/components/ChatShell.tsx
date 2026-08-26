@@ -7,6 +7,7 @@ import {
   processIntent,
 } from "../api/client";
 import type { ContentDocument, FormatterTaskResult, HITLCardView } from "../types/contentDocument";
+import { looksLikeExclusiveMenu } from "../lib/exclusiveMenu";
 import { BlockRenderer } from "./BlockRenderer";
 import { HitlCards } from "./HitlCards";
 
@@ -384,6 +385,15 @@ export function ChatShell() {
                 orgId={orgId}
                 onResolved={(card, resumed) => onHitlResolved(message.id, card, resumed)}
               />
+              {import.meta.env.DEV &&
+              message.document &&
+              looksLikeExclusiveMenu(message.document) &&
+              !message.hitlCards.some((card) => card.status === "pending") ? (
+                <p className="hitl-dev-gap" role="status">
+                  Dev: document looks like an exclusive menu but no pending HITL cards —
+                  check server log <code>hitl.interaction_plan</code>.
+                </p>
+              ) : null}
             </div>
           ),
         )}

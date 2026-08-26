@@ -11,7 +11,8 @@
       "justMyCode": true,
       "env": {
         "PYTHONPATH": "${workspaceFolder}/src",
-        "ENV_FILE": "${workspaceFolder}/env/.env"
+        "ENV_FILE": "${workspaceFolder}/env/.env",
+        "PYTHONUNBUFFERED": "1"
       }
     },
     {
@@ -24,7 +25,8 @@
       "justMyCode": true,
       "env": {
         "PYTHONPATH": "${workspaceFolder}/src",
-        "ENV_FILE": "${workspaceFolder}/env/.env.dev"
+        "ENV_FILE": "${workspaceFolder}/env/.env.dev",
+        "PYTHONUNBUFFERED": "1"
       }
     },
     {
@@ -37,7 +39,8 @@
       "justMyCode": true,
       "env": {
         "PYTHONPATH": "${workspaceFolder}/src",
-        "ENV_FILE": "${workspaceFolder}/env/.env.staging"
+        "ENV_FILE": "${workspaceFolder}/env/.env.staging",
+        "PYTHONUNBUFFERED": "1"
       }
     },
     {
@@ -50,7 +53,8 @@
       "justMyCode": true,
       "env": {
         "PYTHONPATH": "${workspaceFolder}/src",
-        "ENV_FILE": "${workspaceFolder}/env/.env.prod"
+        "ENV_FILE": "${workspaceFolder}/env/.env.prod",
+        "PYTHONUNBUFFERED": "1"
       }
     }
   ]

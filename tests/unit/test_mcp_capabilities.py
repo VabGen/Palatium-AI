@@ -50,3 +50,6 @@ async def test_resolve_best_requires_task_text_evidence() -> None:
     assert bound is not None
     assert bound.server_name == "edms"
     assert bound.tool_name == "search_documents"
+    assert bound.side_effect == "read"
+    assert bound.requires_hitl is False
+    assert bound.risk_tier == "low"

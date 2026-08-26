@@ -101,5 +101,6 @@ def build_formatter_input(
         worker_summary=snapshot.worker_summary,
         critic_summary=snapshot.critic_summary,
         requires_review=intent_review or critic_requires_review,
+        requires_user_choice=selectors.requires_user_choice(state),
         revision_feedback=selectors.resolved_revision_feedback(state),
     )

@@ -331,3 +331,45 @@ def test_new_topic_tool_ask_not_remapped_by_continuity() -> None:
     assert effective.task_kind == "tool_execution"
     assert effective.requires_mcp is True
     assert effective.suppress_intent_hitl is False
+
+
+def test_requires_user_choice_forces_clarification_not_knowledge() -> None:
+    """Exclusive menu asks must not dump a catalog via knowledge_request."""
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        requires_user_choice=True,
+        candidate_capabilities=("summarize",),
+        confidence=0.91,
+        reasoning="user asked for topic options to pick",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=None, dialog=None, raw_intent=raw)
+    assert effective.task_kind == "clarification_needed"
+    assert effective.requires_user_choice is True
+    assert effective.requires_mcp is False
+    assert "user_choice" in effective.candidate_capabilities
+    assert effective.suppress_intent_hitl is False
+
+
+def test_answer_does_not_remap_choice_clarify_to_knowledge() -> None:
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="дай выбор тем кликабельными карточками",
+        continuation_kind="answer",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="Анекдот про компас",
+        reasoning="follow-up menu ask",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="clarification_needed",
+        requires_mcp=False,
+        requires_user_choice=True,
+        candidate_capabilities=("user_choice",),
+        confidence=0.9,
+        reasoning="exclusive topic pick",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.task_kind == "clarification_needed"
+    assert effective.requires_user_choice is True
+    assert effective.suppress_intent_hitl is False

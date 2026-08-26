@@ -236,6 +236,13 @@ class IntentService:
     ) -> FormatterTaskResult:
         """Возвращает финальный отформатированный ответ платформы."""
         resolved_task_id = task_id or thread_id
+        logger.info(
+            "agent.turn.start",
+            thread_id=thread_id,
+            task_id=resolved_task_id,
+            user_id=user_id or "",
+            text_chars=len(text),
+        )
         await self._session_service.assert_thread_access(
             thread_id=thread_id,
             user_id=user_id,
@@ -491,6 +498,9 @@ class IntentService:
         from palatium_ai.application.orchestration import selectors as orch_selectors
 
         selected_strategy = orch_selectors.selected_strategy(final_state)
+        resolved_requires_user_choice = bool(
+            getattr(routing_intent, "requires_user_choice", False)
+        ) if routing_intent is not None else False
 
         if isinstance(formatted, FormatterTaskResult):
             formatted = await self._attach_hitl_cards(
@@ -499,6 +509,7 @@ class IntentService:
                 task_id=task_id,
                 selected_strategy=selected_strategy,
                 task_kind=resolved_task_kind,
+                requires_user_choice=resolved_requires_user_choice,
                 user_id=user_id,
                 org_id=org_id,
             )
@@ -902,12 +913,16 @@ class IntentService:
         task_id: str,
         selected_strategy: str | None = None,
         task_kind: str | None = None,
+        requires_user_choice: bool = False,
         user_id: str | None = None,
         org_id: str | None = None,
     ) -> FormatterTaskResult:
         """Сервер создаёт HITL-карточки; LLM actions не являются источником истины."""
+        from palatium_ai.application.services.interaction_assembler import (
+            InteractionAssembler,
+            interaction_plan_log_fields,
+        )
         from palatium_ai.domain.content import parse_content_document
-        from palatium_ai.domain.hitl.interaction_policy import HitlInteractionPolicy
 
         if formatted.output is None and not formatted.requires_review:
             return formatted.model_copy(update={"hitl_cards": ()})
@@ -923,22 +938,23 @@ class IntentService:
             if selected_strategy is not None and hasattr(selected_strategy, "value")
             else selected_strategy
         )
-        plan = HitlInteractionPolicy.plan(
+        assembled = InteractionAssembler.assemble(
             document,
             requires_review=formatted.requires_review,
             selected_strategy=strategy if isinstance(strategy, str) else None,
             task_kind=task_kind,
+            requires_user_choice=requires_user_choice,
         )
-        logger.debug(
+        logger.info(
             "hitl.interaction_plan",
             thread_id=thread_id,
             task_id=task_id,
-            reason=plan.reason,
-            choice_actions=len(plan.choice_actions),
             task_kind=task_kind,
             selected_strategy=strategy,
+            requires_user_choice=requires_user_choice,
+            **interaction_plan_log_fields(assembled),
         )
-        if plan.reason == "formatter_output_invalid":
+        if assembled.invalid:
             agent_metrics.record_hitl_deny("formatter_output_invalid")
             await _write_audit(
                 conversation_id=thread_id,
@@ -947,6 +963,9 @@ class IntentService:
                     "task_id": task_id,
                     "task_kind": task_kind or "",
                     "selected_strategy": str(strategy or ""),
+                    "menu_shaped": str(assembled.plan.menu_shaped),
+                    "promoted_from": assembled.plan.promoted_from,
+                    "force_structural": str(assembled.plan.force_structural),
                 },
             )
             return formatted.model_copy(
@@ -958,6 +977,9 @@ class IntentService:
                     "confidence": min(formatted.confidence, 0.0),
                 }
             )
+
+        plan = assembled.plan
+        document = assembled.document
         cards: list[HITLCardView] = []
 
         if plan.choice_actions and document is not None:
@@ -971,11 +993,6 @@ class IntentService:
                 org_id=org_id,
             )
             cards.append(choice)
-            # Cards are the selector; drop exclusive list/steps so UI is not a text menu.
-            document = HitlInteractionPolicy.document_with_choice_framing(
-                document,
-                choice_count=len(plan.choice_actions),
-            )
 
         if plan.mint_quality_review and document is not None:
             cards.append(
@@ -992,11 +1009,9 @@ class IntentService:
         if document is None:
             return formatted.model_copy(update={"hitl_cards": tuple(cards)})
 
-        # Strip client-side actions: server HITL cards are the only interactive channel.
-        clean_document = document.model_copy(update={"actions": ()})
         return formatted.model_copy(
             update={
-                "output": clean_document,
+                "output": document,
                 "hitl_cards": tuple(cards),
             }
         )

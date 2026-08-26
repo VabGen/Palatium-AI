@@ -20,7 +20,12 @@ app = create_app(settings)
 
 async def main() -> None:
     """Запуск приложения через uvicorn."""
+    import os
+
     import uvicorn
+
+    # Ensure worker logs under --reload flush promptly on Windows pipes.
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
 
     uvicorn.run(
         "palatium_ai.main:app",

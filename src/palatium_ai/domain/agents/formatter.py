@@ -28,6 +28,7 @@ class FormatterInput(BaseModel):
     worker_summary: str | None = None
     critic_summary: str | None = None
     requires_review: bool = False
+    requires_user_choice: bool = False
     revision_feedback: str | None = Field(default=None, max_length=4_000)
 
 

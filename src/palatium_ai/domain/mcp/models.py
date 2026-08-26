@@ -92,7 +92,7 @@ class MCPServerDescriptor(BaseModel):
 
 
 class MCPCapabilityBinding(BaseModel):
-    """Связка capability -> server/tool."""
+    """Связка capability -> server/tool (+ platform HITL metadata when known)."""
 
     model_config = {"frozen": True}
 
@@ -100,6 +100,9 @@ class MCPCapabilityBinding(BaseModel):
     server_name: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
     description: str = Field(default="", min_length=0)
+    side_effect: Literal["read", "write", "unknown"] = "unknown"
+    risk_tier: Literal["low", "medium", "high"] = "medium"
+    requires_hitl: bool = True
 
 
 class ToolExecutionPlan(BaseModel):
