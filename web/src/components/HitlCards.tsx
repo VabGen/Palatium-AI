@@ -132,8 +132,9 @@ function HitlCard({
         const challenge = await fetchHitlStepUpChallenge(local.card_id, userId, orgId);
         if (challenge.required) {
           if (challenge.assertion) {
+            // hmac_stub: server returns a short-lived preminted assertion.
             assertion = challenge.assertion;
-            if (challenge.method === "idp_acr" || challenge.method === "webauthn") {
+          } else if (challenge.method === "idp_acr" || challenge.method === "webauthn") {
             setStepUpPending({ actionId, actionToken, challenge });
             if (challenge.authorize_url) {
               openAuthorizeUrl(challenge.authorize_url);
