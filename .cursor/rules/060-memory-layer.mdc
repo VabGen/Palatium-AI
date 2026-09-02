@@ -1,0 +1,79 @@
+---
+description: Слой памяти: схемы knowledge/memory, иерархия, стратегии обслуживания
+globs:
+  - "src/palatium_ai/infrastructure/memory/**/*.py"
+  - "src/palatium_ai/domain/memory/**/*.py"
+  - "src/palatium_ai/application/agents/memory_keeper/**"
+alwaysApply: true
+---
+
+# Слой памяти (ЯДРО системы)
+
+## Физическое разделение — не нарушать
+
+- Схема `knowledge` — статичные знания; схема `memory` — эпизодическая память.
+- Связка «схема ↔ embedding-модель ↔ размерность» — ТОЛЬКО в `core/types`
+  как реестр констант; менять модель эмбеддингов = отдельная миграция с
+  reindex ВСЕХ векторов схемы (in-place смена размерности запрещена):
+
+```python
+# core/types/embeddings.py — единственный источник
+from typing import Literal
+
+EmbeddingModel = Literal[
+    "text-embedding-3-small",   # → knowledge, 1536d
+    "sentence-transformers-mini",  # → memory, 384d
+]
+
+KNOWLEDGE_EMBEDDING_DIM = 1536
+MEMORY_EMBEDDING_DIM = 384
+```
+
+- Несовпадение размерности вектора и колонки = ошибка на этапе записи
+  (assert/проверка перед insert), не тихое обрезание.
+- Векторные размеры — константы в `core/types`, не магические числа (010).
+
+## Иерархия памяти
+
+| Уровень | Хранилище | TTL | Наполнение |
+|---|---|---|---|
+| Short-term | checkpointer LangGraph (Redis) | TTL сессии — константа в конфиге (`session_ttl_seconds`, default 1800) | авто |
+| Medium-term | `memory.entries` (pgvector) | 30 дней (константа в конфиге) | MCP `memory_save` |
+| Long-term | граф знаний (Neo4j / Cognee) | бессрочно, но растёт ТОЛЬКО через consolidate | consolidation |
+
+- **Consolidation medium→long-term** — фоновая задача: episode с
+  `access_frequency >= N` (константа) и `importance >= M` конвертируется
+  в узел/факт графа. Ad-hoc записи в Neo4j мимо consolidate — запрещены.
+
+## Правила кода
+
+1. Каждый запрос к `memory.entries` содержит `WHERE user_id = :uid` —
+   RLS не отменяет явный фильтр. **RLS обязателен:** политика по `user_id`
+   на `memory.entries`, app-роль БД без `BYPASSRLS`. Отсутствие политики
+   RLS в миграции — ошибка ревью.
+2. Importance: `recency + relevance + access_frequency` — формула в одном месте
+   (`domain/memory/scoring.py`), не дублируется.
+3. Тип записи — Literal из `domain/memory/types.py` (единый источник, 010):
+   `Literal["preference", "fact", "incident", "episode"]`.
+4. Суммаризация при ~20 оборотах диалога — константа в конфиге, не в коде.
+5. TTL / forgetting curve / дедупликация — фоновые asyncio-задачи,
+   НЕ блокируют запрос; `datetime.now(UTC)` везде (050).
+6. Гибридный поиск = pgvector (косинус) + Postgres FTS (`tsvector` + `ts_rank_cd`),
+   финальное ранжирование по importance. Назвать это «BM25» в коде/комментариях —
+   неверно; сторонние расширения (ParadeDB и т.п.) — только после явного
+   решения в 000. Плоский top-k запрещён.
+7. Мутации памяти (save/forget/consolidate) — ЕДИНЫЙ путь: агенты — только через
+   MCP-инструменты; MCP-инструмент — тонкая обёртка над `MemoryPort`
+   (infrastructure/memory). Прямой вызов MemoryPort из агента и прямые SQL
+   из агентов запрещены. Каждая мутация — событие в audit (см. 040).
+8. **Перед записью в medium/long-term — secret scanner (020) + PII-классификация.**
+   PII в long-term память (бессрочное хранение) — только с явной пометкой
+   `contains_pii=true` и правилом забывания; молчаливая запись PII — запрещена.
+9. Перед компакцией контекста (065) цель + план + последние результаты
+   сохраняются в long-term память — НИКОГДА не терять их при компакции.
+
+## Метрики
+
+Метрики памяти — из единого реестра 040 (`palatium_memory_recall_at_k`,
+`palatium_memory_query_duration_seconds`, `palatium_memory_entry_size_bytes`).
+Здесь и где-либо ещё свои имена памяти не вводить (050: рассинхронизация).

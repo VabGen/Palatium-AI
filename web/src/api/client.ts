@@ -1,233 +1,179 @@
-const TOKEN_STORAGE_KEY = "palatium.access_token";
-
 import type {
   ContentDocument,
   FormatterTaskResult,
-  HitlRespondResponse,
   HITLCardView,
-  HITLResolveResult,
-} from "../types/contentDocument";
+  HitlRespondResponse,
+} from '../types/contentDocument';
 
-type AuthHeaders = Record<string, string>;
+const TOKEN_STORAGE_KEY = 'palatium.access_token';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 function writeStoredToken(token: string): void {
   try {
-    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
-  } catch {
-    /* ignore quota / private mode */
-  }
-  try {
-    // Migrate off durable localStorage (XSS / shared-machine persistence risk).
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-  } catch {
-    /* ignore */
-  }
+    sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {}
 }
 
 function readStoredToken(): string | null {
   try {
-    const fromSession = window.sessionStorage.getItem(TOKEN_STORAGE_KEY);
-    if (fromSession) {
-      return fromSession;
-    }
+    return sessionStorage.getItem(TOKEN_STORAGE_KEY);
   } catch {
-    /* ignore */
+    return null;
   }
-  try {
-    const legacy = window.localStorage.getItem(TOKEN_STORAGE_KEY);
-    if (legacy) {
-      writeStoredToken(legacy);
-      return legacy;
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
 }
 
 async function mintDevToken(userId: string, orgId?: string | null): Promise<string> {
-  const response = await fetch("/api/auth/dev-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: userId,
-      ...(orgId ? { org_id: orgId } : {}),
-    }),
+  const res = await fetch(`${BASE_URL}/auth/dev-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, ...(orgId ? { org_id: orgId } : {}) }),
   });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Auth ${response.status}: ${detail.slice(0, 300)}`);
+  if (!res.ok) throw new Error(`Auth ${res.status}: ${await res.text()}`);
+  const { access_token } = await res.json();
+  writeStoredToken(access_token);
+  return access_token;
+}
+
+export async function sendFeedback(
+  messageId: string,
+  feedbackType: 'like' | 'dislike',
+  userId?: string | null,
+  orgId?: string | null
+): Promise<void> {
+  const res = await fetchWithAuth(
+    '/feedback',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        message_id: messageId,
+        feedback: feedbackType,
+        ...(orgId ? { org_id: orgId } : {}),
+      }),
+    },
+    userId,
+    orgId
+  );
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Feedback ${res.status}: ${detail.slice(0, 300)}`);
   }
-  const body = (await response.json()) as { access_token: string };
-  writeStoredToken(body.access_token);
-  return body.access_token;
 }
 
 export async function ensureAccessToken(
   userId: string,
   orgId?: string | null,
-  forceRefresh = false,
+  forceRefresh = false
 ): Promise<string> {
   if (!forceRefresh) {
     const existing = readStoredToken();
-    if (existing) {
-      return existing;
-    }
+    if (existing) return existing;
   }
   return mintDevToken(userId, orgId);
 }
 
-async function authHeaders(
-  userId?: string | null,
-  orgId?: string | null,
-  forceRefresh = false,
-): Promise<AuthHeaders> {
-  if (!userId) {
-    const existing = readStoredToken();
-    if (!existing) {
-      throw new Error("Missing user id for API auth");
-    }
-    return {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${existing}`,
-    };
-  }
-  const token = await ensureAccessToken(userId, orgId, forceRefresh);
-  return {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
-  };
-}
-
 async function fetchWithAuth(
   input: string,
-  init: RequestInit,
+  init: RequestInit = {},
   userId?: string | null,
   orgId?: string | null,
+  retries = 2
 ): Promise<Response> {
-  const headers = await authHeaders(userId, orgId);
-  let response = await fetch(input, {
-    ...init,
-    headers: { ...headers, ...(init.headers as AuthHeaders | undefined) },
-  });
-  if (response.status === 401 && userId) {
-    const refreshed = await authHeaders(userId, orgId, true);
-    response = await fetch(input, {
-      ...init,
-      headers: { ...refreshed, ...(init.headers as AuthHeaders | undefined) },
-    });
+  let token = userId ? await ensureAccessToken(userId, orgId) : readStoredToken();
+  if (!token) throw new Error('No access token available');
+
+  const headers = new Headers(init.headers);
+  headers.set('Content-Type', 'application/json');
+  headers.set('Authorization', `Bearer ${token}`);
+
+  const doFetch = async (): Promise<Response> => {
+    const url = input.startsWith('http') ? input : `${BASE_URL}${input}`;
+    const response = await fetch(url, { ...init, headers });
+    if (response.status === 401 && userId) {
+      token = await ensureAccessToken(userId, orgId, true);
+      headers.set('Authorization', `Bearer ${token}`);
+      return fetch(url, { ...init, headers });
+    }
+    return response;
+  };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await doFetch();
+      if (res.ok || res.status < 500) return res;
+    } catch {
+      if (attempt === retries) throw new Error(`Request failed after ${retries} retries`);
+      await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+    }
   }
-  return response;
+  throw new Error(`Request failed after ${retries} retries`);
 }
 
 export async function processIntent(
   text: string,
   threadId: string,
   userId?: string | null,
-  orgId?: string | null,
+  orgId?: string | null
 ): Promise<FormatterTaskResult> {
-  const response = await fetchWithAuth(
-    "/api/intents/process",
+  const res = await fetchWithAuth(
+    '/intents/process',
     {
-      method: "POST",
-      body: JSON.stringify({
-        text,
-        thread_id: threadId,
-        ...(orgId ? { org_id: orgId } : {}),
-      }),
+      method: 'POST',
+      body: JSON.stringify({ text, thread_id: threadId, ...(orgId ? { org_id: orgId } : {}) }),
     },
     userId,
-    orgId,
+    orgId
   );
-
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`API ${response.status}: ${detail.slice(0, 300)}`);
-  }
-
-  return (await response.json()) as FormatterTaskResult;
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
-
-export type DialogTurnDto = {
-  id: string | null;
-  thread_id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  payload?: ContentDocument | Record<string, unknown> | null;
-  task_id: string | null;
-  seq: number;
-  created_at: string | null;
-};
 
 export async function fetchDialogTurns(
   threadId: string,
   limit = 50,
   userId?: string | null,
-  orgId?: string | null,
-): Promise<DialogTurnDto[]> {
-  const response = await fetchWithAuth(
-    `/api/sessions/${encodeURIComponent(threadId)}/turns?limit=${limit}`,
-    { method: "GET" },
+  orgId?: string | null
+): Promise<any[]> {
+  const res = await fetchWithAuth(
+    `/sessions/${encodeURIComponent(threadId)}/turns?limit=${limit}`,
+    { method: 'GET' },
     userId,
-    orgId,
+    orgId
   );
-  if (response.status === 404) {
-    return [];
-  }
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Turns ${response.status}: ${detail.slice(0, 300)}`);
-  }
-  const body = (await response.json()) as { items: DialogTurnDto[] };
-  return body.items ?? [];
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(await res.text());
+  const json = (await res.json()) as { items: any[] };
+  return json.items ?? [];
 }
 
 export async function fetchHitlCard(
   cardId: string,
   userId?: string | null,
-  orgId?: string | null,
+  orgId?: string | null
 ): Promise<HITLCardView> {
-  const response = await fetchWithAuth(
-    `/api/hitl/${encodeURIComponent(cardId)}`,
-    { method: "GET" },
+  const res = await fetchWithAuth(
+    `/hitl/${encodeURIComponent(cardId)}`,
+    { method: 'GET' },
     userId,
-    orgId,
+    orgId
   );
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`HITL get ${response.status}: ${detail.slice(0, 300)}`);
-  }
-  return (await response.json()) as HITLCardView;
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
-
-export type HitlStepUpChallenge = {
-  required: boolean;
-  method: "none" | "hmac_stub" | "idp_acr" | "webauthn";
-  assertion?: string | null;
-  challenge?: string | null;
-  required_acr?: string | null;
-  required_amr?: string[];
-  card_claim?: string | null;
-  authorize_url?: string | null;
-  card_id: string;
-};
 
 export async function fetchHitlStepUpChallenge(
   cardId: string,
   userId?: string | null,
-  orgId?: string | null,
-): Promise<HitlStepUpChallenge> {
-  const response = await fetchWithAuth(
-    `/api/hitl/${encodeURIComponent(cardId)}/step-up-challenge`,
-    { method: "POST", body: "{}" },
+  orgId?: string | null
+): Promise<any> {
+  const res = await fetchWithAuth(
+    `/hitl/${encodeURIComponent(cardId)}/step-up-challenge`,
+    { method: 'POST', body: '{}' },
     userId,
-    orgId,
+    orgId
   );
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`HITL step-up ${response.status}: ${detail.slice(0, 300)}`);
-  }
-  return (await response.json()) as HitlStepUpChallenge;
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function respondHitlCard(
@@ -237,12 +183,12 @@ export async function respondHitlCard(
   idempotencyKey: string,
   userId?: string | null,
   orgId?: string | null,
-  stepUpAssertion?: string | null,
+  stepUpAssertion?: string | null
 ): Promise<HitlRespondResponse> {
-  const response = await fetchWithAuth(
-    `/api/hitl/${cardId}/respond`,
+  const res = await fetchWithAuth(
+    `/hitl/${encodeURIComponent(cardId)}/respond`,
     {
-      method: "POST",
+      method: 'POST',
       body: JSON.stringify({
         action_id: actionId,
         action_token: actionToken,
@@ -251,51 +197,36 @@ export async function respondHitlCard(
       }),
     },
     userId,
-    orgId,
+    orgId
   );
-
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`HITL ${response.status}: ${detail.slice(0, 300)}`);
-  }
-
-  const body = (await response.json()) as HitlRespondResponse | HITLResolveResult;
-  if ("resolve" in body && body.resolve) {
-    return body;
-  }
-  // Backward-compatible unwrap if server ever returns bare resolve.
-  return { resolve: body as HITLResolveResult, resumed: null };
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function downloadDocumentPdf(
   doc: ContentDocument,
   threadId: string,
   userId?: string | null,
-  orgId?: string | null,
+  orgId?: string | null
 ): Promise<void> {
-  const response = await fetchWithAuth(
-    "/api/documents/export/pdf",
+  const res = await fetchWithAuth(
+    '/documents/export/pdf',
     {
-      method: "POST",
-      body: JSON.stringify({
-        thread_id: threadId,
-        document: doc,
-      }),
+      method: 'POST',
+      body: JSON.stringify({ thread_id: threadId, document: doc }),
     },
     userId,
-    orgId,
+    orgId
   );
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`PDF ${response.status}: ${detail.slice(0, 300)}`);
-  }
-  const blob = await response.blob();
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
   const url = URL.createObjectURL(blob);
-  const anchor = window.document.createElement("a");
-  const disposition = response.headers.get("Content-Disposition");
-  const match = disposition?.match(/filename="(.+?)"/);
-  anchor.href = url;
-  anchor.download = match?.[1] ?? "palatium-answer.pdf";
-  anchor.click();
+  const a = document.createElement('a');
+  const match = res.headers.get('Content-Disposition')?.match(/filename="(.+?)"/);
+  a.href = url;
+  a.download = match?.[1] ?? 'palatium-answer.pdf';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }

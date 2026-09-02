@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import json
+
 from pydantic import Field, SecretStr, field_validator
 
 from .base import BaseConfig
@@ -23,7 +25,7 @@ class MCPConfig(BaseConfig):
     # Shared Bearer for platform → MCP servers (stubs and real adapters).
     auth_token: SecretStr | None = Field(default=None, validation_alias="MCP_AUTH_TOKEN")
     # Optional per-server overrides: {"edms":"token-a","analytics":"token-b"}
-    server_auth_tokens: dict[str, str] = Field(
+    server_auth_tokens: dict[str, SecretStr] = Field(
         default_factory=dict,
         validation_alias="MCP_SERVER_AUTH_TOKENS",
     )
@@ -38,22 +40,48 @@ class MCPConfig(BaseConfig):
     )
 
     consul_url: str | None = Field(default=None, validation_alias="MCP_CONSUL_URL")
-    consul_token: str | None = Field(default=None, validation_alias="MCP_CONSUL_TOKEN")
+    consul_token: SecretStr | None = Field(default=None, validation_alias="MCP_CONSUL_TOKEN")
     consul_datacenter: str | None = Field(default=None, validation_alias="MCP_CONSUL_DATACENTER")
     consul_prefix: str = Field(default="mcp/", validation_alias="MCP_CONSUL_PREFIX")
 
-    @field_validator("auth_token", mode="before")
+    @field_validator("auth_token", "consul_token", mode="before")
     @classmethod
     def _empty_auth_token_as_none(cls, value: object) -> object:
         if value is None or value == "":
             return None
         return value
 
+    @field_validator("server_auth_tokens", mode="before")
+    @classmethod
+    def _parse_server_auth_tokens(cls, value: object) -> object:
+        """Accept JSON env string or dict; wrap values as SecretStr."""
+        if value is None or value == "":
+            return {}
+        raw: object = value
+        if isinstance(value, str):
+            raw = json.loads(value)
+        if not isinstance(raw, dict):
+            raise TypeError("MCP_SERVER_AUTH_TOKENS must be a JSON object")
+        out: dict[str, SecretStr] = {}
+        for key, token in raw.items():
+            name = str(key).strip()
+            if not name:
+                continue
+            if isinstance(token, SecretStr):
+                out[name] = token
+            else:
+                text = str(token).strip()
+                if text:
+                    out[name] = SecretStr(text)
+        return out
+
     def resolve_auth_token(self, server_name: str) -> str | None:
         """Return Bearer token for a server (per-server override, else shared)."""
         override = self.server_auth_tokens.get(server_name)
-        if override is not None and override.strip():
-            return override.strip()
+        if override is not None:
+            text = override.get_secret_value().strip()
+            if text:
+                return text
         if self.auth_token is None:
             return None
         return self.auth_token.get_secret_value()

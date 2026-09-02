@@ -1,45 +1,166 @@
 ---
-description: Mandatory contract for every agent implementation in the platform
-globs: ["**/agents/**/*.py", "**/packages/core/**/*.py"]
-alwaysApply: false
+description: Контракты агентов: BaseAgent, AgentInput/Output, Harness, AgentConfig
+globs:
+  - "src/palatium_ai/application/agents/**/*.py"
+  - "src/palatium_ai/domain/agents/**/*.py"
+alwaysApply: true
 ---
 
-# Обязательный контракт агента
+# Контракты агентов
 
-Каждый файл, реализующий агента (`apps/*/src/agents/**`, `packages/core/src/agents/**`),
-обязан содержать:
+## Обязательная структура пакета агента
 
-1. `AgentConfig` (frozen Pydantic model): `name`, `role` (Literal из реестра агентов),
-   `model_tier`, `temperature`, `allowed_tools: tuple[str, ...]`, `timeout_seconds` (default 300),
-   `max_retries` (default 3), `confidence_threshold` (default 0.7).
-2. Явные Pydantic-схемы входа и выхода — никогда не принимать/возвращать сырой `dict`.
-3. Retry с экспоненциальным backoff (`2 ** attempt`), максимум `max_retries` попыток.
-4. Проверку `confidence` перед возвратом успешного результата — ниже порога → `status="partial"`
-   и сигнал на эскалацию (Critic или HITL), а не тихий возврат низкокачественного результата.
-5. Оборачивание каждого вызова LLM и каждого tool call в трассировку (LangSmith `@traceable`
-   или эквивалент) — без исключений.
+Каждый агент living в `application/agents/<name>/` как пакет:
 
-## Шаблон
+```
+application/agents/intent_classifier/
+├── __init__.py      # экспорт класса агента
+├── agent.py         # класс, наследующий BaseAgent
+├── prompts.py       # ВСЕ промпты строковыми константами
+├── config.py        # AgentConfig (pydantic)
+└── evals/
+    ├── tasks.json   # тестовые запросы + ожидания
+    └── grader.py    # оценка (детерминированная или LLM-as-judge)
+```
+
+## Контракты ввода/вывода (domain/agents/messages.py — единственный источник)
+
+```python
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class AgentInput(BaseModel, frozen=True):
+    task_id: UUID
+    trace_id: str                       # привязка к OTel-трассировке
+    instruction: str
+    context: dict[str, str] = Field(default_factory=dict)  # уже собранный Harness'ом
+    # ТОЛЬКО str-значения: rich-объекты передаются через context-ключи,
+    # а не через произвольные поля AgentInput
+
+
+class AgentOutput(BaseModel, frozen=True):
+    task_id: UUID
+    status: Literal["success", "failure", "partial"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    output: BaseModel                   # конкретный подтип объявляет сам агент
+    error_message: str | None = None    # обязателен при status="failure"
+```
+
+## Контракт BaseAgent (domain/agents/base.py — не отклонять без обсуждения)
+
+```python
+from abc import ABC, abstractmethod
+
+from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
+
+
+class BaseAgent(ABC):
+    def __init__(self, harness: Harness, config: AgentConfig) -> None:
+        self._harness = harness
+        self._config = config
+
+    @abstractmethod
+    async def run(self, input: AgentInput) -> AgentOutput: ...
+
+    @abstractmethod
+    def get_required_context_keys(self) -> list[str]: ...   # JIT-контекст (см. 065)
+
+    @abstractmethod
+    def get_available_tools(self) -> list[str]: ...         # фильтруется по RBAC
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Семантическая самопроверка выхода. Вызывается Harness'ом после run().
+        False → статус понижается до 'partial' + сигнал эскалации.
+        Переопределять по необходимости; дефолт — True."""
+        return True
+```
+
+- Конфиг и Harness — ТОЛЬКО через `__init__` (DI из composition root, см. 000).
+  Конфиг как атрибут класса — запрещён: ломает сборку зависимостей.
+
+## AgentConfig — обязателен для каждого агента
+
+Frozen pydantic model в `config.py`:
+
+```python
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+# role — значение из реестра агентов (000-architecture). Список значений
+# держится в ОДНОМ месте (core/types или domain/agents) и реэкспортируется;
+# не дублировать Literal по файлам агентов.
+AgentRole = Literal[
+    "intent_classifier", "supervisor", "researcher", "critic",
+    "formatter", "memory_keeper", "context_enricher",
+    "text_ingestor", "coder", "analyst",
+]
+
+
+class AgentConfig(BaseModel, frozen=True):
+    name: str
+    role: AgentRole
+    model_tier: Literal["frontier", "standard", "fast"]
+    temperature: float = Field(ge=0.0, le=2.0)
+    allowed_tools: tuple[str, ...] = ()
+    timeout_seconds: int = Field(default=300, gt=0)
+    max_retries: int = Field(default=3, ge=0)
+    confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+```
+
+## Правила
+
+1. Агент НИКОГДА не вызывает LLM/БД/инструменты напрямую — только через `self._harness`.
+2. Агент НЕ собирает контекст сам — декларирует `get_required_context_keys()`,
+   контекст готовит Harness через ContextBuilder.
+3. Промпты — ТОЛЬКО в `prompts.py`, без inline-строк в `agent.py`.
+4. `confidence` — обязательное поле AgentOutput, вычисляется, не хардкодится.
+   Допустимые способы (по убыванию предпочтения): logprobs провайдера →
+   структурированная самооценка LLM в том же вызове → детерминированный
+   evaluator-скрипт. Если провайдер не даёт logprobs — самооценка, и это
+   фиксируется в config.py комментарием. Хардкод константы запрещён.
+5. Вход/выход — только pydantic-модели (`AgentInput`/`AgentOutput`),
+   никогда сырой dict.
+6. Retry — экспоненциальный backoff + jitter, не более `max_retries`
+   (реализовано в Harness/core/resilience, НЕ дублировать в агентах).
+7. `confidence < confidence_threshold` → `status="partial"` + сигнал на эскалацию
+   (Critic или HITL), а НЕ тихий возврат.
+8. **Ошибки:** сбой инструмента/таймаут/исчерпан retry НЕ пробрасываются наружу.
+   Агент возвращает `AgentOutput(status="failure", error_message=...)` —
+   решение (retry на уровне графа, эскалация) принимает оркестратор.
+   Проброс необработанного исключения из `run()` — ошибка ревью
+   (исключение: баги программирования — ValueError на некорректном input).
+9. Каждый вызов LLM и каждый tool call — в трассировке (см. 040), без исключений.
+10. Любое изменение существующего legacy-агента = миграция к этому контракту
+    (skill `agent-refactoring`).
+11. ContextWeaver + Contextualizer объединены в `context_enricher/`.
+    Новых агентов с дублирующей ответственностью не создавать (реестр — 000).
+
+## Разделение полномочий (инвариант Supervisor)
+
+- Supervisor — только планирование и ревью. НИКОГДА не исполняет задачи сам.
+- В `allowed_tools` Supervisor запрещены execution-инструменты (`send_email`,
+  `db_write`, `code_execute`, `edms_upload`, `web_fetch` и т.п.) —
+  только `plan` / `delegate` / `review`.
+- Execution-инструменты — только у Worker-агентов (researcher, coder, analyst,
+  text_ingestor) и только через Harness с проверкой RBAC (см. 020).
+
+## Эталонный шаблон (структура — не реализация)
 
 ```python
 class SupervisorAgent(BaseAgent):
     """Декомпозирует запрос на подзадачи. НИКОГДА не исполняет задачи сам."""
 
-    config = AgentConfig(
-        name="supervisor",
-        role="supervisor",
-        model_tier="frontier",
-        temperature=0.2,
-        allowed_tools=("delegate", "review", "plan"),
-        timeout_seconds=300,
-        max_retries=3,
-        confidence_threshold=0.7,
-    )
-
-    async def execute(self, task: TaskInput, context: AgentContext) -> TaskResult:
-        ...
+    async def run(self, input: AgentInput) -> AgentOutput:
+        # 1. промпт из prompts.py + input через self._harness.llm
+        # 2. валидация ответа в pydantic-модель
+        # 3. вычисление confidence (правило 4)
+        # 4. return AgentOutput(...)
+        raise NotImplementedError  # реализуй по шагам 1–4
 ```
 
-Supervisor/Planner — только планирование и ревью, не должны иметь в `allowed_tools` инструменты
-исполнения (send_email, db_write, code_execute и т.п.). Такие инструменты — только у Worker-агентов
-(Coder, Researcher, Analyst) и только через `execute_tool()` с проверкой RBAC.
+Тела с `...` / `NotImplementedError` в «эталоне» — демонстрация структуры.
+В реальном коде пустые `run()` запрещены.

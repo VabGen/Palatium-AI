@@ -9,9 +9,9 @@ from pydantic import BaseModel, Field
 
 from palatium_ai.application.services.cost_budget import CostBudgetExceededError
 from palatium_ai.application.services.kill_switch import KillSwitchEngagedError
-from palatium_ai.core.exceptions import SessionOwnershipError
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal, principal_is_admin
 

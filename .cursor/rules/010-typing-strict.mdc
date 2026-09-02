@@ -1,37 +1,86 @@
 ---
-description: Strict typing rules for all Python code in the agent platform
+description: Строгая типизация всего Python-кода (Python 3.12+ / mypy --strict)
 globs: ["**/*.py"]
 alwaysApply: false
 ---
 
 # Типобезопасность (Python 3.12+ / mypy --strict)
 
-- Запрещено: `Any`, непараметризованные `dict`, `list`, `tuple` без generic-параметров.
-- Все структуры данных — `pydantic.BaseModel` (v2) с явными `Field(...)` ограничениями,
-  либо `@dataclass(frozen=True)` для чисто внутренних immutable-объектов.
-- Интерфейсы между слоями — только через `typing.Protocol`, никогда через утиную типизацию
-  без объявления протокола.
-- Каждая публичная функция/метод имеет полную сигнатуру типов, включая возвращаемый тип.
-- `# type: ignore` допустим только с комментарием-обоснованием на той же строке.
-- Код обязан проходить `mypy --strict` без ошибок и без "тихих" подавлений.
-- Enum вместо "магических строк" для конечных множеств значений (`Literal[...]` — приемлемая
-  альтернатива для простых закрытых множеств).
+## Базовые запреты
 
-## Пример правильного контракта
+- Запрещены: `Any` (см. исключения ниже), непараметризованные `dict`, `list`, `tuple`.
+- Запрещён legacy-синтаксис typing: `Optional[X]` → `X | None`, `List[str]` → `list[str]`,
+  `Dict` → `dict`, `Union` → `|`. Только современный синтаксис Python 3.12.
+- Запрещена утинная типизация на границах слоёв — только объявленные
+  `typing.Protocol` (или ABC для BaseAgent).
+- Запрещён злоупотребление `cast()` — как `# type: ignore`, только с обоснованием
+  на той же строке; `cast` НЕ заменяет корректную типизацию.
+
+## Структуры данных
+
+- Контракты и DTO — `pydantic.BaseModel` (v2) с явными `Field(...)` ограничениями.
+- Внутренние immutable-объекты — `@dataclass(frozen=True)`.
+- ⚠️ `frozen=True` — shallow freeze: вложенные list/dict/модели мутируются.
+  Если нужна глубокая иммутабельность — `tuple` вместо `list` и вложенные frozen-модели.
+- **Исключение:** `TypedDict` разрешён ТОЛЬКО для `AgentState` в
+  `application/orchestration/state.py` — это требование LangGraph (см. 065).
+  TypedDict вне orchestration — ошибка ревью.
+
+## Строковые типы (Literal / Enum)
+
+- Конечные множества значений — `Literal[...]` (простые закрытые) или `StrEnum`
+  (когда нужны методы/поведение).
+- Значения Literal — ТОЛЬКО `snake_case` нижним регистром (`"partial"`, не `"Partial"`),
+  объявляются в одном месте (`domain/...` или `core/types`) и реэкспортируются,
+  не дублируются по файлам.
+
+## Сигнатуры и подавления
+
+- Каждая публичная функция/метод — полная сигнатура типов, включая возвращаемый тип.
+- `# type: ignore` — только с конкретным кодом ошибки и обоснованием на той же строке:
+  `x = call()  # type: ignore[no-untyped-call]  # lib X не имеет py.typed, обёрнуто в адаптере`.
+  Голый `# type: ignore` без кода — ошибка ревью.
+- Код обязан проходить `mypy --strict` (конфиг в `pyproject.toml`,
+  проверка в `.cursor/hooks/python-quality-gate.sh` и CI).
+
+## Единственные допустимые исключения для `Any`
+
+| Случай | Условие |
+|---|---|
+| Адаптер к сторонней библиотеке без py.typed | Внутри `infrastructure/**` только; результат немедленно оборачивается в типизированную модель |
+| Декораторы трассировки/логирования (`**kwargs: Any`) | Внутри `core/observability` только |
+| Тесты | `tests/**` — послабления допустимы |
+
+Везде: `Any` с комментарием-обоснованием. `Any` в `domain/` — всегда ошибка.
+Если нужен `Any` вне этих случаев — сначала предложи типизацию, а не подавление.
+
+## Константы
+
+- Константы (векторные размерности, лимиты, TTL, пороги) — именованные константы
+  в `core/types` или конфиге, не магические числа.
+
+## Эталонный контракт
 
 ```python
-from typing import Literal, Protocol
+from collections.abc import Mapping
+from typing import Generic, Literal, Protocol, TypeVar
+
 from pydantic import BaseModel, Field
 
-class TaskResult(BaseModel, frozen=True):
+OutputT = TypeVar("OutputT", bound=BaseModel)
+
+
+class TaskResult(BaseModel, Generic[OutputT], frozen=True):
     task_id: str
     status: Literal["success", "failure", "partial"]
     confidence: float = Field(ge=0.0, le=1.0)
-    output: BaseModel
+    output: OutputT  # конкретный тип сохранён, а не стёрт до BaseModel
+
+
+class AnalystOutput(BaseModel, frozen=True):
+    summary: str
+    metrics: Mapping[str, float]  # nested immutable
+
 
 class ToolExecutor(Protocol):
-    async def execute(self, tool_name: str, params: BaseModel) -> TaskResult: ...
-```
-
-Если пользователь просит "быстрый прототип без типов" — предупреди, что это нарушает
-project baseline, и предложи минимально типизированную версию вместо полного отказа от типов.
+    async def execute(self, tool_name: str, params: BaseModel) -> TaskResult[BaseModel]: ...

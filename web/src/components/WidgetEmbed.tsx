@@ -1,23 +1,13 @@
-import { TokenIcon } from "../icons/TokenIcon";
-import type { WidgetBlock } from "../types/contentDocument";
+import { TokenIcon } from '../icons/TokenIcon';
+import type { WidgetBlock } from '../types/contentDocument';
 
-type WidgetEmbedProps = {
-  block: WidgetBlock;
-};
+type WidgetEmbedProps = { block: WidgetBlock };
 
-/**
- * Generic embed card. Product-specific renderers (EDMS, calendar, …) belong in
- * optional UI plugins / MCP adapters — not hardcoded in the core chat shell.
- */
 function safeHttpHref(href: string): string | null {
   try {
     const parsed = new URL(href);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return href;
-    }
-  } catch {
-    return null;
-  }
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return href;
+  } catch {}
   return null;
 }
 
@@ -35,11 +25,11 @@ export function WidgetEmbed({ block }: WidgetEmbedProps) {
         <strong>{label}</strong>
         <p className="widget-ref">{block.ref_id}</p>
       </div>
-      {ctaHref ? (
+      {ctaHref && (
         <a className="widget-cta" href={ctaHref} target="_blank" rel="noopener noreferrer">
           Open
         </a>
-      ) : null}
+      )}
     </div>
   );
 }

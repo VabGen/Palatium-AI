@@ -10,8 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from palatium_ai.application.services.intent_service import IntentService
-from palatium_ai.core.exceptions import SessionOwnershipError
 from palatium_ai.domain.content import WidgetBlock
+from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.domain.sessions.ownership import evaluate_session_access, next_session_owner
 
 
@@ -31,20 +31,23 @@ def test_evaluate_session_access_denies_foreign_owner() -> None:
     assert admin.allowed
 
 
-def test_evaluate_session_access_unowned_read_vs_claim() -> None:
+def test_evaluate_session_access_unowned_never_claimable() -> None:
     read = evaluate_session_access(
         owner_user_id=None,
         caller_user_id="user-a",
         session_exists=True,
     )
     assert not read.allowed
+    assert read.reason == "unowned_not_readable"
+    # allow_claim must not transfer residual MCP/dialog payloads to a stranger.
     mutate = evaluate_session_access(
         owner_user_id=None,
         caller_user_id="user-a",
         session_exists=True,
         allow_claim=True,
     )
-    assert mutate.verdict == "claim"
+    assert not mutate.allowed
+    assert mutate.reason == "unowned_not_readable"
     admin = evaluate_session_access(
         owner_user_id=None,
         caller_user_id="ops",

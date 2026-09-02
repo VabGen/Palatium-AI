@@ -65,9 +65,7 @@ class DiscreteChoiceSynthesisPolicy:
             confidence = document.meta.confidence
 
         text = (framing_text or "").strip() or (
-            document.title
-            if document and document.title
-            else "Select one option to continue."
+            document.title if document and document.title else "Select one option to continue."
         )
         # Keep light framing only — cards own the selector.
         framing_blocks = (ParagraphBlock(type="paragraph", text=text[:2000]),)

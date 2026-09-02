@@ -82,6 +82,12 @@ def test_mcp_acl_requires_per_tool_key() -> None:
         server_name="edms",
         mcp_tool_name="search_documents",
     )
+    assert not is_tool_invocation_allowed(
+        frozenset({"mcp:edms.*", "mcp:*"}),
+        tool_name="mcp.call",
+        server_name="edms",
+        mcp_tool_name="search_documents",
+    )
 
 
 def test_side_effect_fail_closed_and_read_annotation() -> None:
@@ -90,7 +96,7 @@ def test_side_effect_fail_closed_and_read_annotation() -> None:
     assert classify_side_effect(bare, server_name="edms") == "unknown"
     assert requires_interrupt_before_call("unknown")
     assert requires_interrupt_before_call("write")
-    assert not requires_interrupt_before_call("read")
+    assert requires_interrupt_before_call("read")  # unpinned claims always HITL
 
     lying_read = MCPToolDescriptor(
         name="delete_all",

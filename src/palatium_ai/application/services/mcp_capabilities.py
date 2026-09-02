@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from palatium_ai.domain.mcp.models import MCPCapabilityBinding, MCPToolDescriptor
-from palatium_ai.domain.mcp.tool_policy import binding_hitl_metadata
+from palatium_ai.domain.mcp.models import MCPCapabilityBinding, MCPToolSummary
+from palatium_ai.domain.mcp.tool_policy import binding_hitl_metadata_for_ref
 
 if TYPE_CHECKING:
-    from palatium_ai.infrastructure.mcp.registry import MCPRegistry
+    from palatium_ai.domain.ports.mcp import MCPRegistryPort
 
 logger = structlog.get_logger(__name__)
 
@@ -26,9 +26,9 @@ _DISCOVER_CACHE_TTL_SECONDS = 60.0
 
 
 class MCPCapabilityIndex:
-    """Строит capability map из tool descriptors MCP серверов (TTL-кэш discover)."""
+    """Capability map from MCP tool *summaries* (progressive disclosure; no schema dump)."""
 
-    def __init__(self, registry: MCPRegistry, *, cache_ttl_seconds: float = _DISCOVER_CACHE_TTL_SECONDS) -> None:
+    def __init__(self, registry: MCPRegistryPort, *, cache_ttl_seconds: float = _DISCOVER_CACHE_TTL_SECONDS) -> None:
         self._registry = registry
         self._cache_ttl_seconds = cache_ttl_seconds
         self._cached_bindings: list[MCPCapabilityBinding] | None = None
@@ -76,7 +76,7 @@ class MCPCapabilityIndex:
         return scored[0][1]
 
     async def discover(self, *, force_refresh: bool = False) -> list[MCPCapabilityBinding]:
-        """Строит индекс capability -> server/tool (параллельно, с TTL-кэшем)."""
+        """Build capability -> server/tool from summaries (TTL cache)."""
         now = time.time()
         if not force_refresh and self._cached_bindings is not None and now - self._cached_at < self._cache_ttl_seconds:
             return list(self._cached_bindings)
@@ -84,19 +84,19 @@ class MCPCapabilityIndex:
         bindings: list[MCPCapabilityBinding] = []
         server_names = self._registry.list_servers()
         listed = await asyncio.gather(
-            *[self._safe_list_tools(server_name) for server_name in server_names],
+            *[self._safe_list_summaries(server_name) for server_name in server_names],
         )
         for server_name, tools in zip(server_names, listed, strict=True):
             for tool in tools:
-                bindings.extend(_tool_to_bindings(server_name, tool))
+                bindings.extend(_summary_to_bindings(server_name, tool))
 
         self._cached_bindings = bindings
         self._cached_at = now
         return list(bindings)
 
-    async def _safe_list_tools(self, server_name: str) -> list[MCPToolDescriptor]:
+    async def _safe_list_summaries(self, server_name: str) -> list[MCPToolSummary]:
         try:
-            return await self._registry.list_tools(server_name)
+            return await self._registry.list_tool_summaries(server_name)
         except Exception as exc:
             logger.warning(
                 "MCP capability discovery skipped server",
@@ -106,10 +106,13 @@ class MCPCapabilityIndex:
             return []
 
 
-def _tool_to_bindings(server_name: str, tool: MCPToolDescriptor) -> list[MCPCapabilityBinding]:
-    """Извлекает capability tags из descriptor без жёсткой keyword-map."""
-    terms = _extract_tool_terms(tool)
-    side_effect, risk_tier, requires_hitl = binding_hitl_metadata(tool, server_name=server_name)
+def _summary_to_bindings(server_name: str, tool: MCPToolSummary) -> list[MCPCapabilityBinding]:
+    """Extract capability tags from a summary (name/description/property names only)."""
+    terms = _extract_summary_terms(tool)
+    side_effect, risk_tier, requires_hitl = binding_hitl_metadata_for_ref(
+        server_name=server_name,
+        tool_name=tool.name,
+    )
     return [
         MCPCapabilityBinding(
             capability=term,
@@ -130,12 +133,9 @@ def _binding_terms(binding: MCPCapabilityBinding) -> set[str]:
     return _extract_terms(" ".join(parts))
 
 
-def _extract_tool_terms(tool: MCPToolDescriptor) -> set[str]:
-    """Собирает термы из имени, описания и JSON Schema property names."""
-    schema_properties = tool.input_schema.get("properties", {})
-    property_names = tuple(str(key) for key in schema_properties) if isinstance(schema_properties, dict) else tuple()
-
-    raw_parts = [tool.name, tool.description, *property_names]
+def _extract_summary_terms(tool: MCPToolSummary) -> set[str]:
+    """Terms from name, description, and schema property *names* (not full schema)."""
+    raw_parts = [tool.name, tool.description, *tool.property_names]
     return _extract_terms(" ".join(raw_parts))
 
 

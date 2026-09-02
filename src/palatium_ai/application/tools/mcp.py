@@ -13,8 +13,7 @@ from palatium_ai.core.observability.audit import get_audit_logger
 from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolResult
 
 if TYPE_CHECKING:
-    from palatium_ai.infrastructure.database.repositories import McpToolCallRepository
-    from palatium_ai.infrastructure.mcp.registry import MCPRegistry
+    from palatium_ai.domain.ports.mcp import MCPRegistryPort, McpToolCallRecorderPort
 
 
 class MCPToolCallParams(BaseModel):
@@ -38,10 +37,10 @@ class MCPToolCallOutcome(BaseModel):
 
 async def call_mcp_tool(
     params: MCPToolCallParams,
-    registry: MCPRegistry,
+    registry: MCPRegistryPort,
     *,
     conversation_id: str | None = None,
-    repository: McpToolCallRepository | None = None,
+    repository: McpToolCallRecorderPort | None = None,
 ) -> MCPToolCallOutcome:
     """Вызывает MCP tool через registry с JSON Schema validation."""
     result: MCPToolResult = await registry.call_tool(

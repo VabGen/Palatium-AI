@@ -37,7 +37,7 @@ class ConsulMCPSource:
             raise ValueError("MCPConfig.consul_url must be set to use ConsulMCPSource")
         self._client = consul.Consul(
             host=config.consul_url.replace("http://", "").replace("https://", ""),
-            token=config.consul_token,
+            token=(config.consul_token.get_secret_value() if config.consul_token is not None else None),
             dc=config.consul_datacenter,
         )
         self._last_index: int | None = None

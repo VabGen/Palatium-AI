@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import logging
+import math
+
 from typing import TYPE_CHECKING, Literal
 
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -21,6 +24,7 @@ from palatium_ai.domain.agents.workflow_policy import WorkflowExecutionPolicy
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.contracts import AgentContext
 
+logger = logging.getLogger(__name__)
 
 SUPERVISOR_CONFIG = AgentConfig(
     name="supervisor",
@@ -43,9 +47,24 @@ _DEFAULT_PLANS: dict[TaskKind, str] = {
     "clarification_needed": "Сформировать уточняющий вопрос до дальнейшего исполнения.",
 }
 
+_FALLBACK_PLAN = "Исполнить запрос по общему сценарию researcher → formatter."
+
+_ROUTE_MATRIX: dict[str, tuple[WorkerRoute, str]] = {
+    "social_conversation": ("formatter", "formatter"),
+    "response_formatting": ("formatter", "formatter"),
+    "clarification_needed": ("clarification", "formatter"),
+    "multi_step_workflow": ("researcher", "researcher"),
+}
+
 
 class SupervisorAgent:
-    """Определяет следующий маршрут по platform task kind."""
+    """Определяет следующий маршрут по platform task kind.
+
+    Без LLM: детерминированный роутер над результатом классификации.
+    Контракт отказного пути — как у остальных агентов: исключения
+    (например, KeyError на новом TaskKind) конвертируются в fallback-план
+    или failure-result, а не роняют граф-ноду.
+    """
 
     config = SUPERVISOR_CONFIG
 
@@ -59,39 +78,42 @@ class SupervisorAgent:
         _ = context
         agent_metrics.record_node_execution("supervisor", "supervisor_node")
 
+        confidence = _clamp_confidence(task_input.classification_confidence, default=0.0)
+
         executable_kind = WorkflowExecutionPolicy.executable_task_kind(
             task_input.task_kind,
             requires_mcp=task_input.requires_mcp,
         )
-        plan = WorkflowExecutionPolicy.plan_for(
-            task_input.task_kind,
-            requires_mcp=task_input.requires_mcp,
-            default_plans=_DEFAULT_PLANS,
-        )
 
-        if executable_kind == "social_conversation" and not task_input.requires_mcp:
-            route: WorkerRoute = "formatter"
-            target_agent = "formatter"
-        elif executable_kind == "response_formatting":
-            route = "formatter"
-            target_agent = "formatter"
-        elif executable_kind == "clarification_needed":
-            route = "clarification"
-            target_agent = "formatter"
-        else:
-            route = "researcher"
-            target_agent = "researcher"
+        try:
+            plan = WorkflowExecutionPolicy.plan_for(
+                task_input.task_kind,
+                requires_mcp=task_input.requires_mcp,
+                default_plans=_DEFAULT_PLANS,
+            )
+        except Exception:
+            logger.exception(
+                "plan_for failed for kind=%s (task=%s)",
+                task_input.task_kind,
+                task_input.task_id,
+            )
+            agent_metrics.record_error("supervisor", "plan_missing")
+            plan = _FALLBACK_PLAN
 
-        requires_review = task_input.classification_confidence < self.config.confidence_threshold
+        route, target_agent = _ROUTE_MATRIX.get(executable_kind, ("researcher", "researcher"))
+
+        requires_review = confidence < self.config.confidence_threshold
         status: Literal["success", "failure", "partial"] = "partial" if requires_review else "success"
 
         if requires_review:
             agent_metrics.record_human_escalation("low_confidence_route")
+        if route == "clarification":
+            agent_metrics.record_human_escalation("clarification_route")
 
         output = SupervisorOutput(
             route=route,
             target_agent=target_agent,
-            confidence=task_input.classification_confidence,
+            confidence=confidence,
             plan=plan,
         )
 
@@ -99,7 +121,19 @@ class SupervisorAgent:
             task_id=task_input.task_id,
             agent_role=self.config.role,
             status=status,
-            confidence=task_input.classification_confidence,
+            confidence=confidence,
             requires_review=requires_review,
             output=output,
         )
+
+
+def _clamp_confidence(value: float, *, default: float) -> float:
+    """Кламп [0, 1] с NaN/inf-guard для LLM-происхождения значения.
+
+    TODO: заменить на общий хелпер (например,
+    palatium_ai.domain.llm.scoring.clamp_score) — сейчас это седьмая
+    локальная копия клампа по кодовой базе.
+    """
+    if not math.isfinite(value):
+        return default
+    return min(max(value, 0.0), 1.0)

@@ -10,6 +10,7 @@ import structlog
 
 from litellm import acompletion
 
+from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.domain.llm.models import (
     ChatMessage,
     LLMCompletion,
@@ -168,7 +169,12 @@ class LiteLLMAdapter:
             logger.debug("LLM response received", provider=self._provider, model=completion.model)
             return completion
         except Exception as exc:
-            logger.error("LLM request failed", provider=self._provider, error=str(exc), exc_info=True)
+            logger.error(
+                "LLM request failed",
+                provider=self._provider,
+                error=redact_text(str(exc)),
+                exc_info=True,
+            )
             raise
 
     async def generate_stream(

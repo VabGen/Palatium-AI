@@ -25,12 +25,20 @@ from palatium_ai.domain.mcp.models import (
     MCPToolCall,
     MCPToolDescriptor,
     MCPToolResult,
+    MCPToolSummary,
 )
 
 if TYPE_CHECKING:
     from palatium_ai.core.config.settings import Settings
 
 logger = structlog.get_logger(__name__)
+
+
+def _raw_tools_list(raw_result: object) -> list[object]:
+    if not isinstance(raw_result, dict):
+        return []
+    raw_tools = raw_result.get("tools", [])
+    return raw_tools if isinstance(raw_tools, list) else []
 
 
 def _is_transient_mcp_http_error(exc: BaseException) -> bool:
@@ -78,16 +86,33 @@ class MCPJsonRpcClient:
         return {"Authorization": f"Bearer {token}"}
 
     async def list_tools(self) -> list[MCPToolDescriptor]:
-        """Получает tools/list у MCP server."""
+        """Получает tools/list у MCP server (full schemas)."""
         response = await self._send_request("tools/list", {})
-        raw_result = response.result
-        if not isinstance(raw_result, dict):
-            return []
+        return self._parse_tool_descriptors(response.result)
 
-        raw_tools = raw_result.get("tools", [])
-        if not isinstance(raw_tools, list):
-            return []
+    async def list_tool_summaries(self) -> list[MCPToolSummary]:
+        """tools/list with omitInputSchema; strip locally if server ignores the flag."""
+        response = await self._send_request("tools/list", {"omitInputSchema": True})
+        return self._parse_tool_summaries(response.result)
+
+    @staticmethod
+    def _parse_tool_descriptors(raw_result: object) -> list[MCPToolDescriptor]:
+        raw_tools = _raw_tools_list(raw_result)
         return [MCPToolDescriptor.model_validate(tool) for tool in raw_tools]
+
+    @staticmethod
+    def _parse_tool_summaries(raw_result: object) -> list[MCPToolSummary]:
+        raw_tools = _raw_tools_list(raw_result)
+        summaries: list[MCPToolSummary] = []
+        for tool in raw_tools:
+            if not isinstance(tool, dict):
+                continue
+            schema = tool.get("inputSchema")
+            if isinstance(schema, dict) and schema:
+                summaries.append(MCPToolDescriptor.model_validate(tool).to_summary())
+            else:
+                summaries.append(MCPToolSummary.model_validate(tool))
+        return summaries
 
     async def call_tool(self, tool_call: MCPToolCall) -> MCPToolResult:
         """Вызывает tools/call на MCP server."""

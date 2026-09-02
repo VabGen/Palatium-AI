@@ -1,5 +1,5 @@
-import { LottieSvg } from "lottie-react";
-import type { LucideIcon } from "lucide-react";
+import { LottieSvg } from 'lottie-react';
+import type { LucideIcon } from 'lucide-react';
 import {
   AlertTriangle,
   Calendar,
@@ -19,12 +19,12 @@ import {
   Users,
   BarChart3,
   X,
-} from "lucide-react";
-import type { IconToken } from "../types/contentDocument";
-import dangerAnim from "../lottie/danger.json";
-import infoAnim from "../lottie/info.json";
-import successAnim from "../lottie/success.json";
-import warningAnim from "../lottie/warning.json";
+} from 'lucide-react';
+import type { IconToken } from '../types/contentDocument';
+import dangerAnim from '../lottie/danger.json';
+import infoAnim from '../lottie/info.json';
+import successAnim from '../lottie/success.json';
+import warningAnim from '../lottie/warning.json';
 
 const TOKEN_MAP: Record<IconToken, LucideIcon> = {
   calendar: Calendar,
@@ -62,20 +62,15 @@ type TokenIconProps = {
   animated?: boolean;
 };
 
-export function TokenIcon({
-  token,
-  className,
-  size = 18,
-  animated = false,
-}: TokenIconProps) {
+export function TokenIcon({ token, className, size = 18, animated = false }: TokenIconProps) {
   if (!token) return null;
 
   const lottieData = animated ? LOTTIE_BY_TOKEN[token] : undefined;
   if (lottieData) {
     return (
       <span
-        className={["token-lottie", className].filter(Boolean).join(" ")}
-        style={{ width: size, height: size, display: "inline-flex" }}
+        className={['token-lottie', className].filter(Boolean).join(' ')}
+        style={{ width: size, height: size, display: 'inline-flex' }}
         aria-hidden
       >
         <LottieSvg src={lottieData} loop style={{ width: size, height: size }} />
@@ -88,9 +83,7 @@ export function TokenIcon({
   return (
     <Icon
       size={size}
-      className={[className, animated ? "icon-animated" : ""]
-        .filter(Boolean)
-        .join(" ")}
+      className={[className, animated ? 'icon-animated' : ''].filter(Boolean).join(' ')}
       aria-hidden
     />
   );

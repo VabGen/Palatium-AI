@@ -1,25 +1,80 @@
 ---
-description: Tracing, metrics and hash-chained audit logging requirements
-globs: ["**/*.py"]
+description: Tracing, метрики Prometheus, hash-chained audit log, LLM-as-a-Judge
 alwaysApply: false
 ---
-
 # Observability = выживаемость
 
-- 100% узлов LangGraph StateGraph оборачиваются трассировкой (LangSmith/Langfuse):
-  вход, выход, latency, token usage — без исключений, даже для "простых" узлов.
-- Метрики Prometheus обязательны как минимум для:
-  `agent_request_duration_seconds{agent_type,node_name}`,
-  `agent_token_usage_total{model,agent_type,direction}`,
-  `agent_errors_total{agent_type,error_type}`,
-  `agent_human_escalation_total{reason}`,
-  `agent_cost_usd{task_type,model}`.
-- Audit log — **hash-chained**: каждая запись включает hash предыдущей записи
-  (`current_hash = sha256(previous_hash + payload)`), запись неизменяема (append-only),
-  retention согласно compliance-требованиям (по умолчанию 7 лет для регулируемых сценариев).
-- LLM-as-a-Judge — обязательный quality gate перед финализацией критичного выхода:
-  `accuracy < 6/10` или `safety < 8/10` → `requires_review = true`, узел не завершает workflow
-  автоматически.
+## Трассировка
 
-При генерации нового узла графа — сразу добавляй вызов трассировки и минимум одну метрику,
-не оставляй "добавим observability потом".
+- **Primary — OpenTelemetry.** LangSmith (если включён) — вторичная система,
+  получает данные через OTel-экспортёр, НЕ через отдельные декораторы.
+  Смешение декораторов `@traceable` и ручных span'ов — запрещено.
+- 100% узлов LangGraph StateGraph оборачиваются span'ом (helper из
+  `core/observability`): вход, выход, latency, token usage — без исключений,
+  даже для «простых» узлов.
+- Каждый вызов LLM и каждый tool call внутри агента — отдельный child-span.
+- Имена span'ов: `agent.<name>`, `node.<name>`, `tool.<name>` — единый реестр
+  имён в `core/observability/span_names.py`, не строковые литералы по коду.
+- Structlog — JSON-логи; корреляция ТОЛЬКО по `trace_id` (единое имя везде:
+  в AgentInput — 030, в логах, в метрических лейблах). `request_id`/`task_id`
+  как синонимы не использовать.
+- Перед логированием и записью в audit — пропуск через secret scanner (см. 020).
+  Секреты в payload audit-записи = критическая ошибка.
+
+## Метрики Prometheus — единый стиль
+
+- Стиль: `snake_case`, точки НЕ использовать, суффикс единицы обязателен
+  (`_seconds`, `_bytes`, `_total`). Библиотека `prometheus_client`.
+- Кардинальность: суммарное число активных series на метрику ≤ 1000.
+  НЕ ставить в лейблы `task_id`, `user_id`, неограниченные множества.
+
+Минимальный набор:
+
+| Метрика | Лейблы |
+|---|---|
+| `palatium_agent_request_duration_seconds` | `agent_type`, `node_name` |
+| `palatium_agent_token_usage_total` | `model`, `agent_type`, `direction` |
+| `palatium_agent_errors_total` | `agent_type`, `error_type` |
+| `palatium_agent_human_escalation_total` | `reason` |
+| `palatium_agent_cost_usd_total` | `model` (без task_type — кардинальность) |
+| `palatium_rbac_denied_total` | `agent_type`, `tool_name` |
+| `palatium_hitl_card_replay_rejected_total` | — |
+| `palatium_circuit_breaker_state` | `target` (0=closed, 1=half_open, 2=open) |
+| `palatium_memory_recall_at_k` | `k` |
+| `palatium_memory_query_duration_seconds` | — |
+| `palatium_memory_entry_size_bytes` | `memory_type` |
+| `palatium_context_tokens_used` | `agent_type` |
+
+## Audit log — hash-chained
+
+- Формат записи: canonical JSON (отсортированные ключи, UTF-8, без пробелов),
+  `current_hash = sha256(previous_hash + sha256(canonical_json(payload)))`.
+- Genesis-запись: `previous_hash = 64 × "0"`, создаётся при инициализации БД
+  миграцией и фиксируется вне БД (конфиг деплоя).
+- Append-only: НЕТ UPDATE/DELETE прав у app-роли БД — enforcement на уровне БД,
+  не только кода.
+- **Периодическая верификация** цепочки (cron/задача, минимум раз в сутки):
+  пересчёт hash от genesis; расхождение → CRITICAL-алерт.
+- События (минимум, синхронизировано с 020): RBAC-отказы, replay HITL-карточек,
+  переключения Kill Switch, HITL-решения (approve/reject/timeout), мутации памяти,
+  эскалации.
+- Retention: 7 лет для регулируемых сценариев (конфигурируемо); хранилище —
+  append-only (WORM/партиции без DELETE), не тот же инстанс, что OLTP-нагрузка.
+
+## LLM-as-a-Judge — quality gate
+
+- Обязателен перед финализацией критичного выхода:
+  `accuracy < 6/10` или `safety < 8/10` → `requires_review = true`,
+  узел не завершает workflow автоматически.
+- **Судья — модель ДРУГОГО провайдера, чем генератор выхода** (независимость
+  оценки); tier не ниже `standard`. Судить самому собой — запрещено.
+- Бюджет Judge-вызовов учитывается в `palatium_agent_cost_usd_total`
+  с лейблом `direction="judge"`.
+- Критерий «нужен ли Judge вообще» — политика `CriticPolicy`
+  (см. 055): low-risk стратегии (`ack_only`, `format_only`) проходят без судьи.
+  Все остальные ветки — Judge обязателен, «забыли подключить» — ошибка ревью.
+
+## Правило «никогда потом»
+
+При генерации нового узла графа — сразу добавляй span и минимум одну метрику.
+«Добавим observability потом» — запрещённая фраза.

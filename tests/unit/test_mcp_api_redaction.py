@@ -33,7 +33,7 @@ def test_redact_mcp_content_truncates_text_blocks() -> None:
     assert out[0]["token"] == "[REDACTED]"  # noqa: S105
 
 
-def test_unowned_session_not_readable_without_claim() -> None:
+def test_unowned_session_not_claimable() -> None:
     denied = evaluate_session_access(
         owner_user_id=None,
         caller_user_id="user-a",
@@ -43,14 +43,14 @@ def test_unowned_session_not_readable_without_claim() -> None:
     assert not denied.allowed
     assert denied.reason == "unowned_not_readable"
 
-    claimed = evaluate_session_access(
+    still_denied = evaluate_session_access(
         owner_user_id=None,
         caller_user_id="user-a",
         session_exists=True,
         allow_claim=True,
     )
-    assert claimed.allowed
-    assert claimed.verdict == "claim"
+    assert not still_denied.allowed
+    assert still_denied.reason == "unowned_not_readable"
 
 
 def test_contains_untrusted_tool_output_detects_fence() -> None:

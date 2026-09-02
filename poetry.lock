@@ -1699,6 +1699,21 @@ files = [
 ]
 
 [[package]]
+name = "json-repair"
+version = "0.63.4"
+description = "A package to repair broken json strings"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "json_repair-0.63.4-py3-none-any.whl", hash = "sha256:0f374f3eee21454aef0a5d72c06b8689b660a1788f80ab392639e3f7d5c5d458"},
+    {file = "json_repair-0.63.4.tar.gz", hash = "sha256:77aa642193d62b02b889e8ce0df33898d3ea87282f0b9d8653f8ce8772c642b4"},
+]
+
+[package.extras]
+schema = ["jsonschema (>=4.21) ; python_full_version < \"3.15.0a0\" or python_full_version >= \"3.15.0\"", "pydantic (>=2) ; python_full_version < \"3.15.0a0\" or python_full_version >= \"3.15.0\""]
+
+[[package]]
 name = "jsonpatch"
 version = "1.33"
 description = "Apply JSON-Patches (RFC 6902)"
@@ -5189,4 +5204,4 @@ pgsql = ["psycopg2"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.14,<3.15"
-content-hash = "76c3d9569c95338bddaa81d95af7ae4b475882c13e88a844f0203bd712b5edf0"
+content-hash = "98db8fd072be683c891916e1d28d7d115a168f36b59f41f164d4477c7cd447d1"

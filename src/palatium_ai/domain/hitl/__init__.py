@@ -22,7 +22,7 @@ from .escalation_policy import (
     TimeoutEscalationDecision,
 )
 from .notify import HitlEscalationNotice, HitlNotifierPort, HitlNotifyPolicy
-from .ports import HitlCardStore
+from .ports import HitlCardStore, HitlDenyResumePort
 from .risk_policy import HitlRiskPolicy
 from .step_up import (
     HitlStepUpChallenge,
@@ -47,6 +47,7 @@ __all__ = [
     "HitlChoiceResumeKind",
     "HitlChoiceSelection",
     "HitlDeadLetterPolicy",
+    "HitlDenyResumePort",
     "HitlEscalationNotice",
     "HitlNotifierPort",
     "HitlNotifyPolicy",

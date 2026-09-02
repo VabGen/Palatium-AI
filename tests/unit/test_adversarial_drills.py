@@ -251,7 +251,7 @@ def test_drill_rate_limit_on_process() -> None:
 def test_drill_write_side_effect_requires_interrupt() -> None:
     assert requires_interrupt_before_call("write")
     assert requires_interrupt_before_call("unknown")
-    assert not requires_interrupt_before_call("read")
+    assert requires_interrupt_before_call("read")
 
 
 def test_drill_sensitive_tool_args_denied() -> None:
@@ -449,8 +449,7 @@ def test_drill_agents_roster_requires_admin() -> None:
 # --- Drill: MCP surface (auth, SSRF, fail-closed, API redaction) ---
 
 
-def test_drill_mcp_stub_rejects_unauthenticated_jsonrpc(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When MCP_AUTH_TOKEN is set, stub JSON-RPC must not accept anonymous POST."""
+def _mcp_stub_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     import sys
 
     from pathlib import Path
@@ -459,9 +458,7 @@ def test_drill_mcp_stub_rejects_unauthenticated_jsonrpc(monkeypatch: pytest.Monk
 
     mcp_root = Path(__file__).resolve().parents[2] / "mcp_servers"
     monkeypatch.syspath_prepend(str(mcp_root))
-    # Fresh import so env-backed token is read under the patched value.
     sys.modules.pop("mcp_stub_auth", None)
-    monkeypatch.setenv("MCP_AUTH_TOKEN", "drill-mcp-token")
     from mcp_stub_auth import require_mcp_bearer  # type: ignore[import-not-found]
 
     app = FastAPI()
@@ -470,7 +467,14 @@ def test_drill_mcp_stub_rejects_unauthenticated_jsonrpc(monkeypatch: pytest.Monk
     async def rpc(_: None = Depends(require_mcp_bearer)) -> dict[str, str]:
         return {"ok": "1"}
 
-    client = TestClient(app)
+    return TestClient(app)
+
+
+def test_drill_mcp_stub_rejects_unauthenticated_jsonrpc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When MCP_AUTH_TOKEN is set, stub JSON-RPC must not accept anonymous POST."""
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "drill-mcp-token")
+    monkeypatch.delenv("MCP_ALLOW_ANON", raising=False)
+    client = _mcp_stub_client(monkeypatch)
     assert client.post("/", json={"jsonrpc": "2.0", "method": "tools/list", "id": "1"}).status_code == 401
     assert (
         client.post(
@@ -486,6 +490,19 @@ def test_drill_mcp_stub_rejects_unauthenticated_jsonrpc(monkeypatch: pytest.Monk
         headers={"Authorization": "Bearer drill-mcp-token"},
     )
     assert ok.status_code == 200
+
+
+def test_drill_mcp_stub_fail_closed_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset MCP_AUTH_TOKEN must reject JSON-RPC unless MCP_ALLOW_ANON is explicit."""
+    monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("MCP_ALLOW_ANON", raising=False)
+    client = _mcp_stub_client(monkeypatch)
+    denied = client.post("/", json={"jsonrpc": "2.0", "method": "tools/list", "id": "1"})
+    assert denied.status_code == 401
+
+    monkeypatch.setenv("MCP_ALLOW_ANON", "1")
+    open_client = _mcp_stub_client(monkeypatch)
+    assert open_client.post("/", json={"jsonrpc": "2.0", "method": "tools/list", "id": "1"}).status_code == 200
 
 
 def test_drill_mcp_client_sends_bearer_from_config() -> None:
@@ -571,6 +588,15 @@ def test_drill_mcp_api_redaction_and_unowned_read_deny() -> None:
         allow_claim=False,
     )
     assert not denied.allowed
+    # Mutate-path claim must not open residual MCP payloads on orphan threads.
+    claim_denied = evaluate_session_access(
+        owner_user_id=None,
+        caller_user_id="attacker",
+        session_exists=True,
+        allow_claim=True,
+    )
+    assert not claim_denied.allowed
+    assert claim_denied.reason == "unowned_not_readable"
 
 
 @pytest.mark.asyncio

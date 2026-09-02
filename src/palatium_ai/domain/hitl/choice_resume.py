@@ -26,6 +26,9 @@ class HitlChoiceSelection(BaseModel):
     option_kind: ActionKind = "custom"
 
 
+_HITL_LABEL_CLOSE = "<<<END_UNTRUSTED_HITL_LABEL>>>"
+
+
 class ChoiceResumePolicy:
     """Map card + action_id → typed resume envelope (no NL instructions)."""
 
@@ -33,6 +36,8 @@ class ChoiceResumePolicy:
     def resume_kind_for(cls, option: HITLOption) -> HitlChoiceResumeKind:
         """Derive resume axis from ActionKind — never from label text."""
         _ = cls
+        if option.kind == "format":
+            return "format"
         if option.kind in {"approve", "confirm"}:
             return "tool"
         if option.kind in {"reject", "dismiss"}:
@@ -58,12 +63,14 @@ class ChoiceResumePolicy:
         """Machine envelope only — no natural-language instructions for the graph.
 
         Label is fenced untrusted display data. Agents must route on resume_kind + action_id.
+        Fence-close markers inside the label are neutralized (same contract as tool output).
         """
         _ = cls
+        safe_label = selection.label.replace(_HITL_LABEL_CLOSE, "[redacted-end-fence]")
         return (
             f"<<<HITL_CHOICE_RESUME kind={selection.resume_kind} "
             f"action_id={selection.action_id} option_kind={selection.option_kind}>>>\n"
-            f"<<<UNTRUSTED_HITL_LABEL\n{selection.label}\n<<<END_UNTRUSTED_HITL_LABEL>>>"
+            f"<<<UNTRUSTED_HITL_LABEL\n{safe_label}\n{_HITL_LABEL_CLOSE}"
         )
 
 

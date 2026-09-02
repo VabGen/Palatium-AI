@@ -128,7 +128,7 @@ class McpToolRef(BaseModel):
 
     @property
     def server_wildcard(self) -> str:
-        """Server-scoped wildcard: mcp:<server>.*."""
+        """Legacy wildcard form — not accepted by ACL (exact pins only)."""
         return f"mcp:{self.server_name}.*"
 
 
@@ -172,7 +172,7 @@ def is_tool_invocation_allowed(
     Rules:
     - Exact match on `tool_name` for non-MCP tools.
     - `mcp.call` alone never authorizes a concrete server/tool.
-    - MCP requires `mcp:<server>.<tool>`, `mcp:<server>.*`, or `mcp:*`.
+    - MCP requires exact `mcp:<server>.<tool>` (wildcards rejected).
     """
     allowed = frozenset(allowed_tools)
     if tool_name != "mcp.call":
@@ -181,7 +181,7 @@ def is_tool_invocation_allowed(
     if server_name is None or mcp_tool_name is None:
         return False
     ref = mcp_tool_ref(server_name, mcp_tool_name)
-    return bool(allowed & {ref.acl_key, ref.server_wildcard, "mcp:*"})
+    return ref.acl_key in allowed
 
 
 def classify_side_effect(
@@ -227,11 +227,12 @@ def requires_interrupt_before_call(
     """Whether human approval is required before the MCP call.
 
     Prefer explicit ``pin.requires_hitl`` when the tool is platform-pinned.
-    Unpinned / unknown always interrupt (fail-closed).
+    Unpinned calls always interrupt — never trust a free-floating side_effect claim.
     """
+    _ = side_effect
     if pin is not None:
         return pin.requires_hitl
-    return side_effect in {"write", "unknown"}
+    return True
 
 
 def risk_score_for_tier(tier: ToolRiskTier) -> float:
@@ -250,6 +251,23 @@ def binding_hitl_metadata(
 ) -> tuple[SideEffectClass, ToolRiskTier, bool]:
     """side_effect, risk_tier, requires_hitl for capability index / planners."""
     pinned = resolve_platform_pin(descriptor, server_name=server_name)
+    if pinned is not None:
+        return pinned.side_effect, pinned.risk_tier, pinned.requires_hitl
+    return "unknown", "medium", True
+
+
+def binding_hitl_metadata_for_ref(
+    *,
+    server_name: str,
+    tool_name: str,
+) -> tuple[SideEffectClass, ToolRiskTier, bool]:
+    """Discovery-time HITL hints from platform pin name (no schema yet).
+
+    Execution must still call ``resolve_platform_pin`` with the full descriptor —
+    schema fingerprint is verified only at call time.
+    """
+    ref = mcp_tool_ref(server_name, tool_name)
+    pinned = _PLATFORM_SIDE_EFFECTS.get(ref.acl_key)
     if pinned is not None:
         return pinned.side_effect, pinned.risk_tier, pinned.requires_hitl
     return "unknown", "medium", True

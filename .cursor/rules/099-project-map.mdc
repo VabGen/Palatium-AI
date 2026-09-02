@@ -1,0 +1,42 @@
+---
+description: Карта проекта PALATIUM-AI для навигации
+globs: []
+alwaysApply: true
+---
+
+# Карта проекта
+
+- Стек: Python 3.14, FastAPI, LangGraph, LangMem, Cognee, FastMCP, PostgreSQL
+  (pgvector; FTS через tsvector/ts_rank_cd — 060), Neo4j, Redis, LiteLLM,
+  structlog, OpenTelemetry.
+- **Индекс правил:** 000-архитектура · 010-типизация · 020-безопасность ·
+  030-контракты · 040-observability · 050-антипаттерны · 055-принципиальные фиксы ·
+  060-память · 065-контекст · 070-MCP · 075-тесты · 090-JavaEdms. Этот файл —
+  навигация; источники истины — указанные правила, дублей не создаём (050).
+- Исходники: `src/palatium_ai/` — 5 слоёв (см. 000-architecture).
+- Точка входа API: `presentation/api/` → routers. WS: `presentation/websockets/`.
+  Composition root (DI) — см. 000; запуск: `python -m palatium_ai` (или uvicorn-скриптом).
+- Оркестратор: `application/orchestration/graph.py` (StateGraph, узлы в `nodes.py`,
+  state — `orchestration/state.py`, 065).
+- Контракты агентов: `application/agents/base.py`.
+  Контракт Harness: `domain/ports/harness.py` (065); реализация —
+  `application/agents/harness.py`.
+- Политики (ContinuityPolicy, CriticPolicy, RouteStrategy): `domain/policies/`,
+  Literal-типы осей — `domain/policies/types.py` (055).
+- Реестр агентов — ЕДИНСТВЕННЫЙ источник: 000-architecture (полный перечень агентов).
+  Здесь список агентов НЕ дублируется.
+- Схемы БД: `knowledge` / `memory` — размерности и embedding-модели ТОЛЬКО в
+  реестре `core/types/embeddings.py` (060), не в этом файле.
+  Миграции в `infrastructure/database/migrations/`.
+- Скиллы: `.cursor/skills/<name>/SKILL.md`; `reference.md` — через tool call
+  `skill_reference` (065).
+- Фронтенд: React 18 + Vite (SPA, без SSR/RSC — гидратационные оговорки
+  из apple-design/animate тут неприменимы), Tailwind CSS. Пакет — `web/`.
+  Фронтенд-craft скиллы (анимация/UI-полировка Emil Kowalski) — индекс в
+  `.cursor/skills/web-craft/SKILL.md`.
+- EDMS-интеграция: `mcp_servers/edms/edms_mcp_server.py`; JavaEdms — read-only
+  reference (см. 090).
+- Инструменты: закрытый перечень и контракт — 070 (`ToolDefinition`).
+- Перед изменением: найди все использования через grep по порту/классу,
+  не угадывай сигнатуры.
+- `__pycache__` никогда не индексировать и не редактировать.

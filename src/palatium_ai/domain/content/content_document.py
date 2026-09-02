@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 IconToken = Literal[
     "calendar",
@@ -34,7 +34,7 @@ CalloutTone = Literal["info", "success", "warning", "danger"]
 ListStyle = Literal["ordered", "unordered"]
 ChartKind = Literal["bar", "line", "pie"]
 StepStatus = Literal["pending", "active", "done", "blocked"]
-ActionKind = Literal["approve", "reject", "confirm", "dismiss", "custom"]
+ActionKind = Literal["approve", "reject", "confirm", "dismiss", "custom", "format"]
 ActionStyle = Literal["primary", "secondary", "danger"]
 HeadingLevel = Literal[1, 2, 3]
 # How the document expects human participation (server turns this into HITL cards).
@@ -301,6 +301,13 @@ class ContentDocument(BaseModel):
         if len(text) > limit:
             return f"{text[: limit - 1]}…"
         return text
+
+    @model_validator(mode="after")
+    def _validate_structured_shapes(self) -> ContentDocument:
+        """Enforce table/chart shape on every validate path (not only parse_*)."""
+        _validate_table_shapes(self)
+        _validate_chart_shapes(self)
+        return self
 
 
 def _block_plain_lines(block: ContentBlock) -> list[str]:

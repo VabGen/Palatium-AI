@@ -2,7 +2,7 @@
 
 """Модуль database содержит настройки PostgreSQL и Redis."""
 
-from pydantic import Field, computed_field
+from pydantic import Field, SecretStr, computed_field, field_validator
 
 from .base import BaseConfig
 
@@ -13,7 +13,7 @@ class DatabaseConfig(BaseConfig):
     host: str = Field(default="localhost", validation_alias="POSTGRES_HOST")
     port: int = Field(default=5432, validation_alias="POSTGRES_PORT")
     user: str = Field(validation_alias="POSTGRES_USER")
-    password: str = Field(validation_alias="POSTGRES_PASSWORD")
+    password: SecretStr = Field(validation_alias="POSTGRES_PASSWORD")
     db: str = Field(validation_alias="POSTGRES_DB")
     db_schema: str = Field(default="public", validation_alias="POSTGRES_SCHEMA")
     pool_size: int = Field(default=10, validation_alias="DB_POOL_SIZE")
@@ -24,13 +24,15 @@ class DatabaseConfig(BaseConfig):
     @property
     def async_dsn(self) -> str:
         """Возвращает асинхронный DSN для PostgreSQL."""
-        return f"postgresql+asyncpg://{self.user}:{self.password}@{self.host}:{self.port}/{self.db}"
+        secret = self.password.get_secret_value()
+        return f"postgresql+asyncpg://{self.user}:{secret}@{self.host}:{self.port}/{self.db}"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def psycopg_dsn(self) -> str:
         """DSN for psycopg / LangGraph AsyncPostgresSaver (not SQLAlchemy)."""
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.db}"
+        secret = self.password.get_secret_value()
+        return f"postgresql://{self.user}:{secret}@{self.host}:{self.port}/{self.db}"
 
 
 class RedisConfig(BaseConfig):
@@ -39,12 +41,21 @@ class RedisConfig(BaseConfig):
     host: str = Field(default="localhost", validation_alias="REDIS_HOST")
     port: int = Field(default=6379, validation_alias="REDIS_PORT")
     db: int = Field(default=0, validation_alias="REDIS_DB")
-    password: str | None = Field(default=None, validation_alias="REDIS_PASSWORD")
+    password: SecretStr | None = Field(default=None, validation_alias="REDIS_PASSWORD")
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def _empty_password_as_none(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        return value
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def dsn(self) -> str:
         """Возвращает DSN для Redis."""
-        if self.password:
-            return f"redis://:{self.password}@{self.host}:{self.port}/{self.db}"
+        if self.password is not None:
+            secret = self.password.get_secret_value()
+            if secret:
+                return f"redis://:{secret}@{self.host}:{self.port}/{self.db}"
         return f"redis://{self.host}:{self.port}/{self.db}"

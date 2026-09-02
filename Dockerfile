@@ -37,24 +37,25 @@ ARG WITH_GRAPHITI=0
 # ---------------------------------------------------------------------------
 # Stage: base — общий Python runtime foundation
 # ---------------------------------------------------------------------------
-FROM python:${PYTHON_VERSION}-slim AS base
+    FROM python:${PYTHON_VERSION}-slim AS base
 
-ARG PYTHON_VERSION
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONFAULTHANDLER=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+    ARG PYTHON_VERSION
+    ENV PYTHONDONTWRITEBYTECODE=1 \
+        PYTHONUNBUFFERED=1 \
+        PYTHONFAULTHANDLER=1 \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 \
+        PIP_NO_CACHE_DIR=1 \
+        LANG=C.UTF-8 \
+        LC_ALL=C.UTF-8
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        tini \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    RUN apt-get update \
+        && apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            tini \
+            fonts-liberation \
+        && rm -rf /var/lib/apt/lists/* \
+        && apt-get clean
 
 # ---------------------------------------------------------------------------
 # Stage: deps — Poetry + lockfile install (кэш BuildKit)
@@ -80,8 +81,6 @@ WORKDIR /app
 
 COPY pyproject.toml poetry.lock README.md ./
 
-# Poetry 2.x: `poetry lock` только синхронизирует lock/content-hash, не апгрейдит пакеты.
-# (флага --no-update больше нет)
 RUN --mount=type=cache,target=/tmp/poetry_cache \
     poetry lock --no-ansi \
     && poetry install --only main --no-ansi --no-root
@@ -89,22 +88,22 @@ RUN --mount=type=cache,target=/tmp/poetry_cache \
 # ---------------------------------------------------------------------------
 # Stage: builder — установка пакета + исходники
 # ---------------------------------------------------------------------------
-FROM deps AS builder
+    FROM deps AS builder
 
-ARG WITH_GRAPHITI=0
+    ARG WITH_GRAPHITI=0
 
-COPY src ./src
-COPY alembic.ini ./
-COPY alembic ./alembic
+    COPY src ./src
+    COPY alembic.ini ./
+    COPY alembic ./alembic
 
-RUN --mount=type=cache,target=/tmp/poetry_cache \
-    poetry install --only main --no-ansi \
-    && if [ "${WITH_GRAPHITI}" = "1" ]; then \
-         /app/.venv/bin/pip install --no-cache-dir "graphiti-core>=0.11.0,<1.0.0"; \
-       fi \
-    && find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
-    && find /app/.venv -type f -name "*.pyc" -delete \
-    && find /app/.venv -type f -name "*.pyo" -delete
+    RUN --mount=type=cache,target=/tmp/poetry_cache \
+        poetry install --only main --no-ansi \
+        && if [ "${WITH_GRAPHITI}" = "1" ]; then \
+             /app/.venv/bin/pip install --no-cache-dir "graphiti-core>=0.11.0,<1.0.0"; \
+           fi \
+        && find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
+        && find /app/.venv -type f -name "*.pyc" -delete \
+        && find /app/.venv -type f -name "*.pyo" -delete
 
 # ---------------------------------------------------------------------------
 # Stage: runtime — production image (DEFAULT)
@@ -132,7 +131,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
     UVICORN_PORT=8000 \
     UVICORN_WORKERS=${UVICORN_WORKERS} \
     RUN_MIGRATIONS=0 \
-    # tini as PID 1 — корректная обработка сигналов / zombie reaping
     TINI_SUBREAPER=1
 
 RUN groupadd --system --gid 999 app \
@@ -143,7 +141,6 @@ RUN groupadd --system --gid 999 app \
 
 WORKDIR /app
 
-# Только артефакты рантайма — без Poetry, gcc, headers, cache
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
@@ -151,7 +148,6 @@ COPY --from=builder --chown=app:app /app/alembic /app/alembic
 COPY --chown=app:app env/.env.example /app/env/.env.example
 COPY --chown=app:app scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
 
-# CRLF с Windows ломает shebang → "No such file or directory" (exit 127)
 RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
     && chmod 0555 /app/scripts/docker-entrypoint.sh \
     && chmod -R a-w /app/.venv /app/src /app/alembic /app/alembic.ini \
@@ -166,7 +162,6 @@ STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD python -c "import os,urllib.request; p=os.environ.get('UVICORN_PORT','8000'); urllib.request.urlopen(f'http://127.0.0.1:{p}/health', timeout=3)"
 
-# sh явно — устойчиво к отсутствию +x / странному shebang
 ENTRYPOINT ["/usr/bin/tini", "--", "sh", "/app/scripts/docker-entrypoint.sh"]
 CMD ["uvicorn"]
 
@@ -208,7 +203,9 @@ RUN groupadd --system --gid 999 app 2>/dev/null || true \
     && chown -R app:app /app \
     && apt-get update \
     && apt-get install -y --no-install-recommends bash \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*\
+    && curl -L -o src/palatium_ai/infrastructure/export/fonts/DejaVuSans.ttf \
+  https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf
 USER app
 
 WORKDIR /app

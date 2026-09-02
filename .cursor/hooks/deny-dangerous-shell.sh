@@ -1,45 +1,14 @@
 #!/usr/bin/env bash
-# beforeShellExecution — блокирует деструктивные/опасные команды.
-# Читает JSON из stdin; пишет JSON permission в stdout.
-# Без зависимости от jq (Windows / Git Bash): парсинг через Python.
+# beforeShellExecution — DEPRECATED STUB.
 
 set -euo pipefail
-INPUT="$(cat)"
 
-extract_command() {
-  if command -v jq >/dev/null 2>&1; then
-    echo "$INPUT" | jq -r '.command // ""'
-    return
-  fi
-  printf '%s' "$INPUT" | python -c "import sys,json; print(json.load(sys.stdin).get('command') or '')"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-emit_json() {
-  local payload="$1"
-  if command -v jq >/dev/null 2>&1; then
-    echo "$payload"
-    return
-  fi
-  printf '%s\n' "$payload"
-}
+if ! command -v python >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+  echo '{"permission":"deny","agentMessage":"deny-dangerous-shell.sh: python недоступен, канонический guard не может выполниться — fail-closed (020).","userMessage":"Команда заблокирована: guard безопасности недоступен."}'
+  exit 0
+fi
 
-CMD="$(extract_command)"
-
-DENY_PATTERNS=(
-  'rm[[:space:]]+-rf[[:space:]]+/'
-  'git[[:space:]]+push[[:space:]]+--force[[:space:]]+.*(main|master|prod)'
-  'curl[[:space:]].*\|[[:space:]]*bash'
-  'wget[[:space:]].*\|[[:space:]]*sh'
-  ':(){ :\|:& };:'
-  'DROP[[:space:]]+TABLE'
-  'DROP[[:space:]]+DATABASE'
-)
-
-for pattern in "${DENY_PATTERNS[@]}"; do
-  if echo "$CMD" | grep -Eiq "$pattern"; then
-    python -c "import json,sys; print(json.dumps({'permission':'deny','agentMessage':'Команда заблокирована политикой ZeroTrust Agent Platform (деструктивная/опасная операция).','userMessage':'Заблокирована потенциально опасная команда: '+sys.argv[1]}))" "$CMD"
-    exit 0
-  fi
-done
-
-python -c "import json; print(json.dumps({'permission':'allow'}))"
+PY="$(command -v python || command -v python3)"
+exec "$PY" "$SCRIPT_DIR/deny-dangerous-shell.py"

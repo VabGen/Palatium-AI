@@ -17,14 +17,13 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.core.observability.turn_tokens import get_turn_token_collector
 from palatium_ai.domain.agents.contracts import AgentContext, TaskResult
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion, LLMResponseFormat
-from palatium_ai.infrastructure.llm.cost import estimate_completion_cost_usd
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from palatium_ai.application.services.cost_budget import CostBudgetService
     from palatium_ai.domain.agents.agent_config import AgentConfig
-    from palatium_ai.domain.ports.llm import LLMPort
+    from palatium_ai.domain.ports.llm import LlmCostEstimatorPort, LLMPort
 
 logger = get_logger(__name__)
 
@@ -39,9 +38,11 @@ class BaseAgent(ABC):
         llm: LLMPort,
         *,
         cost_budget: CostBudgetService | None = None,
+        cost_estimator: LlmCostEstimatorPort | None = None,
     ) -> None:
         self._llm = llm
         self._cost_budget = cost_budget
+        self._cost_estimator = cost_estimator
 
     @abstractmethod
     async def execute(self, task_input: BaseModel, context: AgentContext) -> TaskResult:
@@ -90,11 +91,13 @@ class BaseAgent(ABC):
                     timeout=self.config.timeout_seconds,
                 )
                 usage = completion.usage
-                cost_usd = estimate_completion_cost_usd(
-                    model=completion.model or (resolved_model or ""),
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
-                )
+                cost_usd = 0.0
+                if self._cost_estimator is not None:
+                    cost_usd = self._cost_estimator(
+                        model=completion.model or (resolved_model or ""),
+                        prompt_tokens=usage.prompt_tokens,
+                        completion_tokens=usage.completion_tokens,
+                    )
                 agent_metrics.record_token_usage(
                     agent_type=self.config.role,
                     model=completion.model,

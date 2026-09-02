@@ -58,7 +58,7 @@ def _client(
     *,
     owner_user_id: str = "user-owner",
     deny_foreign: bool = True,
-) -> tuple[TestClient, HitlService, JwtTokenService]:
+) -> tuple[TestClient, HitlService, JwtTokenService, Any]:
     security = _security()
     tokens = JwtTokenService(security)
     hitl_service = HitlService(InMemoryHitlCardStore(), signing_secret=HITL_HMAC)
@@ -111,7 +111,7 @@ def _client(
     app.state.token_service = tokens
     app.include_router(hitl_router.router, prefix="/api/hitl")
     app.add_middleware(AuthMiddleware, security=security, token_service=tokens)
-    return TestClient(app), hitl_service, tokens
+    return TestClient(app), hitl_service, tokens, intent_service
 
 
 def _bearer(tokens: JwtTokenService, *, sub: str, roles: tuple[str, ...] = ()) -> dict[str, str]:
@@ -121,7 +121,7 @@ def _bearer(tokens: JwtTokenService, *, sub: str, roles: tuple[str, ...] = ()) -
 
 @pytest.mark.asyncio
 async def test_hitl_idor_foreign_user_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, hitl_service, tokens = _client(monkeypatch)
+    client, hitl_service, tokens, _intent = _client(monkeypatch)
     card = await hitl_service.create_review_card(
         thread_id="th-owner",
         task_id="task-1",
@@ -175,7 +175,7 @@ async def test_dialog_payload_strips_action_tokens() -> None:
 async def test_manager_resolve_endpoint_for_escalated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, hitl_service, tokens = _client(monkeypatch)
+    client, hitl_service, tokens, intent_service = _client(monkeypatch)
     card = await hitl_service.create_tool_approval_card(
         thread_id="th-owner",
         task_id="task-mcp",
@@ -184,6 +184,8 @@ async def test_manager_resolve_endpoint_for_escalated(
         side_effect="write",
         risk_score=0.9,
         argument_preview="q=x",
+        owner_user_id="user-owner",
+        org_id="org-1",
     )
     expired = card.model_copy(update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)})
     await hitl_service._store.save(expired)
@@ -214,13 +216,18 @@ async def test_manager_resolve_endpoint_for_escalated(
     body: dict[str, Any] = response.json()
     assert body["resolve"]["card"]["status"] == "resolved"
     assert body["resumed"] is not None
+    # Resume must act as thread owner, not manager subject (ownership split-brain).
+    intent_service.resume_after_tool_approval.assert_awaited()
+    resume_kwargs = intent_service.resume_after_tool_approval.await_args.kwargs
+    assert resume_kwargs["user_id"] == "user-owner"
+    assert resume_kwargs["org_id"] == "org-1"
 
 
 @pytest.mark.asyncio
 async def test_step_up_challenge_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, hitl_service, tokens = _client(monkeypatch)
+    client, hitl_service, tokens, _intent = _client(monkeypatch)
     # Force step-up on this service instance.
     hitl_service._step_up_required = True
     card = await hitl_service.create_tool_approval_card(
@@ -263,7 +270,7 @@ async def test_step_up_challenge_endpoint(
 async def test_escalated_queue_redacts_and_scopes_org(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, hitl_service, tokens = _client(monkeypatch)
+    client, hitl_service, tokens, _intent = _client(monkeypatch)
     card_a = await hitl_service.create_tool_approval_card(
         thread_id="th-owner",
         task_id="task-a",

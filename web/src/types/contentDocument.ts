@@ -1,41 +1,41 @@
 export type IconToken =
-  | "calendar"
-  | "mail"
-  | "search"
-  | "document"
-  | "warning"
-  | "success"
-  | "danger"
-  | "info"
-  | "user"
-  | "users"
-  | "clock"
-  | "chart"
-  | "shield"
-  | "check"
-  | "x"
-  | "link"
-  | "edit"
-  | "settings";
+  | 'calendar'
+  | 'mail'
+  | 'search'
+  | 'document'
+  | 'warning'
+  | 'success'
+  | 'danger'
+  | 'info'
+  | 'user'
+  | 'users'
+  | 'clock'
+  | 'chart'
+  | 'shield'
+  | 'check'
+  | 'x'
+  | 'link'
+  | 'edit'
+  | 'settings';
 
-export type CalloutTone = "info" | "success" | "warning" | "danger";
-export type ListStyle = "ordered" | "unordered";
-export type ChartKind = "bar" | "line" | "pie";
-export type StepStatus = "pending" | "active" | "done" | "blocked";
-export type ActionKind = "approve" | "reject" | "confirm" | "dismiss" | "custom";
-export type ActionStyle = "primary" | "secondary" | "danger";
+export type CalloutTone = 'info' | 'success' | 'warning' | 'danger';
+export type ListStyle = 'ordered' | 'unordered';
+export type ChartKind = 'bar' | 'line' | 'pie';
+export type StepStatus = 'pending' | 'active' | 'done' | 'blocked';
+export type ActionKind = 'approve' | 'reject' | 'confirm' | 'dismiss' | 'custom';
+export type ActionStyle = 'primary' | 'secondary' | 'danger';
 /** Opaque id resolved by UI registry — not a platform product enum. */
 export type WidgetKind = string;
 
 export type HeadingBlock = {
-  type: "heading";
+  type: 'heading';
   level: 1 | 2 | 3;
   text: string;
   icon?: IconToken | null;
 };
 
 export type ParagraphBlock = {
-  type: "paragraph";
+  type: 'paragraph';
   text: string;
 };
 
@@ -46,19 +46,19 @@ export type ListItem = {
 };
 
 export type ListBlock = {
-  type: "list";
+  type: 'list';
   style: ListStyle;
   items: ListItem[];
 };
 
 export type TableBlock = {
-  type: "table";
+  type: 'table';
   columns: string[];
   rows: string[][];
 };
 
 export type CalloutBlock = {
-  type: "callout";
+  type: 'callout';
   tone: CalloutTone;
   title?: string | null;
   body: string;
@@ -66,13 +66,13 @@ export type CalloutBlock = {
 };
 
 export type CodeBlock = {
-  type: "code";
+  type: 'code';
   language: string;
   content: string;
 };
 
 export type FormulaBlock = {
-  type: "formula";
+  type: 'formula';
   latex: string;
 };
 
@@ -83,7 +83,7 @@ export type KeyValueItem = {
 };
 
 export type KeyValueBlock = {
-  type: "kv";
+  type: 'kv';
   items: KeyValueItem[];
 };
 
@@ -95,7 +95,7 @@ export type StepItem = {
 };
 
 export type StepsBlock = {
-  type: "steps";
+  type: 'steps';
   items: StepItem[];
 };
 
@@ -105,7 +105,7 @@ export type ChartSeries = {
 };
 
 export type ChartBlock = {
-  type: "chart";
+  type: 'chart';
   kind: ChartKind;
   labels: string[];
   series: ChartSeries[];
@@ -113,11 +113,11 @@ export type ChartBlock = {
 };
 
 export type DividerBlock = {
-  type: "divider";
+  type: 'divider';
 };
 
 export type WidgetBlock = {
-  type: "widget";
+  type: 'widget';
   kind: WidgetKind;
   ref_id: string;
   title?: string | null;
@@ -152,7 +152,7 @@ export type DocumentMeta = {
   confidence: number;
   requires_review: boolean;
   source_refs: string[];
-  interaction?: "none" | "choice" | "confirm";
+  interaction?: 'none' | 'choice' | 'confirm';
 };
 
 export type ContentDocument = {
@@ -167,7 +167,7 @@ export type ContentDocument = {
 export type FormatterTaskResult = {
   task_id: string;
   agent_role: string;
-  status: "success" | "failure" | "partial";
+  status: 'success' | 'failure' | 'partial';
   confidence: number;
   requires_review: boolean;
   error: string | null;
@@ -176,12 +176,7 @@ export type FormatterTaskResult = {
 };
 
 export type HITLCardStatus =
-  | "pending"
-  | "resolved"
-  | "expired"
-  | "escalated"
-  | "auto_rejected"
-  | "dead_letter";
+  'pending' | 'resolved' | 'expired' | 'escalated' | 'auto_rejected' | 'dead_letter';
 
 export type HITLOption = {
   action_id: string;
@@ -192,7 +187,7 @@ export type HITLOption = {
   action_token: string;
 };
 
-export type HITLCardPurpose = "quality_review" | "mcp_tool_approval" | "user_choice";
+export type HITLCardPurpose = 'quality_review' | 'mcp_tool_approval' | 'user_choice';
 
 export type HITLCardView = {
   card_id: string;

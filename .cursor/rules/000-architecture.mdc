@@ -1,51 +1,97 @@
----
-description: Core reference architecture for ZeroTrust Multi-Agent AI Platform
-globs:
-alwaysApply: true
----
 
-# Архитектура платформы (обязательно к соблюдению)
+- При вопросе «в какой каталог положить файл» — руководствуйся ТОЛЬКО картой кода.
+- L-уровни используй для рассуждений о деплое, инфраструктуре и границах процессов.
 
-Ты работаешь над production-грейд мультиагентной ИИ-платформой (ZeroTrust Agent Platform).
-Перед генерацией любого кода определи, к какому слою он относится, и не нарушай направление
-зависимостей.
+## Хексагональная / чистая архитектура (правила импортов)
 
-## Слои (сверху вниз, зависимости строго вниз)
+- `domain/` — НЕ импортирует НИЧЕГО из других слоёв. Только stdlib + pydantic.
+  Никаких фреймворков, SDK провайдеров LLM, ORM, HTTP-клиентов.
+- `application/` — импортирует `domain` и `core`. НЕ импортирует `infrastructure`
+  напрямую — только через порты (`typing.Protocol` / ABC) из `domain/ports`.
+- `infrastructure/` — реализует порты из `domain/ports` (LiteLLM, LangGraph
+  checkpointer, MCP client, Postgres, Neo4j, Redis). Импортирует `domain` и `core`.
+- `presentation/` — импортирует только `application`. НЕ знает об `infrastructure`.
+- `core/` — импортируется всеми слоями, сам НЕ импортирует ни один слой
+  (только stdlib + сторонние библиотеки без доменных типов).
+- Один агент = одна ответственность (SRP). Агент делает два дела — раздели его.
 
-```
-L6 API Gateway        Kong/Traefik · WAF · Rate Limit · OAuth2/JWT
-L5 Orchestration       LangGraph StateGraph + Temporal
-L4 Agent Layer         Supervisor · Router · 12 специализированных агентов
-L3 Protocol            MCP Client ↔ MCP Servers · A2A · SSE
-L2 Memory              Working · Redis · pgvector/Qdrant · Neo4j
-L1 Model               LiteLLM Proxy · Fallback chains · Budget caps
-L0 Observability/Sec   LangSmith · Prometheus · Guardrails · Vault · Audit
-```
+## Единственное исключение — composition root
 
-## Хексагональная / чистая архитектура
+- Ручная сборка зависимостей (DI) допустима ТОЛЬКО в корне композиции:
+  `src/palatium_ai/composition.py` (или `main.py`). Это единственное место,
+  где разрешён import `infrastructure` для передачи реализаций портов в `application`.
+- Композиция ничего не решает о бизнес-логике — только собирает граф объектов.
+- `presentation/` (роутеры, WS) по-прежнему НЕ импортирует `infrastructure` —
+  зависимости приходят к нему уже собранными через composition.
 
-- Domain → Application → Infrastructure → Presentation.
-- Domain-слой (контракты агентов, правила маршрутизации, бизнес-инварианты) НЕ импортирует
-  фреймворки, SDK провайдеров LLM, ORM или HTTP-клиенты напрямую.
-- Инфраструктура (LiteLLM, LangGraph checkpointer, MCP client, Postgres) реализует интерфейсы,
-  объявленные в domain/application через `typing.Protocol`.
-- Один агент = одна ответственность (SRP). Если агент делает больше одного дела — раздели его.
+## Тесты — исключение из правил импортов
+
+Тесты (`tests/`) могут импортировать любой слой — это их природа.
+Но тестируемый код правил не нарушает; нарушения в src — всегда баг.
+
+## Назначение каталогов
+
+| Каталог | Содержимое |
+|---|---|
+| `domain/agents` | Контракты и сущности агентов (без логики LLM) |
+| `domain/ports` | `LLMPort`, `MemoryPort`, `VectorStorePort`, `GraphPort`, `MCPPort` |
+| `domain/memory` | Модели памяти: `MemoryEntry`, `MemoryType`, `ImportanceScore` |
+| `application/agents` | Реализации агентов (BaseAgent-наследники), Harness |
+| `application/orchestration` | LangGraph: state, nodes, graph |
+| `application/services` | Сервисы-фасады над агентами |
+| `application/tools` | ToolRegistry, обёртки MCP-инструментов |
+| `infrastructure/llm` | Адаптеры LiteLLM/OpenAI, fallback-цепочки |
+| `infrastructure/memory` | Реализация MemoryPort (pgvector + LangMem) |
+| `infrastructure/mcp` | FastMCP-сервер и клиент |
+| `infrastructure/database` | SQLAlchemy-модели, миграции (детали — только здесь) |
+| `core/resilience` | Retry, circuit breaker, timeouts — ВСЕ внешние вызовы через него |
+| `core/observability` | structlog, OTel, метрики |
+| `core/types` | Общие константы (размерности embedding, лимиты), типы |
+
+## Вне слоевой модели
+
+- `mcp_servers/**` — отдельные процессы (MCP-серверы), НЕ часть пакета
+  `palatium_ai`, слои на них не распространяются. Правила — в `090-javaedms-reference`.
+- Точка входа (`main.py`), настройки приложения, DI-сборка — корень композиции, см. выше.
+- Temporal — в стеке НЕ используется (отсутствует). Долгоживущие workflow —
+  только LangGraph + Redis checkpointer. Не добавляй Temporal без явного запроса.
+
+## Запрещено
+
+- ❌ `from palatium_ai.infrastructure import ...` внутри `application/` или `domain/`
+  (единственное исключение — composition root)
+- ❌ SQLAlchemy-модели как возвращаемые типы сервисов — только доменные модели
+- ❌ Прямые вызовы LLM вне адаптера `LLMPort`; прямой `import litellm` вне `infrastructure/llm`
+- ❌ Бизнес-логика в роутерах (`presentation/api/routers`) — только делегирование в services
+- ❌ Утиная типизация на границах слоёв — только объявленные Protocol/ABC
+- ❌ Импорт слоёв внутри `core/`
 
 ## Реестр агентов (не добавляй новых сущностей мимо реестра без явного запроса)
 
-| # | Агент | Ответственность |
-|---|-------|-----------------|
-| 1 | TextIngestor | Чанкинг, нормализация текста |
-| 2 | IntentClassifier | Классификация, temperature=0 |
-| 3 | Supervisor | Декомпозиция и план, НИКОГДА не исполняет |
-| 4 | Reasoner | Верификация рассуждений |
-| 5 | Planner | Граф шагов, зависимости |
-| 6 | ContextWeaver | Сборка контекста (RAG) |
-| 7 | Coder | Код в sandbox (E2B) |
-| 8 | Researcher | Внешний поиск/извлечение |
-| 9 | Analyst | Анализ, тренды |
-| 10 | Critic | Контроль качества перед передачей дальше |
-| 11 | Formatter | MD/PDF/JSON форматирование |
-| 12 | MemoryKeeper | Semantic + episodic + graph память |
+> Актуальный состав — ВСЕГДА эта таблица. Формулировки вида «12 агентов» в других
+> документах — устаревшие; истина здесь.
 
-Перед реализацией нового узла StateGraph — сверь его роль с этим реестром.
+| Агент | Статус | Ответственность |
+|---|---|---|
+| intent_classifier | exists | Классификация намерения, temperature=0 |
+| supervisor | exists | Декомпозиция и план. НИКОГДА не исполняет задачи сам |
+| researcher | exists | Внешний поиск/извлечение через MCP |
+| critic | exists | Quality gate перед передачей дальше/финализацией |
+| formatter | exists | MD/PDF/JSON форматирование |
+| memory_keeper | exists | Semantic + episodic + graph память |
+| context_enricher | merge | Бывш. context_weaver + contextualizer: сборка/обогащение контекста |
+| text_ingestor | planned | Чанкинг, нормализация текста при ингесте документов |
+| coder | deferred | Код только в sandbox, по мере необходимости |
+| analyst | deferred | Анализ, тренды — по мере необходимости |
+| planner | merged | Планирование = Supervisor. Отдельного не создавать |
+| reasoner | merged | Верификация рассуждений = Critic. Отдельного не создавать |
+
+**Router — НЕ агент.** Это узел/логика маршрутизации внутри Supervisor/графа.
+Не создавать класс `RouterAgent`.
+
+Новый узел StateGraph = новая строка этой таблицы (сначала сверь роль).
+Агент мимо реестра — ошибка ревью.
+
+## При создании нового файла
+
+Всегда указывай в начале ответа, в какой слой он попадает и почему.

@@ -60,3 +60,18 @@ def test_no_choice_passthrough() -> None:
         reasoning="plain ask",
     )
     assert UserChoiceIntentPolicy.normalize(raw) is raw
+
+
+def test_select_cap_alone_does_not_force_choice() -> None:
+    """Capability token 'select' is not a choice-axis signal (only user_choice)."""
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        requires_user_choice=False,
+        candidate_capabilities=("select",),
+        confidence=0.88,
+        reasoning="noisy cap",
+    )
+    out = UserChoiceIntentPolicy.normalize(raw)
+    assert out.requires_user_choice is False
+    assert out.task_kind == "knowledge_request"

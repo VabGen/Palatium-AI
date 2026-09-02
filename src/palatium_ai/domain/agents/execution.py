@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from palatium_ai.domain.mcp.models import ExecutionStrategy
 
+CLARIFY_STRATEGY: ExecutionStrategy = "clarify"
+
 WORKER_STRATEGIES: frozenset[ExecutionStrategy] = frozenset(
     {
         "direct_tool_call",
@@ -14,4 +16,4 @@ WORKER_STRATEGIES: frozenset[ExecutionStrategy] = frozenset(
     }
 )
 
-__all__ = ["ExecutionStrategy", "WORKER_STRATEGIES"]
+__all__ = ["ExecutionStrategy", "WORKER_STRATEGIES", "CLARIFY_STRATEGY"]

@@ -15,7 +15,7 @@ from palatium_ai.domain.llm.models import (
     LLMResponseFormat,
     LLMStreamDelta,
 )
-from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolDescriptor, MCPToolResult
+from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolDescriptor, MCPToolResult, MCPToolSummary
 
 
 class FakeLLMPort:
@@ -134,6 +134,16 @@ class FakeMCPRegistry:
         """Возвращает tools указанного тестового сервера."""
         _ = force_refresh
         return self._tools[server_name]
+
+    async def list_tool_summaries(self, server_name: str, *, force_refresh: bool = False) -> list[MCPToolSummary]:
+        """Progressive disclosure summaries for capability discovery."""
+        tools = await self.list_tools(server_name, force_refresh=force_refresh)
+        return [tool.to_summary() for tool in tools]
+
+    async def get_tool(self, server_name: str, tool_name: str) -> MCPToolDescriptor | None:
+        """Return one full descriptor by name."""
+        tools = await self.list_tools(server_name)
+        return next((tool for tool in tools if tool.name == tool_name), None)
 
     async def call_tool(self, server_name: str, tool_call: MCPToolCall) -> MCPToolResult:
         """Запоминает вызов и возвращает stub content."""

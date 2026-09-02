@@ -1,27 +1,35 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Download, LoaderCircle, SendHorizontal, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import {
-  downloadDocumentPdf,
-  fetchDialogTurns,
-  fetchHitlCard,
-  processIntent,
-} from "../api/client";
-import type { ContentDocument, FormatterTaskResult, HITLCardView } from "../types/contentDocument";
-import { looksLikeExclusiveMenu } from "../lib/exclusiveMenu";
-import { BlockRenderer } from "./BlockRenderer";
-import { HitlCards } from "./HitlCards";
+  Copy,
+  Download,
+  LoaderCircle,
+  RotateCw,
+  SendHorizontal,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+} from 'lucide-react';
+import { downloadDocumentPdf, fetchDialogTurns, processIntent, sendFeedback } from '../api/client';
+import type { ContentDocument } from '../types/contentDocument';
+import { BlockRenderer } from './BlockRenderer';
 
-const THREAD_STORAGE_KEY = "palatium.thread_id";
-const USER_STORAGE_KEY = "palatium.user_id";
-const ORG_STORAGE_KEY = "palatium.org_id";
+const THREAD_STORAGE_KEY = 'palatium.thread_id';
+const USER_STORAGE_KEY = 'palatium.user_id';
+const ORG_STORAGE_KEY = 'palatium.org_id';
 
 type ChatMessage =
-  | { id: string; role: "user"; text: string }
+  | { id: string; role: 'user'; text: string }
   | {
       id: string;
-      role: "assistant";
+      role: 'assistant';
       document: ContentDocument | null;
-      hitlCards: HITLCardView[];
+      _requiresReview?: boolean;
+      _pendingReview?: boolean;
+      _feedbackLike?: boolean;
+      _feedbackDislike?: boolean;
+      _feedbackSending?: boolean;
+      _regenerating?: boolean;
       error?: string;
       status?: string;
     };
@@ -33,131 +41,153 @@ function newThreadId(): string {
 function resolveThreadId(): string {
   try {
     const stored = window.localStorage.getItem(THREAD_STORAGE_KEY);
-    if (stored && stored.startsWith("thread-")) {
-      return stored;
-    }
-  } catch {
-    /* ignore */
-  }
+    if (stored && stored.startsWith('thread-')) return stored;
+  } catch {}
   const created = newThreadId();
   try {
     window.localStorage.setItem(THREAD_STORAGE_KEY, created);
-  } catch {
-    /* ignore */
-  }
+  } catch {}
   return created;
 }
 
 function resolveUserId(): string {
   try {
     const stored = window.localStorage.getItem(USER_STORAGE_KEY);
-    if (stored && stored.startsWith("user-")) {
-      return stored;
-    }
-  } catch {
-    /* ignore */
-  }
+    if (stored && stored.startsWith('user-')) return stored;
+  } catch {}
   const created = `user-${crypto.randomUUID()}`;
   try {
     window.localStorage.setItem(USER_STORAGE_KEY, created);
-  } catch {
-    /* ignore */
-  }
+  } catch {}
   return created;
 }
 
 function resolveOrgId(): string {
   try {
     const stored = window.localStorage.getItem(ORG_STORAGE_KEY);
-    if (stored && stored.startsWith("org-")) {
-      return stored;
-    }
-  } catch {
-    /* ignore */
-  }
-  const created = "org-default";
-  try {
-    window.localStorage.setItem(ORG_STORAGE_KEY, created);
-  } catch {
-    /* ignore */
-  }
-  return created;
+    if (stored && stored.startsWith('org-')) return stored;
+  } catch {}
+  return 'org-default';
 }
 
 function isContentDocument(value: unknown): value is ContentDocument {
   return (
-    typeof value === "object" &&
+    typeof value === 'object' &&
     value !== null &&
-    "schema_version" in value &&
-    "blocks" in value &&
+    'schema_version' in value &&
+    'blocks' in value &&
     Array.isArray((value as ContentDocument).blocks)
   );
-}
-
-function isHitlCardView(value: unknown): value is HITLCardView {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as HITLCardView).card_id === "string" &&
-    Array.isArray((value as HITLCardView).options)
-  );
-}
-
-function parseAssistantPayload(
-  payload: unknown,
-  fallbackText: string,
-): { document: ContentDocument; hitlCards: HITLCardView[] } {
-  if (payload && typeof payload === "object") {
-    const record = payload as Record<string, unknown>;
-    const envelope =
-      record.schema === "assistant_turn_v1" ||
-      ("document" in record && "hitl_cards" in record);
-    if (envelope) {
-      return {
-        document: isContentDocument(record.document)
-          ? record.document
-          : textAsDocument(fallbackText),
-        hitlCards: Array.isArray(record.hitl_cards)
-          ? record.hitl_cards.filter(isHitlCardView)
-          : [],
-      };
-    }
-    if (isContentDocument(payload)) {
-      return { document: payload, hitlCards: [] };
-    }
-  }
-  return { document: textAsDocument(fallbackText), hitlCards: [] };
 }
 
 function textAsDocument(text: string): ContentDocument {
   return {
     schema_version: 1,
-    locale: "ru-RU",
-    title: "",
-    blocks: [{ type: "paragraph", text }],
+    locale: 'ru-RU',
+    title: '',
+    blocks: [{ type: 'paragraph', text }],
     actions: [],
     meta: {
       confidence: 1,
       requires_review: false,
       source_refs: [],
+      interaction: 'none',
     },
   };
+}
+
+function parseAssistantPayload(
+  payload: unknown,
+  fallbackText: string
+): { document: ContentDocument; requiresReview: boolean } {
+  if (payload && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    const requiresReview = Boolean(record.requires_review) || false;
+    if (isContentDocument(record.document)) {
+      return { document: record.document, requiresReview };
+    }
+    if (isContentDocument(payload)) {
+      return { document: payload, requiresReview };
+    }
+  }
+  return { document: textAsDocument(fallbackText), requiresReview: false };
+}
+
+function getDocumentPlainText(doc: ContentDocument): string {
+  const parts: string[] = [];
+  if (doc.title) parts.push(doc.title);
+  for (const block of doc.blocks) {
+    switch (block.type) {
+      case 'heading':
+      case 'paragraph':
+      case 'callout':
+        if ('text' in block && block.text) parts.push(block.text);
+        else if ('body' in block && block.body) parts.push(block.body);
+        break;
+      case 'code':
+        if ('content' in block && block.content) parts.push(block.content);
+        break;
+      case 'formula':
+        if ('latex' in block && block.latex) parts.push(block.latex);
+        break;
+      case 'widget':
+        if ('title' in block && block.title) parts.push(block.title);
+        break;
+      case 'list':
+        for (const item of block.items) {
+          if (item.text) parts.push(item.text);
+        }
+        break;
+      case 'steps':
+        for (const step of block.items) {
+          if (step.title) parts.push(step.title);
+          if (step.body) parts.push(step.body);
+        }
+        break;
+      case 'kv':
+        for (const kv of block.items) {
+          if (kv.label) parts.push(`${kv.label}: ${kv.value}`);
+        }
+        break;
+      case 'table':
+        for (const row of block.rows) {
+          parts.push(row.join(' | '));
+        }
+        break;
+      case 'chart':
+        if (block.title) parts.push(block.title);
+        parts.push(block.labels.join(', '));
+        break;
+      default:
+        break;
+    }
+  }
+  return parts.join('\n').trim() || '(empty)';
 }
 
 export function ChatShell() {
   const [threadId] = useState(resolveThreadId);
   const [userId] = useState(resolveUserId);
   const [orgId] = useState(resolveOrgId);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hydrated, setHydrated] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [devMode, setDevMode] = useState(false);
+  const messageEndRef = useRef<HTMLDivElement>(null);
 
-  const canSend = useMemo(
-    () => input.trim().length > 0 && !busy,
-    [input, busy],
-  );
+  const canSend = useMemo(() => input.trim().length > 0 && !busy, [input, busy]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        setDevMode(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -165,53 +195,36 @@ export function ChatShell() {
       try {
         const turns = await fetchDialogTurns(threadId, 50, userId, orgId);
         if (cancelled || turns.length === 0) {
+          setHydrated(true);
           return;
         }
-        const restored: ChatMessage[] = await Promise.all(
-          turns.map(async (turn) => {
-            if (turn.role === "user") {
-              return {
-                id: turn.id ?? crypto.randomUUID(),
-                role: "user" as const,
-                text: turn.content,
-              };
-            }
-            const { document, hitlCards } = parseAssistantPayload(
-              turn.payload,
-              turn.content,
-            );
-            const refreshed = (
-              await Promise.all(
-                hitlCards.map(async (card) => {
-                  // Pending-only interactive hydrate; never keep payload secrets as fallback.
-                  if (card.status !== "pending") {
-                    return null;
-                  }
-                  try {
-                    const live = await fetchHitlCard(card.card_id, userId, orgId);
-                    return live.status === "pending" ? live : null;
-                  } catch {
-                    return null;
-                  }
-                }),
-              )
-            ).filter((card): card is HITLCardView => card !== null);
+        const restored: ChatMessage[] = turns.map(turn => {
+          if (turn.role === 'user') {
             return {
               id: turn.id ?? crypto.randomUUID(),
-              role: "assistant" as const,
-              document,
-              hitlCards: refreshed,
-              status: "success",
+              role: 'user' as const,
+              text: turn.content,
             };
-          }),
-        );
+          }
+          const { document, requiresReview } = parseAssistantPayload(turn.payload, turn.content);
+          const feedback = (turn.payload as any)?.feedback || {};
+          return {
+            id: turn.id ?? crypto.randomUUID(),
+            role: 'assistant' as const,
+            document,
+            _requiresReview: requiresReview,
+            _pendingReview: false,
+            _feedbackLike: feedback.like || false,
+            _feedbackDislike: feedback.dislike || false,
+            status: 'success',
+            error: undefined,
+          };
+        });
         setMessages(restored);
       } catch {
-        /* empty transcript on hydrate failure */
+        /* empty */
       } finally {
-        if (!cancelled) {
-          setHydrated(true);
-        }
+        if (!cancelled) setHydrated(true);
       }
     })();
     return () => {
@@ -220,40 +233,44 @@ export function ChatShell() {
   }, [threadId, userId, orgId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, busy]);
 
   async function send() {
     const text = input.trim();
     if (!text || busy) return;
-    setInput("");
+    setInput('');
     setBusy(true);
-    const messageId = crypto.randomUUID();
-    setMessages((prev) => [...prev, { id: messageId, role: "user", text }]);
+    const userMsgId = crypto.randomUUID();
+    setMessages(prev => [...prev, { id: userMsgId, role: 'user', text }]);
 
     try {
       const result = await processIntent(text, threadId, userId, orgId);
-      setMessages((prev) => [
+      const requiresReview = result.requires_review || false;
+      const pendingReview = requiresReview && result.output === null;
+      setMessages(prev => [
         ...prev,
         {
           id: crypto.randomUUID(),
-          role: "assistant",
+          role: 'assistant',
           document: result.output,
-          hitlCards: (result.hitl_cards ?? []).filter((c) => c.status === "pending"),
+          _requiresReview: requiresReview,
+          _pendingReview: pendingReview,
           error: result.error ?? undefined,
           status: result.status,
         },
       ]);
     } catch (err) {
-      setMessages((prev) => [
+      setMessages(prev => [
         ...prev,
         {
           id: crypto.randomUUID(),
-          role: "assistant",
+          role: 'assistant',
           document: null,
-          hitlCards: [],
-          error: err instanceof Error ? err.message : "Request failed",
-          status: "failure",
+          _requiresReview: false,
+          _pendingReview: false,
+          error: err instanceof Error ? err.message : 'Request failed',
+          status: 'failure',
         },
       ]);
     } finally {
@@ -261,49 +278,121 @@ export function ChatShell() {
     }
   }
 
-  function onHitlResolved(
-    messageId: string,
-    card: HITLCardView,
-    resumed?: FormatterTaskResult | null,
-  ) {
-    setMessages((prev) =>
-      prev.map((message) => {
-        if (message.id !== messageId || message.role !== "assistant") {
-          return message;
-        }
-        return {
-          ...message,
-          hitlCards: message.hitlCards.map((item) =>
-            item.card_id === card.card_id ? card : item,
-          ),
-        };
-      }),
-    );
-    if (resumed?.output) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          document: resumed.output,
-          hitlCards: (resumed.hitl_cards ?? []).filter((c) => c.status === "pending"),
-          status: resumed.status,
-          error: resumed.error ?? undefined,
-        },
-      ]);
-    }
-    // Quality reject returns resumed revision; approve only updates card status above.
-  }
+  const regenerateResponse = useCallback(
+    async (messageId: string) => {
+      const target = messages.find(m => m.id === messageId && m.role === 'assistant');
+      if (!target) return;
+      const idx = messages.indexOf(target);
+      const userMsg = messages
+        .slice(0, idx)
+        .reverse()
+        .find(m => m.role === 'user');
+      if (!userMsg) return;
 
-  function startNewThread() {
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === messageId && msg.role === 'assistant' ? { ...msg, _regenerating: true } : msg
+        )
+      );
+      setBusy(true);
+      try {
+        const result = await processIntent(userMsg.text, threadId, userId, orgId);
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === messageId && msg.role === 'assistant'
+              ? {
+                  ...msg,
+                  document: result.output,
+                  hitlCards: (result.hitl_cards ?? []).filter(c => c.status === 'pending'),
+                  error: result.error ?? undefined,
+                  status: result.status,
+                  _requiresReview: result.requires_review || false,
+                  _pendingReview: result.requires_review && result.output === null,
+                  _regenerating: false,
+                }
+              : msg
+          )
+        );
+        toast.success('Ответ обновлён');
+      } catch (err) {
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === messageId && msg.role === 'assistant'
+              ? {
+                  ...msg,
+                  error: err instanceof Error ? err.message : 'Ошибка при регенерации',
+                  _regenerating: false,
+                }
+              : msg
+          )
+        );
+        toast.error('Не удалось обновить ответ');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [messages, threadId, userId, orgId]
+  );
+
+  const handleFeedback = useCallback(
+    async (messageId: string, type: 'like' | 'dislike') => {
+      const message = messages.find(m => m.id === messageId);
+      if (!message || message.role !== 'assistant') return;
+      if (message._feedbackSending) return;
+
+      const isLike = type === 'like';
+      const isCurrentlyActive = isLike ? message._feedbackLike : message._feedbackDislike;
+      const newActive = !isCurrentlyActive;
+
+      setMessages(prev =>
+        prev.map(msg => {
+          if (msg.id !== messageId || msg.role !== 'assistant') return msg;
+          return {
+            ...msg,
+            _feedbackLike: isLike ? newActive : false,
+            _feedbackDislike: isLike ? false : newActive,
+            _feedbackSending: true,
+          };
+        })
+      );
+
+      try {
+        await sendFeedback(messageId, type, userId, orgId);
+        setMessages(prev =>
+          prev.map(msg => {
+            if (msg.id !== messageId || msg.role !== 'assistant') return msg;
+            return { ...msg, _feedbackSending: false };
+          })
+        );
+      } catch (err) {
+        console.warn('Feedback not saved on server:', err);
+        setMessages(prev =>
+          prev.map(msg => {
+            if (msg.id !== messageId || msg.role !== 'assistant') return msg;
+            return { ...msg, _feedbackSending: false };
+          })
+        );
+        toast.error('Не удалось отправить отзыв на сервер, но он сохранён локально');
+      }
+    },
+    [messages, userId, orgId]
+  );
+
+  const copyMessageContent = useCallback((message: ChatMessage) => {
+    if (message.role !== 'assistant' || !message.document) return;
+    const text = getDocumentPlainText(message.document);
+    if (text) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  }, []);
+
+  const startNewThread = useCallback(() => {
     const next = newThreadId();
     try {
       window.localStorage.setItem(THREAD_STORAGE_KEY, next);
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     window.location.reload();
-  }
+  }, []);
 
   return (
     <div className="shell">
@@ -313,6 +402,7 @@ export function ChatShell() {
           <div>
             <h1>Palatium</h1>
             <p>Structured agent replies</p>
+            {devMode && <span className="dev-badge">🔧 DEV</span>}
           </div>
         </div>
         <div className="header-actions">
@@ -324,17 +414,12 @@ export function ChatShell() {
       </header>
 
       <main className="transcript">
-        {hydrated && messages.length === 0 ? (
+        {hydrated && messages.length === 0 && (
           <div className="empty">
             <h2>Ask anything</h2>
-            <p>
-              Responses 🎶🎶🎶
-            </p>
+            <p>I'll provide structured answers. You can copy, export, or give feedback.</p>
             <div className="suggestions">
-              {[
-                "Какие планы на сегодня",
-                "Составь план встречи на завтра",
-              ].map((hint) => (
+              {['Какие планы на сегодня', 'Составь план встречи на завтра'].map(hint => (
                 <button
                   key={hint}
                   type="button"
@@ -346,88 +431,142 @@ export function ChatShell() {
               ))}
             </div>
           </div>
-        ) : null}
-
-        {messages.map((message) =>
-          message.role === "user" ? (
-            <div key={message.id} className="msg user">
-              <p>{message.text}</p>
-            </div>
-          ) : (
-            <div key={message.id} className="msg assistant">
-              {message.document ? (
-                <>
-                  <BlockRenderer document={message.document} />
-                  <div className="msg-toolbar">
-                    <button
-                      type="button"
-                      className="toolbar-btn"
-                      onClick={() => {
-                        if (!message.document) return;
-                        void downloadDocumentPdf(message.document, threadId, userId, orgId).catch((err: unknown) => {
-                          window.alert(
-                            err instanceof Error ? err.message : "PDF export failed",
-                          );
-                        });
-                      }}
-                    >
-                      <Download size={14} />
-                      PDF
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <p className="msg-error">{message.error ?? "Empty response"}</p>
-              )}
-              <HitlCards
-                cards={message.hitlCards}
-                userId={userId}
-                orgId={orgId}
-                onResolved={(card, resumed) => onHitlResolved(message.id, card, resumed)}
-              />
-              {import.meta.env.DEV &&
-              message.document &&
-              looksLikeExclusiveMenu(message.document) &&
-              !message.hitlCards.some((card) => card.status === "pending") ? (
-                <p className="hitl-dev-gap" role="status">
-                  Dev: document looks like an exclusive menu but no pending HITL cards —
-                  check server log <code>hitl.interaction_plan</code>.
-                </p>
-              ) : null}
-            </div>
-          ),
         )}
 
-        {busy ? (
-          <div className="msg assistant pending">
-            <LoaderCircle className="spin" size={18} />
-            <span>Agents working…</span>
+        {messages.map(message => {
+          if (message.role === 'user') {
+            return (
+              <div key={message.id} className="msg user fade-in">
+                <div className="avatar">U</div>
+                <div className="bubble">
+                  <p>{message.text}</p>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div key={message.id} className="msg assistant fade-in">
+              <div className="avatar">P</div>
+              <div className="bubble">
+                {message._pendingReview ? (
+                  <div className="msg pending-review">
+                    <LoaderCircle className="spin" size={18} />
+                    <span>Ответ проверяется модератором…</span>
+                  </div>
+                ) : message.document ? (
+                  <>
+                    <BlockRenderer document={message.document} />
+                    {message.error && <p className="msg-error">{message.error}</p>}
+                    <div className="msg-actions">
+                      <button
+                        className={`action-btn ${message._feedbackLike ? 'active' : ''}`}
+                        onClick={() => handleFeedback(message.id, 'like')}
+                        disabled={message._feedbackSending || busy}
+                        aria-pressed={!!message._feedbackLike}
+                        aria-label="Like this response"
+                      >
+                        <ThumbsUp size={16} />
+                      </button>
+                      <button
+                        className={`action-btn ${message._feedbackDislike ? 'active' : ''}`}
+                        onClick={() => handleFeedback(message.id, 'dislike')}
+                        disabled={message._feedbackSending || busy}
+                        aria-pressed={!!message._feedbackDislike}
+                        aria-label="Dislike this response"
+                      >
+                        <ThumbsDown size={16} />
+                      </button>
+                      <button
+                        className="action-btn"
+                        onClick={() => copyMessageContent(message)}
+                        disabled={busy}
+                        aria-label="Copy response text"
+                      >
+                        <Copy size={16} />
+                      </button>
+                      <button
+                        className="action-btn"
+                        onClick={() => {
+                          if (!message.document) return;
+                          void downloadDocumentPdf(message.document, threadId, userId, orgId).catch(
+                            (err: unknown) => {
+                              toast.error('PDF export failed');
+                              console.error(err);
+                            }
+                          );
+                        }}
+                        disabled={busy}
+                        aria-label="Export as PDF"
+                      >
+                        <Download size={16} />
+                      </button>
+                      <button
+                        className="action-btn"
+                        onClick={() => regenerateResponse(message.id)}
+                        disabled={busy || message._regenerating}
+                        aria-label="Regenerate response"
+                      >
+                        {message._regenerating ? (
+                          <LoaderCircle className="spin" size={16} />
+                        ) : (
+                          <RotateCw size={16} />
+                        )}
+                      </button>
+                      {devMode && (
+                        <span className="dev-meta">
+                          Confidence: {message.document.meta.confidence} | Requires review:{' '}
+                          {String(message._requiresReview)}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="msg-error">{message.error ?? 'Empty response'}</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {busy && !messages.some(m => m.role === 'assistant' && m._regenerating) && (
+          <div className="msg assistant pending fade-in">
+            <span className="typing-dots">
+              <span>.</span>
+              <span>.</span>
+              <span>.</span>
+            </span>
+            <span>Agents working</span>
           </div>
-        ) : null}
-        <div ref={bottomRef} />
+        )}
+        <div ref={messageEndRef} />
       </main>
 
       <form
         className="composer"
-        onSubmit={(e) => {
+        onSubmit={e => {
           e.preventDefault();
           void send();
         }}
       >
         <textarea
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={e => setInput(e.target.value)}
           placeholder="Message Palatium…"
           rows={2}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               void send();
             }
           }}
         />
-        <button type="submit" disabled={!canSend} aria-label="Send">
-          <SendHorizontal size={18} />
+        <button
+          type="submit"
+          disabled={!canSend}
+          className={`send-btn ${busy ? 'sending' : ''}`}
+          aria-label="Send message"
+        >
+          {busy ? <LoaderCircle className="spin" size={18} /> : <SendHorizontal size={18} />}
         </button>
       </form>
     </div>

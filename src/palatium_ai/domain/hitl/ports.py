@@ -41,3 +41,20 @@ class HitlCardStore(Protocol):
 
     async def list_cards(self) -> list[HITLCardView]:
         """Все известные карточки (для TTL sweep)."""
+
+
+class HitlDenyResumePort(Protocol):
+    """Best-effort graph deny after TTL auto-reject / dead_letter / resume failure.
+
+    Keeps mcp_tool_approval interrupts from hanging when the card is already terminal.
+    """
+
+    async def deny_tool_interrupt(
+        self,
+        *,
+        thread_id: str,
+        task_id: str,
+        card_id: str,
+        reason: str,
+    ) -> None:
+        """Command(resume=reject) when a tool-approval interrupt is still open."""

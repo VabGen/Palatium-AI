@@ -74,6 +74,14 @@ _BLOCKED_HOSTNAMES: frozenset[str] = frozenset(
 
 _PATH_TRAVERSAL = re.compile(r"(^|[/\\])\.\.([/\\]|$)")
 _ABSOLUTE_URI = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+# Inline secret material in otherwise-allowed string values (020).
+_SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bsk-[a-z0-9]{16,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"(?i)\bpassword\s*=\s*\S+"),
+    re.compile(r"(?i)\bapi[_-]?key\s*=\s*\S+"),
+    re.compile(r"(?i)\bbearer\s+[a-z0-9\-._~+/]+=*"),
+)
 
 
 class UnsafeToolArgumentError(ValueError):
@@ -110,6 +118,14 @@ def is_sensitive_argument_key(key: str) -> bool:
     return any(marker in normalized for marker in _DENIED_KEY_MARKERS)
 
 
+def contains_secret_value(value: str) -> bool:
+    """Return True when a string looks like embedded credential material."""
+    stripped = value.strip()
+    if not stripped:
+        return False
+    return any(pattern.search(stripped) for pattern in _SECRET_VALUE_PATTERNS)
+
+
 def _is_denied_key(key: str) -> bool:
     return is_sensitive_argument_key(key)
 
@@ -123,6 +139,8 @@ def _assert_string_value_safe(*, key: str, value: str, path: str) -> None:
     stripped = value.strip()
     if not stripped:
         return
+    if contains_secret_value(stripped):
+        raise UnsafeToolArgumentError(f"Denied secret-shaped value in tool argument at {path!r}")
     # Any absolute URI-shaped string is checked for dangerous schemes / SSRF hosts.
     if _ABSOLUTE_URI.match(stripped) or "://" in stripped:
         _assert_uri_safe(stripped, path=path)

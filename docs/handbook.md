@@ -209,6 +209,14 @@ poetry run python scripts/smoke_mcp_registry.py
 poetry run python scripts/smoke_mcp_turn.py
 ```
 
+Stubs **fail-closed**: без `MCP_AUTH_TOKEN` JSON-RPC отклоняется (401),
+пока явно не задан `MCP_ALLOW_ANON=1` (только локальный bootstrap, не shared network).
+`dev-up.ps1` сам выставляет `dev-mcp-local-token`, если токен не задан.
+
+Progressive disclosure: клиент discovery шлёт `tools/list` с
+`omitInputSchema: true`; stubs отвечают карточками (`propertyNames`) без полного
+`inputSchema`. Полная schema грузится только на `list_tools` / `get_tool` / call.
+
 В `MCP_SERVERS` для локального Poetry:
 
 ```json

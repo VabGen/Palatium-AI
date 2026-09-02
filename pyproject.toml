@@ -42,6 +42,7 @@ dependencies = [
     "fpdf2 (>=2.8.8,<3.0.0)",
     "httpx (>=0.28.0,<0.29.0)",
     "jsonschema (>=4.25.0,<5.0.0)",
+    "json-repair (>=0.63.4,<0.64.0)",
     "langgraph (>=1.2.10,<2.0.0)",
     "langgraph-checkpoint-postgres (>=2.0.0,<4.0.0)",
     "litellm (>=1.97.0,<2.0.0)",                                 
@@ -164,6 +165,16 @@ plugins = ["pydantic.mypy"]
 init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
+
+[tool.basedpyright]
+pythonVersion = "3.14"
+extraPaths = [".cursor/hooks"]
+executionEnvironments = [{ root = ".cursor/hooks" }]
+
+[tool.pyright]
+pythonVersion = "3.14"
+extraPaths = [".cursor/hooks"]
+executionEnvironments = [{ root = ".cursor/hooks" }]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

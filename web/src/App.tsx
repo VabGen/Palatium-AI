@@ -1,5 +1,13 @@
-import { ChatShell } from "./components/ChatShell";
+import { Toaster } from 'react-hot-toast';
+import { ChatShell } from './components/ChatShell';
 
-export function App() {
-  return <ChatShell />;
+function App() {
+  return (
+    <>
+      <ChatShell />
+      <Toaster position="bottom-right" toastOptions={{ duration: 3000 }} />
+    </>
+  );
 }
+
+export default App;

@@ -29,6 +29,7 @@ from palatium_ai.core.logging import logger
 from palatium_ai.infrastructure.database.repositories import McpToolCallRepository
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 from palatium_ai.infrastructure.hitl.redis_store import RedisHitlCardStore
+from palatium_ai.infrastructure.llm.cost import estimate_completion_cost_usd
 from palatium_ai.infrastructure.llm.factory import LLMClientFactory
 from palatium_ai.infrastructure.memory.checkpoint_serde import build_checkpoint_serde
 from palatium_ai.infrastructure.memory.dialog_turn_store import PostgresDialogTurnStore
@@ -208,20 +209,24 @@ def build_intent_service(
     agent = IntentClassifierAgent(
         llm_factory.get_client_for_agent(IntentClassifierAgent.config),
         cost_budget=cost_budget,
+        cost_estimator=estimate_completion_cost_usd,
     )
     contextualizer = ContextualizerAgent(
         llm_factory.get_client_for_agent(ContextualizerAgent.config),
         cost_budget=cost_budget,
+        cost_estimator=estimate_completion_cost_usd,
     )
     capability_index = MCPCapabilityIndex(mcp_registry)
     context_weaver = ContextWeaverAgent(mcp_registry=mcp_registry, capability_index=capability_index)
     critic = CriticAgent(
         llm_factory.get_client_for_agent(CriticAgent.config),
         cost_budget=cost_budget,
+        cost_estimator=estimate_completion_cost_usd,
     )
     formatter = FormatterAgent(
         llm_factory.get_client_for_agent(FormatterAgent.config),
         cost_budget=cost_budget,
+        cost_estimator=estimate_completion_cost_usd,
     )
     option_synthesizer = OptionSynthesizer(
         llm_factory.get_client_for_agent(IntentClassifierAgent.config),
@@ -232,6 +237,7 @@ def build_intent_service(
         mcp_tool_call_repository=mcp_tool_call_repository,
         capability_index=capability_index,
         cost_budget=cost_budget,
+        cost_estimator=estimate_completion_cost_usd,
     )
     supervisor = SupervisorAgent()
     resolved_checkpointer = checkpointer if checkpointer is not None else MemorySaver(serde=build_checkpoint_serde())

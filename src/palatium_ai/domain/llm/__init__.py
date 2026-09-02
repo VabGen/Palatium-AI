@@ -2,7 +2,6 @@
 
 """Доменные модели LLM."""
 
-from .json_codec import extract_json_object, loads_llm_json
 from .models import ChatMessage, LLMCompletion, LLMResponseFormat, LLMStreamDelta, LLMUsage
 
 __all__ = [

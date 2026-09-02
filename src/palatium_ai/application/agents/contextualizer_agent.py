@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 
 from typing import TYPE_CHECKING, cast
 
@@ -23,9 +25,12 @@ from palatium_ai.domain.memory.contextualizer import (
 )
 from palatium_ai.domain.memory.contextualizer_policy import ContextualizerPolicy
 from palatium_ai.domain.memory.continuity import ContinuityPolicy
+from palatium_ai.domain.memory.turns import DialogTurnWindow
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.contracts import AgentContext
+
+logger = logging.getLogger(__name__)
 
 CONTEXTUALIZER_CONFIG = AgentConfig(
     name="contextualizer",
@@ -37,6 +42,10 @@ CONTEXTUALIZER_CONFIG = AgentConfig(
     max_retries=2,
     confidence_threshold=0.5,
 )
+
+_FALLBACK_CONFIDENCE = 0.4
+_EXCERPT_MAX_CHARS = 1500
+_QUERY_MAX_CHARS = 32_000
 
 _SYSTEM_PROMPT = """You restore standalone meaning of a follow-up chat message.
 Use dialog history and optional durable memory hints. Do NOT invent facts not present
@@ -77,7 +86,14 @@ _CONTINUATIONS = frozenset({"format", "answer", "new_topic", "clarify"})
 
 
 class ContextualizerAgent(BaseAgent):
-    """Rewrites underspecified follow-ups using last-K turns."""
+    """Rewrites underspecified follow-ups using last-K turns.
+
+    Контракт отказного пути — как у researcher/critic/formatter:
+    LLM-стейдж при отказе возвращает degraded/partial-result, исключения
+    никогда не покидают execute. Особенность этого агента: отказ парсинга
+    деградирует в fail-soft answer/new_topic (не в failure), чтобы не
+    терять пайплайн на косметическом шаге — но с confidence 0.4.
+    """
 
     config = CONTEXTUALIZER_CONFIG
 
@@ -110,7 +126,7 @@ class ContextualizerAgent(BaseAgent):
                 task_id=task_input.task_id,
                 agent_role=self.config.role,
                 status="success",
-                confidence=1.0,
+                confidence=output.confidence,
                 requires_review=False,
                 output=output,
             )
@@ -135,38 +151,31 @@ class ContextualizerAgent(BaseAgent):
             ChatMessage(role="system", content=_SYSTEM_PROMPT),
             ChatMessage(role="user", content=json.dumps(user_payload, ensure_ascii=False)),
         ]
-        completion = await self._call_llm(messages, response_format="json_object")
+
+        try:
+            completion = await self._call_llm(messages, response_format="json_object")
+        except Exception:
+            logger.exception("contextualizer LLM stage failed (task=%s)", task_input.task_id)
+            agent_metrics.record_error("contextualizer", "llm_stage_failure")
+            return _fallback_result(
+                task_input,
+                agent_role=self.config.role,
+                reason="llm_stage_failure",
+            )
+
         try:
             output = _parse_output(completion.content, dialog_window=task_input.dialog_window)
         except ValueError as exc:
-            prior = ContinuityPolicy.prior_assistant_content(None, task_input.dialog_window)
-            if prior is not None:
-                # Fail soft into answer continuity — never wipe prior as new_topic.
-                output = ContextualizerOutput(
-                    rewritten_query=task_input.user_text,
-                    continuation_kind="answer",
-                    confidence=0.4,
-                    refers_to_prior=True,
-                    prior_assistant_excerpt=prior[:1500],
-                    reasoning=f"Parse fallback with prior dialog: {exc}",
-                )
-            else:
-                output = ContextualizerOutput(
-                    rewritten_query=task_input.user_text,
-                    continuation_kind="new_topic",
-                    confidence=0.4,
-                    refers_to_prior=False,
-                    prior_assistant_excerpt=None,
-                    reasoning=f"Parse fallback: {exc}",
-                )
-            return ContextualizerTaskResult(
-                task_id=task_input.task_id,
+            logger.warning(
+                "contextualizer parse failed, degrading (task=%s): %s",
+                task_input.task_id,
+                str(exc)[:300],
+            )
+            agent_metrics.record_error("contextualizer", "parse_fallback")
+            return _fallback_result(
+                task_input,
                 agent_role=self.config.role,
-                status="partial",
-                confidence=output.confidence,
-                requires_review=False,
-                output=output,
-                error=str(exc),
+                reason=f"parse_failed: {exc}",
             )
 
         return ContextualizerTaskResult(
@@ -179,31 +188,111 @@ class ContextualizerAgent(BaseAgent):
         )
 
 
-def _parse_output(raw: str, *, dialog_window: object | None = None) -> ContextualizerOutput:
+def _fallback_result(
+    task_input: ContextualizerInput,
+    *,
+    agent_role: str,
+    reason: str,
+) -> ContextualizerTaskResult:
+    """Fail-soft деградация: query остаётся исходным, kind — по наличию prior.
+
+    Не new_topic при живом prior: затирать контекст диалога при отказе
+    LLM-стейджа хуже, чем ошибиться в сторону answer (downstream увидит
+    низкий confidence и низкое качество rewrite, но не потеряет нить разговора).
+    """
+    prior = ContinuityPolicy.prior_assistant_content(None, task_input.dialog_window)
+    if prior is not None:
+        output = ContextualizerOutput(
+            rewritten_query=task_input.user_text,
+            continuation_kind="answer",
+            confidence=_FALLBACK_CONFIDENCE,
+            refers_to_prior=True,
+            prior_assistant_excerpt=prior[:_EXCERPT_MAX_CHARS],
+            reasoning=f"Contextualizer fallback ({reason}); prior dialog preserved.",
+        )
+    else:
+        output = ContextualizerOutput(
+            rewritten_query=task_input.user_text,
+            continuation_kind="new_topic",
+            confidence=_FALLBACK_CONFIDENCE,
+            refers_to_prior=False,
+            prior_assistant_excerpt=None,
+            reasoning=f"Contextualizer fallback ({reason}).",
+        )
+    return ContextualizerTaskResult(
+        task_id=task_input.task_id,
+        agent_role=agent_role,
+        status="partial",
+        confidence=output.confidence,
+        requires_review=False,
+        output=output,
+        error=reason,
+    )
+
+
+def _coerce_bool(value: object) -> bool:
+    """bool("false") == True — строковые значения требуют явной интерпретации."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _coerce_confidence(value: object, default: float) -> float:
+    """Кламп [0, 1] с NaN/inf-guard: JSON-мусор не доезжает до пайплайна."""
+    try:
+        confidence = float(value)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return default
+    if not math.isfinite(confidence):
+        return default
+    return min(max(confidence, 0.0), 1.0)
+
+
+def _coerce_reasoning(value: object) -> str:
+    """Reasoning без строковых "None" и whitespace-пустышек."""
+    if value is None:
+        return "n/a"
+    reasoning = str(value).strip()
+    return reasoning[:2000] if reasoning else "n/a"
+
+
+def _parse_output(
+    raw: str,
+    *,
+    dialog_window: DialogTurnWindow | None = None,
+) -> ContextualizerOutput:
+    """Парсит JSON-ответ LLM в ContextualizerOutput.
+
+    Все приведения строгие: битые типы от LLM дают ValueError,
+    который execute конвертирует в fail-soft fallback.
+    """
     payload = loads_llm_json(raw)
     if not isinstance(payload, dict):
         raise ValueError("Contextualizer JSON must be an object")
+
     kind_raw = str(payload.get("continuation_kind", "new_topic"))
     if kind_raw in _CONTINUATIONS:
         kind = cast("ContinuationKind", kind_raw)
     else:
-        from palatium_ai.domain.memory.turns import DialogTurnWindow
-
-        prior = ContinuityPolicy.prior_assistant_content(
-            None,
-            dialog_window if isinstance(dialog_window, DialogTurnWindow) else None,
-        )
+        prior = ContinuityPolicy.prior_assistant_content(None, dialog_window)
         kind = "answer" if prior is not None else "new_topic"
+
     rewritten = str(payload.get("rewritten_query", "")).strip()
     if not rewritten:
         raise ValueError("rewritten_query empty")
+
     excerpt = payload.get("prior_assistant_excerpt")
-    excerpt_text = str(excerpt)[:1500] if excerpt else None
+    excerpt_text = str(excerpt)[:_EXCERPT_MAX_CHARS] if excerpt else None
+
     return ContextualizerOutput(
-        rewritten_query=rewritten[:32_000],
+        rewritten_query=rewritten[:_QUERY_MAX_CHARS],
         continuation_kind=kind,
-        confidence=float(payload.get("confidence", 0.5)),
-        refers_to_prior=bool(payload.get("refers_to_prior", False)),
+        confidence=_coerce_confidence(payload.get("confidence"), default=0.5),
+        refers_to_prior=_coerce_bool(payload.get("refers_to_prior", False)),
         prior_assistant_excerpt=excerpt_text,
-        reasoning=str(payload.get("reasoning", "n/a"))[:2000] or "n/a",
+        reasoning=_coerce_reasoning(payload.get("reasoning")),
     )

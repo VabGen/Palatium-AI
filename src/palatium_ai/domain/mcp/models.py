@@ -51,6 +51,22 @@ class JsonRpcResponse(BaseModel):
     id: str | None = None
 
 
+class MCPToolSummary(BaseModel):
+    """Lightweight tool card for discovery/planning (Anthropic progressive disclosure).
+
+    Full ``inputSchema`` is loaded only when building arguments / calling the tool.
+    Wire form may use ``propertyNames`` when the server omitted ``inputSchema``.
+    """
+
+    model_config = {"frozen": True, "populate_by_name": True}
+
+    name: str = Field(min_length=1)
+    description: str = Field(default="", min_length=0)
+    side_effect: Literal["read", "write", "unknown"] | None = None
+    risk_tier: Literal["low", "medium", "high"] | None = Field(default=None, alias="riskTier")
+    property_names: tuple[str, ...] = Field(default=(), alias="propertyNames")
+
+
 class MCPToolDescriptor(BaseModel):
     """Описание MCP tool через JSON Schema 2020-12."""
 
@@ -62,6 +78,18 @@ class MCPToolDescriptor(BaseModel):
     annotations: dict[str, object] | None = None
     side_effect: Literal["read", "write", "unknown"] | None = None
     risk_tier: Literal["low", "medium", "high"] | None = Field(default=None, alias="riskTier")
+
+    def to_summary(self) -> MCPToolSummary:
+        """Progressive disclosure: name/description/risk without full inputSchema."""
+        properties = self.input_schema.get("properties", {})
+        property_names = tuple(str(key) for key in properties) if isinstance(properties, dict) else ()
+        return MCPToolSummary(
+            name=self.name,
+            description=self.description,
+            side_effect=self.side_effect,
+            risk_tier=self.risk_tier,
+            property_names=property_names,
+        )
 
 
 class MCPToolCall(BaseModel):

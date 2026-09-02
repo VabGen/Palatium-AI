@@ -40,7 +40,7 @@ from palatium_ai.domain.hitl.step_up import (
 if TYPE_CHECKING:
     from palatium_ai.domain.content import ActionSpec
     from palatium_ai.domain.hitl.notify import HitlNotifierPort
-    from palatium_ai.domain.hitl.ports import HitlCardStore
+    from palatium_ai.domain.hitl.ports import HitlCardStore, HitlDenyResumePort
     from palatium_ai.domain.hitl.step_up import HitlStepUpProviderPort
 
 
@@ -79,6 +79,7 @@ class HitlService:
         step_up_provider: HitlStepUpProviderPort | None = None,
         step_up_verifier: HitlStepUpProviderPort | None = None,
         notifier: HitlNotifierPort | None = None,
+        deny_resume: HitlDenyResumePort | None = None,
     ) -> None:
         secret = signing_secret.strip()
         if len(secret) < 16:
@@ -92,6 +93,11 @@ class HitlService:
         self._step_up_provider = provider
         self._step_up_verifier = provider
         self._notifier = notifier
+        self._deny_resume = deny_resume
+
+    def bind_deny_resume(self, deny_resume: HitlDenyResumePort) -> None:
+        """Late-bind graph deny port after IntentService is constructed (no circular ctor)."""
+        self._deny_resume = deny_resume
 
     async def create_choice_card(
         self,
@@ -252,6 +258,13 @@ class HitlService:
         nonce = new_token_nonce()
         owner = (owner_user_id or "").strip() or None
         tenant = (org_id or "").strip() or None
+        # Manager queue is org-scoped; write/high-risk without org cannot be operated.
+        if (
+            side_effect.strip().lower() == "write" or clamped_risk > HitlTimeoutPolicy.RISK_ESCALATION_THRESHOLD
+        ) and not tenant:
+            raise HitlInvalidActionError(
+                "org_id required for write/high-risk MCP tool approval cards",
+            )
         subject = HitlRiskPolicy.binding_subject(owner_user_id=owner, escalated=False)
         card = HITLCardView(
             card_id=card_id,
@@ -615,7 +628,7 @@ class HitlService:
                 update={
                     "status": status,
                     "resolved_at": now,
-                    "resolved_action_id": None,
+                    "resolved_action_id": "reject",
                     "escalate_to_roles": decision.escalate_to_roles,
                     "token_nonce": new_token_nonce(),
                     "options": tuple(option.model_copy(update={"action_token": ""}) for option in card.options),
@@ -661,6 +674,8 @@ class HitlService:
                 )
             except Exception:  # noqa: BLE001 — OOB must not break sweep CAS path
                 agent_metrics.record_hitl_deny("notify_failed")
+        if status == "auto_rejected":
+            await self._maybe_deny_resume_interrupt(closed, reason=decision.reason)
         return closed
 
     async def _dead_letter_escalated(self, card: HITLCardView, *, now: datetime) -> HITLCardView:
@@ -672,7 +687,7 @@ class HitlService:
             update={
                 "status": "dead_letter",
                 "resolved_at": now,
-                "resolved_action_id": None,
+                "resolved_action_id": "reject",
                 "token_nonce": new_token_nonce(),
                 "options": tuple(option.model_copy(update={"action_token": ""}) for option in card.options),
             }
@@ -711,7 +726,25 @@ class HitlService:
                 )
             except Exception:  # noqa: BLE001 — OOB must not break sweep CAS path
                 agent_metrics.record_hitl_deny("notify_failed")
+        await self._maybe_deny_resume_interrupt(closed, reason=decision.reason)
         return closed
+
+    async def _maybe_deny_resume_interrupt(self, card: HITLCardView, *, reason: str) -> None:
+        """Fail-closed: terminal deny must also clear an open mcp_tool_approval interrupt."""
+        if card.purpose != "mcp_tool_approval":
+            return
+        if self._deny_resume is None:
+            agent_metrics.record_hitl_deny("deny_resume_unbound")
+            return
+        try:
+            await self._deny_resume.deny_tool_interrupt(
+                thread_id=card.thread_id,
+                task_id=card.task_id,
+                card_id=card.card_id,
+                reason=reason,
+            )
+        except Exception:  # noqa: BLE001 — sweep/TTL must not crash on resume failure
+            agent_metrics.record_hitl_deny("deny_resume_failed")
 
     async def list_escalated(
         self,

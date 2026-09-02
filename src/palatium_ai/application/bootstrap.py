@@ -97,20 +97,26 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
     """Select MemoryPort backend (postgres | mem0 | graphiti) + optional rerank."""
     backend = settings.memory.backend
     if backend == "mem0":
+        mem0_key = settings.memory.mem0_api_key.get_secret_value() if settings.memory.mem0_api_key is not None else ""
         port: MemoryPort = Mem0MemoryPort(
             Mem0HttpTransport(
-                api_key=settings.memory.mem0_api_key,
+                api_key=mem0_key,
                 host=settings.memory.mem0_host,
                 timeout_seconds=settings.memory.mem0_timeout_seconds,
             )
         )
         logger.info("MemoryPort: Mem0 Platform", host=settings.memory.mem0_host)
     elif backend == "graphiti":
+        neo4j_password = (
+            settings.memory.graphiti_neo4j_password.get_secret_value()
+            if settings.memory.graphiti_neo4j_password is not None
+            else ""
+        )
         port = GraphitiMemoryPort(
             GraphitiSdkTransport(
                 uri=settings.memory.graphiti_neo4j_uri,
                 user=settings.memory.graphiti_neo4j_user,
-                password=settings.memory.graphiti_neo4j_password,
+                password=neo4j_password,
             )
         )
         logger.info("MemoryPort: Graphiti", uri=settings.memory.graphiti_neo4j_uri)
@@ -203,6 +209,7 @@ async def startup(settings: Settings) -> AppResources:
         memory_port=memory_port,
         checkpointer=checkpointer_handle.saver,
     )
+    hitl_service.bind_deny_resume(intent_service)
 
     background_tasks.append(
         asyncio.create_task(

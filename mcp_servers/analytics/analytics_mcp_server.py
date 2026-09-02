@@ -1,16 +1,21 @@
-# src/mcp_servers/analytics/analytics_mcp_server.py
+# mcp_servers/analytics/analytics_mcp_server.py
 
-"""Минимальный MCP-compatible analytics server stub."""
+"""Minimal MCP-compatible analytics server stub."""
 
 from __future__ import annotations
+
+import json
 
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
 from mcp_stub_auth import require_mcp_bearer
+from mcp_stub_tools import tools_list_payload
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="analytics-mcp-server")
+
+_MAX_PERIOD_CHARS = 64
 
 
 class JsonRpcRequest(BaseModel):
@@ -39,9 +44,26 @@ class JsonRpcResponse(BaseModel):
     id: str | None = None
 
 
+def _call_arguments(params: dict[str, object] | None) -> dict[str, object]:
+    raw = (params or {}).get("arguments", {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _text_result(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+        "isError": False,
+    }
+
+
 _GET_SALES_METRICS_TOOL: dict[str, object] = {
     "name": "get_sales_metrics",
-    "description": "Return sales KPIs for a date range.",
+    "description": (
+        "Return sales KPIs for one reporting period. "
+        "Use for revenue/orders/conversion summaries; not for EDMS documents or writes. "
+        "Period must be an exact label (e.g. 2025-Q1), no wildcards. "
+        "Returns truncated stub metrics: revenue, orders, conversion_pct."
+    ),
     "annotations": {"readOnlyHint": True, "destructiveHint": False},
     "side_effect": "read",
     "riskTier": "low",
@@ -52,7 +74,8 @@ _GET_SALES_METRICS_TOOL: dict[str, object] = {
             "period": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Reporting period (e.g. 2025-Q1).",
+                "maxLength": _MAX_PERIOD_CHARS,
+                "description": (f"Exact reporting period label (max {_MAX_PERIOD_CHARS} chars; e.g. 2025-Q1)."),
             },
         },
         "required": ["period"],
@@ -76,39 +99,52 @@ async def handle_jsonrpc(
     if request.method == "tools/list":
         return JsonRpcResponse(
             id=request.id,
-            result={
-                "tools": [_GET_SALES_METRICS_TOOL],
-            },
+            result={"tools": tools_list_payload((_GET_SALES_METRICS_TOOL,), request.params)},
         )
 
     if request.method == "tools/call":
         params = request.params or {}
         tool_name = params.get("name")
-        arguments = params.get("arguments", {})
+        arguments = _call_arguments(params if isinstance(params, dict) else None)
+
         if tool_name != "get_sales_metrics":
             return JsonRpcResponse(
                 id=request.id,
                 error=JsonRpcError(code=-32601, message=f"Unknown tool: {tool_name}"),
             )
 
-        period = arguments.get("period") if isinstance(arguments, dict) else None
+        period = arguments.get("period")
         if not isinstance(period, str) or not period.strip():
             return JsonRpcResponse(
                 id=request.id,
                 error=JsonRpcError(code=-32602, message="Invalid params: period is required"),
             )
+        period_label = period.strip()[:_MAX_PERIOD_CHARS]
+        if "*" in period_label or "?" in period_label:
+            return JsonRpcResponse(
+                id=request.id,
+                error=JsonRpcError(
+                    code=-32602,
+                    message="Invalid params: period must be exact (no wildcards)",
+                ),
+            )
 
         return JsonRpcResponse(
             id=request.id,
-            result={
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (f"Stub analytics for {period}: revenue=1.2M, orders=842, conversion=3.4%"),
+            result=_text_result(
+                {
+                    "stub": True,
+                    "tool": "get_sales_metrics",
+                    "period": period_label,
+                    "metrics": {
+                        "revenue": 1_200_000,
+                        "orders": 842,
+                        "conversion_pct": 3.4,
                     },
-                ],
-                "isError": False,
-            },
+                    "currency": "USD",
+                    "truncated": True,
+                },
+            ),
         )
 
     return JsonRpcResponse(

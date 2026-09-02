@@ -5,13 +5,18 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 from palatium_ai.domain.mcp.api_redaction import redact_mcp_arguments, redact_mcp_content
+from palatium_ai.domain.sessions.context_privacy import (
+    filter_client_context_patch,
+    public_session_context,
+)
+from palatium_ai.domain.sessions.models import SessionRecord
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal, principal_is_admin
 from palatium_ai.presentation.security.ownership import load_session_for_principal
@@ -27,7 +32,7 @@ class SessionResponse(BaseModel):
     user_id: str | None = None
     status: str
     title: str | None = None
-    context: dict[str, Any]
+    context: dict[str, JsonValue]
     created_at: datetime
     updated_at: datetime
 
@@ -47,7 +52,7 @@ class UpsertSessionRequest(BaseModel):
     thread_id: str = Field(min_length=1, max_length=128)
     title: str | None = Field(default=None, max_length=255)
     status: str = Field(default="active", min_length=1, max_length=32)
-    context: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class DialogTurnResponse(BaseModel):
@@ -57,7 +62,7 @@ class DialogTurnResponse(BaseModel):
     thread_id: str
     role: str
     content: str
-    payload: dict[str, Any] | None = None
+    payload: dict[str, JsonValue] | None = None
     task_id: str | None = None
     seq: int
     created_at: datetime | None = None
@@ -79,8 +84,8 @@ class McpToolCallResponse(BaseModel):
     conversation_id: str
     server_name: str
     tool_name: str
-    arguments: dict[str, Any]
-    content: list[dict[str, Any]]
+    arguments: dict[str, JsonValue]
+    content: list[dict[str, JsonValue]]
     is_error: bool
     event: str
     user_id: str | None = None
@@ -133,17 +138,15 @@ async def upsert_session(body: UpsertSessionRequest, request: Request) -> Sessio
     principal = get_principal(request)
     resources = get_app_resources(request.app)
     existing = await resources.session_service.get_session(thread_id=body.thread_id)
-    if (
-        existing is not None
-        and existing.user_id not in (None, principal.subject)
-        and not principal_is_admin(request, principal)
-    ):
+    if existing is not None and not principal_is_admin(request, principal) and existing.user_id != principal.subject:
+        # Exact owner match only — unowned residual sessions are not claimable (IDOR).
         raise HTTPException(status_code=403, detail="Not allowed to update this session")
     session = await resources.session_service.touch_session(
         thread_id=body.thread_id,
         user_id=principal.subject,
         title=body.title,
-        context_patch=body.context,
+        # Control-plane keys (HITL counters, critic, effective text) are server-only.
+        context_patch=filter_client_context_patch(body.context),
         status=body.status,
     )
     return _to_response(session)
@@ -293,15 +296,15 @@ async def get_session_timeline(
     )
 
 
-def _to_response(session: Any) -> SessionResponse:
-    """Convert ORM entity to API response."""
+def _to_response(session: SessionRecord) -> SessionResponse:
+    """Convert domain session record to API response."""
     return SessionResponse(
         id=session.id,
         thread_id=session.thread_id,
         user_id=session.user_id,
         status=session.status,
         title=session.title,
-        context=session.context,
+        context=cast("dict[str, JsonValue]", public_session_context(session.context)),
         created_at=session.created_at,
         updated_at=session.updated_at,
     )

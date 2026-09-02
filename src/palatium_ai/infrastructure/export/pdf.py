@@ -1,6 +1,6 @@
 # src/palatium_ai/infrastructure/export/pdf.py
 
-"""PDF-рендер ContentDocument (без второго LLM-прохода)."""
+"""PDF-рендер ContentDocument (с поддержкой Unicode)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from fpdf import FPDF
+from structlog import get_logger
 
 from palatium_ai.domain.content import (
     CalloutBlock,
@@ -25,15 +26,18 @@ from palatium_ai.domain.content import (
     WidgetBlock,
 )
 
+logger = get_logger(__name__)
+
 
 class ContentDocumentPdfExporter:
-    """Компилирует typed blocks в PDF bytes."""
+    """Компилирует typed blocks в PDF bytes с поддержкой Unicode."""
 
     def export(self, document: ContentDocument) -> bytes:
-        """Сериализует ContentDocument в PDF (Unicode-шрифт при наличии)."""
+        """Сериализует ContentDocument в PDF (Unicode-шрифт)."""
         pdf = FPDF()
         pdf.set_auto_page_break(auto=True, margin=16)
         pdf.add_page()
+
         font_name = _register_unicode_font(pdf)
         pdf.set_font(font_name, size=12)
 
@@ -54,12 +58,13 @@ class ContentDocumentPdfExporter:
             f"locale={document.locale} · confidence={document.meta.confidence:.2f}",
             line_height=5,
         )
+
         out = pdf.output()
         return bytes(out) if isinstance(out, (bytes, bytearray)) else str(out).encode("latin-1")
 
 
 def _write(pdf: FPDF, text: str, *, line_height: float = 6) -> None:
-    """Пишет абзац с возвратом к левому краю (избегает FPDF width errors)."""
+    """Пишет абзац с возвратом к левому краю."""
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(0, line_height, text, new_x="LMARGIN", new_y="NEXT")
 
@@ -83,7 +88,6 @@ def _render_block(pdf: FPDF, font_name: str, block: object) -> None:
     for handler in handlers:
         if handler(pdf, font_name, block):
             return
-
 
 def _render_heading(pdf: FPDF, font_name: str, block: object) -> bool:
     if not isinstance(block, HeadingBlock):
@@ -225,15 +229,15 @@ def _render_widget(pdf: FPDF, font_name: str, block: object) -> bool:
     return True
 
 
+# ---- Шрифт ----
 @lru_cache(maxsize=1)
 def _font_path() -> Path | None:
-    """Unicode TTF: bundled / system DejaVu / Arial / Segoe UI."""
-    import fpdf
+    """Поиск Unicode-шрифта в проекте или системе."""
+    project_font = Path(__file__).resolve().parent / "fonts" / "DejaVuSans.ttf"
+    if project_font.is_file():
+        return project_font
 
     candidates = [
-        Path(__file__).resolve().parent / "fonts" / "DejaVuSans.ttf",
-        Path(fpdf.__file__).resolve().parent / "font" / "DejaVuSans.ttf",
-        Path(fpdf.__file__).resolve().parent / "fonts" / "DejaVuSans.ttf",
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
         Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
         Path("C:/Windows/Fonts/arial.ttf"),
@@ -246,11 +250,16 @@ def _font_path() -> Path | None:
 
 
 def _register_unicode_font(pdf: FPDF) -> str:
-    """Регистрирует Unicode-шрифт или падает на Helvetica."""
     path = _font_path()
     if path is None:
+        logger.warning("Unicode font not found. Using Helvetica (Cyrillic will not render).")
         return "Helvetica"
-    # Один TTF на regular/bold — достаточно для экспортного рендера
-    pdf.add_font("DocSans", fname=str(path))
-    pdf.add_font("DocSans", style="B", fname=str(path))
-    return "DocSans"
+    try:
+        pdf.add_font("DocSans", fname=str(path), uni=True)
+        pdf.add_font("DocSans", style="B", fname=str(path), uni=True)
+        logger.debug("Unicode font registered", font_path=str(path))
+        return "DocSans"
+    except Exception as e:
+        logger.error("Failed to register font", error=str(e))
+        raise RuntimeError(f"Failed to load font from {path}. Please ensure the font file is valid.") from e
+

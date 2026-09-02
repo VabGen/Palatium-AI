@@ -43,3 +43,17 @@ class LLMPort(Protocol):
     ) -> AsyncIterator[LLMStreamDelta]:
         """Возвращает поток частичных ответов."""
         ...
+
+
+class LlmCostEstimatorPort(Protocol):
+    """Контракт оценки USD-стоимости completion (infra реализует через pricing tables)."""
+
+    def __call__(
+        self,
+        *,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> float:
+        """Return estimated USD cost, or 0.0 when unknown."""
+        ...

@@ -16,15 +16,28 @@ def configured_mcp_token() -> str | None:
     return raw or None
 
 
-def require_mcp_bearer(authorization: str | None = Header(default=None)) -> None:
-    """Reject requests when MCP_AUTH_TOKEN is set and Authorization does not match.
+def anon_mcp_allowed() -> bool:
+    """Explicit local-only opt-in when MCP_AUTH_TOKEN is unset (default: deny)."""
+    raw = os.environ.get("MCP_ALLOW_ANON", "").strip().lower()
+    return raw in {"1", "true", "yes"}
 
-    When the env var is unset, stubs stay open for local bootstrap only.
-    Set MCP_AUTH_TOKEN (same value as the platform client) before any shared network.
+
+def require_mcp_bearer(authorization: str | None = Header(default=None)) -> None:
+    """Require a matching Bearer token for stub JSON-RPC.
+
+    Fail-closed: missing MCP_AUTH_TOKEN rejects all callers unless MCP_ALLOW_ANON
+    is explicitly set (local bootstrap only). Empty Bearer / whitespace-only
+    tokens are always rejected when a token is configured.
     """
     expected = configured_mcp_token()
     if expected is None:
-        return
+        if anon_mcp_allowed():
+            return
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MCP_AUTH_TOKEN required (set MCP_ALLOW_ANON=1 only for local bootstrap)",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -32,7 +45,7 @@ def require_mcp_bearer(authorization: str | None = Header(default=None)) -> None
             headers={"WWW-Authenticate": "Bearer"},
         )
     provided = authorization.removeprefix("Bearer ").strip()
-    if not secrets.compare_digest(provided, expected):
+    if not provided or not secrets.compare_digest(provided, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Bearer token",

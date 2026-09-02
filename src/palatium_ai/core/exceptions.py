@@ -1,14 +1,10 @@
 # palatium_ai/core/exceptions.py
 
-"""Исключения платформы."""
+"""Исключения платформы (core-only; domain errors stay in domain)."""
 
 
 class PalatiumError(Exception):
     """Базовое исключение платформы."""
-
-
-class SessionOwnershipError(PalatiumError, PermissionError):
-    """Caller is not the session owner (and is not admin)."""
 
 
 class AuditChainIntegrityError(PalatiumError):
@@ -28,3 +24,15 @@ class ToolNotAllowedError(PalatiumError, PermissionError):
 
 class AgentExecutionError(PalatiumError):
     """Ошибка выполнения агента после исчерпания retry."""
+
+
+class ClarifyError(PalatiumError):
+    """Ошибка при запросе дополнительной информации."""
+
+
+class AuditWriteDegradedError(RuntimeError):
+    """Audit write failed on I/O level; event preserved in dead-letter.
+
+    Бизнес-флоу ОБЯЗАН ловить это исключение и продолжать работу —
+    деградация аудита не должна превращаться в пользовательскую ошибку.
+    """

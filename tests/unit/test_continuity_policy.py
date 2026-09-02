@@ -373,3 +373,110 @@ def test_answer_does_not_remap_choice_clarify_to_knowledge() -> None:
     assert effective.task_kind == "clarification_needed"
     assert effective.requires_user_choice is True
     assert effective.suppress_intent_hitl is False
+
+
+def test_format_with_choice_does_not_suppress_intent_hitl() -> None:
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="оформи как таблицу",
+        continuation_kind="format",
+        confidence=0.95,
+        refers_to_prior=True,
+        prior_assistant_excerpt="План\n• Завершение встречи (15:00–15:15)",
+        reasoning="format",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="response_formatting",
+        requires_mcp=False,
+        requires_user_choice=True,
+        underspecification_kind="discrete_choice",
+        candidate_capabilities=("format", "user_choice"),
+        confidence=0.9,
+        reasoning="format but still need exclusive style pick",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.task_kind == "response_formatting"
+    assert effective.requires_user_choice is True
+    assert effective.suppress_intent_hitl is False
+    assert effective.trust_prior_for_workers is True
+
+
+def test_resolve_worker_prior_prefers_rich_user_payload() -> None:
+    user_doc = "D" * 900
+    dialog = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t1",
+                role="user",
+                content=user_doc,
+                seq=0,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t1",
+                role="assistant",
+                content="Нужен документ",
+                seq=1,
+                created_at=datetime.now(UTC),
+            ),
+        ),
+        limit=12,
+    )
+    prior = ContinuityPolicy.resolve_worker_prior(
+        assistant_prior="Нужен документ",
+        dialog=dialog,
+        continuation_kind="format",
+        trust_prior_for_workers=True,
+    )
+    assert prior is not None
+    assert prior.startswith("D")
+    assert len(prior) == 900
+
+
+def test_prior_context_clipped_to_worker_budget() -> None:
+    from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
+
+    huge = "X" * (DEFAULT_PROMPT_BUDGET.worker_summary_max_chars + 500)
+    dialog = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t1",
+                role="user",
+                content=huge,
+                seq=0,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t1",
+                role="assistant",
+                content="ok",
+                seq=1,
+                created_at=datetime.now(UTC),
+            ),
+        ),
+        limit=12,
+    )
+    ctx = ContextualizerOutput(
+        rewritten_query="переформатируй",
+        continuation_kind="format",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="ok",
+        reasoning="format",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="response_formatting",
+        requires_mcp=False,
+        candidate_capabilities=("format",),
+        confidence=0.9,
+        reasoning="format",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.prior_context is not None
+    assert len(effective.prior_context) == DEFAULT_PROMPT_BUDGET.worker_summary_max_chars

@@ -16,7 +16,7 @@ import structlog
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from palatium_ai.domain.mcp.models import MCPToolDescriptor
+from palatium_ai.domain.mcp.models import MCPToolDescriptor, MCPToolSummary
 from palatium_ai.domain.mcp.server_url_policy import filter_mcp_server_map
 from palatium_ai.infrastructure.mcp.base import MCPJsonRpcClient, MCPJsonRpcError
 from palatium_ai.infrastructure.mcp.circuit import McpServerCircuit
@@ -38,6 +38,13 @@ class _ToolsCacheEntry:
     ok: bool
 
 
+@dataclass(slots=True)
+class _SummariesCacheEntry:
+    summaries: list[MCPToolSummary]
+    cached_at: float
+    ok: bool
+
+
 class MCPRegistry:
     """Реестр MCP-серверов с TTL-кэшем descriptors и per-server circuit."""
 
@@ -51,6 +58,7 @@ class MCPRegistry:
         self._servers: dict[str, str] = {}
         self._health_cache: dict[str, tuple[bool, float]] = {}
         self._tools_cache: dict[str, _ToolsCacheEntry] = {}
+        self._summaries_cache: dict[str, _SummariesCacheEntry] = {}
         self._circuits: dict[str, McpServerCircuit] = {}
         self._cache_ttl_seconds: int = 60
         self._lock = asyncio.Lock()
@@ -123,6 +131,7 @@ class MCPRegistry:
     def _clear_runtime_caches(self) -> None:
         self._health_cache.clear()
         self._tools_cache.clear()
+        self._summaries_cache.clear()
         self._circuits.clear()
 
     async def reload(self) -> None:
@@ -278,11 +287,76 @@ class MCPRegistry:
 
         circuit.record_success()
         self._tools_cache[server_name] = _ToolsCacheEntry(tools=tools, cached_at=now, ok=True)
+        self._summaries_cache[server_name] = _SummariesCacheEntry(
+            summaries=[tool.to_summary() for tool in tools],
+            cached_at=now,
+            ok=True,
+        )
         return tools
+
+    async def list_tool_summaries(self, server_name: str, *, force_refresh: bool = False) -> list[MCPToolSummary]:
+        """Discovery path: network omitInputSchema + separate TTL cache (no full-schema warm)."""
+        now = time.time()
+        circuit = self._circuit(server_name)
+        if circuit.is_open(now):
+            return self._cached_summaries_on_circuit_open(server_name)
+
+        if not force_refresh:
+            cached = self._summaries_cache.get(server_name)
+            if cached is not None:
+                ttl = self._cache_ttl_seconds if cached.ok else _NEGATIVE_CACHE_TTL_SECONDS
+                if now - cached.cached_at < ttl:
+                    return list(cached.summaries)
+            tools_cached = self._tools_cache.get(server_name)
+            if tools_cached is not None and tools_cached.ok:
+                ttl = self._cache_ttl_seconds
+                if now - tools_cached.cached_at < ttl:
+                    return [tool.to_summary() for tool in tools_cached.tools]
+
+        client = self.get_client(server_name)
+        server_url = self.get_server_url(server_name)
+        try:
+            summaries = await client.list_tool_summaries()
+        except (httpx.HTTPError, MCPJsonRpcError, Exception) as exc:
+            logger.warning(
+                "MCP tools/list summaries failed; skipping server",
+                server=server_name,
+                url=server_url,
+                error=str(exc),
+                exc_info=True,
+            )
+            return self._remember_summaries_failure(server_name, now)
+
+        circuit.record_success()
+        self._summaries_cache[server_name] = _SummariesCacheEntry(
+            summaries=summaries,
+            cached_at=now,
+            ok=True,
+        )
+        return summaries
+
+    def _cached_summaries_on_circuit_open(self, server_name: str) -> list[MCPToolSummary]:
+        """Return cached summaries when circuit is open, falling back to tool cache if needed."""
+        cached = self._summaries_cache.get(server_name)
+        if cached is not None:
+            return list(cached.summaries)
+        tools_cached = self._tools_cache.get(server_name)
+        return [tool.to_summary() for tool in tools_cached.tools] if tools_cached is not None else []
+
+    async def get_tool(self, server_name: str, tool_name: str) -> MCPToolDescriptor | None:
+        """Load one full descriptor (schema) for argument build / HITL / call."""
+        tools = await self.list_tools(server_name)
+        return next((tool for tool in tools if tool.name == tool_name), None)
 
     def _remember_tools_failure(self, server_name: str, now: float) -> list[MCPToolDescriptor]:
         self._circuit(server_name).record_failure(now)
         self._tools_cache[server_name] = _ToolsCacheEntry(tools=[], cached_at=now, ok=False)
+        self._summaries_cache[server_name] = _SummariesCacheEntry(summaries=[], cached_at=now, ok=False)
+        return []
+
+    def _remember_summaries_failure(self, server_name: str, now: float) -> list[MCPToolSummary]:
+        self._circuit(server_name).record_failure(now)
+        self._summaries_cache[server_name] = _SummariesCacheEntry(summaries=[], cached_at=now, ok=False)
         return []
 
     async def call_tool(self, server_name: str, tool_call: MCPToolCall) -> MCPToolResult:

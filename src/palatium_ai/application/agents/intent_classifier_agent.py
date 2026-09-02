@@ -180,7 +180,7 @@ def _parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
         IntentClassifierOutput(
             task_kind=task_kind,
             requires_mcp=requires_mcp,
-            requires_user_choice=_coerce_requires_user_choice(payload, capabilities),
+            requires_user_choice=_coerce_bool_flag(payload.get("requires_user_choice")),
             underspecification_kind=_coerce_underspecification_kind(payload),
             candidate_capabilities=capabilities,
             confidence=float(payload.get("confidence", 0.0)),
@@ -189,18 +189,13 @@ def _parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
     )
 
 
-def _coerce_requires_user_choice(payload: dict[str, object], capabilities: tuple[str, ...]) -> bool:
-    """Normalize requires_user_choice; capability tag user_choice is a backup signal."""
-    raw = payload.get("requires_user_choice")
+def _coerce_bool_flag(raw: object) -> bool:
+    """Parse LLM bool-ish field; choice-axis OR logic lives in UserChoiceIntentPolicy."""
     if isinstance(raw, bool):
-        flagged = raw
-    elif isinstance(raw, str):
-        flagged = raw.strip().lower() in {"1", "true", "yes"}
-    else:
-        flagged = False
-    caps = {item.strip().lower() for item in capabilities}
-    underspec = _coerce_underspecification_kind(payload)
-    return flagged or underspec == "discrete_choice" or "user_choice" in caps or "select" in caps
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes"}
+    return False
 
 
 def _coerce_underspecification_kind(payload: dict[str, object]) -> UnderspecificationKind:

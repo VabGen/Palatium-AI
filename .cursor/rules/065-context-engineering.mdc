@@ -1,0 +1,75 @@
+---
+description: Контекст-инжиниринг: JIT, progressive disclosure, компакция
+globs:
+  - "src/palatium_ai/application/agents/core/**"
+  - "src/palatium_ai/application/orchestration/**"
+alwaysApply: true
+---
+
+# Контекст-инжиниринг
+
+## ContextBuilder — единственная точка сборки контекста
+
+Пайплайн строго: **извлечение → фильтрация → ранжирование → сжатие → доставка**.
+
+1. JIT: загружаются ТОЛЬКО ключи из `agent.get_required_context_keys()`.
+   Порядок вызова: Harness создаёт агента → вызывает `get_required_context_keys()`
+   → собирает контекст через ContextBuilder → передаёт его в `AgentInput.context`
+   → вызывает `run()`. Агент НЕ дособирает контекст внутри `run()` (030.2).
+   Расширение ключей «на всякий случай» — нарушение JIT; нехватка ключа →
+   ошибка сборки, не тихий пропуск.
+2. Прогрессивное раскрытие: скиллы отдаются как метаданные (заголовок SKILL.md);
+   `reference.md` — только через tool call `skill_reference(name)` из ToolRegistry
+   (проходит RBAC и трассировку как обычный tool call). Side-channels мимо
+   Harness запрещены.
+3. Компакция: `ContextBuilder.compact()` при достижении 80% лимита.
+   Лимит контекста — из реестра `core/types/model_registry.py`
+   (`model_tier → context_limit_tokens`), не хардкод (050).
+   Семантика compact(): LLM-суммаризация dialog-части + ОТДЕЛЬНОЕ сохранение
+   (не сжимать): goal, plan, последние результаты → long-term память (060),
+   событие `context_compacted` в трассировку с before/after token-счётом.
+   Молчаливое усечение — запрещено.
+4. Дедупликация перед подачей в LLM: нормализация (trim + collapse whitespace,
+   lowercase для сравнения) → удаление повторов; точные дубли — всегда,
+   near-duplicates — только если включены в конфиге.
+5. Токен-бюджет — конфигурируемый; подсчёт — единый tokenizer-хелпер в
+   `core/context/tokens.py` (не считать len() по словам). Фактическое
+   использование — метрика `palatium_context_tokens_used` (040; свои имена
+   контекстных метрик не вводить).
+
+## Оркестрация (LangGraph)
+
+- `AgentState` — TypedDict в `orchestration/state.py`; менять только с обновлением
+  всех узлов. Правила:
+  - значения — только примитивы, pydantic-модели (AgentOutput и подтипы, 030)
+    или UUID; `Any` и вложенные сырые dict в state — запрещены (050);
+  - все поля state сериализуемы (попадают в Redis-checkpoint) — никаких
+    live-объектов (клиенты, соединения) в state;
+  - обязательные поля: `trace_id` (корреляция, 040), `goal`, `plan`,
+    `revisions_count`.
+- Узел = асинхронная функция. Тела узлов НЕ содержат бизнес-логики: валидация
+  входа → `harness.execute_with_guardrails(agent, input)` → маппинг результата
+  в state.
+- **Контракт `execute_with_guardrails` (domain/ports/harness.py):**
+
+```python
+async def execute_with_guardrails(
+    agent: BaseAgent, input: AgentInput
+) -> AgentOutput:
+    """Единая точка запуска агента из узла графа.
+    Внутри (последовательность, НЕ дублировать по узлам):
+    1. span узла (040)  2. сборка JIT-контекста  3. RBAC-фильтр инструментов
+    (020, ToolRegistry)  4. secret scan входа (020)
+    5. agent.run() с timeout из AgentConfig  6. agent.verify()
+    7. confidence gate (030.7)  8. метрики + лог.
+    """
+```
+
+  Названия и порядок шагов фиксируются здесь; узел не повторяет ни один из них.
+- Условные рёбра (цикл Critic → доработка): `MAX_REVISIONS` — константа в конфиге
+  (default 2), защита от бесконечного цикла (050). При исчерпании — эскалация,
+  не тихий выход.
+- Все узлы идемпотентны относительно checkpoint'а; узел после HITL-resume
+  обязан полагаться на одноразовость карточки (020), а не на свою память
+  о «уже спрашивали».
+- Каждый узел — span + минимум одна метрика (040; правило «никогда потом»).

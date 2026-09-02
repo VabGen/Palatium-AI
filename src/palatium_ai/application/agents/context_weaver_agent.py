@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from typing import TYPE_CHECKING, Literal
 
 from palatium_ai.application.services.execution_planner import ExecutionPlanner
@@ -17,12 +19,14 @@ from palatium_ai.domain.agents.context_weaver import (
     ContextWeaverOutput,
     ContextWeaverTaskResult,
 )
+from palatium_ai.domain.agents.execution import CLARIFY_STRATEGY
 from palatium_ai.domain.mcp.models import ExecutionStrategy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.contracts import AgentContext
-    from palatium_ai.infrastructure.mcp.registry import MCPRegistry
+    from palatium_ai.domain.ports.mcp import MCPRegistryPort
 
+logger = logging.getLogger(__name__)
 
 CONTEXT_WEAVER_CONFIG = AgentConfig(
     name="context_weaver",
@@ -35,21 +39,31 @@ CONTEXT_WEAVER_CONFIG = AgentConfig(
     confidence_threshold=0.7,
 )
 
+# Confidence без LLM-оценок: детерминированная сборка => полная уверенность,
+# clarify-маршрут => половина (downstream видит, что план требует человека).
+_PLANNED_CONFIDENCE = 1.0
+_CLARIFY_CONFIDENCE = 0.5
+
 
 class ContextWeaverAgent:
-    """Собирает контекст и execution plan до worker execution."""
+    """Собирает контекст и execution plan до worker execution.
+
+    Контракт отказного пути — как у остальных агентов: отказ планировщика
+    конвертируется в failure-result с requires_review=True, исключения
+    не покидают execute. LLM здесь нет, но planner/capability index —
+    это IO с внешним состоянием и умеет падать.
+    """
 
     config = CONTEXT_WEAVER_CONFIG
 
     def __init__(
         self,
-        mcp_registry: MCPRegistry | None = None,
+        mcp_registry: MCPRegistryPort | None = None,
         *,
         capability_index: MCPCapabilityIndex | None = None,
     ) -> None:
-        self._capability_index: MCPCapabilityIndex | None
         if capability_index is not None:
-            self._capability_index = capability_index
+            self._capability_index: MCPCapabilityIndex | None = capability_index
         elif mcp_registry is not None:
             self._capability_index = MCPCapabilityIndex(mcp_registry)
         else:
@@ -66,7 +80,34 @@ class ContextWeaverAgent:
         _ = context
         agent_metrics.record_node_execution("context_weaver", "context_weaver_node")
 
-        execution_bundle = await self._execution_planner.build(task_input)
+        try:
+            execution_bundle = await self._execution_planner.build(task_input)
+        except Exception:
+            logger.exception("execution planner failed (task=%s)", task_input.task_id)
+            agent_metrics.record_error("context_weaver", "planner_failure")
+            return ContextWeaverTaskResult(
+                task_id=task_input.task_id,
+                agent_role=self.config.role,
+                status="failure",
+                confidence=0.0,
+                requires_review=True,
+                output=None,
+                error="execution plan could not be built",
+            )
+
+        if not execution_bundle.steps:
+            logger.error("execution planner returned empty steps (task=%s)", task_input.task_id)
+            agent_metrics.record_error("context_weaver", "empty_plan")
+            return ContextWeaverTaskResult(
+                task_id=task_input.task_id,
+                agent_role=self.config.role,
+                status="failure",
+                confidence=0.0,
+                requires_review=True,
+                output=None,
+                error="execution plan has no steps",
+            )
+
         execution_plan = execution_bundle.steps[0]
         context_summary = _build_context_summary(task_input, execution_bundle.selected_strategy)
         context_packet = ContextPacket(
@@ -85,13 +126,14 @@ class ContextWeaverAgent:
             execution_bundle=execution_bundle,
             available_capabilities=task_input.candidate_capabilities,
         )
-        requires_review = execution_plan.strategy == "clarify"
+
+        requires_review = execution_plan.strategy == CLARIFY_STRATEGY
         status: Literal["success", "failure", "partial"] = "partial" if requires_review else "success"
         return ContextWeaverTaskResult(
             task_id=task_input.task_id,
             agent_role=self.config.role,
             status=status,
-            confidence=1.0 if not requires_review else 0.5,
+            confidence=_CLARIFY_CONFIDENCE if requires_review else _PLANNED_CONFIDENCE,
             requires_review=requires_review,
             output=output,
         )

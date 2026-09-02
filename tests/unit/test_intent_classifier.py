@@ -58,3 +58,23 @@ async def test_intent_classifier_invalid_json_failure() -> None:
     assert result.status == "failure"
     assert result.output is None
     assert result.error is not None
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_user_choice_cap_owned_by_policy() -> None:
+    """Application parses flags only; UserChoiceIntentPolicy owns choice-axis OR/remap."""
+    llm = FakeLLMPort(
+        '{"task_kind":"knowledge_request","requires_mcp":false,"requires_user_choice":false,'
+        '"underspecification_kind":"none","candidate_capabilities":["user_choice"],'
+        '"confidence":0.91,"reasoning":"menu ask"}',
+    )
+    agent = IntentClassifierAgent(llm)
+    result = await agent.execute(
+        IntentClassifierInput(task_id="t4", text="pick a topic"),
+        AgentContext(thread_id="thread-4"),
+    )
+
+    assert result.output is not None
+    assert result.output.requires_user_choice is True
+    assert result.output.task_kind == "clarification_needed"
+    assert result.output.underspecification_kind == "discrete_choice"

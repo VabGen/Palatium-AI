@@ -29,7 +29,7 @@ async def ensure_database_and_schema(settings: Settings) -> None:
         host=db_cfg.host,
         port=db_cfg.port,
         user=db_cfg.user,
-        password=db_cfg.password,
+        password=db_cfg.password.get_secret_value(),
         database="postgres",
     )
 

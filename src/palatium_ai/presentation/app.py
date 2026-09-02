@@ -20,6 +20,7 @@ from palatium_ai.presentation.api.routers import (
     agents,
     auth,
     documents,
+    feedback,
     health,
     hitl,
     intents,
@@ -98,6 +99,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(documents.router, prefix="/api/documents", tags=["documents"])
     application.include_router(health.router, tags=["health"])
     application.include_router(metrics.router, tags=["observability"])
+    application.include_router(feedback.router, prefix="/api", tags=["feedback"])
 
     _mount_chat_ui(application)
 

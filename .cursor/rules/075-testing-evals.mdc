@@ -1,0 +1,85 @@
+---
+description: Тесты и эвалы агентов, CI-пороги
+globs:
+  - "tests/**/*.py"
+  - "src/palatium_ai/application/agents/**/evals/**"
+alwaysApply: false
+---
+
+# Тестирование и эвалы
+
+## Пирамида
+
+1. **Unit** — каждый агент с моками `Harness`/`LLMPort`. Проверять: `run()`,
+   `get_required_context_keys()`, `get_available_tools()`, парсинг вывода,
+   confidence gate (низкий confidence → `partial` + эскалация, 030.7).
+   Тесты фиксируют КОНТРАКТ (AgentInput/Output, политики, 030/055),
+   а не внутреннюю реализацию агента — рефакторинг не должен ломать тесты.
+2. **Policies (domain/policies/, 055)** — чистые unit без LLM и моков;
+   coverage по `domain/` ≥ 90% (порог — константа CI-конфига, не в pyproject-полу).
+3. **Интеграционные** — полный граф LangGraph на сценариях:
+   research, data_analysis, memory_recall, follow-up continuity.
+   LLM — через `mock_llm` с записанными реальными ответами (cassette-подход:
+   детерминированно, бесплатно, тестирует роутинг и сведение контрактов).
+   Тесты с ЖИВЫМИ LLM — только маркер `@pytest.mark.llm_live`, отдельно от PR-CI.
+4. **Evals** — `tasks.json` + `grader.py` в каждом агенте (структура — 030);
+   запуск в CI; качество не ниже baseline с допуском ±tolerance.
+5. **Нагрузочные** — latency p95, cost per query; маркер `@pytest.mark.slow`,
+   отдельный workflow.
+
+## Контракт grader.py (единственный источник — здесь)
+
+```python
+from typing import Protocol
+from pydantic import BaseModel
+
+
+class GradeResult(BaseModel, frozen=True):
+    score: float            # 0.0..1.0
+    passed: bool            # против порога из tasks.json
+    details: str            # человекочитаемо, в артефакты CI
+
+
+class Grader(Protocol):
+    kind: str               # "deterministic" | "llm_judge"
+    async def grade(self, task: dict, output: dict) -> GradeResult: ...
+```
+
+- `tasks.json` — валидируется pydantic-схемой при загрузке (не сырой dict в коде).
+- CI-раннер evals работает ТОЛЬКО через этот протокол; grader со своим API
+  (не Protocol) — ошибка ревью.
+- На PR — только `kind="deterministic"` (быстро, флейка нет);
+  `kind="llm_judge"` — nightly workflow (cost + недетерминизм вне PR-пути).
+  LLM-judge в CI — модель другого провайдера, чем тестируемая (040), ключи —
+  только из CI-secrets, в логи не печатать.
+
+## Baseline evals
+
+- Baseline — файл `evals/baseline.json` В РЕПОЗИТОРИИ (score per task-класс),
+  обновляется осознанно в том же PR, что улучшение (не авто-обновлением из CI).
+- Сравнение: score ≥ baseline − tolerance (tolerance — константа CI-конфига,
+  гасит недетерминизм; не магическое число в workflow-yml).
+- Ночное падение относительно baseline → задача на разбор, авто-revert baseline
+  запрещён.
+
+## Правила
+
+- Тест = файл `test_<module>.py` в `tests/unit/...`, зеркалирующий путь исходника.
+- Мок LLM — фикстура `mock_llm` (детерминированные ответы из `tests/fixtures/`).
+- Тесты памяти — изолированная тестовая БД; схемы `knowledge`/`memory` создаются
+  МИГРАЦИЯМИ проекта (не fixture-скриптом — иначе тестируем не ту схему, что в проде);
+  очистка — усечение таблиц между тестами. Drop-БД — только в teardown всего
+  тестового контейнера. DSN тестовой БД — только из env `TEST_DATABASE_URL`;
+  если указатель на не-test инстанс — тест падает на старте (защита от drop на прод).
+  Тестировать: Recall@k, фильтр `user_id` (в т.ч. RLS-политику, 060),
+  гибридный поиск (060.6).
+- Каждый bugfix сопровождается regression-тестом, воспроизводящим баг (055).
+- Evals в CI на PR (детерминированная часть); отчёт в артефактах.
+- Тесты RBAC: агент без права на инструмент получает от Harness
+  СТРУКТУРИРОВАННЫЙ отказ → `AgentOutput(status="failure", error_message=...)`
+  (030.8, 070), audit-событие `permission_denied` записано, НИКАКОГО проброса
+  `PermissionError` наружу. Тест, ожидающий исключение, — неверный.
+- Тесты никогда не ослабляются, чтобы «прошёл» (050); спорное ожидание —
+  обсуждение, не тихая правка.
+- Тесты не пишутся под реализацию: сигнатуры — только публичные контракты
+  (030, 055, 065, 070).

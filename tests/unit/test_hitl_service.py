@@ -465,6 +465,7 @@ async def test_step_up_challenge_issues_assertion_when_enforced() -> None:
         risk_score=0.9,
         argument_preview="x=1",
         owner_user_id=ACTOR,
+        org_id="org-1",
     )
     challenge = await service.issue_step_up_challenge(card.card_id, actor_subject=ACTOR)
     assert challenge.required is True
@@ -484,6 +485,7 @@ async def test_step_up_challenge_issues_assertion_when_enforced() -> None:
         risk_score=0.9,
         argument_preview="x=1",
         owner_user_id=ACTOR,
+        org_id="org-1",
     )
     none_needed = await skipped.issue_step_up_challenge(soft.card_id, actor_subject=ACTOR)
     assert none_needed.required is False
@@ -509,6 +511,7 @@ async def test_step_up_required_for_high_risk_mcp() -> None:
         risk_score=0.9,
         argument_preview="x=1",
         owner_user_id=ACTOR,
+        org_id="org-1",
     )
     body = _resolve(card, action_id="approve", idem="idem-step-missing")
     with pytest.raises(HitlInvalidActionError, match="step_up"):
@@ -607,6 +610,22 @@ async def test_chaos_concurrent_respond_and_sweep() -> None:
 
 def test_mcp_write_floor_applied() -> None:
     assert HitlRiskPolicy.for_mcp_tool(0.1) == pytest.approx(HitlRiskPolicy.MCP_WRITE_FLOOR)
+
+
+@pytest.mark.asyncio
+async def test_write_tool_approval_requires_org_id() -> None:
+    service = _service()
+    with pytest.raises(HitlInvalidActionError, match="org_id"):
+        await service.create_tool_approval_card(
+            thread_id="t-no-org",
+            task_id="task-1",
+            server_name="edms",
+            tool_name="archive_document",
+            side_effect="write",
+            risk_score=0.9,
+            argument_preview="document_id=X",
+            owner_user_id=ACTOR,
+        )
 
 
 def test_clamp_ttl() -> None:

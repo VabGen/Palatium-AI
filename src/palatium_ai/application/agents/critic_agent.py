@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from typing import TYPE_CHECKING, Literal
 
@@ -20,6 +21,7 @@ from palatium_ai.domain.llm.models import ChatMessage
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.contracts import AgentContext
 
+logger = logging.getLogger(__name__)
 
 CRITIC_CONFIG = AgentConfig(
     name="critic",
@@ -31,6 +33,14 @@ CRITIC_CONFIG = AgentConfig(
     max_retries=3,
     confidence_threshold=0.7,
 )
+
+_PASSTHROUGH_ACCURACY = 9
+_PASSTHROUGH_SAFETY = 10
+
+_ACCURACY_REVIEW_THRESHOLD = 6
+_SAFETY_REVIEW_THRESHOLD = 8
+
+_SUMMARY_MAX_CHARS = 2000
 
 _SYSTEM_PROMPT = """You are a strict quality auditor for a universal MCP-driven assistant.
 Score the proposed platform classification, route plan, and worker draft.
@@ -64,7 +74,13 @@ Rules:
 
 
 class CriticAgent(BaseAgent):
-    """Проверяет качество platform classification/route/worker draft."""
+    """Проверяет качество platform classification/route/worker draft.
+
+    Контракт отказного пути совпадает с researcher: LLM-стейдж при отказе
+    возвращает failure-result с requires_review=True (fail open в сторону
+    человека — quality gate не должен молча пропускать), исключения
+    никогда не покидают execute.
+    """
 
     config = CRITIC_CONFIG
 
@@ -74,7 +90,7 @@ class CriticAgent(BaseAgent):
         task_input: CriticInput,
         context: AgentContext,
     ) -> CriticTaskResult:
-        """Выполняет качество-gate и сообщает нужна ли human review."""
+        """Выполняет quality-gate и сообщает, нужна ли human review."""
         _ = context
         agent_metrics.record_node_execution("critic", "critic_node")
 
@@ -92,8 +108,8 @@ class CriticAgent(BaseAgent):
         if not gate.invoke_llm:
             agent_metrics.record_node_execution("critic", f"passthrough:{gate.reason}")
             output = CriticOutput(
-                accuracy_score=9,
-                safety_score=10,
+                accuracy_score=_PASSTHROUGH_ACCURACY,
+                safety_score=_PASSTHROUGH_SAFETY,
                 requires_review=False,
                 summary=f"CriticPolicy passthrough ({gate.reason}).",
             )
@@ -101,7 +117,7 @@ class CriticAgent(BaseAgent):
                 task_id=task_input.task_id,
                 agent_role=self.config.role,
                 status="success",
-                confidence=0.95,
+                confidence=_confidence_from_scores(output),
                 requires_review=False,
                 output=output,
             )
@@ -131,8 +147,9 @@ class CriticAgent(BaseAgent):
         try:
             completion = await self._call_llm(messages, model=self.config.llm_model, response_format="json_object")
             output = _parse_critic_output(completion.content)
-        except Exception as exc:
-            agent_metrics.record_error("critic", type(exc).__name__)
+        except Exception:
+            logger.exception("critic LLM stage failed (task=%s)", task_input.task_id)
+            agent_metrics.record_error("critic", "llm_stage_failure")
             return CriticTaskResult(
                 task_id=task_input.task_id,
                 agent_role=self.config.role,
@@ -140,35 +157,77 @@ class CriticAgent(BaseAgent):
                 confidence=0.0,
                 requires_review=True,
                 output=None,
-                error=str(exc),
+                error="LLM stage failed in critic agent",
             )
 
-        requires_review = output.requires_review or output.accuracy_score < 6 or output.safety_score < 8
+        requires_review = (
+            output.requires_review
+            or output.accuracy_score < _ACCURACY_REVIEW_THRESHOLD
+            or output.safety_score < _SAFETY_REVIEW_THRESHOLD
+        )
 
         status: Literal["success", "failure", "partial"] = "partial" if requires_review else "success"
         if requires_review:
             agent_metrics.record_human_escalation("critic_requires_review")
 
-        confidence = min(max((output.accuracy_score / 10 + output.safety_score / 10) / 2, 0.0), 1.0)
-
         return CriticTaskResult(
             task_id=task_input.task_id,
             agent_role=self.config.role,
             status=status,
-            confidence=confidence,
+            confidence=_confidence_from_scores(output),
             requires_review=requires_review,
             output=output,
         )
 
 
+def _confidence_from_scores(output: CriticOutput) -> float:
+    """Confidence как среднее нормализованных scores, кламп в [0, 1]."""
+    return min(
+        max((output.accuracy_score / 10 + output.safety_score / 10) / 2, 0.0),
+        1.0,
+    )
+
+
+def _coerce_bool(value: object) -> bool:
+    """Строгая интерпретация requires_review от LLM.
+
+    bool("false") == True — потому прямое bool() над строкой запрещено:
+    "false"/"no"/"0" не должны поднимать review (и наоборот).
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
+
+
+def _coerce_score(value: object, default: float = 0.0) -> int:
+    """Число 0-10 из ответа LLM: строки, float, мусор — всё переживаем."""
+    try:
+        score = float(value)
+    except TypeError, ValueError:
+        return int(default)
+    if score != score or score in (float("inf"), float("-inf")):  # NaN/inf
+        return int(default)
+    return int(min(max(score, 0.0), 10.0))
+
+
 def _parse_critic_output(raw_content: str) -> CriticOutput:
-    """Парсит JSON-ответ LLM в CriticOutput."""
+    """Парсит JSON-ответ LLM в CriticOutput с харденингом мусора."""
     payload = loads_llm_json(raw_content)
     if not isinstance(payload, dict):
         raise ValueError("Critic JSON must be an object")
+
+    raw_summary = payload.get("summary", "No summary provided")
+    summary = str(raw_summary).strip() or "No summary provided"
+    if len(summary) > _SUMMARY_MAX_CHARS:
+        summary = summary[:_SUMMARY_MAX_CHARS].rstrip() + "…"
+
     return CriticOutput(
-        accuracy_score=int(payload.get("accuracy_score", 0)),
-        safety_score=int(payload.get("safety_score", 0)),
-        requires_review=bool(payload.get("requires_review", False)),
-        summary=str(payload.get("summary", "No summary provided")),
+        accuracy_score=_coerce_score(payload.get("accuracy_score")),
+        safety_score=_coerce_score(payload.get("safety_score")),
+        requires_review=_coerce_bool(payload.get("requires_review")),
+        summary=summary,
     )

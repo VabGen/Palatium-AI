@@ -1,47 +1,88 @@
 ---
-description: Principled fixes — global root cause, no phrase hardcode, no workarounds
+description: Принципиальные исправления — глобальная причина, без хардкода фраз и костылей
+globs: ["**/*"]
 alwaysApply: true
 ---
 
 # Принципы исправлений (без хардкода и костылей)
 
-При баге от пользователя сначала ищи **глобальную причину в контрактах/политиках**,
-а не патч под один сценарий («как дела», «спасибо», конкретный язык и т.п.).
-Таких сценариев может быть множество — точечный if/список фраз не масштабируется.
+Связь с 050: 050 — ЧТО запрещено (таблица антипаттернов),
+этот файл — КАК чинить правильно (процедура).
+
+При баге сначала ищи **глобальную причину в контрактах/политиках**, а не патч под один
+сценарий («как дела», «спасибо», конкретный язык). Точечный if/список фраз не масштабируется.
 
 ## Обязательный порядок
 
-1. Воспроизвести симптом → найти слой (Contextualizer / Intent / Continuity / Supervisor /
-   Planner / Critic / HITL).
-2. Спросить: это ошибка **контракта** или частный кейс? Если контракт — чинить контракт.
-3. Предложить принцип, покрывающий класс ситуаций, затем код. Не молча клеить if под фразу.
+1. Воспроизвести симптом → найти слой (context_enricher / intent_classifier /
+   supervisor / critic / HITL). Зафиксируй слой и классификацию причины
+   (контракт / политика / частный кейс) в описании PR.
+2. **Исключение — legacy:** если симптом в агенте, ещё не мигрированном на
+   контракт 030, — сначала минимальный фикс на месте, затем отдельная задача
+   на миграцию (skill `agent-refactoring`). НЕ переписывать легаси молча
+   в рамках багфикса.
+3. Спросить: это ошибка **контракта** или частный кейс? Если контракт — чинить контракт.
+4. Предложить принцип, покрывающий класс ситуаций, затем код. Не молча клеить if под фразу.
+
+## Источники истины для осей и политик
+
+- `task_kind`, `continuation_kind`, `route strategy` — Literal-типы, объявленные
+  ОДИН раз в `domain/policies/types.py` (см. 010: единый источник + реэкспорт).
+  Объявлять эти Literal локально в агенте — запрещено.
+- Политики — доменные объекты в `domain/policies/`, чистые функции/классы без I/O,
+  полностью детерминированные и unit-тестируемые без LLM:
+
+```python
+# domain/policies/continuity.py (эскиз контракта)
+class ContinuityPolicy(Protocol):
+    def suppress_false_clarification(
+        self, continuation: ContinuationKind, prior_present: bool
+    ) -> bool: ...
+
+# domain/policies/critic.py (эскиз контракта)
+class CriticPolicy(Protocol):
+    def needs_judge(self, strategy: RouteStrategy, confidence: float) -> bool: ...
+```
+
+- Агенты ПОЛУЧАЮТ политики через DI (как Harness в 030), не создают внутри себя.
+  Это позволяет переиспользовать ContinuityPolicy в critic и тестировать изолированно.
+
+- **Low-risk стратегии (закрытый перечень):** `ack_only`, `format_only`,
+  `small_talk`. Расширять перечень — только правкой Literal в
+  `domain/policies/types.py` с комментарием-обоснованием, не локальными
+  проверками в Critic.
 
 ## Запрещено
 
 | Костыль | Почему | Вместо этого |
-|---------|--------|--------------|
+|---|---|---|
 | Списки приветствий / regex «привет\|как дела\|thanks» | Ломается на новых языках и формулировках | `task_kind` / `continuation_kind` / политика домена |
-| `if text == "..."` / special-case в Supervisor/Critic | Рост ветвлений, скрытая логика | Единая доменная политика (`ContinuityPolicy`, `CriticPolicy`, …) |
-| Continuity переписывает любой follow-up в `knowledge_request` | Ложный Researcher + Critic LLM + HITL | Continuity **обогащает** prior; remapa только history-blind ложный `clarification_needed` |
-| Промпт «answer → всегда knowledge_request» | Дублирует Continuity и смешивает оси | Intent классифицирует *ask*; hints — только зависимость от prior |
-| «Быстрый» патч только под скрин/лог пользователя | Следующий пользователь словит соседний кейс | Принцип + тесты на класс сценариев |
+| `if text == "..."` / special-case в Supervisor/Critic | Рост ветвлений, скрытая логика | Единая доменная политика (`ContinuityPolicy`, `CriticPolicy`) |
+| ContextEnricher переписывает любой follow-up в `knowledge_request` | Ложный Researcher + Critic LLM + HITL | ContextEnricher **обогащает** prior; remap только history-blind ложного `clarification_needed` |
+| Промпт «answer → всегда knowledge_request» | Дублирует ContextEnricher, смешивает оси | Intent классифицирует *ask*; hints — только зависимость от prior |
+| «Быстрый» патч только под скрин/лог пользователя | Следующий кейс словит соседний баг | Принцип + regression-тест на класс сценариев |
+| Policy-логика внутри агента (не в `domain/policies/`) | Нетеструемо, дублируется между агентами | Доменный объект + DI (см. 030, 000) |
 
-## Контракт осей (не смешивать)
+## Контракт осей (НЕ смешивать)
 
 | Ось | Владелец | Смысл |
-|-----|----------|--------|
-| `continuation_kind` / `refers_to_prior` | Contextualizer | Зависит ли реплика от prior |
-| `task_kind` / `requires_mcp` | Intent | Какое намерение у пользователя |
-| prior + suppress false HITL | ContinuityPolicy | Что Intent не видит без истории |
-| route / strategy | Supervisor + Planner | Куда идти при уже известном kind |
-| LLM judge vs passthrough | CriticPolicy | Нужен ли Critic LLM |
+|---|---|---|
+| `continuation_kind` / `refers_to_prior` | context_enricher | Зависит ли реплика от prior |
+| `task_kind` / `requires_mcp` | intent_classifier | Какое намерение у пользователя |
+| suppress false HITL | ContinuityPolicy (`domain/policies/`) | Что Intent не видит без истории |
+| route / strategy | Supervisor | Куда идти при уже известном kind |
+| LLM judge vs passthrough | CriticPolicy (`domain/policies/`) | Нужен ли Critic LLM |
 
-Continuity **не** классифицирует social/capability/tool. Intent **не** форсит research
-из‑за наличия диалога. Critic **не** эскалирует low-risk стратегии (`ack_only`, `format_only`)
-без сигнала риска.
+- ContextEnricher **не** классифицирует social/capability/tool.
+- Intent **не** форсит research из-за наличия диалога.
+- Critic **не** эскалирует low-risk стратегии (закрытый перечень выше)
+  без сигнала риска.
 
 ## Если просят точечный хардкод
 
-Сначала явно откажись от хардкода фраз/костыля, назови нарушенный принцип,
-предложи исправление контракта/политики. Реализуй костыль только если пользователь
-после этого **явно** подтвердил исключение.
+Сначала явно откажись: назови нарушенный принцип, предложи исправление
+контракта/политики. Реализуй костыль только если пользователь после этого
+**явно** подтвердил исключение — и пометь место
+`# EXCEPTION: <принцип> — подтверждено пользователем <дата>` (как в 050).
+
+Каждый bugfix сопровождается regression-тестом, воспроизводящим баг (см. 075).

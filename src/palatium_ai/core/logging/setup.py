@@ -16,6 +16,7 @@ import structlog
 
 from .filters import SuppressFilter
 from .processors import add_context_vars, add_timestamp
+from .redact import redact_secrets
 
 if TYPE_CHECKING:
     from structlog.types import Processor
@@ -51,6 +52,7 @@ def setup_logging(settings: Settings) -> None:
             ]
         ),
         add_context_vars,
+        redact_secrets,
     ]
 
     renderer: Processor

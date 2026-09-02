@@ -13,6 +13,7 @@ from .models import (
     MCPToolCall,
     MCPToolDescriptor,
     MCPToolResult,
+    MCPToolSummary,
     ToolExecutionPlan,
 )
 
@@ -27,5 +28,6 @@ __all__ = [
     "MCPToolCall",
     "MCPToolDescriptor",
     "MCPToolResult",
+    "MCPToolSummary",
     "ToolExecutionPlan",
 ]

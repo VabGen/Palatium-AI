@@ -20,7 +20,7 @@ class ResearcherInput(BaseModel):
 
     task_id: str
     context_packet: ContextPacket
-    prior_context: str | None = Field(default=None, max_length=16_000)
+    prior_context: str | None = Field(default=None, max_length=8_000)
     mcp_tool_output_max_chars: int = Field(default=3000, ge=500, le=16_000)
     revision_feedback: str | None = Field(default=None, max_length=4_000)
 

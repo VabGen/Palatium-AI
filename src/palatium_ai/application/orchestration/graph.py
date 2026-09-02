@@ -13,10 +13,13 @@ from langgraph.graph import END, START, StateGraph
 from palatium_ai.application.orchestration import node_inputs
 from palatium_ai.application.orchestration.snapshot import OrchestrationSnapshot
 from palatium_ai.application.orchestration.state import AgentGraphState
+from palatium_ai.core.exceptions import ClarifyError
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
+from palatium_ai.core.resilience.circuit import CircuitOpenError, ConsecutiveFailureCircuit
+from palatium_ai.domain.agents import FormatterTaskResult
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.execution import WORKER_STRATEGIES
 from palatium_ai.domain.agents.intent import IntentClassifierInput
@@ -25,10 +28,6 @@ from palatium_ai.domain.memory.contextualizer import ContextualizerInput
 from palatium_ai.domain.memory.continuity import ContinuityPolicy
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.infrastructure.memory.checkpoint_serde import build_checkpoint_serde
-from palatium_ai.infrastructure.resilience.circuit import (
-    CircuitOpenError,
-    ConsecutiveFailureCircuit,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -260,20 +259,39 @@ async def _supervisor_node(
     return await _run_logged_node(agent=agent, node_name="supervisor", state=state, run=run)
 
 
-@traceable(name="graph.node.context_weaver")
-async def _context_weaver_node(
-    state: AgentGraphState,
-    agent: ContextWeaverAgent,
-) -> AgentGraphState:
-    """Узел LangGraph: сборка context bundle и execution plan."""
+# @traceable(name="graph.node.context_weaver")
+# async def _context_weaver_node(
+#     state: AgentGraphState,
+#     agent: ContextWeaverAgent,
+# ) -> AgentGraphState:
+#     """Узел LangGraph: сборка context bundle и execution plan."""
 
-    async def run() -> tuple[AgentGraphState, object]:
+#     async def run() -> tuple[AgentGraphState, object]:
+#         snapshot = OrchestrationSnapshot.from_state(state)
+#         task_input = node_inputs.build_context_weaver_input(snapshot)
+#         context = AgentContext(thread_id=snapshot.thread_id)
+#         result = await agent.execute(task_input, context)
+#         return {"context_bundle": result}, result
+
+#     return await _run_logged_node(agent=agent, node_name="context_weaver", state=state, run=run)
+
+
+@traceable(name="graph.node.context_weaver")
+async def _context_weaver_node(state: AgentGraphState, agent: ContextWeaverAgent) -> AgentGraphState:
+    async def run():
         snapshot = OrchestrationSnapshot.from_state(state)
         task_input = node_inputs.build_context_weaver_input(snapshot)
         context = AgentContext(thread_id=snapshot.thread_id)
-        result = await agent.execute(task_input, context)
-        return {"context_bundle": result}, result
-
+        try:
+            result = await agent.execute(task_input, context)
+            return {"context_bundle": result}, result
+        except ClarifyError as e:
+            logger.info("Context weaver requires clarification", question=str(e))
+            return {
+                "context_bundle": None,
+                "requires_clarification": True,
+                "clarification_question": str(e),
+            }, None
     return await _run_logged_node(agent=agent, node_name="context_weaver", state=state, run=run)
 
 
@@ -311,25 +329,65 @@ async def _researcher_node(
     return await _run_logged_node(agent=agent, node_name="researcher", state=state, run=run)
 
 
-@traceable(name="graph.node.formatter")
-async def _formatter_node(
-    state: AgentGraphState,
-    agent: FormatterAgent,
-) -> AgentGraphState:
-    """Узел LangGraph: финальное форматирование ответа."""
+# @traceable(name="graph.node.formatter")
+# async def _formatter_node(
+#     state: AgentGraphState,
+#     agent: FormatterAgent,
+# ) -> AgentGraphState:
+#     """Узел LangGraph: финальное форматирование ответа."""
 
-    async def run() -> tuple[AgentGraphState, object]:
+#     async def run() -> tuple[AgentGraphState, object]:
+#         snapshot = OrchestrationSnapshot.from_state(state)
+#         task_input = node_inputs.build_formatter_input(snapshot, state)
+#         context = AgentContext(thread_id=snapshot.thread_id)
+#         result = await agent.execute(task_input, context)
+#         return {"formatted": result}, result
+
+#     return await _run_logged_node(agent=agent, node_name="formatter", state=state, run=run)
+
+
+@traceable(name="graph.node.formatter")
+async def _formatter_node(state: AgentGraphState, agent: FormatterAgent) -> AgentGraphState:
+    async def run():
+        if state.get("requires_clarification"):
+            question = state.get("clarification_question", "Уточните, пожалуйста.")
+            from palatium_ai.domain.content import ContentDocument
+            doc = ContentDocument(
+                schema_version=1,
+                locale="ru-RU",
+                title="Уточнение",
+                blocks=[{"type": "paragraph", "text": question}],
+                actions=[],
+                meta={"confidence": 1.0, "requires_review": False, "source_refs": [], "interaction": "none"}
+            )
+            result = FormatterTaskResult(
+                task_id=state["task_id"],
+                agent_role="formatter",
+                status="success",
+                confidence=1.0,
+                requires_review=False,
+                output=doc,
+            )
+            return {"formatted": result}, result
         snapshot = OrchestrationSnapshot.from_state(state)
         task_input = node_inputs.build_formatter_input(snapshot, state)
         context = AgentContext(thread_id=snapshot.thread_id)
         result = await agent.execute(task_input, context)
         return {"formatted": result}, result
-
     return await _run_logged_node(agent=agent, node_name="formatter", state=state, run=run)
 
 
-def _route_after_context(state: AgentGraphState) -> Literal["researcher", "critic"]:
-    """Выбирает следующий узел после ContextWeaver."""
+# def _route_after_context(state: AgentGraphState) -> Literal["researcher", "critic"]:
+#     """Выбирает следующий узел после ContextWeaver."""
+#     snapshot = OrchestrationSnapshot.from_state(state)
+#     if snapshot.selected_strategy in WORKER_STRATEGIES:
+#         return "researcher"
+#     return "critic"
+
+
+def _route_after_context(state: AgentGraphState) -> Literal["researcher", "critic", "formatter"]:
+    if state.get("requires_clarification"):
+        return "formatter"
     snapshot = OrchestrationSnapshot.from_state(state)
     if snapshot.selected_strategy in WORKER_STRATEGIES:
         return "researcher"

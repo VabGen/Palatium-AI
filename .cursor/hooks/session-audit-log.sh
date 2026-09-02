@@ -2,25 +2,19 @@
 # stop — hash-chained запись в audit log о завершении агентской сессии.
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/audit-chain.sh
+source "$SCRIPT_DIR/lib/audit-chain.sh"
+
 INPUT="$(cat)"
-CONVERSATION_ID="$(echo "$INPUT" | jq -r '.conversation_id // "unknown"')"
+if command -v jq >/dev/null 2>&1; then
+  CONVERSATION_ID="$(echo "$INPUT" | jq -r '.conversation_id // "unknown"')"
+else
+  echo "⚠️  session-audit-log: jq не найден — извлекаю conversation_id через python3 (audit-chain запись будет пропущена)." >&2
+  CONVERSATION_ID="$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('conversation_id') or 'unknown')" 2>/dev/null || echo "unknown")"
+fi
 
-LOG_DIR="$(dirname "$0")/../logs"
-LOG_FILE="$LOG_DIR/audit-chain.log"
-mkdir -p "$LOG_DIR"
-touch "$LOG_FILE"
-
-PREV_HASH="$(tail -n 1 "$LOG_FILE" 2>/dev/null | jq -r '.current_hash // "genesis"' 2>/dev/null || echo "genesis")"
-TIMESTAMP="$(date -u +%FT%TZ)"
-PAYLOAD="{\"timestamp\":\"$TIMESTAMP\",\"conversation_id\":\"$CONVERSATION_ID\",\"event\":\"session_stop\"}"
-CURRENT_HASH="$(printf '%s' "${PREV_HASH}${PAYLOAD}" | sha256sum | awk '{print $1}')"
-
-jq -n \
-  --arg ts "$TIMESTAMP" \
-  --arg cid "$CONVERSATION_ID" \
-  --arg prev "$PREV_HASH" \
-  --arg curr "$CURRENT_HASH" \
-  '{timestamp:$ts, conversation_id:$cid, event:"session_stop", previous_hash:$prev, current_hash:$curr}' \
-  >> "$LOG_FILE"
+audit_append_event "session_stop" "conversation_id" "$CONVERSATION_ID" || true
 
 exit 0

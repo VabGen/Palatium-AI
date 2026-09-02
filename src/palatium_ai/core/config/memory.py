@@ -4,7 +4,7 @@
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr, field_validator
 
 from .base import BaseConfig
 
@@ -60,7 +60,7 @@ class MemoryConfig(BaseConfig):
         default=False,
         validation_alias="MEMORY_EMBEDDING_RERANK",
     )
-    mem0_api_key: str = Field(default="", validation_alias="MEM0_API_KEY")
+    mem0_api_key: SecretStr | None = Field(default=None, validation_alias="MEM0_API_KEY")
     mem0_host: str = Field(default="https://api.mem0.ai", validation_alias="MEM0_HOST")
     mem0_timeout_seconds: float = Field(
         default=30.0,
@@ -73,4 +73,14 @@ class MemoryConfig(BaseConfig):
         validation_alias="GRAPHITI_NEO4J_URI",
     )
     graphiti_neo4j_user: str = Field(default="neo4j", validation_alias="GRAPHITI_NEO4J_USER")
-    graphiti_neo4j_password: str = Field(default="", validation_alias="GRAPHITI_NEO4J_PASSWORD")
+    graphiti_neo4j_password: SecretStr | None = Field(
+        default=None,
+        validation_alias="GRAPHITI_NEO4J_PASSWORD",
+    )
+
+    @field_validator("mem0_api_key", "graphiti_neo4j_password", mode="before")
+    @classmethod
+    def _empty_secret_as_none(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        return value

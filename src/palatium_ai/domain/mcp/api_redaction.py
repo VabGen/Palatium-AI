@@ -6,9 +6,9 @@ must not echo secrets or unbounded tool dumps to the client.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
 
-from palatium_ai.domain.mcp.argument_policy import is_sensitive_argument_key
+from palatium_ai.domain.mcp.argument_policy import contains_secret_value, is_sensitive_argument_key
 
 # Public API budgets (not DB retention limits).
 _MAX_ARG_STRING_CHARS = 256
@@ -17,24 +17,26 @@ _MAX_CONTENT_ITEMS = 8
 _REDACTED = "[REDACTED]"
 _TRUNCATED_SUFFIX = "…[truncated]"
 
+JsonObject = dict[str, object]
 
-def redact_mcp_arguments(arguments: dict[str, Any] | None) -> dict[str, Any]:
+
+def redact_mcp_arguments(arguments: Mapping[str, object] | None) -> JsonObject:
     """Return a client-safe copy of tool arguments."""
     if not arguments:
         return {}
-    redacted = _redact_value(arguments, depth=0)
+    redacted = _redact_value(dict(arguments), depth=0)
     return redacted if isinstance(redacted, dict) else {}
 
 
-def redact_mcp_content(content: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def redact_mcp_content(content: list[Mapping[str, object]] | None) -> list[JsonObject]:
     """Return a client-safe copy of MCP content blocks."""
     if not content:
         return []
-    out: list[dict[str, Any]] = []
+    out: list[JsonObject] = []
     for item in content[:_MAX_CONTENT_ITEMS]:
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             continue
-        out.append(_redact_content_item(item))
+        out.append(_redact_content_item(dict(item)))
     if len(content) > _MAX_CONTENT_ITEMS:
         out.append(
             {
@@ -45,8 +47,8 @@ def redact_mcp_content(content: list[dict[str, Any]] | None) -> list[dict[str, A
     return out
 
 
-def _redact_content_item(item: dict[str, Any]) -> dict[str, Any]:
-    redacted: dict[str, Any] = {}
+def _redact_content_item(item: JsonObject) -> JsonObject:
+    redacted: JsonObject = {}
     for key, value in item.items():
         key_s = str(key)
         if _is_sensitive_key(key_s):
@@ -59,11 +61,11 @@ def _redact_content_item(item: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
-def _redact_value(value: Any, *, depth: int) -> Any:
+def _redact_value(value: object, *, depth: int) -> object:
     if depth > 6:
         return "[depth-limit]"
     if isinstance(value, dict):
-        out: dict[str, Any] = {}
+        out: JsonObject = {}
         for key, nested in list(value.items())[:48]:
             key_s = str(key)
             if _is_sensitive_key(key_s):
@@ -74,7 +76,7 @@ def _redact_value(value: Any, *, depth: int) -> Any:
     if isinstance(value, list):
         return [_redact_value(item, depth=depth + 1) for item in value[:32]]
     if isinstance(value, str):
-        if _looks_like_secret(value):
+        if contains_secret_value(value) or _looks_like_secret(value):
             return _REDACTED
         return _truncate(value, _MAX_ARG_STRING_CHARS)
     return value
@@ -85,6 +87,7 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 def _looks_like_secret(value: str) -> bool:
+    """Legacy short checks kept for Bearer / sk- prefixes."""
     stripped = value.strip()
     if stripped.startswith("sk-") and len(stripped) > 16:
         return True

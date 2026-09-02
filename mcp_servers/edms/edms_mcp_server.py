@@ -1,16 +1,22 @@
-# src/mcp_servers/edms/edms_mcp_server.py
+# mcp_servers/edms/edms_mcp_server.py
 
-"""Минимальный MCP-compatible EDMS server stub."""
+"""Minimal MCP-compatible EDMS server stub (not JavaEdms runtime)."""
 
 from __future__ import annotations
+
+import json
 
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
 from mcp_stub_auth import require_mcp_bearer
+from mcp_stub_tools import tools_list_payload
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="edms-mcp-server")
+
+_MAX_QUERY_CHARS = 200
+_MAX_HITS = 5
 
 
 class JsonRpcRequest(BaseModel):
@@ -39,9 +45,28 @@ class JsonRpcResponse(BaseModel):
     id: str | None = None
 
 
+def _call_arguments(params: dict[str, object] | None) -> dict[str, object]:
+    raw = (params or {}).get("arguments", {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _text_result(payload: dict[str, object]) -> dict[str, object]:
+    """MCP content payload: single high-signal JSON text block (token-bounded)."""
+    return {
+        "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+        "isError": False,
+    }
+
+
 _SEARCH_DOCUMENTS_TOOL: dict[str, object] = {
     "name": "search_documents",
-    "description": "Search EDMS documents by query string.",
+    "description": (
+        "Search EDMS documents by a free-text query. "
+        "Use for lookup/read of contracts, incoming/outgoing, or archive titles. "
+        "Do not use for archive/write. "
+        "Returns truncated stub hits: document_id, title, score (max "
+        f"{_MAX_HITS}). Never invent ids beyond returned hits."
+    ),
     "annotations": {"readOnlyHint": True, "destructiveHint": False},
     "side_effect": "read",
     "riskTier": "low",
@@ -52,7 +77,8 @@ _SEARCH_DOCUMENTS_TOOL: dict[str, object] = {
             "query": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Search string for EDMS documents.",
+                "maxLength": _MAX_QUERY_CHARS,
+                "description": f"Non-empty search string (max {_MAX_QUERY_CHARS} chars).",
             },
         },
         "required": ["query"],
@@ -62,8 +88,13 @@ _SEARCH_DOCUMENTS_TOOL: dict[str, object] = {
 
 _ARCHIVE_DOCUMENT_TOOL: dict[str, object] = {
     "name": "archive_document",
-    "description": "Archive an EDMS document by id (write side-effect; requires HITL).",
-    "annotations": {"readOnlyHint": False, "destructiveHint": False},
+    "description": (
+        "Archive one EDMS document by exact document_id (write/destructive stub). "
+        "Platform HITL must approve before call. "
+        "Use only an id from a prior search_documents hit or an explicit user id; never guess. "
+        "Returns {document_id, status} confirmation."
+    ),
+    "annotations": {"readOnlyHint": False, "destructiveHint": True},
     "side_effect": "write",
     "riskTier": "high",
     "inputSchema": {
@@ -73,7 +104,8 @@ _ARCHIVE_DOCUMENT_TOOL: dict[str, object] = {
             "document_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "EDMS document identifier to archive.",
+                "maxLength": 128,
+                "description": "Exact EDMS document_id to archive (no wildcards).",
             },
         },
         "required": ["document_id"],
@@ -99,53 +131,71 @@ async def handle_jsonrpc(
     if request.method == "tools/list":
         return JsonRpcResponse(
             id=request.id,
-            result={
-                "tools": list(_TOOLS),
-            },
+            result={"tools": tools_list_payload(_TOOLS, request.params)},
         )
 
     if request.method == "tools/call":
         params = request.params or {}
         tool_name = params.get("name")
-        arguments = params.get("arguments", {})
+        arguments = _call_arguments(params if isinstance(params, dict) else None)
+
         if tool_name == "search_documents":
-            query = arguments.get("query") if isinstance(arguments, dict) else None
+            query = arguments.get("query")
             if not isinstance(query, str) or not query.strip():
                 return JsonRpcResponse(
                     id=request.id,
                     error=JsonRpcError(code=-32602, message="Invalid params: query is required"),
                 )
+            q = query.strip()[:_MAX_QUERY_CHARS]
             return JsonRpcResponse(
                 id=request.id,
-                result={
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"Stub EDMS result for query: {query}",
-                        },
-                    ],
-                    "isError": False,
-                },
+                result=_text_result(
+                    {
+                        "stub": True,
+                        "tool": "search_documents",
+                        "query": q,
+                        "hits": [
+                            {
+                                "document_id": "stub-doc-1",
+                                "title": f"Match for: {q[:80]}",
+                                "score": 0.91,
+                            },
+                        ][:_MAX_HITS],
+                        "truncated": True,
+                        "max_hits": _MAX_HITS,
+                    },
+                ),
             )
 
         if tool_name == "archive_document":
-            document_id = arguments.get("document_id") if isinstance(arguments, dict) else None
+            document_id = arguments.get("document_id")
             if not isinstance(document_id, str) or not document_id.strip():
                 return JsonRpcResponse(
                     id=request.id,
-                    error=JsonRpcError(code=-32602, message="Invalid params: document_id is required"),
+                    error=JsonRpcError(
+                        code=-32602,
+                        message="Invalid params: document_id is required",
+                    ),
+                )
+            doc_id = document_id.strip()[:128]
+            if "*" in doc_id or "?" in doc_id:
+                return JsonRpcResponse(
+                    id=request.id,
+                    error=JsonRpcError(
+                        code=-32602,
+                        message="Invalid params: document_id must be exact (no wildcards)",
+                    ),
                 )
             return JsonRpcResponse(
                 id=request.id,
-                result={
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"Stub EDMS archived document_id={document_id.strip()}",
-                        },
-                    ],
-                    "isError": False,
-                },
+                result=_text_result(
+                    {
+                        "stub": True,
+                        "tool": "archive_document",
+                        "document_id": doc_id,
+                        "status": "archived",
+                    },
+                ),
             )
 
         return JsonRpcResponse(

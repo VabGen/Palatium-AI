@@ -15,6 +15,11 @@ class _PartialFailureRegistry(FakeMCPRegistry):
             raise httpx.ConnectError("analytics down")
         return await super().list_tools(server_name, force_refresh=force_refresh)
 
+    async def list_tool_summaries(self, server_name: str, *, force_refresh: bool = False) -> list[object]:
+        if server_name == "analytics":
+            raise httpx.ConnectError("analytics down")
+        return await super().list_tool_summaries(server_name, force_refresh=force_refresh)
+
 
 @pytest.mark.asyncio
 async def test_discover_skips_failed_server_and_keeps_available_capabilities() -> None:
