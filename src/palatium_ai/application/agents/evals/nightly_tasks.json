@@ -1,0 +1,104 @@
+{
+  "tasks": [
+    {
+      "id": "researcher-summary-rubric",
+      "agent": "researcher",
+      "generator_provider": "openai",
+      "cassette": "researcher/knowledge.json",
+      "input": {
+        "user_text": "Explain Palatium architecture",
+        "task_kind": "knowledge_request",
+        "requires_mcp": false
+      },
+      "rubric": "Summary should describe a layered agent platform with Harness, LangGraph orchestration, and MCP tools.",
+      "judge_cassette": "judge/researcher_summary_pass.json",
+      "pass_threshold": 0.7
+    },
+    {
+      "id": "researcher-mcp-summary-rubric",
+      "agent": "researcher",
+      "generator_provider": "openai",
+      "args_cassette": "researcher/search_knowledge_args.json",
+      "input": {
+        "user_text": "Search knowledge index for Palatium architecture overview",
+        "task_kind": "knowledge_request",
+        "route": "researcher",
+        "requires_mcp": true,
+        "requires_tool_call": true,
+        "selected_strategy": "direct_tool_call",
+        "server_name": "platform",
+        "tool_name": "search_knowledge"
+      },
+      "rubric": "Summary must reflect MCP search_knowledge tool output, list mcp:platform.search_knowledge in sources_used, and avoid inventing facts beyond the retrieved hit text.",
+      "judge_cassette": "judge/researcher_mcp_summary_pass.json",
+      "pass_threshold": 0.7
+    },
+    {
+      "id": "formatter-document-rubric",
+      "agent": "formatter",
+      "generator_provider": "openai",
+      "cassette": "formatter/minimal_document.json",
+      "input": {
+        "user_text": "Краткий ответ пользователю.",
+        "task_kind": "social_conversation",
+        "route": "formatter",
+        "route_plan": "Format social reply",
+        "requires_mcp": false,
+        "selected_strategy": "ack_only",
+        "worker_summary": "Краткий ответ пользователю.",
+        "critic_summary": "ok"
+      },
+      "rubric": "Output must be a valid ContentDocument with schema_version 1, a non-empty title, and at least one paragraph block.",
+      "judge_cassette": "judge/formatter_document_pass.json",
+      "pass_threshold": 0.7
+    },
+    {
+      "id": "critic-research-rubric",
+      "agent": "critic",
+      "generator_provider": "openai",
+      "cassette": "critic/answer_continuity.json",
+      "input": {
+        "user_text": "а подробнее?",
+        "task_kind": "knowledge_request",
+        "route": "researcher",
+        "route_plan": "Research then answer",
+        "requires_mcp": false,
+        "selected_strategy": "reason_only",
+        "continuation_kind": "answer",
+        "classification_confidence": 0.9,
+        "classification_reasoning": "knowledge follow-up",
+        "worker_summary": "Summary text",
+        "user_input_chars": 0
+      },
+      "rubric": "Critic should return high accuracy and safety scores with a concise justification summary.",
+      "judge_cassette": "judge/critic_research_pass.json",
+      "pass_threshold": 0.7
+    },
+    {
+      "id": "memory-keeper-preference-rubric",
+      "agent": "memory_keeper",
+      "generator_provider": "openai",
+      "transcript": "user: I prefer tables for meeting agendas.\nassistant: Noted.",
+      "cassette": "memory_keeper/preference.json",
+      "rubric": "At least one preference fact should be extracted with kind preference and non-empty text.",
+      "judge_cassette": "judge/memory_keeper_preference_pass.json",
+      "pass_threshold": 0.7
+    },
+    {
+      "id": "context-enricher-rewrite-rubric",
+      "agent": "context_enricher",
+      "generator_provider": "openai",
+      "cassette": "context_enricher/format_followup.json",
+      "input": {
+        "user_text": "дай в виде таблицы",
+        "dialog": [
+          { "role": "user", "content": "Составь план встречи на завтра" },
+          { "role": "assistant", "content": "План встречи на завтра" }
+        ]
+      },
+      "rubric": "continuation_kind must be format, refers_to_prior true, rewritten_query should mention table/tabulate intent.",
+      "judge_cassette": "judge/context_enricher_rewrite_pass.json",
+      "pass_threshold": 0.7
+    }
+  ]
+}

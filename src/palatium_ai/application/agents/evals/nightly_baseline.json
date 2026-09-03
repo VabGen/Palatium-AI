@@ -1,0 +1,13 @@
+{
+  "agents": {
+    "nightly": 1.0
+  },
+  "tasks": {
+    "nightly/researcher-summary-rubric": 0.7,
+    "nightly/researcher-mcp-summary-rubric": 0.7,
+    "nightly/formatter-document-rubric": 0.7,
+    "nightly/critic-research-rubric": 0.7,
+    "nightly/memory-keeper-preference-rubric": 0.7,
+    "nightly/context-enricher-rewrite-rubric": 0.7
+  }
+}

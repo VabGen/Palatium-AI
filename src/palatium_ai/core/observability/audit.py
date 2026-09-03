@@ -8,7 +8,6 @@ import asyncio
 import hashlib
 import hmac
 import json
-import logging
 import os
 
 from dataclasses import dataclass, field
@@ -20,8 +19,12 @@ from typing import Final
 from pydantic import BaseModel, Field
 
 from palatium_ai.core.exceptions import AuditChainIntegrityError, AuditWriteDegradedError
+from palatium_ai.core.logging import get_logger
+from palatium_ai.core.observability.metrics import agent_metrics
+from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text_fields
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
 
 @dataclass
 class _ChainRecord:
@@ -48,7 +51,7 @@ _DEAD_LETTER_SUFFIX: Final[str] = ".dead-letter.log"
 
 _SINGLETON_LOCK = Lock()
 
-_AUDIT_WRITE_FAILURES_TOTAL = 0  # простая метрика; заменить на метрики
+_AUDIT_WRITE_FAILURES_TOTAL = 0  # in-process fallback; Prometheus via agent_metrics
 
 
 class AuditRecord(BaseModel):
@@ -214,6 +217,15 @@ class AuditChainLogger:
     ) -> AuditRecord:
         """Записывает запись в файл синхронно."""
         meta = dict(metadata or {})
+        try:
+            scan_text_fields(meta, prefix="audit.metadata")
+        except SecretScanError as exc:
+            logger.warning(
+                "audit.append.blocked_secret",
+                audit_event=event,
+                conversation_id=conversation_id,
+            )
+            raise AuditChainIntegrityError(str(exc)) from exc
         normalized_ts = _normalize_timestamp(timestamp)
 
         with self._lock:
@@ -276,10 +288,11 @@ class AuditChainLogger:
         except OSError:
             global _AUDIT_WRITE_FAILURES_TOTAL
             _AUDIT_WRITE_FAILURES_TOTAL += 1
+            agent_metrics.record_audit_write_failure()
             logger.exception(
-                "audit append failed (chain degraded), event=%s conv=%s",
-                event,
-                conversation_id,
+                "audit append failed (chain degraded)",
+                audit_event=event,
+                conversation_id=conversation_id,
             )
             await asyncio.to_thread(
                 self._write_dead_letter,
@@ -367,7 +380,12 @@ class AuditChainLogger:
         ev = rec.get("event")
         current = rec.get("current_hash")
         meta = rec.get("metadata", {})
-        if not all(isinstance(v, str) for v in (ts, conv, ev, current)):
+        if (
+            not isinstance(ts, str)
+            or not isinstance(conv, str)
+            or not isinstance(ev, str)
+            or not isinstance(current, str)
+        ):
             errors.append(f"line {line_no}: missing required fields")
             return None
         if not isinstance(meta, dict):

@@ -1,0 +1,93 @@
+[
+  {
+    "id": "researcher-knowledge",
+    "input": {
+      "user_text": "Explain Palatium architecture",
+      "task_kind": "knowledge_request",
+      "requires_mcp": false
+    },
+    "cassette": "researcher/knowledge.json",
+    "expect": { "status": "success", "requires_mcp": false, "has_summary": true }
+  },
+  {
+    "id": "researcher-search-knowledge",
+    "input": {
+      "user_text": "Search knowledge index for Palatium architecture overview",
+      "task_kind": "knowledge_request",
+      "route": "researcher",
+      "requires_mcp": true,
+      "requires_tool_call": true,
+      "selected_strategy": "direct_tool_call",
+      "server_name": "platform",
+      "tool_name": "search_knowledge"
+    },
+    "args_cassette": "researcher/search_knowledge_args.json",
+    "expect": {
+      "status": "partial",
+      "has_summary": true,
+      "mcp_tool": "search_knowledge",
+      "used_mcp_source": true
+    }
+  },
+  {
+    "id": "researcher-search-memory",
+    "input": {
+      "user_text": "Search episodic memory for user language preference",
+      "task_kind": "knowledge_request",
+      "route": "researcher",
+      "requires_mcp": true,
+      "requires_tool_call": true,
+      "selected_strategy": "direct_tool_call",
+      "server_name": "platform",
+      "tool_name": "search_memory"
+    },
+    "args_cassette": "researcher/search_memory_args.json",
+    "expect": {
+      "status": "partial",
+      "has_summary": true,
+      "mcp_tool": "search_memory",
+      "used_mcp_source": true
+    }
+  },
+  {
+    "id": "researcher-graph-query",
+    "input": {
+      "user_text": "Query knowledge graph for consolidated Palatium architecture facts",
+      "task_kind": "knowledge_request",
+      "route": "researcher",
+      "requires_mcp": true,
+      "requires_tool_call": true,
+      "selected_strategy": "direct_tool_call",
+      "server_name": "platform",
+      "tool_name": "graph_query"
+    },
+    "args_cassette": "researcher/graph_query_args.json",
+    "expect": {
+      "status": "partial",
+      "has_summary": true,
+      "mcp_tool": "graph_query",
+      "used_mcp_source": true
+    }
+  },
+  {
+    "id": "researcher-web-fallback",
+    "input": {
+      "user_text": "Web search fallback after empty local knowledge and memory search",
+      "task_kind": "knowledge_request",
+      "route": "researcher",
+      "requires_mcp": true,
+      "requires_tool_call": true,
+      "local_retrieval_empty": true,
+      "selected_strategy": "direct_tool_call",
+      "server_name": "platform",
+      "tool_name": "web_fallback"
+    },
+    "args_cassette": "researcher/web_fallback_args.json",
+    "expect": {
+      "status": "partial",
+      "has_summary": true,
+      "mcp_tool": "web_fallback",
+      "used_mcp_source": true
+    }
+  }
+]

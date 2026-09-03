@@ -5,20 +5,21 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 import structlog
+
+from pydantic import BaseModel, Field
 
 from palatium_ai.application.tools.mcp import MCPToolCallParams
 from palatium_ai.core.exceptions import ToolNotAllowedError
 from palatium_ai.core.observability.audit import get_audit_logger
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.mcp.tool_policy import is_tool_invocation_allowed
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-
-    from pydantic import BaseModel
 
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.agents.contracts import AgentContext
@@ -29,6 +30,19 @@ P = TypeVar("P", bound="BaseModel")
 R = TypeVar("R", bound="BaseModel")
 
 
+class ToolRbacDenied(BaseModel):
+    """Structured RBAC denial (070/030.8) — не исключение."""
+
+    model_config = {"frozen": True}
+
+    tool_name: str
+    agent_name: str
+    agent_role: str
+    allowed_tools: tuple[str, ...]
+    reason: Literal["not_in_allow_list"] = "not_in_allow_list"
+    message: str = Field(default="")
+
+
 class ToolExecutor:
     """Проверяет RBAC allow-list до вызова инструмента."""
 
@@ -36,15 +50,15 @@ class ToolExecutor:
         self._config = agent_config
         self._allowed = frozenset(agent_config.allowed_tools)
 
-    @traceable(name="tool_executor.execute")
-    async def execute(
+    @traceable(name="tool_executor.try_execute")
+    async def try_execute(
         self,
         tool_name: str,
         params: P,
         handler: Callable[[P], Awaitable[R]],
         context: AgentContext | None = None,
-    ) -> R:
-        """Вызывает handler только если tool_name ∈ allowed_tools (MCP — per-tool)."""
+    ) -> R | ToolRbacDenied:
+        """Вызывает handler только если tool_name ∈ allowed_tools; иначе ToolRbacDenied."""
         conversation_id = context.thread_id if context is not None else self._config.name
         server_name, mcp_tool_name = _mcp_identity(params)
         if not is_tool_invocation_allowed(
@@ -63,7 +77,7 @@ class ToolExecutor:
             )
             await _write_audit_event(
                 conversation_id=conversation_id,
-                event="tool_rbac_denied",
+                event="permission_denied",
                 metadata={
                     "agent": self._config.name,
                     "tool_name": tool_name,
@@ -71,7 +85,14 @@ class ToolExecutor:
                     "mcp_tool_name": mcp_tool_name or "",
                 },
             )
-            raise ToolNotAllowedError(tool_name, self._config.allowed_tools)
+            agent_metrics.record_rbac_denied(self._config.role, tool_name)
+            return ToolRbacDenied(
+                tool_name=tool_name,
+                agent_name=self._config.name,
+                agent_role=self._config.role,
+                allowed_tools=self._config.allowed_tools,
+                message=f"Tool '{tool_name}' is not in agent allow-list",
+            )
 
         logger.debug(
             "tool.rbac.allowed",
@@ -91,6 +112,20 @@ class ToolExecutor:
             },
         )
         return await handler(params)
+
+    @traceable(name="tool_executor.execute")
+    async def execute(
+        self,
+        tool_name: str,
+        params: P,
+        handler: Callable[[P], Awaitable[R]],
+        context: AgentContext | None = None,
+    ) -> R:
+        """Legacy API: raises ToolNotAllowedError on denial (prefer try_execute)."""
+        outcome = await self.try_execute(tool_name, params, handler, context=context)
+        if isinstance(outcome, ToolRbacDenied):
+            raise ToolNotAllowedError(tool_name, self._config.allowed_tools)
+        return outcome
 
 
 def _mcp_identity(params: BaseModel) -> tuple[str | None, str | None]:

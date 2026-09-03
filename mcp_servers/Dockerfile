@@ -50,6 +50,7 @@ RUN apt-get update \
         --home-dir /app --shell /usr/sbin/nologin mcp
 
 # Копируем shared auth/tools helpers + выбранный stub (edms/ или analytics/)
+COPY --chown=mcp:mcp schema_util.py /app/schema_util.py
 COPY --chown=mcp:mcp mcp_stub_auth.py /app/mcp_stub_auth.py
 COPY --chown=mcp:mcp mcp_stub_tools.py /app/mcp_stub_tools.py
 COPY --chown=mcp:mcp ${MCP_NAME}/ /app/

@@ -6,17 +6,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
+
+from palatium_ai.domain.policies.types import ExecutionStrategy as ExecutionStrategy
 
 JsonRpcVersion = Literal["2.0"]
-ExecutionStrategy = Literal[
-    "direct_tool_call",
-    "retrieve_then_reason",
-    "reason_only",
-    "format_only",
-    "ack_only",
-    "clarify",
-]
 
 
 class JsonRpcError(BaseModel):
@@ -70,14 +64,22 @@ class MCPToolSummary(BaseModel):
 class MCPToolDescriptor(BaseModel):
     """Описание MCP tool через JSON Schema 2020-12."""
 
-    model_config = {"frozen": True}
+    model_config = {"frozen": True, "populate_by_name": True}
 
     name: str = Field(min_length=1)
     description: str = Field(default="", min_length=0)
-    input_schema: dict[str, object] = Field(default_factory=dict, alias="inputSchema")
+    input_schema: dict[str, object] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("input_schema", "inputSchema"),
+        serialization_alias="inputSchema",
+    )
     annotations: dict[str, object] | None = None
     side_effect: Literal["read", "write", "unknown"] | None = None
-    risk_tier: Literal["low", "medium", "high"] | None = Field(default=None, alias="riskTier")
+    risk_tier: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("risk_tier", "riskTier"),
+        serialization_alias="riskTier",
+    )
 
     def to_summary(self) -> MCPToolSummary:
         """Progressive disclosure: name/description/risk without full inputSchema."""
@@ -104,10 +106,14 @@ class MCPToolCall(BaseModel):
 class MCPToolResult(BaseModel):
     """Результат MCP tool call."""
 
-    model_config = {"frozen": True}
+    model_config = {"frozen": True, "populate_by_name": True}
 
     content: list[dict[str, object]] = Field(default_factory=list)
-    is_error: bool = Field(default=False, alias="isError")
+    is_error: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_error", "isError"),
+        serialization_alias="isError",
+    )
 
 
 class MCPServerDescriptor(BaseModel):

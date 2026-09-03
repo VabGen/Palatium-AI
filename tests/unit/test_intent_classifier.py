@@ -1,15 +1,32 @@
 # tests/unit/test_intent_classifier.py
 
-"""Тесты IntentClassifierAgent."""
+"""Тесты IntentClassifierAgent (BaseAgent + Harness)."""
 
 from __future__ import annotations
 
 import pytest
 
-from palatium_ai.application.agents.intent_classifier_agent import IntentClassifierAgent
-from palatium_ai.domain.agents.contracts import AgentContext
+from palatium_ai.application.agents.harness import Harness
+from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
+from palatium_ai.application.orchestration.agent_bridge import intent_output_to_task_result, intent_to_agent_input
 from palatium_ai.domain.agents.intent import IntentClassifierInput
 from tests.conftest import FakeLLMPort
+
+
+async def _classify(llm: FakeLLMPort, task_input: IntentClassifierInput):
+    harness = Harness(llm=llm)
+    agent = IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG)
+    agent_input = intent_to_agent_input(
+        task_input,
+        trace_id="trace-1",
+        thread_id="thread-1",
+    )
+    output = await harness.execute_with_guardrails(agent, agent_input)
+    return intent_output_to_task_result(
+        output,
+        task_id=task_input.task_id,
+        agent_role=agent.config.role,
+    )
 
 
 @pytest.mark.asyncio
@@ -17,10 +34,9 @@ async def test_intent_classifier_success() -> None:
     llm = FakeLLMPort(
         '{"task_kind": "knowledge_request", "requires_mcp": true, "candidate_capabilities": ["search","retrieve"], "confidence": 0.92, "reasoning": "User asks to find data"}',
     )
-    agent = IntentClassifierAgent(llm)
-    result = await agent.execute(
+    result = await _classify(
+        llm,
         IntentClassifierInput(task_id="t1", text="Find the Q3 report"),
-        AgentContext(thread_id="thread-1"),
     )
 
     assert result.status == "success"
@@ -35,10 +51,9 @@ async def test_intent_classifier_low_confidence_partial() -> None:
     llm = FakeLLMPort(
         '{"task_kind": "clarification_needed", "requires_mcp": false, "candidate_capabilities": [], "confidence": 0.4, "reasoning": "Ambiguous request"}',
     )
-    agent = IntentClassifierAgent(llm)
-    result = await agent.execute(
+    result = await _classify(
+        llm,
         IntentClassifierInput(task_id="t2", text="maybe something"),
-        AgentContext(thread_id="thread-2"),
     )
 
     assert result.status == "partial"
@@ -49,10 +64,9 @@ async def test_intent_classifier_low_confidence_partial() -> None:
 @pytest.mark.asyncio
 async def test_intent_classifier_invalid_json_failure() -> None:
     llm = FakeLLMPort("not json at all")
-    agent = IntentClassifierAgent(llm)
-    result = await agent.execute(
+    result = await _classify(
+        llm,
         IntentClassifierInput(task_id="t3", text="hello"),
-        AgentContext(thread_id="thread-3"),
     )
 
     assert result.status == "failure"
@@ -62,16 +76,14 @@ async def test_intent_classifier_invalid_json_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_intent_classifier_user_choice_cap_owned_by_policy() -> None:
-    """Application parses flags only; UserChoiceIntentPolicy owns choice-axis OR/remap."""
     llm = FakeLLMPort(
         '{"task_kind":"knowledge_request","requires_mcp":false,"requires_user_choice":false,'
         '"underspecification_kind":"none","candidate_capabilities":["user_choice"],'
         '"confidence":0.91,"reasoning":"menu ask"}',
     )
-    agent = IntentClassifierAgent(llm)
-    result = await agent.execute(
+    result = await _classify(
+        llm,
         IntentClassifierInput(task_id="t4", text="pick a topic"),
-        AgentContext(thread_id="thread-4"),
     )
 
     assert result.output is not None

@@ -1,0 +1,51 @@
+[
+  {
+    "id": "paragraph-split",
+    "cassette": "text_ingestor/harness.json",
+    "input": {
+      "task_id": "ti-paragraph",
+      "thread_id": "eval-thread",
+      "raw_text": "First paragraph about onboarding.\n\nSecond paragraph about security policy.",
+      "max_chunk_chars": "500"
+    },
+    "expect": {
+      "status": "success",
+      "min_chunks": 2,
+      "strategy": "paragraph"
+    }
+  },
+  {
+    "id": "fixed-window-long",
+    "cassette": "text_ingestor/harness.json",
+    "input": {
+      "task_id": "ti-window",
+      "thread_id": "eval-thread",
+      "raw_text": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+      "max_chunk_chars": "80"
+    },
+    "expect": {
+      "status": "success",
+      "min_chunks": 3,
+      "strategy": "fixed_window",
+      "max_chunk_chars": 80
+    }
+  },
+  {
+    "id": "context-prefix-enrich",
+    "cassette": "text_ingestor/context_prefix.json",
+    "input": {
+      "task_id": "ti-prefix",
+      "thread_id": "eval-thread",
+      "document_title": "Security Policy",
+      "raw_text": "Section A defines access control.\n\nSection B defines audit logging.",
+      "max_chunk_chars": "500",
+      "enrich_context_prefix": true
+    },
+    "expect": {
+      "status": "success",
+      "min_chunks": 2,
+      "context_prefixes_applied": true,
+      "min_prefixed_chunks": 2
+    }
+  }
+]

@@ -21,17 +21,22 @@ alwaysApply: true
 from typing import Literal
 
 EmbeddingModel = Literal[
-    "text-embedding-3-small",   # → knowledge, 1536d
-    "sentence-transformers-mini",  # → memory, 384d
+    "text-embedding-3-small",  # → knowledge, 1536d
+    "qwen3-embedding-8b",      # → memory, 4096d native (corporate vLLM; no MRL)
 ]
 
 KNOWLEDGE_EMBEDDING_DIM = 1536
-MEMORY_EMBEDDING_DIM = 384
+MEMORY_EMBEDDING_DIM = 4096
 ```
 
 - Несовпадение размерности вектора и колонки = ошибка на этапе записи
   (assert/проверка перед insert), не тихое обрезание.
 - Векторные размеры — константы в `core/types`, не магические числа (010).
+- **Corporate embedding gateway** отдаёт native **4096** и **отклоняет** `dimensions`
+  (нет Matryoshka на этом деплое). Не слать `dimensions`, не truncate на клиенте.
+- **pgvector ANN:** float32 HNSW/IVFFlat — max 2000 dims. При memory@4096 —
+  exact cosine без float-HNSW. Опционально позже: `binary_quantize` → `bit(4096)`
+  HNSW + cosine rerank (отдельная задача).
 
 ## Иерархия памяти
 

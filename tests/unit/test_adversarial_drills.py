@@ -225,7 +225,7 @@ async def test_drill_mcp_tool_acl_denies_unlisted() -> None:
             _handler,
             context=AgentContext(thread_id="t-acl"),
         )
-    assert audit.events[-1] == "tool_rbac_denied"
+    assert audit.events[-1] == "permission_denied"
 
 
 # --- Drill 8: rate limit ---
@@ -395,6 +395,15 @@ def test_drill_tool_output_is_fenced_untrusted() -> None:
     assert fenced.startswith("<<<UNTRUSTED_TOOL_OUTPUT")
 
 
+def test_drill_argument_preview_redacts_secrets() -> None:
+    from palatium_ai.application.services.intent_turn_helpers import argument_preview
+
+    secret = "sk-abcdefghijklmnopqrstuvwxyz1234567890"
+    preview = argument_preview({"token": secret})
+    assert secret not in preview
+    assert "[REDACTED]" in preview
+
+
 def test_drill_rate_limit_covers_hitl_prefix() -> None:
     app = FastAPI()
 
@@ -533,16 +542,21 @@ def test_drill_mcp_registry_rejects_ssrf_metadata_url() -> None:
 @pytest.mark.asyncio
 async def test_drill_researcher_does_not_invent_mcp_when_unavailable() -> None:
     """requires_mcp + no registry → failure; LLM must not invent tool sources."""
-    from palatium_ai.application.agents.researcher_agent import ResearcherAgent
+    from palatium_ai.application.agents.harness import Harness
+    from palatium_ai.application.orchestration.agent_bridge import (
+        researcher_output_to_task_result,
+        researcher_to_agent_input,
+    )
     from palatium_ai.domain.agents.context_packet import ContextPacket
-    from palatium_ai.domain.agents.contracts import AgentContext
     from palatium_ai.domain.agents.researcher import ResearcherInput
     from palatium_ai.domain.mcp.models import ToolExecutionPlan
+    from tests.conftest import make_researcher_agent
 
     llm = FakeLLMPort(
         '{"summary": "Invented EDMS hits", "confidence": 0.95, "sources_used": ["mcp:edms.search_documents"]}'
     )
-    agent = ResearcherAgent(llm, mcp_registry=None)
+    harness = Harness(llm=llm)
+    agent = make_researcher_agent(llm, harness=harness)
     packet = ContextPacket(
         task_id="task-drill",
         user_text="Найди договор в СЭД",
@@ -561,9 +575,17 @@ async def test_drill_researcher_does_not_invent_mcp_when_unavailable() -> None:
         ),
         context_summary="requires_mcp",
     )
-    result = await agent.execute(
-        ResearcherInput(task_id="task-drill", context_packet=packet),
-        AgentContext(thread_id="thread-drill"),
+    task_input = ResearcherInput(task_id="task-drill", context_packet=packet)
+    agent_input = researcher_to_agent_input(
+        task_input,
+        trace_id="trace-drill",
+        thread_id="thread-drill",
+    )
+    agent_output = await harness.execute_with_guardrails(agent, agent_input)
+    result = researcher_output_to_task_result(
+        agent_output,
+        task_id="task-drill",
+        agent_role=agent.config.role,
     )
     assert result.status == "failure"
     assert result.confidence == 0.0
@@ -683,3 +705,109 @@ async def test_drill_escalated_manager_ttl_goes_dead_letter_not_loop() -> None:
     assert second["escalated"] == 0
     closed = await store.get(card.card_id)
     assert closed is not None and closed.status == "dead_letter"
+
+
+# --- Drill: memory HITL namespace IDOR (MEM-HITL-01/02) ---
+
+
+@pytest.mark.asyncio
+async def test_drill_memory_hitl_rejects_foreign_user_namespace() -> None:
+    from palatium_ai.application.services.hitl_service import HitlService
+    from palatium_ai.application.services.memory_forget_service import MemoryForgetService
+    from palatium_ai.application.services.memory_save_service import MemorySaveService
+    from palatium_ai.domain.memory.namespaces import user_namespace
+    from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
+    from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
+    from tests.conftest import make_platform_mcp_registry
+
+    port = InMemoryMemoryPort()
+    registry = make_platform_mcp_registry(memory_port=port)
+    hitl = HitlService(InMemoryHitlCardStore(), signing_secret="unit-test-hitl-hmac-key-32bytes!!")
+    save = MemorySaveService(hitl_service=hitl, mcp_registry=registry)
+    forget = MemoryForgetService(hitl_service=hitl, mcp_registry=registry)
+
+    with pytest.raises(ValueError, match="authenticated user"):
+        await save.request_save(
+            thread_id="thread-drill",
+            owner_user_id="attacker",
+            org_id="org-drill",
+            namespace_kind="user",
+            scope_id="victim",
+            entry_key="x",
+            text="cross-tenant write",
+        )
+    with pytest.raises(ValueError, match="authenticated user"):
+        await forget.request_forget(
+            thread_id="thread-drill",
+            owner_user_id="attacker",
+            org_id="org-drill",
+            namespace_kind="user",
+            scope_id="victim",
+            entry_key="x",
+        )
+    assert await port.search(namespace=user_namespace("victim"), query="cross-tenant", limit=4) == []
+
+
+@pytest.mark.asyncio
+async def test_drill_mcp_save_memory_rejects_mismatched_user_scope() -> None:
+    import json
+
+    from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
+    from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
+    from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
+
+    handler = PlatformToolHandler(
+        knowledge_port=InMemoryKnowledgePort(),
+        memory_port=InMemoryMemoryPort(),
+    )
+    result = await handler.call_tool(
+        "save_memory",
+        {
+            "user_id": "attacker",
+            "namespace_kind": "user",
+            "scope_id": "victim",
+            "entry_key": "x",
+            "value_json": json.dumps({"text": "nope"}),
+        },
+    )
+    assert result.is_error is True
+    assert "scope_id must equal user_id" in result.content[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_drill_mcp_save_memory_rejects_org_without_claim() -> None:
+    import json
+
+    from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
+    from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
+    from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
+
+    handler = PlatformToolHandler(
+        knowledge_port=InMemoryKnowledgePort(),
+        memory_port=InMemoryMemoryPort(),
+    )
+    missing = await handler.call_tool(
+        "save_memory",
+        {
+            "user_id": "attacker",
+            "namespace_kind": "org",
+            "scope_id": "org-victim",
+            "entry_key": "x",
+            "value_json": json.dumps({"text": "nope"}),
+        },
+    )
+    assert missing.is_error is True
+    assert "org_id must equal scope_id" in missing.content[0]["text"]
+
+    mismatched = await handler.call_tool(
+        "save_memory",
+        {
+            "user_id": "attacker",
+            "namespace_kind": "org",
+            "scope_id": "org-victim",
+            "org_id": "org-attacker",
+            "entry_key": "x",
+            "value_json": json.dumps({"text": "nope"}),
+        },
+    )
+    assert mismatched.is_error is True

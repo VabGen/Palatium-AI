@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from palatium_ai.application.agents.supervisor_agent import SupervisorAgent
 from palatium_ai.application.services.execution_planner import ExecutionPlanner
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
-from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.supervisor import SupervisorInput
+from tests.conftest import run_supervisor
 
 
 @pytest.mark.asyncio
 async def test_supervisor_routes_social_to_formatter() -> None:
-    result = await SupervisorAgent().execute(
+    result = await run_supervisor(
         SupervisorInput(
             task_id="t1",
             user_text="привет",
@@ -22,7 +21,6 @@ async def test_supervisor_routes_social_to_formatter() -> None:
             candidate_capabilities=(),
             classification_confidence=0.95,
         ),
-        AgentContext(thread_id="th1"),
     )
     assert result.output is not None
     assert result.output.route == "formatter"
@@ -31,7 +29,7 @@ async def test_supervisor_routes_social_to_formatter() -> None:
 
 @pytest.mark.asyncio
 async def test_supervisor_social_with_mcp_goes_researcher() -> None:
-    result = await SupervisorAgent().execute(
+    result = await run_supervisor(
         SupervisorInput(
             task_id="t2",
             user_text="привет, найди документ",
@@ -40,7 +38,6 @@ async def test_supervisor_social_with_mcp_goes_researcher() -> None:
             candidate_capabilities=("search",),
             classification_confidence=0.9,
         ),
-        AgentContext(thread_id="th2"),
     )
     assert result.output is not None
     assert result.output.route == "researcher"
@@ -83,7 +80,7 @@ async def test_planner_skips_mcp_discovery_on_formatter_route() -> None:
 
 @pytest.mark.asyncio
 async def test_supervisor_multi_step_routes_researcher_with_honest_plan() -> None:
-    result = await SupervisorAgent().execute(
+    result = await run_supervisor(
         SupervisorInput(
             task_id="t-ms",
             user_text="сделай пайплайн из трёх шагов",
@@ -92,7 +89,6 @@ async def test_supervisor_multi_step_routes_researcher_with_honest_plan() -> Non
             candidate_capabilities=(),
             classification_confidence=0.9,
         ),
-        AgentContext(thread_id="th-ms"),
     )
     assert result.output is not None
     assert result.output.route == "researcher"

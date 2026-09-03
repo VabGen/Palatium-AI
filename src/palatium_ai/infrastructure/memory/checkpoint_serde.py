@@ -9,9 +9,11 @@ Factor 5: only known contracts may revive from checkpoints.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+from palatium_ai.core.types.graph_nodes import LEGACY_GRAPH_NODE_IDS
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.serde.base import SerializerProtocol
@@ -27,6 +29,7 @@ CHECKPOINT_MSGPACK_ALLOWLIST: tuple[tuple[str, str], ...] = (
     ("palatium_ai.domain.memory.budget", "MemoryPromptBudget"),
     ("palatium_ai.domain.memory.contextualizer", "ContextualizerOutput"),
     ("palatium_ai.domain.memory.contextualizer", "ContextualizerTaskResult"),
+    ("palatium_ai.domain.policies.continuity", "EffectiveRoutingIntent"),
     ("palatium_ai.domain.memory.continuity", "EffectiveRoutingIntent"),
     # Agents
     ("palatium_ai.domain.agents.intent", "IntentClassifierOutput"),
@@ -70,6 +73,35 @@ CHECKPOINT_MSGPACK_ALLOWLIST: tuple[tuple[str, str], ...] = (
 )
 
 
+def _remap_legacy_node_id(node_id: str) -> str:
+    return LEGACY_GRAPH_NODE_IDS.get(node_id, node_id)
+
+
+def migrate_graph_checkpoint(value: object) -> object:
+    """Rewrite pre-rename LangGraph node ids in deserialized checkpoint payloads."""
+    if isinstance(value, dict):
+        migrated: dict[Any, object] = {key: migrate_graph_checkpoint(item) for key, item in value.items()}
+        next_nodes = migrated.get("next")
+        if isinstance(next_nodes, tuple):
+            migrated["next"] = tuple(_remap_legacy_node_id(str(node)) for node in next_nodes)
+        elif isinstance(next_nodes, list):
+            migrated["next"] = [_remap_legacy_node_id(str(node)) for node in next_nodes]
+        return migrated
+    if isinstance(value, list):
+        return [migrate_graph_checkpoint(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(migrate_graph_checkpoint(item) for item in value)
+    return value
+
+
+class MigratingJsonPlusSerializer(JsonPlusSerializer):
+    """JsonPlusSerializer that remaps legacy graph node ids on load."""
+
+    def loads_typed(self, data: tuple[str, bytes]) -> object:
+        restored = super().loads_typed(data)
+        return migrate_graph_checkpoint(restored)
+
+
 def build_checkpoint_serde() -> SerializerProtocol:
     """JsonPlusSerializer with explicit allowlist (no silent unregistered types)."""
-    return JsonPlusSerializer(allowed_msgpack_modules=CHECKPOINT_MSGPACK_ALLOWLIST)
+    return MigratingJsonPlusSerializer(allowed_msgpack_modules=CHECKPOINT_MSGPACK_ALLOWLIST)

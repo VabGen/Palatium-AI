@@ -89,6 +89,7 @@ def _render_block(pdf: FPDF, font_name: str, block: object) -> None:
         if handler(pdf, font_name, block):
             return
 
+
 def _render_heading(pdf: FPDF, font_name: str, block: object) -> bool:
     if not isinstance(block, HeadingBlock):
         return False
@@ -255,11 +256,10 @@ def _register_unicode_font(pdf: FPDF) -> str:
         logger.warning("Unicode font not found. Using Helvetica (Cyrillic will not render).")
         return "Helvetica"
     try:
-        pdf.add_font("DocSans", fname=str(path), uni=True)
-        pdf.add_font("DocSans", style="B", fname=str(path), uni=True)
+        pdf.add_font("DocSans", fname=str(path))
+        pdf.add_font("DocSans", style="B", fname=str(path))
         logger.debug("Unicode font registered", font_path=str(path))
         return "DocSans"
     except Exception as e:
         logger.error("Failed to register font", error=str(e))
         raise RuntimeError(f"Failed to load font from {path}. Please ensure the font file is valid.") from e
-

@@ -12,8 +12,8 @@ from palatium_ai.domain.agents.intent import IntentTaskResult, TaskKind
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult, WorkerRoute
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
-from palatium_ai.domain.memory.continuity import ContinuityPolicy, EffectiveRoutingIntent
 from palatium_ai.domain.memory.tool_output import compress_worker_context
+from palatium_ai.domain.policies import ContinuityPolicy, EffectiveRoutingIntent
 
 _CONTEXT_PACKET_FACTORY = ContextPacketFactory()
 

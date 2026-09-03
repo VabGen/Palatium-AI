@@ -7,8 +7,8 @@ from uuid import uuid4
 
 from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.memory.contextualizer import ContextualizerOutput
-from palatium_ai.domain.memory.continuity import ContinuityPolicy
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
+from palatium_ai.domain.policies import ContinuityPolicy
 
 
 def _dialog_with_prior() -> DialogTurnWindow:

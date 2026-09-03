@@ -8,20 +8,27 @@ import json
 
 import pytest
 
-from palatium_ai.application.agents.context_weaver_agent import ContextWeaverAgent
-from palatium_ai.application.agents.contextualizer_agent import ContextualizerAgent
-from palatium_ai.application.agents.critic_agent import CriticAgent
-from palatium_ai.application.agents.formatter_agent import FormatterAgent
-from palatium_ai.application.agents.intent_classifier_agent import IntentClassifierAgent
-from palatium_ai.application.agents.researcher_agent import ResearcherAgent
-from palatium_ai.application.agents.supervisor_agent import SupervisorAgent
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_service import IntentService
 from palatium_ai.domain.sla.corpus import BenchmarkCase, build_benchmark_corpus
 from palatium_ai.domain.sla.gates import evaluate_success_rate
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
-from tests.conftest import FakeLLMPort, FakeMCPRegistry, SequentialFakeLLMPort
+from tests.conftest import (
+    FakeLLMPort,
+    FakeMCPRegistry,
+    SequentialFakeLLMPort,
+    make_analyst_agent,
+    make_coder_agent,
+    make_continuation_agent,
+    make_critic_agent,
+    make_formatter_agent,
+    make_graph_checkpointer,
+    make_intent_stack,
+    make_researcher_agent,
+    make_supervisor_agent,
+    make_weaving_agent,
+)
 
 _HITL_HMAC = "unit-test-hitl-hmac-key-32b"  # noqa: S105
 
@@ -80,16 +87,21 @@ def _service_for_case(case: BenchmarkCase) -> IntentService:
             )
         )
 
+    harness, intent_agent = make_intent_stack(FakeLLMPort(_intent_payload(case)))
     graph = build_agent_graph(
-        contextualizer_agent=ContextualizerAgent(FakeLLMPort("{}")),
-        intent_agent=IntentClassifierAgent(FakeLLMPort(_intent_payload(case))),
-        supervisor_agent=SupervisorAgent(),
-        context_weaver_agent=ContextWeaverAgent(mcp_registry=mcp),
-        researcher_agent=ResearcherAgent(researcher_llm, mcp_registry=mcp),
-        critic_agent=CriticAgent(
+        harness=harness,
+        continuation_agent=make_continuation_agent(harness=harness),
+        intent_agent=intent_agent,
+        supervisor_agent=make_supervisor_agent(harness),
+        weaving_agent=make_weaving_agent(mcp, harness=harness),
+        researcher_agent=make_researcher_agent(researcher_llm, mcp, harness=harness),
+        coder_agent=make_coder_agent(harness=harness),
+        analyst_agent=make_analyst_agent(harness=harness),
+        critic_agent=make_critic_agent(
             FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
         ),
-        formatter_agent=FormatterAgent(FakeLLMPort(_formatter_document_json(case.case_id))),
+        formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_document_json(case.case_id))),
+        checkpointer=make_graph_checkpointer(),
     )
     return IntentService(
         graph,  # type: ignore[arg-type]

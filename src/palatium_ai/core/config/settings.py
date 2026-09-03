@@ -18,6 +18,7 @@ from .mcp import MCPConfig
 from .memory import MemoryConfig
 from .observability import ObservabilityConfig
 from .security import SecurityConfig
+from .web import WebConfig
 
 
 class Settings(BaseConfig):
@@ -33,6 +34,7 @@ class Settings(BaseConfig):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(frozen=True)
 

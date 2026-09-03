@@ -1,0 +1,3 @@
+{
+  "response": "{\"user_id\": \"eval-user\", \"cypher\": \"MATCH (f:Fact {user_id: $user_id}) RETURN f.text AS fact LIMIT $lim\", \"params_json\": \"{\\\"lim\\\": 5}\", \"limit\": \"5\"}"
+}

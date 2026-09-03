@@ -36,7 +36,7 @@ class SecurityConfig(BaseConfig):
         validation_alias="API_RATE_LIMIT_WINDOW_SECONDS",
     )
     api_rate_limit_path_prefixes: str = Field(
-        default=("/api/intents/,/api/hitl/,/api/documents/,/api/sessions/,/api/admin/,/api/agents/"),
+        default=("/api/intents/,/api/hitl/,/api/documents/,/api/sessions/,/api/admin/,/api/agents/,/api/memory/"),
         validation_alias="API_RATE_LIMIT_PATH_PREFIXES",
         description="Comma-separated path prefixes protected by the API rate limiter.",
     )

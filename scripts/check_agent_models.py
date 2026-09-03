@@ -7,14 +7,18 @@
 
 from __future__ import annotations
 
-from palatium_ai.application.agents.context_weaver_agent import ContextWeaverAgent
-from palatium_ai.application.agents.contextualizer_agent import ContextualizerAgent
-from palatium_ai.application.agents.critic_agent import CriticAgent
-from palatium_ai.application.agents.formatter_agent import FormatterAgent
-from palatium_ai.application.agents.intent_classifier_agent import IntentClassifierAgent
-from palatium_ai.application.agents.memory_keeper_agent import MemoryKeeperAgent
-from palatium_ai.application.agents.researcher_agent import ResearcherAgent
-from palatium_ai.application.agents.supervisor_agent import SupervisorAgent
+from palatium_ai.application.agents.context_enricher import (
+    CONTEXT_WEAVER_CONFIG,
+    CONTEXTUALIZER_CONFIG,
+    ContextualizerAgent,
+    ContextWeaverAgent,
+)
+from palatium_ai.application.agents.critic import CRITIC_CONFIG, CriticAgent
+from palatium_ai.application.agents.formatter import FORMATTER_CONFIG, FormatterAgent
+from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
+from palatium_ai.application.agents.memory_keeper import MEMORY_KEEPER_CONFIG, MemoryKeeperAgent
+from palatium_ai.application.agents.researcher import RESEARCHER_CONFIG, ResearcherAgent
+from palatium_ai.application.agents.supervisor import SUPERVISOR_CONFIG, SupervisorAgent
 from palatium_ai.core.config import get_settings
 from palatium_ai.infrastructure.llm.factory import (
     LLMClientFactory,
@@ -27,16 +31,16 @@ def main() -> None:
     """Проверяет LLM binding для каждого агента (без сетевых вызовов)."""
     settings = get_settings()
     factory = LLMClientFactory(settings)
-    agents = (
-        ContextualizerAgent,
-        ContextWeaverAgent,
-        IntentClassifierAgent,
-        SupervisorAgent,
-        ResearcherAgent,
-        CriticAgent,
-        FormatterAgent,
-        MemoryKeeperAgent,
-    )
+    configs = {
+        ContextualizerAgent: CONTEXTUALIZER_CONFIG,
+        ContextWeaverAgent: CONTEXT_WEAVER_CONFIG,
+        IntentClassifierAgent: INTENT_CLASSIFIER_CONFIG,
+        SupervisorAgent: SUPERVISOR_CONFIG,
+        ResearcherAgent: RESEARCHER_CONFIG,
+        CriticAgent: CRITIC_CONFIG,
+        FormatterAgent: FORMATTER_CONFIG,
+        MemoryKeeperAgent: MEMORY_KEEPER_CONFIG,
+    }
 
     print(f"default_provider = {settings.llm.default_provider}")
     print(f"default_model    = {settings.llm.get_active_provider().get_default_model()}")
@@ -48,8 +52,8 @@ def main() -> None:
         print(f"  {tier_name:15} provider={binding.provider!s:8} model={binding.model}")
     print()
 
-    for agent_cls in agents:
-        cfg = agent_cls.config
+    for agent_cls, cfg in configs.items():
+        _ = agent_cls
         tier = settings.llm.resolve_tier_binding(cfg.model_tier)
         provider = cfg.llm_provider or tier.provider or settings.llm.default_provider
         provider_cfg = getattr(settings.llm, provider)

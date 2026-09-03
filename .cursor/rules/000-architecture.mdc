@@ -80,9 +80,9 @@
 | formatter | exists | MD/PDF/JSON форматирование |
 | memory_keeper | exists | Semantic + episodic + graph память |
 | context_enricher | merge | Бывш. context_weaver + contextualizer: сборка/обогащение контекста |
-| text_ingestor | planned | Чанкинг, нормализация текста при ингесте документов |
-| coder | deferred | Код только в sandbox, по мере необходимости |
-| analyst | deferred | Анализ, тренды — по мере необходимости |
+| text_ingestor | exists | Чанкинг, нормализация текста при ингесте документов |
+| coder | exists | Код только как draft/plan; sandbox exec — HITL (020), по мере готовности песочницы |
+| analyst | exists | Анализ/тренды по контексту (без произвольного code-exec) |
 | planner | merged | Планирование = Supervisor. Отдельного не создавать |
 | reasoner | merged | Верификация рассуждений = Critic. Отдельного не создавать |
 

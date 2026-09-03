@@ -1,6 +1,6 @@
 """ContextualizerPolicy — LLM rewrite only for prior-dependent task kinds."""
 
-from palatium_ai.domain.memory.contextualizer_policy import ContextualizerPolicy
+from palatium_ai.domain.policies import ContextualizerPolicy
 
 
 def test_skip_without_assistant_prior() -> None:

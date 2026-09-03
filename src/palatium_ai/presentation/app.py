@@ -24,12 +24,15 @@ from palatium_ai.presentation.api.routers import (
     health,
     hitl,
     intents,
+    memory,
     metrics,
     sessions,
 )
 from palatium_ai.presentation.middleware.auth import AuthMiddleware
 from palatium_ai.presentation.middleware.rate_limit import RateLimitMiddleware
+from palatium_ai.presentation.middleware.tracing import TracingMiddleware
 from palatium_ai.presentation.security.jwt import JwtTokenService
+from palatium_ai.presentation.websockets.session import register_websocket_routes
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -89,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(TracingMiddleware)
 
     application.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     application.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -97,11 +101,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(intents.router, prefix="/api/intents", tags=["intents"])
     application.include_router(hitl.router, prefix="/api/hitl", tags=["hitl"])
     application.include_router(documents.router, prefix="/api/documents", tags=["documents"])
+    application.include_router(memory.router, prefix="/api/memory", tags=["memory"])
     application.include_router(health.router, tags=["health"])
     application.include_router(metrics.router, tags=["observability"])
     application.include_router(feedback.router, prefix="/api", tags=["feedback"])
 
     _mount_chat_ui(application)
+    register_websocket_routes(application)
 
     return application
 

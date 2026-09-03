@@ -5,21 +5,23 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import re
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
+from palatium_ai.application.orchestration.agent_bridge import (
+    memory_keeper_output_to_task_result,
+    memory_keeper_to_agent_input,
+)
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.tracing import traceable
-from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.memory_keeper import MemoryKeeperInput
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 
 if TYPE_CHECKING:
-    from palatium_ai.application.agents.memory_keeper_agent import MemoryKeeperAgent
+    from palatium_ai.application.agents.harness import Harness
+    from palatium_ai.application.agents.memory_keeper import MemoryKeeperAgent
+    from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
 
 logger = get_logger(__name__)
@@ -41,13 +43,17 @@ class MemoryConsolidationService:
     def __init__(
         self,
         *,
+        harness: Harness,
         memory_keeper: MemoryKeeperAgent,
         memory_port: MemoryPort,
+        memory_persistence: MemoryFactPersistenceService,
         dialog_turn_store: DialogTurnStore | None = None,
         max_queue: int = 256,
     ) -> None:
+        self._harness = harness
         self._memory_keeper = memory_keeper
         self._memory_port = memory_port
+        self._memory_persistence = memory_persistence
         self._dialog_turn_store = dialog_turn_store
         self._queue: asyncio.Queue[ConsolidationJob | None] = asyncio.Queue(maxsize=max_queue)
 
@@ -110,39 +116,26 @@ class MemoryConsolidationService:
         existing_texts = tuple(
             str(item.get("text", "")).strip() for item in existing if str(item.get("text", "")).strip()
         )
-        result = await self._memory_keeper.execute(
-            MemoryKeeperInput(
-                task_id=job.task_id,
-                thread_id=job.thread_id,
-                transcript_excerpt=excerpt,
-                existing_memory_texts=existing_texts,
-            ),
-            AgentContext(thread_id=job.thread_id, user_id=job.user_id),
+        task_input = MemoryKeeperInput(
+            task_id=job.task_id,
+            thread_id=job.thread_id,
+            transcript_excerpt=excerpt,
+            existing_memory_texts=existing_texts,
+        )
+        agent_input = memory_keeper_to_agent_input(
+            task_input,
+            trace_id=f"consolidation-{job.task_id}",
+            thread_id=job.thread_id,
+        )
+        agent_output = await self._harness.execute_with_guardrails(self._memory_keeper, agent_input)
+        result = memory_keeper_output_to_task_result(
+            agent_output,
+            task_id=job.task_id,
+            agent_role=self._memory_keeper.config.role,
         )
         if result.output is None or not result.output.facts:
             return
-        for fact in result.output.facts:
-            key = _memory_key(fact.key_hint, fact.text)
-            # preference → user; entity → org (shared); other facts → thread.
-            if user_ns is not None and fact.kind == "preference":
-                namespace = user_ns
-            elif org_ns is not None and fact.kind == "entity":
-                namespace = org_ns
-            else:
-                namespace = thread_ns
-            await self._memory_port.put(
-                namespace=namespace,
-                key=key,
-                value={
-                    "text": fact.text,
-                    "kind": fact.kind,
-                    "confidence": fact.confidence,
-                    "source_task_id": job.task_id,
-                    "thread_id": job.thread_id,
-                    "user_id": job.user_id,
-                    "org_id": job.org_id,
-                },
-            )
+        stored = await self._memory_persistence.persist_facts(job=job, facts=result.output.facts)
         logger.info(
             "memory_consolidation.stored",
             thread_id=job.thread_id,
@@ -150,6 +143,7 @@ class MemoryConsolidationService:
             user_id=job.user_id or "",
             org_id=job.org_id or "",
             facts=len(result.output.facts),
+            stored=stored,
         )
 
     async def _load_excerpt(self, *, thread_id: str) -> str:
@@ -157,12 +151,3 @@ class MemoryConsolidationService:
             return ""
         window = await self._dialog_turn_store.list_recent_turns(thread_id=thread_id, limit=8)
         return window.as_prompt_block()[:12000]
-
-
-def _memory_key(key_hint: str | None, text: str) -> str:
-    if key_hint:
-        slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", key_hint.strip().lower()).strip("-")[:80]
-        if slug:
-            return f"add:{slug}"
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    return f"add:{digest}:{uuid4().hex[:8]}"

@@ -30,3 +30,11 @@ jobs:
 
       - name: Quality baseline
         run: poetry run python scripts/ci_quality.py
+
+      - name: Upload agent eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-evals
+          path: artifacts/agent_evals.json
+          if-no-files-found: ignore

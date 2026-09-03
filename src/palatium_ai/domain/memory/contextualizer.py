@@ -4,16 +4,20 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.agents.contracts import TaskResult
 from palatium_ai.domain.agents.intent import TaskKind
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.turns import DialogTurnWindow
+from palatium_ai.domain.policies.types import ContinuationKind
 
-ContinuationKind = Literal["format", "answer", "new_topic", "clarify"]
+__all__ = [
+    "ContinuationKind",
+    "ContextualizerInput",
+    "ContextualizerOutput",
+    "ContextualizerTaskResult",
+]
 
 
 class ContextualizerInput(BaseModel):
@@ -41,6 +45,8 @@ class ContextualizerOutput(BaseModel):
     refers_to_prior: bool = False
     prior_assistant_excerpt: str | None = Field(default=None, max_length=4000)
     reasoning: str = Field(min_length=1, max_length=2000)
+    # True when this turn is a completed HITL user_choice pick (deterministic resume).
+    choice_slot_filled: bool = False
 
 
 class ContextualizerTaskResult(TaskResult):

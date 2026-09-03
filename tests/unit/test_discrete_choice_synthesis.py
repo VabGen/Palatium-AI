@@ -12,7 +12,7 @@ from palatium_ai.domain.content import (
 )
 from palatium_ai.domain.hitl.interaction_policy import HitlInteractionPolicy
 from palatium_ai.domain.hitl.option_synthesis import DiscreteChoiceSynthesisPolicy
-from palatium_ai.domain.memory.continuity import ContinuityPolicy
+from palatium_ai.domain.policies import ContinuityPolicy
 
 
 def test_discrete_choice_forces_requires_user_choice_and_clarify() -> None:

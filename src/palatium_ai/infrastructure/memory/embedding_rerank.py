@@ -77,6 +77,10 @@ class EmbeddingRerankMemoryPort:
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [item for _, item in scored[:safe_limit]]
 
+    async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Delegate delete to inner port."""
+        return await self._inner.forget(namespace=namespace, key=key)
+
 
 def _cosine(left: list[float], right: list[float]) -> float:
     if not left or not right:

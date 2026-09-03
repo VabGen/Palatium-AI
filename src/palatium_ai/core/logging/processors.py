@@ -1,6 +1,6 @@
 # src/palatium_ai/core/logging/processors.py
 
-"""Модуль processors содержит функции для обогащения логов."""
+"""Structlog processors."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ if TYPE_CHECKING:
 
     from structlog.types import EventDict
 
-from .context import request_id_var, session_id_var, user_id_var
+from .context import session_id_var, trace_id_var, user_id_var
 
 
 def add_context_vars(logger: logging.Logger, method_name: str, event_dict: EventDict) -> EventDict:
-    """Добавляет значения из контекстных переменных."""
-    rid = request_id_var.get()
-    if rid:
-        event_dict["request_id"] = rid
+    """Add trace_id and optional user/session from context vars."""
+    trace_id = trace_id_var.get()
+    if trace_id:
+        event_dict["trace_id"] = trace_id
     uid = user_id_var.get()
     if uid:
         event_dict["user_id"] = uid
@@ -30,6 +30,6 @@ def add_context_vars(logger: logging.Logger, method_name: str, event_dict: Event
 
 
 def add_timestamp(logger: logging.Logger, method_name: str, event_dict: EventDict) -> EventDict:
-    """Добавляет временную метку в ISO формате."""
+    """Add ISO timestamp."""
     event_dict["timestamp"] = datetime.now(UTC).isoformat()
     return event_dict

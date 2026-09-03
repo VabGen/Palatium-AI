@@ -15,6 +15,19 @@
 сжатый маппинг на слои проекта — `.cursor/skills/max-pro-review/anthropic-canon.md`.
 Ниже принципы канона используются напрямую по тексту, без пересказа общих мест.
 
+**Иерархия документов (не дублировать):**
+
+| Документ | Роль |
+|---|---|
+| `.cursor/rules/*.mdc` | Норматив, построчное исполнение |
+| `docs/max-pro-level-tz.md` (этот файл) | Описательное ТЗ, целевая картина |
+| `.cursor/skills/agent-refactoring/reference.md` | Карта «черновик → финал», без параллельного ТЗ |
+| `.cursor/skills/max-pro-review/waves.md` | Порядок внедрения по волнам |
+
+Исходный черновик «СОЗДАНИЕ УНИВЕРСАЛЬНОЙ RAG-СИСТЕМЫ...» и «ПОЛНЫЙ ПЛАН
+РЕФАКТОРИНГА...» **не хранятся** в репозитории — расхождения разобраны здесь
+и в `reference.md` (050: один источник истины по осям/реестру/стеку).
+
 ---
 
 ## 1. Принцип 2026: brain ≠ hands ≠ session
@@ -56,10 +69,10 @@ Router, Retriever совмещает поиск/код/SQL/API). Финальн�
 | `critic` | exists | Quality gate перед финализацией |
 | `formatter` | exists | MD/PDF/JSON форматирование |
 | `memory_keeper` | exists | Semantic + episodic + graph память |
-| `context_enricher` | merge | Бывшие ContextWeaver + Contextualizer |
-| `text_ingestor` | planned | Чанкинг, нормализация при ингесте |
-| `coder` | deferred | Код только в песочнице, по требованию |
-| `analyst` | deferred | Анализ/тренды, по требованию |
+| `context_enricher` | exists | Бывшие ContextWeaver + Contextualizer (один пакет) |
+| `text_ingestor` | exists | Чанкинг, нормализация при ингесте |
+| `coder` | exists | Draft/plan кода; **sandbox exec** — HITL (020), по готовности песочницы |
+| `analyst` | exists | Анализ/тренды по контексту (без произвольного code-exec) |
 | `planner` | merged → supervisor | Отдельно не создавать |
 | `reasoner` | merged → critic | Отдельно не создавать |
 
@@ -98,15 +111,51 @@ state запрещены (050, 065).
 валидация входа → execute_with_guardrails(agent, input) → маппинг в state
 ```
 
-`execute_with_guardrails` (единая точка, `domain/ports/harness.py`, 065)
-внутри выполняет фиксированную последовательность: span узла → JIT-сборка
-контекста → RBAC-фильтр инструментов → secret scan входа → `agent.run()` с
-таймаутом из `AgentConfig` → `agent.verify()` → confidence gate → метрики.
-Узел не повторяет ни один из этих шагов самостоятельно.
+`execute_with_guardrails` (единая точка, `domain/ports/harness.py`; реализация —
+`application/agents/harness.py`, 065) внутри выполняет фиксированную
+последовательность: span узла → JIT-сборка контекста → передача вызова в
+`ToolRegistry` (RBAC при резолве инструмента — **единственная точка**, 020;
+Harness не дублирует проверку) → secret scan входа → `agent.run()` с таймаутом
+из `AgentConfig` → `agent.verify()` → confidence gate → метрики. Узел не
+повторяет ни один из этих шагов самостоятельно.
 
-Циклы (Critic → доработка) ограничены `MAX_REVISIONS` из конфига (default
-2) — защита от бесконечного цикла (050, 065); при исчерпании — эскалация,
-не тихий выход.
+### 3.1 Контракты агентов (030) — не из черновика
+
+Черновик задавал `AgentInput` с `query`, `tools: List[Any]`, `memory`,
+`context: Dict[str, Any]` и `AgentOutput` с `response: str`,
+`artifacts: Dict[str, Any]`, `requires_review: bool`. Финальный контракт:
+
+| Артефакт | Где | Суть |
+|---|---|---|
+| `AgentInput` / `AgentOutput` | `domain/agents/messages.py` (цель) | `instruction`, `task_id`, `trace_id`; `context: dict[str, str]`; `output: BaseModel`; `status: Literal[...]` |
+| `BaseAgent` | `domain/agents/base.py` (цель) | `run()`, `get_required_context_keys()`, `get_available_tools()`, `verify()` |
+| `AgentConfig` | `application/agents/<name>/config.py` | frozen pydantic; `confidence_threshold`, не `config.get(...)` |
+| Legacy | ~~`application/agents/base.py`, `*_agent.py`~~ | **мигрировано** — пакеты `application/agents/<name>/` + `domain/agents/base.py` |
+
+Запрещено: `Dict[str, Any]` на границах агентов; хардкод `confidence`; RBAC
+внутри Harness; сборка контекста внутри `run()` (030.2).
+
+### 3.2 Структура каталогов — не из черновика
+
+Черновик предлагал `application/agents/{core/, orchestrator/, agents/}`.
+Целевая структура — **5 слоёв** (000, 099):
+
+```
+src/palatium_ai/
+├── domain/           # policies, ports (Harness), agents/messages, memory, hitl
+├── application/      # agents/<name>/, orchestration/, tools/, services/, wiring
+├── core/             # config, observability, types/embeddings.py, security/
+├── infrastructure/   # database, memory, mcp, llm, hitl adapters
+└── presentation/     # api, security, middleware, websockets
+```
+
+Оркестрация — `application/orchestration/` (`state.py`, `nodes.py`, `graph.py`),
+не `application/agents/orchestrator/`. Инструменты — `application/tools/`, не
+`application/agents/core/tool_registry.py`.
+
+Циклы (Critic → доработка) ограничены `MAX_QUALITY_REVISIONS` из
+`ObservabilityConfig` (default 2) — узел `quality_revision` + conditional edges
+в `graph.py` (050, 065); при исчерпании — Formatter / HITL, не тихий выход.
 
 ---
 
@@ -153,12 +202,17 @@ importance. Называть это «BM25» в коде — ошибка; Parad
 
 ## 6. Память — иерархия и обслуживание
 
-### 6.1 Физическое разделение — без изменений от черновика, уже так и есть
+### 6.1 Физическое разделение — целевое состояние (gap в коде, см. §20)
 
-Схема `knowledge` (эмбеддинг 1536d) — статичные знания; схема `memory`
-(эмбеддинг 384d) — эпизодическая память. Связка «схема ↔ embedding-модель ↔
-размерность» — единственный источник `core/types/embeddings.py` (060).
-Смена модели эмбеддингов = отдельная миграция с reindex, не in-place.
+**Цель (060):** схема `knowledge` (эмбеддинг 1536d) — статичные знания; схема
+`memory` (эмбеддинг 4096d native) — эпизодическая память (`memory.entries` с RLS по
+`user_id`). Связка «схема ↔ embedding-модель ↔ размерность» — единственный
+источник `core/types/embeddings.py` (060). Смена модели = миграция с reindex,
+не in-place.
+
+**Сейчас в репозитории:** одна схема `palatium_ai`, таблица `memory_items`
+(FTS, без pgvector), миграции `infrastructure/database/migrations/` — в работе.
+До закрытия Wave 4 не считать слой памяти production-ready.
 
 ### 6.2 Иерархия
 
@@ -368,7 +422,7 @@ harness'а не должна маскироваться под «модель п
 | Векторный + лексический поиск | pgvector + Postgres FTS | принято, ParadeDB отклонён |
 | Графовая БД | Neo4j | принято |
 | Переранжирование | Cross-Encoder (модель — по бенчмарку, не хардкод) | реализационная деталь |
-| Эмбеддинги | реестр в `core/types/embeddings.py` (1536d knowledge / 384d memory) | принято |
+| Эмбеддинги | реестр в `core/types/embeddings.py` (1536d knowledge / 4096d memory native) | принято |
 | LLM-провайдер | LiteLLM, fallback ≥ 2 независимых провайдера | принято |
 | Наблюдаемость | OpenTelemetry (primary) + LangSmith (опционально) | принято |
 | Метрики | Prometheus (`palatium_*`) | принято |
@@ -440,7 +494,53 @@ skill `agent-refactoring`, не часть этого документа.
 
 ---
 
-## 19. Источники
+## 19. Baseline репозитория (пост-волны FIX)
+
+Снимок обновлён после undefer coder/analyst и Critic revision edge (2026-09-02).
+Не дублировать DoD — см. production-audit canvas / skill.
+
+### Реализовано
+
+| Область | Path | Статус |
+|---|---|---|
+| LangGraph: enricher → intent → supervisor → weaving → worker(s) → critic ↔ revision → formatter | `application/orchestration/graph.py` | работает |
+| Workers: researcher / coder / analyst | `application/agents/{researcher,coder,analyst}/` | exists (coder без sandbox-exec tools) |
+| Critic revision loop | `nodes.quality_revision_node`, `route_after_critic` | bounded `max_quality_revisions()` |
+| HITL-домен (карточки, risk, step-up) | `domain/hitl/` | работает |
+| MCP registry + stubs (edms/analytics/platform) | `infrastructure/mcp/`, `mcp_servers/` | работает |
+| Память: `memory.entries` + pgvector + FTS + RLS | `alembic/…`, `PostgresMemoryPort` | target path |
+| Knowledge schema + embeddings registry | `core/types/embeddings.py`, knowledge migrations | есть |
+| OTel + `palatium_*` metrics + hash-chain audit | `core/observability/` | primary OTel при `OTEL_ENDPOINT` |
+| Per-agent evals + nightly | `application/agents/evals/`, workflows | есть |
+| Composition root | `application/wiring.py`, `bootstrap.py` | есть |
+| Env key-parity | `env/.env.example` + profiles | синхронизировано с Settings |
+
+### Открытые gaps (не блокер кода HITL/RBAC)
+
+| Цель | Факт | Path / next |
+|---|---|---|
+| Load 1000 sessions p95 | скрипт есть, нет зелёного артефакта | `scripts/run_sla_gates.py --load-health` |
+| Kill-switch in-flight stop | блокировка новых turns + audit есть; граница узла не доказана тестом | `KillSwitchService`, drills |
+| Coder sandbox exec | draft/plan only | явный 070 tool + HITL |
+| `domain/policies` cov ≥90% CI gate | нет `fail_under` | CI |
+| Audit DB append-only | file hash-chain | tech debt |
+| Learning Agent | deferred намеренно | §2 |
+| FastMCP in-process server module | stubs на FastAPI/MCP HTTP | опционально |
+
+### Отклонения черновика (не возвращать)
+
+| Черновик | Решение |
+|---|---|
+| 7 агентов (Planner, Router, Learning, Graph Traversal) | реестр 000: 12 ролей, см. §2 |
+| Qdrant, ParadeDB/BM25 | pgvector + Postgres FTS, см. §5 |
+| `application/agents/{core/, orchestrator/}` | 5 слоёв, см. §3.2 |
+| RBAC в Harness | ToolRegistry, см. §8 |
+| План 20–22 недели | `waves.md`, см. §16 |
+| Marketing-SLO («67%→8%») | не контракт, см. §15 |
+
+---
+
+## 20. Источники
 
 - Правила проекта (нормативные, индекс): `.cursor/rules/099-project-map.mdc`
 - Канон: `.cursor/skills/max-pro-review/anthropic-canon.md` →

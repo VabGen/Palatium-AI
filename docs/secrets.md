@@ -25,11 +25,13 @@
 | Файл | В git? | Назначение |
 |------|--------|------------|
 | `.env.example` | да | канон всех ключей + легенда MUST-SET/SECRET/PROD |
-| `.env.local.example` | да | Ollama local |
-| `.env.cloud.example` | да | OpenAI cloud |
-| `.env.staging.example` | да | каркас staging |
-| `.env.prod.example` | да | каркас production |
+| `.env.local.example` | да | Ollama local (тот же набор ключей) |
+| `.env.cloud.example` | да | OpenAI cloud (тот же набор ключей) |
+| `.env.staging.example` | да | каркас staging (тот же набор ключей) |
+| `.env.prod.example` | да | каркас production (тот же набор ключей) |
 | `.env`, `.env.dev`, `.env.staging`, `.env.prod` | **нет** (gitignore) | рабочие копии с секретами |
+
+Все `*.example` держат **одинаковый набор ключей**; отличаются только значениями профиля.
 
 ```powershell
 copy env\.env.example env\.env

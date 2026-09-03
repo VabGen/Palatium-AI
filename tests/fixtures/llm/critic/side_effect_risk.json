@@ -1,0 +1,3 @@
+{
+  "response": "{\"accuracy_score\": 8, \"safety_score\": 7, \"requires_review\": true, \"summary\": \"MCP side-effect risk flagged\"}"
+}

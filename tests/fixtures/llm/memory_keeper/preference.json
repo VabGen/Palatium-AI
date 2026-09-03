@@ -1,0 +1,3 @@
+{
+  "response": "{\"facts\": [{\"text\": \"User prefers tables for meeting agendas.\", \"kind\": \"preference\", \"confidence\": 0.93, \"key_hint\": \"meeting_format\"}], \"reasoning\": \"Explicit preference in transcript\"}"
+}

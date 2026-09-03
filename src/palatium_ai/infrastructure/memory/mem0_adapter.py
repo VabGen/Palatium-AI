@@ -229,6 +229,11 @@ class Mem0MemoryPort:
             limit=limit,
         )
 
+    async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Mem0 adapter does not support keyed delete yet."""
+        _ = namespace, key
+        return False
+
     async def aclose(self) -> None:
         """Close transport resources."""
         await self._transport.aclose()

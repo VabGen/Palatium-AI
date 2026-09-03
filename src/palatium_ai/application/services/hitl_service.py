@@ -396,6 +396,8 @@ class HitlService:
             )
 
         if card.status in {"resolved", "escalated", "auto_rejected", "dead_letter"}:
+            if card.status == "resolved" and existing_key is not None and existing_key != request.idempotency_key:
+                agent_metrics.record_hitl_replay_rejected()
             agent_metrics.record_hitl_deny("conflict")
             raise HitlCardConflictError(f"HITL card already {card.status}: {card_id}")
 
@@ -534,6 +536,8 @@ class HitlService:
                     replayed=True,
                     message="Idempotent replay",
                 )
+            if latest is not None and latest.status == "resolved":
+                agent_metrics.record_hitl_replay_rejected()
             status = latest.status if latest is not None else "missing"
             agent_metrics.record_hitl_deny("conflict")
             raise HitlCardConflictError(f"HITL card already {status}: {card.card_id}")

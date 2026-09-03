@@ -22,54 +22,25 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from palatium_ai.domain.mcp.external_schemas import (
+    ANALYTICS_SALES_METRICS_SCHEMA,
+    EDMS_ARCHIVE_DOCUMENT_SCHEMA,
+    EDMS_SEARCH_DOCUMENTS_SCHEMA,
+)
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
+from palatium_ai.domain.mcp.platform_schemas import (
+    PLATFORM_CONSOLIDATE_MEMORY_SCHEMA,
+    PLATFORM_FORGET_MEMORY_SCHEMA,
+    PLATFORM_GRAPH_QUERY_SCHEMA,
+    PLATFORM_INGEST_DOCUMENT_SCHEMA,
+    PLATFORM_SAVE_MEMORY_SCHEMA,
+    PLATFORM_SEARCH_KNOWLEDGE_SCHEMA,
+    PLATFORM_SEARCH_MEMORY_SCHEMA,
+    PLATFORM_WEB_FALLBACK_SCHEMA,
+)
 
 SideEffectClass = Literal["read", "write", "unknown"]
 ToolRiskTier = Literal["low", "medium", "high"]
-
-# Canonical inputSchema for pinned read tools (must match discovered descriptor).
-_EDMS_SEARCH_SCHEMA: dict[str, object] = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "properties": {
-        "query": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Search string for EDMS documents.",
-        },
-    },
-    "required": ["query"],
-    "additionalProperties": False,
-}
-
-_ANALYTICS_METRICS_SCHEMA: dict[str, object] = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "properties": {
-        "period": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Reporting period (e.g. 2025-Q1).",
-        },
-    },
-    "required": ["period"],
-    "additionalProperties": False,
-}
-
-
-_EDMS_ARCHIVE_SCHEMA: dict[str, object] = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "properties": {
-        "document_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "EDMS document identifier to archive.",
-        },
-    },
-    "required": ["document_id"],
-    "additionalProperties": False,
-}
 
 
 def schema_fingerprint(schema: dict[str, object]) -> str:
@@ -87,6 +58,7 @@ class PlatformToolPin(BaseModel):
     schema_fingerprint: str = Field(min_length=64, max_length=64)
     risk_tier: ToolRiskTier
     requires_hitl: bool
+    irreversible: bool = False
 
 
 # Platform-pinned tools. MCP server self-attestation is never trusted
@@ -94,20 +66,70 @@ class PlatformToolPin(BaseModel):
 _PLATFORM_SIDE_EFFECTS: dict[str, PlatformToolPin] = {
     "mcp:edms.search_documents": PlatformToolPin(
         side_effect="read",
-        schema_fingerprint=schema_fingerprint(_EDMS_SEARCH_SCHEMA),
+        schema_fingerprint=schema_fingerprint(EDMS_SEARCH_DOCUMENTS_SCHEMA),
         risk_tier="low",
         requires_hitl=False,
     ),
     "mcp:edms.archive_document": PlatformToolPin(
         side_effect="write",
-        schema_fingerprint=schema_fingerprint(_EDMS_ARCHIVE_SCHEMA),
+        schema_fingerprint=schema_fingerprint(EDMS_ARCHIVE_DOCUMENT_SCHEMA),
         risk_tier="high",
         requires_hitl=True,
+        irreversible=True,
     ),
     "mcp:analytics.get_sales_metrics": PlatformToolPin(
         side_effect="read",
-        schema_fingerprint=schema_fingerprint(_ANALYTICS_METRICS_SCHEMA),
+        schema_fingerprint=schema_fingerprint(ANALYTICS_SALES_METRICS_SCHEMA),
         risk_tier="low",
+        requires_hitl=False,
+    ),
+    "mcp:platform.ingest_document": PlatformToolPin(
+        side_effect="write",
+        schema_fingerprint=schema_fingerprint(PLATFORM_INGEST_DOCUMENT_SCHEMA),
+        risk_tier="high",
+        requires_hitl=True,
+        irreversible=True,
+    ),
+    "mcp:platform.search_knowledge": PlatformToolPin(
+        side_effect="read",
+        schema_fingerprint=schema_fingerprint(PLATFORM_SEARCH_KNOWLEDGE_SCHEMA),
+        risk_tier="low",
+        requires_hitl=False,
+    ),
+    "mcp:platform.search_memory": PlatformToolPin(
+        side_effect="read",
+        schema_fingerprint=schema_fingerprint(PLATFORM_SEARCH_MEMORY_SCHEMA),
+        risk_tier="low",
+        requires_hitl=False,
+    ),
+    "mcp:platform.save_memory": PlatformToolPin(
+        side_effect="write",
+        schema_fingerprint=schema_fingerprint(PLATFORM_SAVE_MEMORY_SCHEMA),
+        risk_tier="medium",
+        requires_hitl=True,
+    ),
+    "mcp:platform.forget_memory": PlatformToolPin(
+        side_effect="write",
+        schema_fingerprint=schema_fingerprint(PLATFORM_FORGET_MEMORY_SCHEMA),
+        risk_tier="medium",
+        requires_hitl=True,
+    ),
+    "mcp:platform.consolidate_memory": PlatformToolPin(
+        side_effect="write",
+        schema_fingerprint=schema_fingerprint(PLATFORM_CONSOLIDATE_MEMORY_SCHEMA),
+        risk_tier="medium",
+        requires_hitl=True,
+    ),
+    "mcp:platform.graph_query": PlatformToolPin(
+        side_effect="read",
+        schema_fingerprint=schema_fingerprint(PLATFORM_GRAPH_QUERY_SCHEMA),
+        risk_tier="low",
+        requires_hitl=False,
+    ),
+    "mcp:platform.web_fallback": PlatformToolPin(
+        side_effect="read",
+        schema_fingerprint=schema_fingerprint(PLATFORM_WEB_FALLBACK_SCHEMA),
+        risk_tier="medium",
         requires_hitl=False,
     ),
 }

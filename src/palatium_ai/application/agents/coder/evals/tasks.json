@@ -1,0 +1,14 @@
+[
+  {
+    "id": "draft_python_helper",
+    "input": {
+      "user_text": "Write a Python function that clamps a float to [0, 1].",
+      "task_kind": "tool_execution",
+      "route": "coder",
+      "route_plan": "Draft clamp helper",
+      "requires_mcp": false,
+      "selected_strategy": "code_sandbox"
+    },
+    "expect": { "status": "success", "summary_min_chars": 20 }
+  }
+]

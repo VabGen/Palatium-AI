@@ -22,13 +22,14 @@ from palatium_ai.application.services.intent_turn_helpers import (
     tenant_budget_key,
     write_audit,
 )
+from palatium_ai.core.config.settings import get_settings
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.hop_timings import turn_hop_timings
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.turn_tokens import turn_token_usage
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock, ParagraphBlock
-from palatium_ai.domain.hitl.cards import HITLCardView
+from palatium_ai.domain.hitl.cards import HITLCardView, clamp_ttl_seconds
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
 
 if TYPE_CHECKING:
@@ -43,7 +44,14 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_MAX_QUALITY_REVISIONS = 2
+
+def max_quality_revisions() -> int:
+    """Config-driven HITL quality revise budget (065)."""
+    return get_settings().observability.max_quality_revisions
+
+
+# Back-compat alias for tests that treat the limit as a module constant.
+_MAX_QUALITY_REVISIONS = 2  # default; prefer max_quality_revisions() at call sites
 
 ProcessTurn = Callable[..., Awaitable[FormatterTaskResult]]
 
@@ -183,7 +191,8 @@ class IntentHitlFlow:
             revision_count = int(str(context.get("quality_revision_count") or "0"))
         except ValueError:
             revision_count = 0
-        if revision_count >= _MAX_QUALITY_REVISIONS:
+        if revision_count >= max_quality_revisions():
+            limit = max_quality_revisions()
             return FormatterTaskResult(
                 task_id=task_id,
                 agent_role="formatter",
@@ -191,7 +200,7 @@ class IntentHitlFlow:
                 confidence=0.0,
                 requires_review=False,
                 output=None,
-                error=f"Quality revision limit reached ({_MAX_QUALITY_REVISIONS})",
+                error=f"Quality revision limit reached ({limit})",
             )
 
         critic_summary = str(context.get("last_critic_summary") or "").strip()
@@ -450,6 +459,8 @@ class IntentHitlFlow:
         risk_tier = str(interrupt_payload.get("risk_tier") or "medium")
         arguments = interrupt_payload.get("arguments")
         preview = argument_preview(arguments)
+        irreversible = bool(interrupt_payload.get("irreversible"))
+        ttl_seconds = clamp_ttl_seconds(5 * 60) if irreversible else None
         tier_literal: Literal["low", "medium", "high"]
         if risk_tier in {"low", "medium", "high"}:
             tier_literal = cast("Literal['low', 'medium', 'high']", risk_tier)
@@ -466,6 +477,7 @@ class IntentHitlFlow:
                 argument_preview=preview,
                 owner_user_id=user_id,
                 org_id=org_id,
+                ttl_seconds=ttl_seconds,
             )
         except HitlInvalidActionError as exc:
             logger.warning(

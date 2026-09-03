@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import JSONResponse
 
+from palatium_ai.core.logging.context import user_id_var
 from palatium_ai.presentation.security.jwt import JwtTokenService, JwtValidationError
 from palatium_ai.presentation.security.principal import AuthPrincipal
 
@@ -69,7 +70,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         if not self._security.auth_enabled:
             request.state.principal = AuthPrincipal(subject="anonymous", roles=frozenset())
-            return await call_next(request)
+            user_token = user_id_var.set("anonymous")
+            try:
+                return await call_next(request)
+            finally:
+                user_id_var.reset(user_token)
 
         header = request.headers.get("Authorization")
         if header is None or not header.lower().startswith("bearer "):
@@ -84,7 +89,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return _unauthorized(str(exc))
 
         request.state.principal = principal
-        return await call_next(request)
+        user_token = user_id_var.set(principal.subject)
+        try:
+            return await call_next(request)
+        finally:
+            user_id_var.reset(user_token)
 
 
 def _is_public(path: str, method: str, *, metrics_public: bool) -> bool:

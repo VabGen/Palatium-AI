@@ -1,0 +1,14 @@
+[
+  {
+    "id": "trend_summary",
+    "input": {
+      "user_text": "Summarize week-over-week sales trends from the provided context.",
+      "task_kind": "knowledge_request",
+      "route": "analyst",
+      "route_plan": "Analyze trends",
+      "requires_mcp": false,
+      "selected_strategy": "data_analysis"
+    },
+    "expect": { "status": "success", "summary_min_chars": 20 }
+  }
+]

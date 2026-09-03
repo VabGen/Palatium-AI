@@ -8,7 +8,7 @@ import pytest
 
 from pydantic import ValidationError
 
-from palatium_ai.application.agents.formatter_agent import _parse_formatter_document
+from palatium_ai.application.agents.formatter import parse_formatter_document
 from palatium_ai.domain.content import (
     ContentDocument,
     HeadingBlock,
@@ -121,7 +121,7 @@ def test_chart_series_length_validation() -> None:
 
 def test_formatter_parse_unwraps_document_key() -> None:
     wrapped = {"document": _sample_payload(title="Wrapped")}
-    doc = _parse_formatter_document(json.dumps(wrapped))
+    doc = parse_formatter_document(json.dumps(wrapped))
     assert doc.title == "Wrapped"
     assert len(doc.blocks) >= 1
 
@@ -167,15 +167,12 @@ def test_valid_table_ok() -> None:
 @pytest.mark.asyncio
 async def test_formatter_invalid_json_returns_stable_contract_code() -> None:
     """Broken LLM JSON → failure with FORMATTER_OUTPUT_INVALID, never a fake document."""
-    from palatium_ai.application.agents.formatter_agent import FormatterAgent
     from palatium_ai.domain.agents.context_packet import ContextPacket
-    from palatium_ai.domain.agents.contracts import AgentContext
     from palatium_ai.domain.agents.formatter import FORMATTER_OUTPUT_INVALID, FormatterInput
     from palatium_ai.domain.mcp.models import ToolExecutionPlan
-    from tests.conftest import SequentialFakeLLMPort
+    from tests.conftest import SequentialFakeLLMPort, run_formatter
 
     llm = SequentialFakeLLMPort(["not-json-at-all", "still-broken {"])
-    agent = FormatterAgent(llm)
     packet = ContextPacket(
         task_id="t1",
         user_text="rewrite with citations",
@@ -191,7 +188,7 @@ async def test_formatter_invalid_json_returns_stable_contract_code() -> None:
         ),
         context_summary="format_only",
     )
-    result = await agent.execute(
+    result = await run_formatter(
         FormatterInput(
             task_id="t1",
             context_packet=packet,
@@ -200,7 +197,7 @@ async def test_formatter_invalid_json_returns_stable_contract_code() -> None:
             requires_review=False,
             revision_feedback=None,
         ),
-        AgentContext(thread_id="th-formatter-invalid"),
+        llm,
     )
     assert result.status == "failure"
     assert result.output is None

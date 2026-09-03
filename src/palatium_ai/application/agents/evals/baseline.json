@@ -1,0 +1,35 @@
+{
+  "agents": {
+    "intent_classifier": 1.0,
+    "context_enricher": 1.0,
+    "supervisor": 1.0,
+    "researcher": 1.0,
+    "memory_keeper": 1.0,
+    "critic": 1.0,
+    "formatter": 1.0,
+    "text_ingestor": 1.0
+  },
+  "tasks": {
+    "intent_classifier/knowledge_with_mcp": 1.0,
+    "intent_classifier/social_phatic": 1.0,
+    "context_enricher/continuation-format-followup": 1.0,
+    "context_enricher/continuation-answer-followup": 1.0,
+    "context_enricher/continuation-new-topic": 1.0,
+    "supervisor/social-formatter": 1.0,
+    "supervisor/clarify-route": 1.0,
+    "critic/format_passthrough_with_source": 1.0,
+    "critic/answer_continuity_gate": 1.0,
+    "critic/side_effect_risk_mcp": 1.0,
+    "formatter/minimal_document": 1.0,
+    "formatter/structured_steps": 1.0,
+    "researcher/researcher-knowledge": 1.0,
+    "researcher/researcher-search-knowledge": 1.0,
+    "researcher/researcher-search-memory": 1.0,
+    "researcher/researcher-graph-query": 1.0,
+    "researcher/researcher-web-fallback": 1.0,
+    "memory_keeper/keeper-preference": 1.0,
+    "text_ingestor/paragraph-split": 1.0,
+    "text_ingestor/fixed-window-long": 1.0,
+    "text_ingestor/context-prefix-enrich": 1.0
+  }
+}

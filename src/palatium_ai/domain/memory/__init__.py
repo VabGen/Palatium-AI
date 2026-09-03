@@ -2,6 +2,8 @@
 
 """Dialog + long-term memory contracts (chat log ≠ memory)."""
 
+from palatium_ai.domain.policies import ContinuityPolicy, EffectiveRoutingIntent
+
 from .budget import DEFAULT_PROMPT_BUDGET, MemoryPromptBudget, clip_memory_hints
 from .contextualizer import (
     ContextualizerInput,
@@ -9,11 +11,12 @@ from .contextualizer import (
     ContextualizerTaskResult,
     ContinuationKind,
 )
-from .continuity import ContinuityPolicy, EffectiveRoutingIntent
 from .namespaces import org_namespace, thread_namespace, user_namespace
 from .ports import DialogTurnStore, MemoryPort
 from .recall import MemoryHit, MemoryRecallBundle
+from .scoring import ImportanceInputs, compute_importance, frequency_score, recency_score
 from .turns import DialogRole, DialogTurn, DialogTurnWindow
+from .types import MemoryType
 
 __all__ = [
     "DEFAULT_PROMPT_BUDGET",
@@ -31,6 +34,11 @@ __all__ = [
     "MemoryPort",
     "MemoryPromptBudget",
     "MemoryRecallBundle",
+    "MemoryType",
+    "ImportanceInputs",
+    "compute_importance",
+    "frequency_score",
+    "recency_score",
     "clip_memory_hints",
     "org_namespace",
     "thread_namespace",

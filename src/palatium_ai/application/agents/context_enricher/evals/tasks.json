@@ -1,0 +1,36 @@
+[
+  {
+    "id": "continuation-format-followup",
+    "user_text": "дай в виде таблицы",
+    "cassette": "context_enricher/format_followup.json",
+    "input": {
+      "user_text": "дай в виде таблицы",
+      "dialog": [
+        { "role": "user", "content": "Составь план встречи на завтра" },
+        { "role": "assistant", "content": "План встречи на завтра" }
+      ]
+    },
+    "expect": { "continuation_kind": "format", "refers_to_prior": true }
+  },
+  {
+    "id": "continuation-answer-followup",
+    "cassette": "context_enricher/answer_followup.json",
+    "input": {
+      "user_text": "а подробнее про первый пункт?",
+      "dialog": [
+        { "role": "user", "content": "Расскажи про архитектуру Palatium" },
+        { "role": "assistant", "content": "1. Harness\n2. LangGraph\n3. MCP" }
+      ]
+    },
+    "expect": { "continuation_kind": "answer", "refers_to_prior": true }
+  },
+  {
+    "id": "continuation-new-topic",
+    "cassette": "context_enricher/noop.json",
+    "input": {
+      "user_text": "найди договор в СЭД за Q3",
+      "dialog": []
+    },
+    "expect": { "continuation_kind": "new_topic", "refers_to_prior": false }
+  }
+]

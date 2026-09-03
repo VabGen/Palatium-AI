@@ -7,24 +7,43 @@ from uuid import uuid4
 
 import pytest
 
-from palatium_ai.application.agents.contextualizer_agent import ContextualizerAgent
-from palatium_ai.domain.agents.contracts import AgentContext
+from palatium_ai.application.agents.context_enricher import CONTEXTUALIZER_CONFIG, ContextualizerAgent
+from palatium_ai.application.agents.harness import Harness
+from palatium_ai.application.orchestration.agent_bridge import (
+    contextualizer_output_to_task_result,
+    contextualizer_to_agent_input,
+)
 from palatium_ai.domain.memory.contextualizer import ContextualizerInput
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
 from tests.conftest import FakeLLMPort
 
 
+async def _contextualize(llm: FakeLLMPort, task_input: ContextualizerInput):
+    harness = Harness(llm=llm)
+    agent = ContextualizerAgent(harness, CONTEXTUALIZER_CONFIG)
+    agent_input = contextualizer_to_agent_input(
+        task_input,
+        trace_id="trace-1",
+        thread_id=task_input.dialog_window.thread_id,
+    )
+    output = await harness.execute_with_guardrails(agent, agent_input)
+    return contextualizer_output_to_task_result(
+        output,
+        task_id=task_input.task_id,
+        agent_role=agent.config.role,
+    )
+
+
 @pytest.mark.asyncio
 async def test_contextualizer_passthrough_without_history() -> None:
     llm = FakeLLMPort("should-not-be-called")
-    agent = ContextualizerAgent(llm)
-    result = await agent.execute(
+    result = await _contextualize(
+        llm,
         ContextualizerInput(
             task_id="t1",
             user_text="привет",
             dialog_window=DialogTurnWindow(thread_id="th1", turns=()),
         ),
-        AgentContext(thread_id="th1"),
     )
     assert result.status == "success"
     assert result.output is not None
@@ -45,7 +64,6 @@ async def test_contextualizer_rewrites_format_followup() -> None:
           "reasoning": "User asked to tabulate prior answer"
         }"""
     )
-    agent = ContextualizerAgent(llm)
     window = DialogTurnWindow(
         thread_id="th2",
         turns=(
@@ -67,9 +85,9 @@ async def test_contextualizer_rewrites_format_followup() -> None:
             ),
         ),
     )
-    result = await agent.execute(
+    result = await _contextualize(
+        llm,
         ContextualizerInput(task_id="t2", user_text="дай в виде таблицы", dialog_window=window),
-        AgentContext(thread_id="th2"),
     )
     assert result.output is not None
     assert result.output.continuation_kind == "format"
@@ -81,15 +99,14 @@ async def test_contextualizer_rewrites_format_followup() -> None:
 async def test_contextualizer_uses_memory_hints_without_turns() -> None:
     """Memory hints alone do not require rewrite when there is no assistant prior."""
     llm = FakeLLMPort("should-not-be-called")
-    agent = ContextualizerAgent(llm)
-    result = await agent.execute(
+    result = await _contextualize(
+        llm,
         ContextualizerInput(
             task_id="t3",
             user_text="Составь план встречи",
             dialog_window=DialogTurnWindow(thread_id="th3", turns=()),
             memory_hints=("User prefers meeting plans as tables",),
         ),
-        AgentContext(thread_id="th3"),
     )
     assert result.output is not None
     assert result.output.continuation_kind == "new_topic"
@@ -99,7 +116,6 @@ async def test_contextualizer_uses_memory_hints_without_turns() -> None:
 @pytest.mark.asyncio
 async def test_contextualizer_skips_llm_for_social_with_prior() -> None:
     llm = FakeLLMPort("should-not-be-called")
-    agent = ContextualizerAgent(llm)
     window = DialogTurnWindow(
         thread_id="th-social",
         turns=(
@@ -121,7 +137,8 @@ async def test_contextualizer_skips_llm_for_social_with_prior() -> None:
             ),
         ),
     )
-    result = await agent.execute(
+    result = await _contextualize(
+        llm,
         ContextualizerInput(
             task_id="t-social",
             user_text="как дела",
@@ -129,7 +146,6 @@ async def test_contextualizer_skips_llm_for_social_with_prior() -> None:
             task_kind="social_conversation",
             requires_mcp=False,
         ),
-        AgentContext(thread_id="th-social"),
     )
     assert result.output is not None
     assert result.output.continuation_kind == "new_topic"
@@ -140,7 +156,6 @@ async def test_contextualizer_skips_llm_for_social_with_prior() -> None:
 async def test_contextualizer_passthrough_user_only_history() -> None:
     """First turn in thread: user message stored but no assistant reply yet."""
     llm = FakeLLMPort("should-not-be-called")
-    agent = ContextualizerAgent(llm)
     window = DialogTurnWindow(
         thread_id="th4",
         turns=(
@@ -154,9 +169,9 @@ async def test_contextualizer_passthrough_user_only_history() -> None:
             ),
         ),
     )
-    result = await agent.execute(
+    result = await _contextualize(
+        llm,
         ContextualizerInput(task_id="t4", user_text="привет", dialog_window=window),
-        AgentContext(thread_id="th4"),
     )
     assert result.output is not None
     assert result.output.continuation_kind == "new_topic"

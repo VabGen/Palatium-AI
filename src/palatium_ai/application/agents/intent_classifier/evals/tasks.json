@@ -1,0 +1,14 @@
+[
+  {
+    "id": "knowledge_with_mcp",
+    "input": { "text": "Find the Q3 report in EDMS", "continuation_kind": null, "has_prior_dialog": false },
+    "expect": { "task_kind": "knowledge_request", "requires_mcp": true },
+    "cassette": "intent_classifier/knowledge_with_mcp.json"
+  },
+  {
+    "id": "social_phatic",
+    "input": { "text": "hello", "continuation_kind": null, "has_prior_dialog": false },
+    "expect": { "task_kind": "social_conversation", "requires_mcp": false },
+    "cassette": "intent_classifier/social_phatic.json"
+  }
+]

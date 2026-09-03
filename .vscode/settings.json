@@ -1,5 +1,7 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system",
+    // Prefer in-project .venv (see poetry.toml). Create with: poetry install --with dev
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python.analysis.extraPaths": ["src"],
 
     // ---- Языки и форматирование ----
     "editor.defaultFormatter": "esbenp.prettier-vscode",

@@ -22,13 +22,17 @@ from palatium_ai.domain.hitl.cards import HITLCardView, HITLOption
 from palatium_ai.domain.hitl.choice_resume import ChoiceResumePolicy
 from palatium_ai.domain.hitl.escalation_policy import HitlTimeoutPolicy
 from palatium_ai.domain.hitl.interaction_policy import HitlInteractionPolicy
+from palatium_ai.domain.mcp.external_schemas import (
+    EDMS_ARCHIVE_DOCUMENT_SCHEMA,
+    EDMS_SEARCH_DOCUMENTS_SCHEMA,
+)
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
 from palatium_ai.domain.mcp.tool_policy import (
     classify_side_effect,
     requires_interrupt_before_call,
     resolve_platform_pin,
 )
-from palatium_ai.domain.memory.continuity import ContinuityPolicy
+from palatium_ai.domain.policies import ContinuityPolicy
 
 
 def _menu_doc(items: list[str]) -> ContentDocument:
@@ -49,33 +53,8 @@ def _menu_doc(items: list[str]) -> ContentDocument:
     )
 
 
-_EDMS_SEARCH_SCHEMA = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "properties": {
-        "query": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Search string for EDMS documents.",
-        },
-    },
-    "required": ["query"],
-    "additionalProperties": False,
-}
-
-_EDMS_ARCHIVE_SCHEMA = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "properties": {
-        "document_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "EDMS document identifier to archive.",
-        },
-    },
-    "required": ["document_id"],
-    "additionalProperties": False,
-}
+_EDMS_SEARCH_SCHEMA = EDMS_SEARCH_DOCUMENTS_SCHEMA
+_EDMS_ARCHIVE_SCHEMA = EDMS_ARCHIVE_DOCUMENT_SCHEMA
 
 
 def test_s1_s3_options_menu_force_mints_without_intent_flag() -> None:

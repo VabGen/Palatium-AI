@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.core.observability.audit import get_audit_logger
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 
@@ -94,10 +95,12 @@ def extract_interrupt(state: object) -> dict[str, object] | None:
 
 
 def argument_preview(arguments: object) -> str:
-    """Возвращает краткое представление аргументов для инструкции."""
+    """Возвращает краткое представление аргументов для HITL (секреты redacted)."""
     if not isinstance(arguments, dict):
         return ""
     parts: list[str] = []
     for key, value in list(arguments.items())[:8]:
-        parts.append(f"{key}={value!r}")
-    return ", ".join(parts)
+        display = redact_text(value) if isinstance(value, str) else repr(value)
+        parts.append(f"{key}={display}")
+    preview = ", ".join(parts)
+    return redact_text(preview)

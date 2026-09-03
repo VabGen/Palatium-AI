@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from palatium_ai.application.services.cost_budget import CostBudgetService
-from palatium_ai.application.services.intent_service import _MAX_QUALITY_REVISIONS, IntentService
+from palatium_ai.application.services.intent_service import IntentService, max_quality_revisions
 from palatium_ai.application.services.kill_switch import KillSwitchService
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock
@@ -164,7 +164,7 @@ async def test_revise_after_quality_reject_respects_limit() -> None:
         return_value=SimpleNamespace(
             context={
                 "effective_user_text": "claim text",
-                "quality_revision_count": str(_MAX_QUALITY_REVISIONS),
+                "quality_revision_count": str(max_quality_revisions()),
             }
         )
     )

@@ -8,25 +8,36 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from palatium_ai.application.agents.context_weaver_agent import ContextWeaverAgent
-from palatium_ai.application.agents.contextualizer_agent import ContextualizerAgent
-from palatium_ai.application.agents.critic_agent import CriticAgent
-from palatium_ai.application.agents.formatter_agent import FormatterAgent
-from palatium_ai.application.agents.intent_classifier_agent import IntentClassifierAgent
-from palatium_ai.application.agents.memory_keeper_agent import MemoryKeeperAgent
-from palatium_ai.application.agents.researcher_agent import ResearcherAgent
-from palatium_ai.application.agents.supervisor_agent import SupervisorAgent
+from palatium_ai.application.agents.analyst import ANALYST_CONFIG, AnalystAgent
+from palatium_ai.application.agents.coder import CODER_CONFIG, CoderAgent
+from palatium_ai.application.agents.context_enricher import (
+    CONTEXT_WEAVER_CONFIG,
+    CONTEXTUALIZER_CONFIG,
+    ContextualizerAgent,
+    ContextWeaverAgent,
+)
+from palatium_ai.application.agents.critic import CRITIC_CONFIG, CriticAgent
+from palatium_ai.application.agents.formatter import FORMATTER_CONFIG, FormatterAgent
+from palatium_ai.application.agents.harness import Harness
+from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
+from palatium_ai.application.agents.memory_keeper import MEMORY_KEEPER_CONFIG, MemoryKeeperAgent
+from palatium_ai.application.agents.researcher import RESEARCHER_CONFIG, ResearcherAgent
+from palatium_ai.application.agents.supervisor import SUPERVISOR_CONFIG, SupervisorAgent
+from palatium_ai.application.agents.text_ingestor import TEXT_INGESTOR_CONFIG, TextIngestorAgent
 from palatium_ai.application.orchestration.graph import build_agent_graph
+from palatium_ai.application.services.context_builder import ContextBuilder
 from palatium_ai.application.services.cost_budget import CostBudgetService
+from palatium_ai.application.services.document_ingest_service import DocumentIngestService
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_service import IntentService
-from palatium_ai.application.services.kill_switch import KillSwitchService
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
 from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.core.logging import logger
 from palatium_ai.infrastructure.database.repositories import McpToolCallRepository
+from palatium_ai.infrastructure.embeddings.factory import create_embedding_client_for_schema
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 from palatium_ai.infrastructure.hitl.redis_store import RedisHitlCardStore
 from palatium_ai.infrastructure.llm.cost import estimate_completion_cost_usd
@@ -41,6 +52,7 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from palatium_ai.application.services.kill_switch import KillSwitchService
     from palatium_ai.core.config.security import SecurityConfig
     from palatium_ai.core.config.settings import Settings
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
@@ -181,7 +193,7 @@ def build_intent_service(
     memory_port: MemoryPort | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     enable_sleep_time: bool = True,
-) -> tuple[IntentService, MemoryConsolidationService | None, MCPCapabilityIndex]:
+) -> tuple[IntentService, MemoryConsolidationService | None, MCPCapabilityIndex, DocumentIngestService]:
     """Создаёт IntentService + optional sleep-time consolidation worker handle."""
     llm_factory = LLMClientFactory(settings)
 
@@ -194,8 +206,16 @@ def build_intent_service(
 
     resolved_memory = memory_port
     if resolved_memory is None and session_factory is not None:
-        resolved_memory = PostgresMemoryPort(session_factory)
-        logger.info("MemoryPort: Postgres")
+        embedding_client = None
+        try:
+            embedding_client = create_embedding_client_for_schema(settings, "memory")
+        except Exception as exc:
+            logger.warning("Memory embeddings disabled", error=str(exc))
+        resolved_memory = PostgresMemoryPort(session_factory, embeddings=embedding_client)
+        logger.info(
+            "MemoryPort: Postgres memory.entries",
+            vector_search=embedding_client is not None,
+        )
     elif resolved_memory is None:
         resolved_memory = InMemoryMemoryPort()
         logger.info("MemoryPort: in-process (dev/tests)")
@@ -206,64 +226,82 @@ def build_intent_service(
         redis_client=redis_client,
     )
 
-    agent = IntentClassifierAgent(
-        llm_factory.get_client_for_agent(IntentClassifierAgent.config),
+    resolved_checkpointer = checkpointer if checkpointer is not None else MemorySaver(serde=build_checkpoint_serde())
+    context_builder = ContextBuilder(
+        dialog_store=resolved_dialog_store,
+        memory_port=resolved_memory,
+    )
+    harness = Harness(
+        context_builder=context_builder,
+        llm_factory=llm_factory,
         cost_budget=cost_budget,
         cost_estimator=estimate_completion_cost_usd,
     )
-    contextualizer = ContextualizerAgent(
-        llm_factory.get_client_for_agent(ContextualizerAgent.config),
-        cost_budget=cost_budget,
-        cost_estimator=estimate_completion_cost_usd,
-    )
+    intent_agent = IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG)
+    continuation = ContextualizerAgent(harness, CONTEXTUALIZER_CONFIG)
     capability_index = MCPCapabilityIndex(mcp_registry)
-    context_weaver = ContextWeaverAgent(mcp_registry=mcp_registry, capability_index=capability_index)
-    critic = CriticAgent(
-        llm_factory.get_client_for_agent(CriticAgent.config),
-        cost_budget=cost_budget,
-        cost_estimator=estimate_completion_cost_usd,
+    weaving = ContextWeaverAgent(
+        harness,
+        CONTEXT_WEAVER_CONFIG,
+        mcp_registry=mcp_registry,
+        capability_index=capability_index,
     )
-    formatter = FormatterAgent(
-        llm_factory.get_client_for_agent(FormatterAgent.config),
-        cost_budget=cost_budget,
-        cost_estimator=estimate_completion_cost_usd,
-    )
+    critic = CriticAgent(harness, CRITIC_CONFIG)
+    formatter = FormatterAgent(harness, FORMATTER_CONFIG)
     option_synthesizer = OptionSynthesizer(
-        llm_factory.get_client_for_agent(IntentClassifierAgent.config),
+        llm_factory.get_client_for_agent(INTENT_CLASSIFIER_CONFIG),
     )
     researcher = ResearcherAgent(
-        llm_factory.get_client_for_agent(ResearcherAgent.config),
+        harness,
+        RESEARCHER_CONFIG,
+        llm_factory.get_client_for_agent(RESEARCHER_CONFIG),
         mcp_registry=mcp_registry,
         mcp_tool_call_repository=mcp_tool_call_repository,
         capability_index=capability_index,
-        cost_budget=cost_budget,
-        cost_estimator=estimate_completion_cost_usd,
     )
-    supervisor = SupervisorAgent()
-    resolved_checkpointer = checkpointer if checkpointer is not None else MemorySaver(serde=build_checkpoint_serde())
+    coder = CoderAgent(harness, CODER_CONFIG)
+    analyst = AnalystAgent(harness, ANALYST_CONFIG)
+    supervisor = SupervisorAgent(harness, SUPERVISOR_CONFIG)
     graph = build_agent_graph(
-        intent_agent=agent,
+        intent_agent=intent_agent,
         supervisor_agent=supervisor,
-        context_weaver_agent=context_weaver,
+        continuation_agent=continuation,
+        weaving_agent=weaving,
         researcher_agent=researcher,
+        coder_agent=coder,
+        analyst_agent=analyst,
         critic_agent=critic,
         formatter_agent=formatter,
-        contextualizer_agent=contextualizer,
+        harness=harness,
         checkpointer=resolved_checkpointer,
     )
 
     consolidation: MemoryConsolidationService | None = None
     if enable_sleep_time:
-        memory_keeper = MemoryKeeperAgent(
-            llm_factory.get_client_for_agent(MemoryKeeperAgent.config),
-            cost_budget=cost_budget,
+        memory_keeper = MemoryKeeperAgent(harness, MEMORY_KEEPER_CONFIG)
+        memory_persistence = MemoryFactPersistenceService(
+            mcp_registry=mcp_registry,
+            mcp_tool_call_repository=mcp_tool_call_repository,
         )
         consolidation = MemoryConsolidationService(
+            harness=harness,
             memory_keeper=memory_keeper,
             memory_port=resolved_memory,
+            memory_persistence=memory_persistence,
             dialog_turn_store=resolved_dialog_store,
         )
-        logger.info("Memory consolidation: sleep-time queue enabled")
+        logger.info("Memory consolidation: sleep-time queue enabled (save_memory MCP)")
+
+    text_ingestor = TextIngestorAgent(harness, TEXT_INGESTOR_CONFIG)
+    document_ingest = DocumentIngestService(
+        harness=harness,
+        text_ingestor=text_ingestor,
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    logger.info("Document ingest: TextIngestor service enabled")
 
     intent_service = IntentService(
         graph,
@@ -283,7 +321,7 @@ def build_intent_service(
         mcp_tool_output_max_chars=settings.memory.mcp_tool_output_max_chars,
         turn_hop_budget_ms=settings.observability.turn_hop_budget_ms,
     )
-    return intent_service, consolidation, capability_index
+    return intent_service, consolidation, capability_index, document_ingest
 
 
 async def warm_mcp_capability_cache(index: MCPCapabilityIndex) -> None:

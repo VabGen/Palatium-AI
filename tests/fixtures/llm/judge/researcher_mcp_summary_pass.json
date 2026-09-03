@@ -1,0 +1,3 @@
+{
+  "response": "{\"score\": 0.88, \"passed\": true, \"details\": \"Summary cites MCP search_knowledge payload, sources_used includes mcp:platform.search_knowledge, no facts beyond cassette hit.\"}"
+}

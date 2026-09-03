@@ -16,6 +16,7 @@ import structlog
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.mcp.models import MCPToolDescriptor, MCPToolSummary
 from palatium_ai.domain.mcp.server_url_policy import filter_mcp_server_map
 from palatium_ai.infrastructure.mcp.base import MCPJsonRpcClient, MCPJsonRpcError
@@ -24,6 +25,7 @@ from palatium_ai.infrastructure.mcp.circuit import McpServerCircuit
 if TYPE_CHECKING:
     from palatium_ai.core.config.settings import Settings
     from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolResult
+    from palatium_ai.infrastructure.mcp.platform_tool_handler import LocalMcpToolHandler
 
 logger = structlog.get_logger(__name__)
 
@@ -63,6 +65,7 @@ class MCPRegistry:
         self._cache_ttl_seconds: int = 60
         self._lock = asyncio.Lock()
         self._http_client: httpx.AsyncClient | None = None
+        self._local_handlers: dict[str, LocalMcpToolHandler] = {}
         self._initialized = False
 
     def _http_timeout(self) -> httpx.Timeout:
@@ -166,14 +169,16 @@ class MCPRegistry:
             raise ValueError(f"Server '{name}' is not registered")
 
         now = time.time()
-        circuit = self._circuits.setdefault(name, McpServerCircuit())
-        if circuit.is_open(now):
+        if self._circuit_open(name, now):
             return False
 
         if name in self._health_cache:
             cached_ok, cached_time = self._health_cache[name]
             if now - cached_time < self._cache_ttl_seconds:
                 return cached_ok
+
+        if not self._circuit_allows(name, now):
+            return False
 
         url = self._servers[name]
         try:
@@ -189,6 +194,10 @@ class MCPRegistry:
             )
             ok = False
 
+        if ok:
+            self._record_circuit_success(name)
+        else:
+            self._record_circuit_failure(name, time.time())
         self._health_cache[name] = (ok, time.time())
         return ok
 
@@ -239,11 +248,34 @@ class MCPRegistry:
     def _circuit(self, server_name: str) -> McpServerCircuit:
         return self._circuits.setdefault(server_name, McpServerCircuit())
 
+    def _circuit_open(self, server_name: str, now: float) -> bool:
+        """Read-only open check (does not consume half-open probe)."""
+        circuit = self._circuit(server_name)
+        blocked = circuit.is_open(now)
+        agent_metrics.record_circuit_state(server_name, circuit.state_code())
+        return blocked
+
+    def _circuit_allows(self, server_name: str, now: float) -> bool:
+        """Half-open aware gate immediately before network I/O."""
+        circuit = self._circuit(server_name)
+        allowed = circuit.allow_request(now)
+        agent_metrics.record_circuit_state(server_name, circuit.state_code())
+        return allowed
+
+    def _record_circuit_success(self, server_name: str) -> None:
+        circuit = self._circuit(server_name)
+        circuit.record_success()
+        agent_metrics.record_circuit_state(server_name, circuit.state_code())
+
+    def _record_circuit_failure(self, server_name: str, now: float) -> None:
+        circuit = self._circuit(server_name)
+        circuit.record_failure(now)
+        agent_metrics.record_circuit_state(server_name, circuit.state_code())
+
     async def list_tools(self, server_name: str, *, force_refresh: bool = False) -> list[MCPToolDescriptor]:
         """Получает tools/list; TTL-кэш + negative cache + circuit breaker."""
         now = time.time()
-        circuit = self._circuit(server_name)
-        if circuit.is_open(now):
+        if self._circuit_open(server_name, now):
             logger.debug("MCP circuit open; skipping tools/list", server=server_name)
             cached = self._tools_cache.get(server_name)
             return list(cached.tools) if cached is not None else []
@@ -254,6 +286,11 @@ class MCPRegistry:
                 ttl = self._cache_ttl_seconds if cached.ok else _NEGATIVE_CACHE_TTL_SECONDS
                 if now - cached.cached_at < ttl:
                     return list(cached.tools)
+
+        if not self._circuit_allows(server_name, now):
+            logger.debug("MCP circuit open; skipping tools/list", server=server_name)
+            cached = self._tools_cache.get(server_name)
+            return list(cached.tools) if cached is not None else []
 
         client = self.get_client(server_name)
         server_url = self.get_server_url(server_name)
@@ -285,7 +322,7 @@ class MCPRegistry:
             )
             return self._remember_tools_failure(server_name, now)
 
-        circuit.record_success()
+        self._record_circuit_success(server_name)
         self._tools_cache[server_name] = _ToolsCacheEntry(tools=tools, cached_at=now, ok=True)
         self._summaries_cache[server_name] = _SummariesCacheEntry(
             summaries=[tool.to_summary() for tool in tools],
@@ -297,8 +334,7 @@ class MCPRegistry:
     async def list_tool_summaries(self, server_name: str, *, force_refresh: bool = False) -> list[MCPToolSummary]:
         """Discovery path: network omitInputSchema + separate TTL cache (no full-schema warm)."""
         now = time.time()
-        circuit = self._circuit(server_name)
-        if circuit.is_open(now):
+        if self._circuit_open(server_name, now):
             return self._cached_summaries_on_circuit_open(server_name)
 
         if not force_refresh:
@@ -312,6 +348,9 @@ class MCPRegistry:
                 ttl = self._cache_ttl_seconds
                 if now - tools_cached.cached_at < ttl:
                     return [tool.to_summary() for tool in tools_cached.tools]
+
+        if not self._circuit_allows(server_name, now):
+            return self._cached_summaries_on_circuit_open(server_name)
 
         client = self.get_client(server_name)
         server_url = self.get_server_url(server_name)
@@ -327,7 +366,7 @@ class MCPRegistry:
             )
             return self._remember_summaries_failure(server_name, now)
 
-        circuit.record_success()
+        self._record_circuit_success(server_name)
         self._summaries_cache[server_name] = _SummariesCacheEntry(
             summaries=summaries,
             cached_at=now,
@@ -349,21 +388,34 @@ class MCPRegistry:
         return next((tool for tool in tools if tool.name == tool_name), None)
 
     def _remember_tools_failure(self, server_name: str, now: float) -> list[MCPToolDescriptor]:
-        self._circuit(server_name).record_failure(now)
+        self._record_circuit_failure(server_name, now)
         self._tools_cache[server_name] = _ToolsCacheEntry(tools=[], cached_at=now, ok=False)
         self._summaries_cache[server_name] = _SummariesCacheEntry(summaries=[], cached_at=now, ok=False)
         return []
 
     def _remember_summaries_failure(self, server_name: str, now: float) -> list[MCPToolSummary]:
-        self._circuit(server_name).record_failure(now)
+        self._record_circuit_failure(server_name, now)
         self._summaries_cache[server_name] = _SummariesCacheEntry(summaries=[], cached_at=now, ok=False)
         return []
 
+    def register_local_handler(self, server_name: str, handler: LocalMcpToolHandler) -> None:
+        """In-process MCP tool execution (e.g. platform.ingest_document → KnowledgePort)."""
+        self._local_handlers[server_name] = handler
+
     async def call_tool(self, server_name: str, tool_call: MCPToolCall) -> MCPToolResult:
         """Валидирует аргументы по JSON Schema 2020-12 и вызывает tools/call."""
+        local_handler = self._local_handlers.get(server_name)
+        if local_handler is not None:
+            tools = await self.list_tools(server_name)
+            descriptor = next((tool for tool in tools if tool.name == tool_call.name), None)
+            if descriptor is None:
+                raise ValueError(f"Tool '{tool_call.name}' is not declared by server '{server_name}'")
+            MCPJsonRpcClient.validate_arguments(descriptor, tool_call.arguments)
+            return await local_handler.call_tool(tool_call.name, tool_call.arguments)
+
         now = time.time()
         circuit = self._circuit(server_name)
-        if circuit.is_open(now):
+        if self._circuit_open(server_name, now):
             logger.warning("MCP circuit open; refusing tools/call", server=server_name)
             raise MCPCircuitOpenError(server_name, retry_after_seconds=max(0.0, circuit.open_until - now))
 
@@ -373,12 +425,15 @@ class MCPRegistry:
             raise ValueError(f"Tool '{tool_call.name}' is not declared by server '{server_name}'")
 
         MCPJsonRpcClient.validate_arguments(descriptor, tool_call.arguments)
+        if not self._circuit_allows(server_name, time.time()):
+            logger.warning("MCP circuit open; refusing tools/call", server=server_name)
+            raise MCPCircuitOpenError(server_name, retry_after_seconds=max(0.0, circuit.open_until - now))
         client = self.get_client(server_name)
         server_url = self.get_server_url(server_name)
         try:
             result = await client.call_tool(tool_call)
         except httpx.HTTPError as exc:
-            circuit.record_failure(time.time())
+            self._record_circuit_failure(server_name, time.time())
             logger.warning(
                 "MCP tools/call HTTP failure",
                 server=server_name,
@@ -388,7 +443,7 @@ class MCPRegistry:
             )
             raise
         except MCPJsonRpcError as exc:
-            circuit.record_failure(time.time())
+            self._record_circuit_failure(server_name, time.time())
             logger.warning(
                 "MCP tools/call JSON-RPC failure",
                 server=server_name,
@@ -398,10 +453,10 @@ class MCPRegistry:
             )
             raise
         except Exception:
-            circuit.record_failure(time.time())
+            self._record_circuit_failure(server_name, time.time())
             raise
 
-        circuit.record_success()
+        self._record_circuit_success(server_name)
         return result
 
     @property

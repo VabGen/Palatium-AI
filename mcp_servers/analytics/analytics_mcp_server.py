@@ -8,14 +8,13 @@ import json
 
 from typing import Annotated
 
+from contract import _MAX_PERIOD_CHARS, SALES_METRICS_INPUT_SCHEMA
 from fastapi import Depends, FastAPI
 from mcp_stub_auth import require_mcp_bearer
 from mcp_stub_tools import tools_list_payload
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="analytics-mcp-server")
-
-_MAX_PERIOD_CHARS = 64
 
 
 class JsonRpcRequest(BaseModel):
@@ -67,20 +66,7 @@ _GET_SALES_METRICS_TOOL: dict[str, object] = {
     "annotations": {"readOnlyHint": True, "destructiveHint": False},
     "side_effect": "read",
     "riskTier": "low",
-    "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-            "period": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": _MAX_PERIOD_CHARS,
-                "description": (f"Exact reporting period label (max {_MAX_PERIOD_CHARS} chars; e.g. 2025-Q1)."),
-            },
-        },
-        "required": ["period"],
-        "additionalProperties": False,
-    },
+    "inputSchema": SALES_METRICS_INPUT_SCHEMA,
 }
 
 

@@ -14,9 +14,9 @@ from palatium_ai.domain.agents.researcher import ResearcherTaskResult
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContextualizerTaskResult
-from palatium_ai.domain.memory.continuity import EffectiveRoutingIntent
 from palatium_ai.domain.memory.recall import MemoryRecallBundle
 from palatium_ai.domain.memory.turns import DialogTurnWindow
+from palatium_ai.domain.policies import EffectiveRoutingIntent
 
 
 class AgentGraphState(TypedDict, total=False):
@@ -25,6 +25,12 @@ class AgentGraphState(TypedDict, total=False):
     task_id: str
     user_text: str
     thread_id: str
+    user_id: str
+    org_id: str
+    trace_id: str
+    goal: str
+    plan: str
+    revisions_count: int
     dialog_window: DialogTurnWindow
     memory_recall: MemoryRecallBundle
     prompt_budget: MemoryPromptBudget
@@ -38,3 +44,5 @@ class AgentGraphState(TypedDict, total=False):
     critic: CriticTaskResult
     formatted: FormatterTaskResult
     revision_feedback: str
+    requires_clarification: bool
+    clarification_question: str

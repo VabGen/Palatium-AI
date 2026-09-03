@@ -14,6 +14,7 @@ import structlog
 
 from palatium_ai.domain.mcp.models import MCPCapabilityBinding, MCPToolSummary
 from palatium_ai.domain.mcp.tool_policy import binding_hitl_metadata_for_ref
+from palatium_ai.domain.policies.retrieval import RetrievalPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.ports.mcp import MCPRegistryPort
@@ -43,6 +44,8 @@ class MCPCapabilityIndex:
         self,
         task_text: str,
         requested_capabilities: tuple[str, ...],
+        *,
+        local_retrieval_empty: bool = False,
     ) -> MCPCapabilityBinding | None:
         """Pick best binding: Intent tags filter/boost; task text must evidence the tool.
 
@@ -55,6 +58,13 @@ class MCPCapabilityIndex:
 
         scored: list[tuple[int, MCPCapabilityBinding]] = []
         for binding in discovered:
+            if RetrievalPolicy.is_last_resort_tool(binding.tool_name):
+                gate = RetrievalPolicy.may_bind_tool(
+                    tool_name=binding.tool_name,
+                    local_retrieval_empty=local_retrieval_empty,
+                )
+                if not gate.allowed:
+                    continue
             tool_terms = _binding_terms(binding)
             overlap = task_terms & tool_terms
             if not overlap:

@@ -374,6 +374,8 @@ npm run build
 
 Write MCP (EDMS stub): `archive_document` — platform-pinned `write` → HITL interrupt
 до вызова (self-attestation сервера не снижает риск).
+Off-graph memory: `POST /api/memory/save|forget|consolidate` → HITL →
+`/api/hitl/{id}/respond` (`scripts/smoke_memory_hitl.py`).
 Хранилище HITL: **Redis** (in-memory запрещён в staging/production).
 Фоновый TTL sweep раз в 60с закрывает просроченные pending-карточки (CAS, не затирает resolve).
 

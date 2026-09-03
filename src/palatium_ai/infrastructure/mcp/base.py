@@ -125,7 +125,7 @@ class MCPJsonRpcClient:
         )
         raw_result = response.result
         if not isinstance(raw_result, dict):
-            return MCPToolResult(content=[], isError=True)
+            return MCPToolResult(content=[], is_error=True)
         return MCPToolResult.model_validate(raw_result)
 
     @staticmethod

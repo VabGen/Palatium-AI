@@ -1,0 +1,3 @@
+{
+  "response": "{\"schema_version\": 1, \"locale\": \"ru-RU\", \"title\": \"Ответ\", \"blocks\": [{\"type\": \"paragraph\", \"text\": \"Краткий ответ пользователю.\"}], \"actions\": [], \"meta\": {\"confidence\": 0.9, \"requires_review\": false, \"source_refs\": []}}"
+}

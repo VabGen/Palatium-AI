@@ -18,9 +18,8 @@ alwaysApply: true
   Composition root (DI) — см. 000; запуск: `python -m palatium_ai` (или uvicorn-скриптом).
 - Оркестратор: `application/orchestration/graph.py` (StateGraph, узлы в `nodes.py`,
   state — `orchestration/state.py`, 065).
-- Контракты агентов: `application/agents/base.py`.
-  Контракт Harness: `domain/ports/harness.py` (065); реализация —
-  `application/agents/harness.py`.
+- Контракты агентов: `domain/agents/base.py` + пакеты `application/agents/<name>/`
+  (030). Harness: `application/agents/harness.py` (порт — `domain/ports/harness.py`).
 - Политики (ContinuityPolicy, CriticPolicy, RouteStrategy): `domain/policies/`,
   Literal-типы осей — `domain/policies/types.py` (055).
 - Реестр агентов — ЕДИНСТВЕННЫЙ источник: 000-architecture (полный перечень агентов).

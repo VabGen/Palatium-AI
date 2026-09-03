@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react';
 import { ListChecks, ShieldAlert } from 'lucide-react';
 import { fetchHitlStepUpChallenge, respondHitlCard } from '../api/client';
+import { formatHitlError } from '../lib/hitl';
 import { TokenIcon } from '../icons/TokenIcon';
-import type { FormatterTaskResult, HITLCardView } from '../types/contentDocument';
+import type {
+  FormatterTaskResult,
+  HITLCardView,
+  HitlStepUpChallenge,
+} from '../types/contentDocument';
 
 type HitlCardsProps = {
   cards: HITLCardView[];
@@ -14,7 +19,7 @@ type HitlCardsProps = {
 type PendingStepUp = {
   actionId: string;
   actionToken: string;
-  challenge: any;
+  challenge: HitlStepUpChallenge;
 };
 
 const STEP_UP_MESSAGE_TYPE = 'palatium.hitl.step_up';
@@ -140,7 +145,7 @@ function HitlCard({
       }
       await completeRespond(actionId, actionToken, assertion);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'HITL failed');
+      setError(formatHitlError(err));
     } finally {
       setBusyAction(null);
     }
@@ -158,7 +163,7 @@ function HitlCard({
     try {
       await completeRespond(stepUpPending.actionId, stepUpPending.actionToken, token);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'HITL failed');
+      setError(formatHitlError(err));
     } finally {
       setBusyAction(null);
     }

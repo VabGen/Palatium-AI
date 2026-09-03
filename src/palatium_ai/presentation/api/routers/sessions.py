@@ -5,13 +5,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, cast
+from typing import cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, JsonValue
 
-from palatium_ai.domain.mcp.api_redaction import redact_mcp_arguments, redact_mcp_content
 from palatium_ai.domain.sessions.context_privacy import (
     filter_client_context_patch,
     public_session_context,
@@ -193,10 +192,10 @@ async def list_dialog_turns(
     )
     if session is None:
         return DialogTurnListResponse(items=[], limit=limit, count=0)
-    store = resources.dialog_turn_store
-    if store is None:
+    timeline = resources.session_timeline_service
+    if timeline is None:
         return DialogTurnListResponse(items=[], limit=limit, count=0)
-    window = await store.list_recent_turns(thread_id=thread_id, limit=limit)
+    turns = await timeline.list_dialog_turns(thread_id=thread_id, limit=limit)
     return DialogTurnListResponse(
         items=[
             DialogTurnResponse(
@@ -209,10 +208,10 @@ async def list_dialog_turns(
                 seq=turn.seq,
                 created_at=turn.created_at,
             )
-            for turn in window.turns
+            for turn in turns
         ],
         limit=limit,
-        count=len(window.turns),
+        count=len(turns),
     )
 
 
@@ -240,7 +239,10 @@ async def list_mcp_tool_calls(
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{thread_id}' not found")
 
-    tool_calls = await resources.mcp_tool_call_repository.list_by_thread_id(
+    timeline = resources.session_timeline_service
+    if timeline is None:
+        return McpToolCallListResponse(items=[], limit=limit, offset=offset, count=0)
+    tool_calls = await timeline.list_mcp_tool_calls(
         thread_id=thread_id,
         limit=limit,
         offset=offset,
@@ -250,7 +252,23 @@ async def list_mcp_tool_calls(
         include_archived=include_archived,
     )
     return McpToolCallListResponse(
-        items=[_to_tool_call_response(item) for item in tool_calls],
+        items=[
+            McpToolCallResponse(
+                id=item.id,
+                session_id=item.session_id,
+                conversation_id=item.conversation_id,
+                server_name=item.server_name,
+                tool_name=item.tool_name,
+                arguments=item.arguments,
+                content=item.content,
+                is_error=item.is_error,
+                event=item.event,
+                user_id=item.user_id,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+            )
+            for item in tool_calls
+        ],
         limit=limit,
         offset=offset,
         count=len(tool_calls),
@@ -281,7 +299,10 @@ async def get_session_timeline(
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{thread_id}' not found")
 
-    tool_calls = await resources.mcp_tool_call_repository.list_by_thread_id(
+    timeline = resources.session_timeline_service
+    if timeline is None:
+        return SessionTimelineResponse(session=_to_response(session), mcp_tool_calls=[])
+    view = await timeline.load_timeline(
         thread_id=thread_id,
         limit=limit,
         offset=offset,
@@ -292,7 +313,23 @@ async def get_session_timeline(
     )
     return SessionTimelineResponse(
         session=_to_response(session),
-        mcp_tool_calls=[_to_tool_call_response(item) for item in tool_calls],
+        mcp_tool_calls=[
+            McpToolCallResponse(
+                id=item.id,
+                session_id=item.session_id,
+                conversation_id=item.conversation_id,
+                server_name=item.server_name,
+                tool_name=item.tool_name,
+                arguments=item.arguments,
+                content=item.content,
+                is_error=item.is_error,
+                event=item.event,
+                user_id=item.user_id,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+            )
+            for item in view.mcp_tool_calls
+        ],
     )
 
 
@@ -307,24 +344,4 @@ def _to_response(session: SessionRecord) -> SessionResponse:
         context=cast("dict[str, JsonValue]", public_session_context(session.context)),
         created_at=session.created_at,
         updated_at=session.updated_at,
-    )
-
-
-def _to_tool_call_response(tool_call: Any) -> McpToolCallResponse:
-    """Convert ORM entity to API response (redacted args/content)."""
-    raw_args = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
-    raw_content = tool_call.content if isinstance(tool_call.content, list) else []
-    return McpToolCallResponse(
-        id=tool_call.id,
-        session_id=tool_call.session_id,
-        conversation_id=tool_call.conversation_id,
-        server_name=tool_call.server_name,
-        tool_name=tool_call.tool_name,
-        arguments=redact_mcp_arguments(raw_args),
-        content=redact_mcp_content(raw_content),
-        is_error=tool_call.is_error,
-        event=tool_call.event,
-        user_id=tool_call.user_id,
-        created_at=tool_call.created_at,
-        updated_at=tool_call.updated_at,
     )

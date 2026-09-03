@@ -13,6 +13,7 @@ from .choice_resume import (
     ChoiceResumePolicy,
     HitlChoiceResumeKind,
     HitlChoiceSelection,
+    ParsedHitlChoiceResume,
     hitl_card_public_dump,
 )
 from .escalation_policy import (
@@ -47,6 +48,7 @@ __all__ = [
     "HitlChoiceResumeKind",
     "HitlChoiceSelection",
     "HitlDeadLetterPolicy",
+    "ParsedHitlChoiceResume",
     "HitlDenyResumePort",
     "HitlEscalationNotice",
     "HitlNotifierPort",

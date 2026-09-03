@@ -1,0 +1,3 @@
+{
+  "response": "{\n  \"rewritten_query\": \"Расскажи подробнее про первый пункт архитектуры Palatium (Harness)\",\n  \"continuation_kind\": \"answer\",\n  \"confidence\": 0.91,\n  \"refers_to_prior\": true,\n  \"prior_assistant_excerpt\": \"1. Harness\",\n  \"reasoning\": \"User asked to elaborate on the first list item\"\n}"
+}

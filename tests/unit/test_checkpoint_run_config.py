@@ -8,10 +8,15 @@ import pytest
 
 from palatium_ai.application.orchestration.run_config import build_graph_run_config
 from palatium_ai.core.observability.hop_timings import turn_hop_timings
+from palatium_ai.core.types.graph_nodes import (
+    NODE_CONTEXT_ENRICHER_CONTINUATION,
+    NODE_CONTEXT_ENRICHER_WEAVING,
+)
 from palatium_ai.domain.agents.intent import IntentClassifierOutput, IntentTaskResult
 from palatium_ai.infrastructure.memory.checkpoint_serde import (
     CHECKPOINT_MSGPACK_ALLOWLIST,
     build_checkpoint_serde,
+    migrate_graph_checkpoint,
 )
 
 
@@ -69,6 +74,48 @@ def test_checkpoint_serde_roundtrips_intent_without_unregistered_warning(
     assert restored.output.task_kind == "social_conversation"
     assert not any("msgpack_unregistered" in r.getMessage() for r in caplog.records)
     assert not any("Add to allowed_msgpack_modules" in r.getMessage() for r in caplog.records)
+
+
+def test_migrate_graph_checkpoint_remaps_legacy_node_ids() -> None:
+    payload = {
+        "next": ("contextualizer", "context_weaver"),
+        "nested": {"tasks": [{"node": "context_weaver"}]},
+    }
+    migrated = migrate_graph_checkpoint(payload)
+    assert migrated["next"] == (NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_CONTEXT_ENRICHER_WEAVING)
+    assert migrated["nested"]["tasks"][0]["node"] == NODE_CONTEXT_ENRICHER_WEAVING
+
+
+def test_migrating_serde_roundtrips_channel_values_and_remaps_legacy_nodes() -> None:
+    """Full serde load path must migrate legacy node ids inside nested checkpoint payloads."""
+    serde = build_checkpoint_serde()
+    result = IntentTaskResult(
+        task_id="t-legacy",
+        agent_role="intent_classifier",
+        status="success",
+        confidence=0.9,
+        requires_review=False,
+        output=IntentClassifierOutput(
+            task_kind="knowledge_request",
+            requires_mcp=True,
+            candidate_capabilities=(),
+            confidence=0.9,
+            reasoning="eval",
+        ),
+    )
+    payload = {
+        "next": ("contextualizer", "context_weaver"),
+        "channel_values": {"classification": result},
+    }
+    typed, raw = serde.dumps_typed(payload)
+    restored = serde.loads_typed((typed, raw))
+    assert isinstance(restored, dict)
+    assert restored["next"] == (NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_CONTEXT_ENRICHER_WEAVING)
+    channel = restored.get("channel_values")
+    assert isinstance(channel, dict)
+    classification = channel.get("classification")
+    assert isinstance(classification, IntentTaskResult)
+    assert classification.task_id == "t-legacy"
 
 
 def test_turn_hop_timings_collects_and_resets() -> None:

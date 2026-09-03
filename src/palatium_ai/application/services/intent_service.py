@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING, Literal
 
 from palatium_ai.application.services.cost_budget import CostBudgetService
 from palatium_ai.application.services.intent_graph_runner import IntentGraphRunner
-from palatium_ai.application.services.intent_hitl_flow import _MAX_QUALITY_REVISIONS, IntentHitlFlow
+from palatium_ai.application.services.intent_hitl_flow import (
+    _MAX_QUALITY_REVISIONS,
+    IntentHitlFlow,
+    max_quality_revisions,
+)
 from palatium_ai.application.services.intent_turn_helpers import (
     assistant_turn_content as _assistant_turn_content,
     assistant_turn_payload as _assistant_turn_payload,
@@ -44,6 +48,7 @@ logger = get_logger(__name__)
 __all__ = [
     "IntentService",
     "_MAX_QUALITY_REVISIONS",
+    "max_quality_revisions",
     "_assistant_turn_content",
     "_assistant_turn_payload",
     "_snapshot_awaits_resume",

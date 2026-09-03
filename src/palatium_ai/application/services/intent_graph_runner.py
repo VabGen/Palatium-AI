@@ -17,6 +17,7 @@ from palatium_ai.application.services.intent_turn_helpers import (
 )
 from palatium_ai.application.services.memory_recall import recall_for_thread
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.logging.context import trace_id_var
 from palatium_ai.core.observability.hop_timings import turn_hop_timings
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.turn_tokens import turn_token_usage
@@ -103,8 +104,10 @@ class IntentGraphRunner:
         tenant_key: str | None = None,
         revision_feedback: str | None = None,
         exclude_trailing_user: bool = True,
+        trace_id: str | None = None,
     ) -> AgentGraphState:
         """Запускает LangGraph с dialog window + thread checkpointer config."""
+        resolved_trace_id = (trace_id or trace_id_var.get() or task_id).strip()
         dialog_window = await self.load_dialog_window(thread_id=thread_id)
         # Exclude the user turn just appended (Contextualizer sees prior only).
         if exclude_trailing_user and dialog_window.turns and dialog_window.turns[-1].role == "user":
@@ -136,11 +139,15 @@ class IntentGraphRunner:
         with turn_hop_timings() as hops, turn_token_usage() as tokens:
             graph_input: AgentGraphState = {
                 "task_id": task_id,
+                "trace_id": resolved_trace_id,
                 "user_text": text,
                 "thread_id": thread_id,
+                "user_id": (user_id or "").strip(),
+                "org_id": (org_id or "").strip(),
                 "dialog_window": prior_window,
                 "memory_recall": memory_recall,
                 "prompt_budget": prompt_budget,
+                "revisions_count": 0,
             }
             if revision_feedback and revision_feedback.strip():
                 graph_input["revision_feedback"] = revision_feedback.strip()[:4_000]
@@ -157,6 +164,7 @@ class IntentGraphRunner:
                 "agent.turn.hops",
                 thread_id=thread_id,
                 task_id=task_id,
+                trace_id=resolved_trace_id,
                 **hop_fields,
                 **token_fields,
             )

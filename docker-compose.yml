@@ -21,7 +21,9 @@ name: palatium-ai
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector required by alembic memory/knowledge migrations (060).
+    # Official tags are Debian-based (no alpine): pg16, pg16-bookworm, …
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -193,7 +195,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       MCP_SERVERS: '{"edms":"http://mcp-edms:8080","analytics":"http://mcp-analytics:8081"}'
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
-      MCP_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,::1,mcp-edms,mcp-analytics
+      MCP_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,::1,mcp-edms,mcp-analytics,mcp-platform
       LANGGRAPH_CHECKPOINT_POSTGRES: ${LANGGRAPH_CHECKPOINT_POSTGRES:-true}
       MEMORY_BACKEND: ${MEMORY_BACKEND:-postgres}
       MEMORY_EMBEDDING_RERANK: ${MEMORY_EMBEDDING_RERANK:-false}

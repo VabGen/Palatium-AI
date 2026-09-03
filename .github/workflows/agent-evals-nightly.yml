@@ -1,0 +1,106 @@
+# .github/workflows/agent-evals-nightly.yml
+
+name: agent-evals-nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Eval mode (cassette default; live_* needs judge secrets)
+        type: choice
+        options:
+          - cassette
+          - live_smoke
+          - live_full
+        default: cassette
+
+concurrency:
+  group: agent-evals-nightly
+  cancel-in-progress: true
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Resolve eval mode
+        id: mode
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=cassette" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cassette nightly evals
+        if: steps.mode.outputs.value == 'cassette'
+        run: poetry run python scripts/run_agent_evals_nightly.py
+
+      - name: Validate live judge secrets
+        if: steps.mode.outputs.value == 'live_smoke' || steps.mode.outputs.value == 'live_full'
+        shell: bash
+        run: |
+          missing=0
+          for key in PALATIUM_EVAL_JUDGE_PROVIDER PALATIUM_EVAL_AGENT_PROVIDER; do
+            if [ -z "${!key}" ]; then
+              echo "::error::Missing GitHub secret $key for live judge mode"
+              missing=1
+            fi
+          done
+          if [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::At least one of OPENAI_API_KEY or ANTHROPIC_API_KEY is required"
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+        env:
+          PALATIUM_EVAL_JUDGE_PROVIDER: ${{ secrets.PALATIUM_EVAL_JUDGE_PROVIDER }}
+          PALATIUM_EVAL_AGENT_PROVIDER: ${{ secrets.PALATIUM_EVAL_AGENT_PROVIDER }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Live judge smoke
+        if: steps.mode.outputs.value == 'live_smoke' || steps.mode.outputs.value == 'live_full'
+        env:
+          PALATIUM_EVAL_LIVE_JUDGE: "1"
+          PALATIUM_EVAL_JUDGE_PROVIDER: ${{ secrets.PALATIUM_EVAL_JUDGE_PROVIDER }}
+          PALATIUM_EVAL_JUDGE_MODEL: ${{ secrets.PALATIUM_EVAL_JUDGE_MODEL }}
+          PALATIUM_EVAL_AGENT_PROVIDER: ${{ secrets.PALATIUM_EVAL_AGENT_PROVIDER }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: poetry run python scripts/run_agent_evals_judge_smoke.py
+
+      - name: Live full nightly evals
+        if: steps.mode.outputs.value == 'live_full'
+        env:
+          PALATIUM_EVAL_LIVE_JUDGE: "1"
+          PALATIUM_EVAL_JUDGE_PROVIDER: ${{ secrets.PALATIUM_EVAL_JUDGE_PROVIDER }}
+          PALATIUM_EVAL_JUDGE_MODEL: ${{ secrets.PALATIUM_EVAL_JUDGE_MODEL }}
+          PALATIUM_EVAL_AGENT_PROVIDER: ${{ secrets.PALATIUM_EVAL_AGENT_PROVIDER }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: poetry run python scripts/run_agent_evals_nightly.py --live-judge
+
+      - name: Upload nightly eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-evals-nightly-${{ steps.mode.outputs.value }}
+          path: artifacts/agent_evals_nightly.json
+          if-no-files-found: ignore

@@ -8,17 +8,23 @@ import json
 
 import pytest
 
-from palatium_ai.application.agents.context_weaver_agent import ContextWeaverAgent
-from palatium_ai.application.agents.contextualizer_agent import ContextualizerAgent
-from palatium_ai.application.agents.critic_agent import CriticAgent
-from palatium_ai.application.agents.formatter_agent import FormatterAgent
-from palatium_ai.application.agents.intent_classifier_agent import IntentClassifierAgent
-from palatium_ai.application.agents.researcher_agent import ResearcherAgent
-from palatium_ai.application.agents.supervisor_agent import SupervisorAgent
+from palatium_ai.application.agents.context_enricher import CONTEXTUALIZER_CONFIG, ContextualizerAgent
+from palatium_ai.application.agents.harness import Harness
+from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.intent_service import IntentService
 from palatium_ai.domain.content import HeadingBlock
-from tests.conftest import FakeLLMPort, FakeMCPRegistry, SequentialFakeLLMPort
+from tests.conftest import (
+    FakeLLMPort,
+    FakeMCPRegistry,
+    SequentialFakeLLMPort,
+    make_critic_agent,
+    make_formatter_agent,
+    make_graph_checkpointer,
+    make_researcher_agent,
+    make_supervisor_agent,
+    make_weaving_agent,
+)
 
 _HITL_HMAC = "unit-test-hitl-hmac-key-32b"  # noqa: S105
 
@@ -45,11 +51,25 @@ def _intent_service(graph: object) -> IntentService:
 
 
 def _graph(**kwargs: object) -> object:
-    """build_agent_graph with a no-op contextualizer LLM (empty history → pass-through)."""
-    contextualizer = kwargs.pop("contextualizer_agent", None)
-    if contextualizer is None:
-        contextualizer = ContextualizerAgent(FakeLLMPort("{}"))
-    return build_agent_graph(contextualizer_agent=contextualizer, **kwargs)  # type: ignore[arg-type]
+    """build_agent_graph with a no-op continuation LLM (empty history → pass-through)."""
+    from tests.conftest import make_analyst_agent, make_coder_agent
+
+    continuation = kwargs.pop("continuation_agent", None)
+    harness = kwargs.get("harness")
+    if continuation is None:
+        if harness is None:
+            harness = Harness(llm=FakeLLMPort("{}"))
+            kwargs["harness"] = harness
+        continuation = ContextualizerAgent(harness, CONTEXTUALIZER_CONFIG)  # type: ignore[arg-type]
+    if "coder_agent" not in kwargs:
+        kwargs["coder_agent"] = make_coder_agent(harness=harness)  # type: ignore[arg-type]
+    if "analyst_agent" not in kwargs:
+        kwargs["analyst_agent"] = make_analyst_agent(harness=harness)  # type: ignore[arg-type]
+    return build_agent_graph(
+        continuation_agent=continuation,
+        checkpointer=make_graph_checkpointer(),
+        **kwargs,
+    )  # type: ignore[arg-type]
 
 
 def _formatter_document_json(title: str, *, locale: str = "en-US") -> str:
@@ -73,6 +93,11 @@ def _formatter_document_json(title: str, *, locale: str = "en-US") -> str:
     )
 
 
+def _intent_stack(llm_intent: FakeLLMPort) -> tuple[Harness, IntentClassifierAgent]:
+    harness = Harness(llm=llm_intent)
+    return harness, IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG)
+
+
 @pytest.mark.asyncio
 async def test_graph_classifies_intent_end_to_end() -> None:
     llm_intent = FakeLLMPort(
@@ -88,15 +113,16 @@ async def test_graph_classifies_intent_end_to_end() -> None:
     )
     llm_formatter = FakeLLMPort(_formatter_document_json("Final formatted answer"))
 
-    agent = IntentClassifierAgent(llm_intent)
-    researcher = ResearcherAgent(llm_researcher)
-    critic = CriticAgent(llm_critic)
-    formatter = FormatterAgent(llm_formatter)
-    supervisor = SupervisorAgent()
+    harness, agent = _intent_stack(llm_intent)
+    researcher = make_researcher_agent(llm_researcher, harness=harness)
+    critic = make_critic_agent(llm_critic)
+    formatter = make_formatter_agent(llm_formatter)
+    supervisor = make_supervisor_agent(harness)
     graph = _graph(
+        harness=harness,
         intent_agent=agent,
         supervisor_agent=supervisor,
-        context_weaver_agent=ContextWeaverAgent(),
+        weaving_agent=make_weaving_agent(harness=harness),
         researcher_agent=researcher,
         critic_agent=critic,
         formatter_agent=formatter,
@@ -130,16 +156,17 @@ async def test_graph_records_node_metrics() -> None:
     )
     llm_formatter = FakeLLMPort(_formatter_document_json("Formatted answer"))
 
-    agent = IntentClassifierAgent(llm_intent)
-    researcher = ResearcherAgent(llm_researcher)
-    critic = CriticAgent(llm_critic)
-    formatter = FormatterAgent(llm_formatter)
-    supervisor = SupervisorAgent()
+    harness, agent = _intent_stack(llm_intent)
+    researcher = make_researcher_agent(llm_researcher, harness=harness)
+    critic = make_critic_agent(llm_critic)
+    formatter = make_formatter_agent(llm_formatter)
+    supervisor = make_supervisor_agent(harness)
     service = _intent_service(
         _graph(
+            harness=harness,
             intent_agent=agent,
             supervisor_agent=supervisor,
-            context_weaver_agent=ContextWeaverAgent(),
+            weaving_agent=make_weaving_agent(harness=harness),
             researcher_agent=researcher,
             critic_agent=critic,
             formatter_agent=formatter,
@@ -168,14 +195,16 @@ async def test_graph_skips_researcher_for_non_research_route() -> None:
     )
     llm_formatter = FakeLLMPort(_formatter_document_json("Formatted-only answer"))
 
+    harness, intent_agent = _intent_stack(llm_intent)
     service = _intent_service(
         _graph(
-            intent_agent=IntentClassifierAgent(llm_intent),
-            supervisor_agent=SupervisorAgent(),
-            context_weaver_agent=ContextWeaverAgent(),
-            researcher_agent=ResearcherAgent(llm_researcher),
-            critic_agent=CriticAgent(llm_critic),
-            formatter_agent=FormatterAgent(llm_formatter),
+            harness=harness,
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(llm_researcher, harness=harness),
+            critic_agent=make_critic_agent(llm_critic),
+            formatter_agent=make_formatter_agent(llm_formatter),
         )
     )
 
@@ -200,14 +229,16 @@ async def test_graph_social_skips_researcher_and_critic_llm() -> None:
     )
     llm_formatter = FakeLLMPort(_formatter_document_json("Привет!", locale="ru-RU"))
 
+    harness, intent_agent = _intent_stack(llm_intent)
     service = _intent_service(
         _graph(
-            intent_agent=IntentClassifierAgent(llm_intent),
-            supervisor_agent=SupervisorAgent(),
-            context_weaver_agent=ContextWeaverAgent(),
-            researcher_agent=ResearcherAgent(llm_researcher),
-            critic_agent=CriticAgent(llm_critic),
-            formatter_agent=FormatterAgent(llm_formatter),
+            harness=harness,
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(llm_researcher, harness=harness),
+            critic_agent=make_critic_agent(llm_critic),
+            formatter_agent=make_formatter_agent(llm_formatter),
         )
     )
 
@@ -222,26 +253,29 @@ async def test_graph_social_skips_researcher_and_critic_llm() -> None:
 
 @pytest.mark.asyncio
 async def test_process_returns_formatter_result() -> None:
+    harness, intent_agent = _intent_stack(
+        FakeLLMPort(
+            '{"task_kind": "knowledge_request", "requires_mcp": false, "candidate_capabilities": ["summarize"], "confidence": 0.94, "reasoning": "Answer request"}',
+        )
+    )
     service = _intent_service(
         _graph(
-            intent_agent=IntentClassifierAgent(
-                FakeLLMPort(
-                    '{"task_kind": "knowledge_request", "requires_mcp": false, "candidate_capabilities": ["summarize"], "confidence": 0.94, "reasoning": "Answer request"}',
-                )
-            ),
-            supervisor_agent=SupervisorAgent(),
-            context_weaver_agent=ContextWeaverAgent(),
-            researcher_agent=ResearcherAgent(
+            harness=harness,
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(
                 FakeLLMPort(
                     '{"summary": "Draft answer", "confidence": 0.93, "sources_used": ["llm_internal_reasoning"]}',
-                )
+                ),
+                harness=harness,
             ),
-            critic_agent=CriticAgent(
+            critic_agent=make_critic_agent(
                 FakeLLMPort(
                     '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "Ready"}',
                 )
             ),
-            formatter_agent=FormatterAgent(
+            formatter_agent=make_formatter_agent(
                 FakeLLMPort(_formatter_document_json("Final user answer")),
             ),
         )
@@ -258,27 +292,30 @@ async def test_process_returns_formatter_result() -> None:
 @pytest.mark.asyncio
 async def test_researcher_uses_mcp_registry_when_required() -> None:
     mcp_registry = FakeMCPRegistry()
+    harness, intent_agent = _intent_stack(
+        FakeLLMPort(
+            '{"task_kind": "tool_execution", "requires_mcp": true, "candidate_capabilities": ["search"], "confidence": 0.97, "reasoning": "Need MCP search"}',
+        )
+    )
     service = _intent_service(
         _graph(
-            intent_agent=IntentClassifierAgent(
-                FakeLLMPort(
-                    '{"task_kind": "tool_execution", "requires_mcp": true, "candidate_capabilities": ["search"], "confidence": 0.97, "reasoning": "Need MCP search"}',
-                )
-            ),
-            supervisor_agent=SupervisorAgent(),
-            context_weaver_agent=ContextWeaverAgent(mcp_registry=mcp_registry),
-            researcher_agent=ResearcherAgent(
+            harness=harness,
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(mcp_registry, harness=harness),
+            researcher_agent=make_researcher_agent(
                 SequentialFakeLLMPort(
                     ['{"query": "Find the contract in EDMS"}'],
                 ),
-                mcp_registry=mcp_registry,
+                mcp_registry,
+                harness=harness,
             ),
-            critic_agent=CriticAgent(
+            critic_agent=make_critic_agent(
                 FakeLLMPort(
                     '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "Ready"}',
                 )
             ),
-            formatter_agent=FormatterAgent(
+            formatter_agent=make_formatter_agent(
                 FakeLLMPort(_formatter_document_json("Formatted MCP answer")),
             ),
         )

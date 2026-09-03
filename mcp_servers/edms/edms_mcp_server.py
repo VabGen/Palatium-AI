@@ -8,6 +8,12 @@ import json
 
 from typing import Annotated
 
+from contract import (
+    _MAX_DOCUMENT_ID_CHARS,
+    _MAX_QUERY_CHARS,
+    ARCHIVE_DOCUMENT_INPUT_SCHEMA,
+    SEARCH_DOCUMENTS_INPUT_SCHEMA,
+)
 from fastapi import Depends, FastAPI
 from mcp_stub_auth import require_mcp_bearer
 from mcp_stub_tools import tools_list_payload
@@ -15,7 +21,6 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="edms-mcp-server")
 
-_MAX_QUERY_CHARS = 200
 _MAX_HITS = 5
 
 
@@ -70,20 +75,7 @@ _SEARCH_DOCUMENTS_TOOL: dict[str, object] = {
     "annotations": {"readOnlyHint": True, "destructiveHint": False},
     "side_effect": "read",
     "riskTier": "low",
-    "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": _MAX_QUERY_CHARS,
-                "description": f"Non-empty search string (max {_MAX_QUERY_CHARS} chars).",
-            },
-        },
-        "required": ["query"],
-        "additionalProperties": False,
-    },
+    "inputSchema": SEARCH_DOCUMENTS_INPUT_SCHEMA,
 }
 
 _ARCHIVE_DOCUMENT_TOOL: dict[str, object] = {
@@ -97,20 +89,7 @@ _ARCHIVE_DOCUMENT_TOOL: dict[str, object] = {
     "annotations": {"readOnlyHint": False, "destructiveHint": True},
     "side_effect": "write",
     "riskTier": "high",
-    "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-            "document_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128,
-                "description": "Exact EDMS document_id to archive (no wildcards).",
-            },
-        },
-        "required": ["document_id"],
-        "additionalProperties": False,
-    },
+    "inputSchema": ARCHIVE_DOCUMENT_INPUT_SCHEMA,
 }
 
 _TOOLS: tuple[dict[str, object], ...] = (_SEARCH_DOCUMENTS_TOOL, _ARCHIVE_DOCUMENT_TOOL)
@@ -177,7 +156,7 @@ async def handle_jsonrpc(
                         message="Invalid params: document_id is required",
                     ),
                 )
-            doc_id = document_id.strip()[:128]
+            doc_id = document_id.strip()[:_MAX_DOCUMENT_ID_CHARS]
             if "*" in doc_id or "?" in doc_id:
                 return JsonRpcResponse(
                     id=request.id,

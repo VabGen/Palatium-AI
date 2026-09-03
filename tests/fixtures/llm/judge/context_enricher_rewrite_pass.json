@@ -1,0 +1,3 @@
+{
+  "response": "{\"score\": 0.91, \"passed\": true, \"details\": \"Rewritten query preserves format intent and prior context.\"}"
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "task_id": "social-formatter",
+    "user_text": "привет",
+    "task_kind": "social_conversation",
+    "requires_mcp": false,
+    "classification_confidence": 0.95,
+    "cassette": "supervisor/noop.json",
+    "expect": { "route": "formatter", "target_agent": "formatter", "status": "success" }
+  },
+  {
+    "task_id": "clarify-route",
+    "user_text": "сделай это",
+    "task_kind": "clarification_needed",
+    "requires_mcp": false,
+    "classification_confidence": 0.88,
+    "cassette": "supervisor/noop.json",
+    "expect": { "route": "clarification", "target_agent": "formatter", "status": "success" }
+  }
+]

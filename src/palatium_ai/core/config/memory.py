@@ -77,6 +77,10 @@ class MemoryConfig(BaseConfig):
         default=None,
         validation_alias="GRAPHITI_NEO4J_PASSWORD",
     )
+    graph_query_backend: Literal["in_memory", "neo4j"] = Field(
+        default="in_memory",
+        validation_alias="GRAPH_QUERY_BACKEND",
+    )
 
     @field_validator("mem0_api_key", "graphiti_neo4j_password", mode="before")
     @classmethod

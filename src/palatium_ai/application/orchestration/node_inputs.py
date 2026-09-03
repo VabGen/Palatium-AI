@@ -7,6 +7,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from palatium_ai.application.orchestration import selectors
+from palatium_ai.domain.agents.analyst import AnalystInput
+from palatium_ai.domain.agents.coder import CoderInput
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.critic import CriticInput
 from palatium_ai.domain.agents.formatter import FormatterInput
@@ -57,6 +59,38 @@ def build_researcher_input(
         ),
         prior_context=selectors.resolved_prior_assistant_content(state),
         mcp_tool_output_max_chars=selectors.prompt_budget(state).mcp_tool_output_max_chars,
+        revision_feedback=selectors.resolved_revision_feedback(state),
+    )
+
+
+def build_coder_input(
+    snapshot: OrchestrationSnapshot,
+    state: AgentGraphState,
+) -> CoderInput:
+    """Собирает вход для Coder."""
+    return CoderInput(
+        task_id=snapshot.task_id,
+        context_packet=snapshot.context_packet(
+            state,
+            fallback_strategy="code_sandbox",
+            fallback_rationale="Coder requires a context packet before execution.",
+        ),
+        revision_feedback=selectors.resolved_revision_feedback(state),
+    )
+
+
+def build_analyst_input(
+    snapshot: OrchestrationSnapshot,
+    state: AgentGraphState,
+) -> AnalystInput:
+    """Собирает вход для Analyst."""
+    return AnalystInput(
+        task_id=snapshot.task_id,
+        context_packet=snapshot.context_packet(
+            state,
+            fallback_strategy="data_analysis",
+            fallback_rationale="Analyst requires a context packet before execution.",
+        ),
         revision_feedback=selectors.resolved_revision_feedback(state),
     )
 

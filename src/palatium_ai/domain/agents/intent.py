@@ -2,27 +2,18 @@
 
 """Контракты агента IntentClassifier."""
 
-from typing import Literal
-
 from pydantic import BaseModel, Field
+
+from palatium_ai.domain.policies.types import ContinuationKind, TaskKind, UnderspecificationKind
 
 from .contracts import TaskResult
 
-TaskKind = Literal[
-    "capability_discovery",
-    "knowledge_request",
-    "multi_step_workflow",
-    "tool_execution",
-    "response_formatting",
-    "social_conversation",
-    "clarification_needed",
-]
-
-# Form of incompleteness — not a domain/scenario label (no phrase lists).
-UnderspecificationKind = Literal[
-    "none",
-    "open_text",  # need free-form clarify (which document id / paste payload)
-    "discrete_choice",  # missing closed/suggested slot → HITL cards before work
+__all__ = [
+    "IntentClassifierInput",
+    "IntentClassifierOutput",
+    "IntentTaskResult",
+    "TaskKind",
+    "UnderspecificationKind",
 ]
 
 
@@ -33,7 +24,7 @@ class IntentClassifierInput(BaseModel):
 
     task_id: str
     text: str = Field(min_length=1, max_length=32_000)
-    continuation_kind: Literal["format", "answer", "new_topic", "clarify"] | None = None
+    continuation_kind: ContinuationKind | None = None
     has_prior_dialog: bool = False
 
 

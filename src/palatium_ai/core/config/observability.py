@@ -36,3 +36,22 @@ class ObservabilityConfig(BaseConfig):
         validation_alias="DAILY_COST_BUDGET_USD",
         description="Hard per-tenant daily LLM USD cap (0 disables).",
     )
+    max_quality_revisions: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        validation_alias="MAX_QUALITY_REVISIONS",
+        description="HITL quality revise budget per thread (065 MAX_REVISIONS).",
+    )
+    circuit_failures_to_open: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        validation_alias="CIRCUIT_FAILURES_TO_OPEN",
+    )
+    circuit_open_seconds: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=3600.0,
+        validation_alias="CIRCUIT_OPEN_SECONDS",
+    )

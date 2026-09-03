@@ -22,7 +22,7 @@ export type CalloutTone = 'info' | 'success' | 'warning' | 'danger';
 export type ListStyle = 'ordered' | 'unordered';
 export type ChartKind = 'bar' | 'line' | 'pie';
 export type StepStatus = 'pending' | 'active' | 'done' | 'blocked';
-export type ActionKind = 'approve' | 'reject' | 'confirm' | 'dismiss' | 'custom';
+export type ActionKind = 'approve' | 'reject' | 'confirm' | 'dismiss' | 'custom' | 'format';
 export type ActionStyle = 'primary' | 'secondary' | 'danger';
 /** Opaque id resolved by UI registry — not a platform product enum. */
 export type WidgetKind = string;
@@ -206,6 +206,29 @@ export type HITLCardView = {
   owner_user_id?: string | null;
   org_id?: string | null;
   content_sha256?: string | null;
+  token_nonce?: string | null;
+  escalate_to_roles?: string[] | null;
+};
+
+export type HitlStepUpChallenge = {
+  required: boolean;
+  method: string;
+  required_acr?: string | null;
+  card_claim?: string | null;
+  challenge?: string | null;
+  authorize_url?: string | null;
+  assertion?: string | null;
+};
+
+export type DialogTurnResponse = {
+  id?: string | null;
+  thread_id: string;
+  role: string;
+  content: string;
+  payload?: Record<string, unknown> | null;
+  task_id?: string | null;
+  seq: number;
+  created_at?: string | null;
 };
 
 export type HITLResolveResult = {

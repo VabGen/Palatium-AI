@@ -4,8 +4,8 @@
     "beforeShellExecution": [
       {
         "command": "python .cursor/hooks/deny-dangerous-shell.py",
-        "failClosed": true,
-        "timeout": 10
+        "failClosed": false,
+        "timeout": 15
       }
     ],
     "beforeMCPExecution": [

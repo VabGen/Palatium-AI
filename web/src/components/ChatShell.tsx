@@ -10,29 +10,41 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from 'lucide-react';
-import { downloadDocumentPdf, fetchDialogTurns, processIntent, sendFeedback } from '../api/client';
-import type { ContentDocument } from '../types/contentDocument';
+import {
+  downloadDocumentPdf,
+  ensureAccessToken,
+  fetchDialogTurns,
+  processIntent,
+  sendFeedback,
+} from '../api/client';
+import type { ContentDocument, FormatterTaskResult, HITLCardView } from '../types/contentDocument';
+import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
+import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
+import { connectSessionSocket, startSessionSocketPing } from '../lib/sessionSocket';
 import { BlockRenderer } from './BlockRenderer';
+import { HitlCards } from './HitlCards';
+import { MemoryActions } from './MemoryActions';
 
 const THREAD_STORAGE_KEY = 'palatium.thread_id';
 const USER_STORAGE_KEY = 'palatium.user_id';
 const ORG_STORAGE_KEY = 'palatium.org_id';
 
-type ChatMessage =
-  | { id: string; role: 'user'; text: string }
-  | {
-      id: string;
-      role: 'assistant';
-      document: ContentDocument | null;
-      _requiresReview?: boolean;
-      _pendingReview?: boolean;
-      _feedbackLike?: boolean;
-      _feedbackDislike?: boolean;
-      _feedbackSending?: boolean;
-      _regenerating?: boolean;
-      error?: string;
-      status?: string;
-    };
+type AssistantChatMessage = {
+  id: string;
+  role: 'assistant';
+  document: ContentDocument | null;
+  hitlCards?: HITLCardView[];
+  _requiresReview?: boolean;
+  _pendingReview?: boolean;
+  _feedbackLike?: boolean;
+  _feedbackDislike?: boolean;
+  _feedbackSending?: boolean;
+  _regenerating?: boolean;
+  error?: string;
+  status?: string;
+};
+
+type ChatMessage = { id: string; role: 'user'; text: string } | AssistantChatMessage;
 
 function newThreadId(): string {
   return `thread-${crypto.randomUUID()}`;
@@ -80,6 +92,15 @@ function isContentDocument(value: unknown): value is ContentDocument {
   );
 }
 
+function isHitlCardView(value: unknown): value is HITLCardView {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as HITLCardView).card_id === 'string' &&
+    Array.isArray((value as HITLCardView).options)
+  );
+}
+
 function textAsDocument(text: string): ContentDocument {
   return {
     schema_version: 1,
@@ -99,18 +120,21 @@ function textAsDocument(text: string): ContentDocument {
 function parseAssistantPayload(
   payload: unknown,
   fallbackText: string
-): { document: ContentDocument; requiresReview: boolean } {
+): { document: ContentDocument; requiresReview: boolean; hitlCards: HITLCardView[] } {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>;
     const requiresReview = Boolean(record.requires_review) || false;
+    const rawCards = Array.isArray(record.hitl_cards)
+      ? record.hitl_cards.filter(isHitlCardView)
+      : [];
     if (isContentDocument(record.document)) {
-      return { document: record.document, requiresReview };
+      return { document: record.document, requiresReview, hitlCards: rawCards };
     }
     if (isContentDocument(payload)) {
-      return { document: payload, requiresReview };
+      return { document: payload, requiresReview, hitlCards: rawCards };
     }
   }
-  return { document: textAsDocument(fallbackText), requiresReview: false };
+  return { document: textAsDocument(fallbackText), requiresReview: false, hitlCards: [] };
 }
 
 function getDocumentPlainText(doc: ContentDocument): string {
@@ -165,6 +189,14 @@ function getDocumentPlainText(doc: ContentDocument): string {
   return parts.join('\n').trim() || '(empty)';
 }
 
+function buildAssistantMessage(result: FormatterTaskResult, id?: string): AssistantChatMessage {
+  return {
+    id: id ?? crypto.randomUUID(),
+    role: 'assistant',
+    ...fieldsFromFormatterResult(result),
+  };
+}
+
 export function ChatShell() {
   const [threadId] = useState(resolveThreadId);
   const [userId] = useState(resolveUserId);
@@ -174,6 +206,7 @@ export function ChatShell() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [devMode, setDevMode] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const messageEndRef = useRef<HTMLDivElement>(null);
 
   const canSend = useMemo(() => input.trim().length > 0 && !busy, [input, busy]);
@@ -191,6 +224,33 @@ export function ChatShell() {
 
   useEffect(() => {
     let cancelled = false;
+    let socket: WebSocket | null = null;
+    let stopPing: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const token = await ensureAccessToken(userId, orgId);
+        if (cancelled) return;
+        socket = connectSessionSocket(threadId, token, {
+          onSubscribed: () => setWsConnected(true),
+          onError: () => setWsConnected(false),
+        });
+        stopPing = startSessionSocketPing(socket);
+      } catch {
+        setWsConnected(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stopPing?.();
+      socket?.close();
+      setWsConnected(false);
+    };
+  }, [threadId, userId, orgId]);
+
+  useEffect(() => {
+    let cancelled = false;
     void (async () => {
       try {
         const turns = await fetchDialogTurns(threadId, 50, userId, orgId);
@@ -198,31 +258,40 @@ export function ChatShell() {
           setHydrated(true);
           return;
         }
-        const restored: ChatMessage[] = turns.map(turn => {
+        const restored: ChatMessage[] = [];
+        for (const turn of turns) {
           if (turn.role === 'user') {
-            return {
+            restored.push({
               id: turn.id ?? crypto.randomUUID(),
-              role: 'user' as const,
+              role: 'user',
               text: turn.content,
-            };
+            });
+            continue;
           }
-          const { document, requiresReview } = parseAssistantPayload(turn.payload, turn.content);
-          const feedback = (turn.payload as any)?.feedback || {};
-          return {
+          const { document, requiresReview, hitlCards } = parseAssistantPayload(
+            turn.payload,
+            turn.content
+          );
+          const hydratedCards = await hydratePendingHitlCards(hitlCards, userId, orgId);
+          const feedback = (turn.payload as { feedback?: { like?: boolean; dislike?: boolean } })
+            ?.feedback;
+          const hasHitl = hydratedCards.some(card => card.status === 'pending');
+          restored.push({
             id: turn.id ?? crypto.randomUUID(),
-            role: 'assistant' as const,
+            role: 'assistant',
             document,
+            hitlCards: hydratedCards,
             _requiresReview: requiresReview,
-            _pendingReview: false,
-            _feedbackLike: feedback.like || false,
-            _feedbackDislike: feedback.dislike || false,
+            _pendingReview: requiresReview && !document && !hasHitl,
+            _feedbackLike: feedback?.like || false,
+            _feedbackDislike: feedback?.dislike || false,
             status: 'success',
             error: undefined,
-          };
-        });
-        setMessages(restored);
-      } catch {
-        /* empty */
+          });
+        }
+        if (!cancelled) setMessages(restored);
+      } catch (err) {
+        console.warn('Session hydrate failed:', err);
       } finally {
         if (!cancelled) setHydrated(true);
       }
@@ -236,6 +305,60 @@ export function ChatShell() {
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, busy]);
 
+  const handleHitlResolved = useCallback(
+    (messageId: string, card: HITLCardView, resumed?: FormatterTaskResult | null) => {
+      setMessages(prev =>
+        prev.map(msg => {
+          if (msg.id !== messageId || msg.role !== 'assistant') return msg;
+          const hitlCards = (msg.hitlCards ?? [])
+            .map(existing => (existing.card_id === card.card_id ? card : existing))
+            .filter(existing => existing.status === 'pending');
+          if (resumed?.output) {
+            return {
+              ...msg,
+              document: resumed.output,
+              hitlCards,
+              _pendingReview: false,
+              _requiresReview: resumed.requires_review,
+              status: resumed.status,
+              error: resumed.error ?? undefined,
+            };
+          }
+          return {
+            ...msg,
+            hitlCards,
+            _pendingReview: hitlCards.length > 0 ? false : msg._pendingReview,
+          };
+        })
+      );
+      if (resumed?.output) {
+        toast.success('Продолжаем после вашего выбора');
+      }
+    },
+    []
+  );
+
+  const handleMemoryCardCreated = useCallback(
+    (card: HITLCardView, label: string) => {
+      void (async () => {
+        const hydrated = await hydratePendingHitlCards([card], userId, orgId);
+        setMessages(prev => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            document: textAsDocument(label),
+            hitlCards: hydrated,
+            _requiresReview: true,
+            _pendingReview: false,
+            status: 'partial',
+          },
+        ]);
+      })();
+    },
+    [userId, orgId]
+  );
+
   async function send() {
     const text = input.trim();
     if (!text || busy) return;
@@ -246,20 +369,13 @@ export function ChatShell() {
 
     try {
       const result = await processIntent(text, threadId, userId, orgId);
-      const requiresReview = result.requires_review || false;
-      const pendingReview = requiresReview && result.output === null;
-      setMessages(prev => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          document: result.output,
-          _requiresReview: requiresReview,
-          _pendingReview: pendingReview,
-          error: result.error ?? undefined,
-          status: result.status,
-        },
-      ]);
+      const hydratedCards = await hydratePendingHitlCards(
+        fieldsFromFormatterResult(result).hitlCards,
+        userId,
+        orgId
+      );
+      const assistant = buildAssistantMessage({ ...result, hitl_cards: hydratedCards });
+      setMessages(prev => [...prev, assistant]);
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -267,6 +383,7 @@ export function ChatShell() {
           id: crypto.randomUUID(),
           role: 'assistant',
           document: null,
+          hitlCards: [],
           _requiresReview: false,
           _pendingReview: false,
           error: err instanceof Error ? err.message : 'Request failed',
@@ -287,7 +404,7 @@ export function ChatShell() {
         .slice(0, idx)
         .reverse()
         .find(m => m.role === 'user');
-      if (!userMsg) return;
+      if (!userMsg || userMsg.role !== 'user') return;
 
       setMessages(prev =>
         prev.map(msg =>
@@ -297,21 +414,17 @@ export function ChatShell() {
       setBusy(true);
       try {
         const result = await processIntent(userMsg.text, threadId, userId, orgId);
+        const hydratedCards = await hydratePendingHitlCards(
+          fieldsFromFormatterResult(result).hitlCards,
+          userId,
+          orgId
+        );
+        const assistant = buildAssistantMessage(
+          { ...result, hitl_cards: hydratedCards },
+          messageId
+        );
         setMessages(prev =>
-          prev.map(msg =>
-            msg.id === messageId && msg.role === 'assistant'
-              ? {
-                  ...msg,
-                  document: result.output,
-                  hitlCards: (result.hitl_cards ?? []).filter(c => c.status === 'pending'),
-                  error: result.error ?? undefined,
-                  status: result.status,
-                  _requiresReview: result.requires_review || false,
-                  _pendingReview: result.requires_review && result.output === null,
-                  _regenerating: false,
-                }
-              : msg
-          )
+          prev.map(msg => (msg.id === messageId && msg.role === 'assistant' ? assistant : msg))
         );
         toast.success('Ответ обновлён');
       } catch (err) {
@@ -403,6 +516,7 @@ export function ChatShell() {
             <h1>Palatium</h1>
             <p>Structured agent replies</p>
             {devMode && <span className="dev-badge">🔧 DEV</span>}
+            {wsConnected && <span className="dev-badge">WS</span>}
           </div>
         </div>
         <div className="header-actions">
@@ -444,11 +558,27 @@ export function ChatShell() {
               </div>
             );
           }
+
+          const pendingHitl = (message.hitlCards ?? []).filter(card => card.status === 'pending');
+          const showHitl = pendingHitl.length > 0;
+          const showDevGap =
+            devMode &&
+            !showHitl &&
+            looksLikeExclusiveMenu(message.document) &&
+            message._requiresReview;
+
           return (
             <div key={message.id} className="msg assistant fade-in">
               <div className="avatar">P</div>
               <div className="bubble">
-                {message._pendingReview ? (
+                {showHitl ? (
+                  <HitlCards
+                    cards={pendingHitl}
+                    userId={userId}
+                    orgId={orgId}
+                    onResolved={(card, resumed) => handleHitlResolved(message.id, card, resumed)}
+                  />
+                ) : message._pendingReview ? (
                   <div className="msg pending-review">
                     <LoaderCircle className="spin" size={18} />
                     <span>Ответ проверяется модератором…</span>
@@ -456,6 +586,11 @@ export function ChatShell() {
                 ) : message.document ? (
                   <>
                     <BlockRenderer document={message.document} />
+                    {showDevGap && (
+                      <p className="hitl-dev-gap">
+                        DEV: document looks like an exclusive menu but no HITL cards were minted.
+                      </p>
+                    )}
                     {message.error && <p className="msg-error">{message.error}</p>}
                     <div className="msg-actions">
                       <button
@@ -512,7 +647,7 @@ export function ChatShell() {
                           <RotateCw size={16} />
                         )}
                       </button>
-                      {devMode && (
+                      {devMode && message.document && (
                         <span className="dev-meta">
                           Confidence: {message.document.meta.confidence} | Requires review:{' '}
                           {String(message._requiresReview)}
@@ -523,6 +658,7 @@ export function ChatShell() {
                 ) : (
                   <p className="msg-error">{message.error ?? 'Empty response'}</p>
                 )}
+                {showHitl && message.document && <BlockRenderer document={message.document} />}
               </div>
             </div>
           );
@@ -541,34 +677,43 @@ export function ChatShell() {
         <div ref={messageEndRef} />
       </main>
 
-      <form
-        className="composer"
-        onSubmit={e => {
-          e.preventDefault();
-          void send();
-        }}
-      >
-        <textarea
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder="Message Palatium…"
-          rows={2}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
+      <div className="composer-stack">
+        <MemoryActions
+          threadId={threadId}
+          userId={userId}
+          orgId={orgId}
+          disabled={busy}
+          onCardCreated={handleMemoryCardCreated}
         />
-        <button
-          type="submit"
-          disabled={!canSend}
-          className={`send-btn ${busy ? 'sending' : ''}`}
-          aria-label="Send message"
+        <form
+          className="composer"
+          onSubmit={e => {
+            e.preventDefault();
+            void send();
+          }}
         >
-          {busy ? <LoaderCircle className="spin" size={18} /> : <SendHorizontal size={18} />}
-        </button>
-      </form>
+          <textarea
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="Message Palatium…"
+            rows={2}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <button
+            type="submit"
+            disabled={!canSend}
+            className={`send-btn ${busy ? 'sending' : ''}`}
+            aria-label="Send message"
+          >
+            {busy ? <LoaderCircle className="spin" size={18} /> : <SendHorizontal size={18} />}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

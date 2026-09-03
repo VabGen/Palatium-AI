@@ -16,6 +16,10 @@ from palatium_ai.application.tools.mcp import MCPToolCallParams
 from palatium_ai.core.exceptions import ToolNotAllowedError
 from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.agents.contracts import AgentContext
+from palatium_ai.domain.mcp.external_schemas import (
+    EDMS_ARCHIVE_DOCUMENT_SCHEMA,
+    EDMS_SEARCH_DOCUMENTS_SCHEMA,
+)
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
 from palatium_ai.domain.mcp.tool_policy import (
     binding_hitl_metadata,
@@ -123,19 +127,7 @@ def test_side_effect_fail_closed_and_read_annotation() -> None:
     matching = MCPToolDescriptor(
         name="search_documents",
         description="Search EDMS documents by query string.",
-        inputSchema={
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Search string for EDMS documents.",
-                },
-            },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
+        inputSchema=EDMS_SEARCH_DOCUMENTS_SCHEMA,
         side_effect="write",
         riskTier="high",
     )
@@ -144,19 +136,7 @@ def test_side_effect_fail_closed_and_read_annotation() -> None:
     archive = MCPToolDescriptor(
         name="archive_document",
         description="Archive an EDMS document by id (write side-effect; requires HITL).",
-        inputSchema={
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-                "document_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "EDMS document identifier to archive.",
-                },
-            },
-            "required": ["document_id"],
-            "additionalProperties": False,
-        },
+        inputSchema=EDMS_ARCHIVE_DOCUMENT_SCHEMA,
         side_effect="read",
         riskTier="low",
     )
@@ -166,6 +146,7 @@ def test_side_effect_fail_closed_and_read_annotation() -> None:
     archive_pin = resolve_platform_pin(archive, server_name="edms")
     assert archive_pin is not None
     assert archive_pin.requires_hitl is True
+    assert archive_pin.irreversible is True
     assert requires_interrupt_before_call("write", pin=archive_pin) is True
 
     search_pin = resolve_platform_pin(matching, server_name="edms")

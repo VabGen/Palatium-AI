@@ -26,3 +26,7 @@ class ContextPacket(BaseModel):
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
     execution_plan: ToolExecutionPlan
     context_summary: str = Field(min_length=1)
+    local_retrieval_empty: bool = Field(
+        default=False,
+        description="True when local knowledge/memory search returned no hits; enables web_fallback.",
+    )

@@ -66,6 +66,10 @@ class LLMClientFactory:
         primary = agent_config.llm_provider or tier.provider or self._settings.llm.default_provider
         model = agent_config.llm_model or tier.model
         chain = self._settings.llm.build_provider_chain(primary)
+        env = self._settings.app.environment
+        if env in {"staging", "production"} and len(chain) < 2:
+            msg = "LLM fallback chain must include >=2 providers in staging/production"
+            raise RuntimeError(msg)
         if len(chain) < 2:
             logger.debug(
                 "llm.fallback.chain_short",
@@ -95,6 +99,10 @@ class LLMClientFactory:
 
         if not adapters:
             raise ValueError(f"No usable LLM providers in chain starting with {primary!r}")
+
+        if env in {"staging", "production"} and len(adapters) < 2:
+            msg = "LLM fallback chain must resolve to >=2 credentialed providers in staging/production"
+            raise RuntimeError(msg)
 
         if len(adapters) == 1:
             port = adapters[0][1]

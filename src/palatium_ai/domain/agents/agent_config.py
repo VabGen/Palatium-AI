@@ -1,15 +1,14 @@
 # src/palatium_ai/domain/agents/agent_config.py
 
-"""Модуль agent_config содержит класс AgentConfig.
-
-Класс AgentConfig используется для конфигурирования агента.
-"""
+"""AgentConfig — frozen pydantic (030)."""
 
 from __future__ import annotations
 
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from palatium_ai.domain.policies.types import AgentRole, ModelTier
 
 
 class AgentConfig(BaseModel):
@@ -18,25 +17,12 @@ class AgentConfig(BaseModel):
     model_config = {"frozen": True}
 
     name: str
-    role: Literal[
-        "text_ingestor",
-        "intent_classifier",
-        "supervisor",
-        "reasoner",
-        "planner",
-        "context_weaver",
-        "coder",
-        "researcher",
-        "analyst",
-        "critic",
-        "formatter",
-        "memory_keeper",
-    ]
-    model_tier: Literal["nano", "small", "mid", "frontier", "deep_reasoning"]
-    temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    role: AgentRole
+    model_tier: ModelTier
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     allowed_tools: tuple[str, ...] = Field(default_factory=tuple)
-    timeout_seconds: int = 300
-    max_retries: int = 3
+    timeout_seconds: int = Field(default=300, gt=0)
+    max_retries: int = Field(default=3, ge=0)
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
 
     llm_provider: Literal["openai", "anthropic", "ollama", "qwen"] | None = None

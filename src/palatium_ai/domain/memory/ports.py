@@ -50,3 +50,6 @@ class MemoryPort(Protocol):
         limit: int = 8,
     ) -> list[dict[str, object]]:
         """Keyword/hybrid search within a namespace (budgeted)."""
+
+    async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Delete one memory item; returns True when a row was removed."""

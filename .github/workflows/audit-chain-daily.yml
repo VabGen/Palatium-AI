@@ -1,0 +1,28 @@
+# Daily audit hash-chain verification (040).
+name: audit-chain-daily
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # once per day UTC
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install package
+        run: |
+          pip install -e .
+      - name: Verify audit chain
+        env:
+          AUDIT_LOG_FILE: ${{ secrets.AUDIT_LOG_FILE_PATH }}
+        run: |
+          # When no production log is mounted in CI, verify an empty/genesis-capable path.
+          export AUDIT_LOG_FILE="${AUDIT_LOG_FILE:-.cursor/logs/audit-chain.log}"
+          mkdir -p "$(dirname "$AUDIT_LOG_FILE")"
+          touch "$AUDIT_LOG_FILE"
+          python scripts/verify_audit_chain.py --file "$AUDIT_LOG_FILE"

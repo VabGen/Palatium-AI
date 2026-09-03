@@ -170,6 +170,14 @@ $analytics = Start-DevService `
     -Environment $mcpEnv
 $services += $analytics
 
+$platform = Start-DevService `
+    -Name "mcp-platform" `
+    -Arguments "run uvicorn platform_mcp_server:app --app-dir mcp_servers/platform --host 127.0.0.1 --port 8082" `
+    -Port 8082 `
+    -HealthPath "/health" `
+    -Environment $mcpEnv
+$services += $platform
+
 if (-not $SkipApi) {
     $app = Start-DevService `
         -Name "palatium-ai" `
@@ -206,6 +214,7 @@ if (-not $SkipApi) {
 }
 Write-Host "  EDMS MCP:      http://127.0.0.1:8080/docs"
 Write-Host "  Analytics MCP: http://127.0.0.1:8081/docs"
+Write-Host "  Platform MCP:  http://127.0.0.1:8082/docs"
 Write-Host "  Smoke auth:    poetry run python scripts/smoke_mcp_auth.py --skip-api"
 Write-Host ""
 Write-Host "Logs:  $LogDir"

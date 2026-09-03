@@ -68,9 +68,7 @@ class _FileLock:
                 except BlockingIOError as err:
                     if time.monotonic() >= deadline:
                         self._fh.close()
-                        raise TimeoutError(
-                            f"audit-chain: flock {_LOCK_FILE_POSIX} занят > {self._timeout}s"
-                        ) from err
+                        raise TimeoutError(f"audit-chain: flock {_LOCK_FILE_POSIX} занят > {self._timeout}s") from err
                     time.sleep(_LOCK_POLL_SEC)
 
         deadline = time.monotonic() + self._timeout
@@ -82,9 +80,7 @@ class _FileLock:
                 return self
             except FileExistsError as err:
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(
-                        f"audit-chain: lock {_LOCK_FILE_WINDOWS} занят > {self._timeout}s"
-                    ) from err
+                    raise TimeoutError(f"audit-chain: lock {_LOCK_FILE_WINDOWS} занят > {self._timeout}s") from err
                 time.sleep(_LOCK_POLL_SEC)
 
     def __exit__(self, *exc: object) -> None:

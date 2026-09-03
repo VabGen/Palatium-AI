@@ -1,9 +1,12 @@
 import type {
   ContentDocument,
+  DialogTurnResponse,
   FormatterTaskResult,
   HITLCardView,
   HitlRespondResponse,
+  HitlStepUpChallenge,
 } from '../types/contentDocument';
+import { adoptTraceIdFromResponse, getOrCreateTraceId, TRACE_HEADER } from '../lib/trace';
 
 const TOKEN_STORAGE_KEY = 'palatium.access_token';
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -26,9 +29,10 @@ function readStoredToken(): string | null {
 async function mintDevToken(userId: string, orgId?: string | null): Promise<string> {
   const res = await fetch(`${BASE_URL}/auth/dev-token`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', [TRACE_HEADER]: getOrCreateTraceId() },
     body: JSON.stringify({ user_id: userId, ...(orgId ? { org_id: orgId } : {}) }),
   });
+  adoptTraceIdFromResponse(res.headers.get(TRACE_HEADER));
   if (!res.ok) throw new Error(`Auth ${res.status}: ${await res.text()}`);
   const { access_token } = await res.json();
   writeStoredToken(access_token);
@@ -48,7 +52,6 @@ export async function sendFeedback(
       body: JSON.stringify({
         message_id: messageId,
         feedback: feedbackType,
-        ...(orgId ? { org_id: orgId } : {}),
       }),
     },
     userId,
@@ -85,14 +88,18 @@ async function fetchWithAuth(
   const headers = new Headers(init.headers);
   headers.set('Content-Type', 'application/json');
   headers.set('Authorization', `Bearer ${token}`);
+  headers.set(TRACE_HEADER, getOrCreateTraceId());
 
   const doFetch = async (): Promise<Response> => {
     const url = input.startsWith('http') ? input : `${BASE_URL}${input}`;
     const response = await fetch(url, { ...init, headers });
+    adoptTraceIdFromResponse(response.headers.get(TRACE_HEADER));
     if (response.status === 401 && userId) {
       token = await ensureAccessToken(userId, orgId, true);
       headers.set('Authorization', `Bearer ${token}`);
-      return fetch(url, { ...init, headers });
+      const retry = await fetch(url, { ...init, headers });
+      adoptTraceIdFromResponse(retry.headers.get(TRACE_HEADER));
+      return retry;
     }
     return response;
   };
@@ -119,7 +126,7 @@ export async function processIntent(
     '/intents/process',
     {
       method: 'POST',
-      body: JSON.stringify({ text, thread_id: threadId, ...(orgId ? { org_id: orgId } : {}) }),
+      body: JSON.stringify({ text, thread_id: threadId }),
     },
     userId,
     orgId
@@ -133,7 +140,7 @@ export async function fetchDialogTurns(
   limit = 50,
   userId?: string | null,
   orgId?: string | null
-): Promise<any[]> {
+): Promise<DialogTurnResponse[]> {
   const res = await fetchWithAuth(
     `/sessions/${encodeURIComponent(threadId)}/turns?limit=${limit}`,
     { method: 'GET' },
@@ -142,7 +149,7 @@ export async function fetchDialogTurns(
   );
   if (res.status === 404) return [];
   if (!res.ok) throw new Error(await res.text());
-  const json = (await res.json()) as { items: any[] };
+  const json = (await res.json()) as { items: DialogTurnResponse[] };
   return json.items ?? [];
 }
 
@@ -165,7 +172,7 @@ export async function fetchHitlStepUpChallenge(
   cardId: string,
   userId?: string | null,
   orgId?: string | null
-): Promise<any> {
+): Promise<HitlStepUpChallenge> {
   const res = await fetchWithAuth(
     `/hitl/${encodeURIComponent(cardId)}/step-up-challenge`,
     { method: 'POST', body: '{}' },
@@ -196,6 +203,73 @@ export async function respondHitlCard(
         ...(stepUpAssertion ? { step_up_assertion: stepUpAssertion } : {}),
       }),
     },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export type MemorySaveRequest = {
+  thread_id: string;
+  text: string;
+  entry_key: string;
+  namespace_kind?: 'thread' | 'user' | 'org';
+  scope_id?: string;
+  memory_type?: 'preference' | 'fact' | 'incident' | 'episode';
+  contains_pii?: boolean;
+};
+
+export type MemoryForgetRequest = {
+  thread_id: string;
+  entry_key: string;
+  namespace_kind?: 'thread' | 'user' | 'org';
+  scope_id?: string;
+};
+
+export type MemoryConsolidateRequest = {
+  thread_id: string;
+  consolidate_task_id?: string;
+};
+
+export async function requestMemorySave(
+  body: MemorySaveRequest,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<HITLCardView> {
+  const res = await fetchWithAuth(
+    '/memory/save',
+    { method: 'POST', body: JSON.stringify(body) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function requestMemoryForget(
+  body: MemoryForgetRequest,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<HITLCardView> {
+  const res = await fetchWithAuth(
+    '/memory/forget',
+    { method: 'POST', body: JSON.stringify(body) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function requestMemoryConsolidate(
+  body: MemoryConsolidateRequest,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<HITLCardView> {
+  const res = await fetchWithAuth(
+    '/memory/consolidate',
+    { method: 'POST', body: JSON.stringify(body) },
     userId,
     orgId
   );

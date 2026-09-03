@@ -46,6 +46,10 @@ dependencies = [
     "langgraph (>=1.2.10,<2.0.0)",
     "langgraph-checkpoint-postgres (>=2.0.0,<4.0.0)",
     "litellm (>=1.97.0,<2.0.0)",                                 
+    "opentelemetry-api (>=1.29.0,<2.0.0)",
+    "opentelemetry-exporter-otlp-proto-http (>=1.29.0,<2.0.0)",
+    "opentelemetry-sdk (>=1.29.0,<2.0.0)",
+    "pgvector (>=0.3.6,<0.4.0)",
     "prometheus_client (>=0.21.0,<1.0.0)",
     "psycopg[binary,pool] (>=3.2.0,<4.0.0)",
     "py-consul (>=1.7.1,<2.0.0)",
@@ -63,6 +67,7 @@ dependencies = [
 mysql = ["mysqlclient>=2.2.0,<3.0.0"]
 pgsql = ["psycopg2>=2.9,<3.0"]
 databases = ["mysqlclient>=2.2.0,<3.0.0", "psycopg2>=2.9,<3.0"]
+graph = ["neo4j (>=5.28.0,<6.0.0)"]
 
 [dependency-groups]
 test = [
@@ -83,6 +88,9 @@ dev = [
     { include-group = "lint" },
     { include-group = "type-check" },
     "tox (>=4.60.0,<5.0.0)",
+]
+graph = [
+    "neo4j (>=5.28.0,<6.0.0)",
 ]
 
 [tool.poetry]
@@ -121,20 +129,29 @@ select = [
     "TCH",                                                          # typing
 ]
 ignore = [
-    "D100",
-    "D104",
-    "D107",
-    "D203",
-    "D211",
-    "D212",
-    "D213",
+    "D100",  # missing docstring in public module
+    "D101",  # missing docstring in public class
+    "D102",  # missing docstring in public method
+    "D103",  # missing docstring in public function
+    "D104",  # missing docstring in public package
+    "D107",  # missing docstring in __init__
+    "D203",  # incompatible with D211
+    "D211",  # incompatible with D203
+    "D212",  # incompatible with D213
+    "D213",  # incompatible with D212
+    "D401",  # imperative mood (RU/EN mix in codebase)
     "TC001",
     "TC003",
-]   # пропустить docstring правила и typing-only-import linter
+]  # docstring gaps + typing-only-import; keep D for style conflicts only via ignores above
 fixable = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S105", "S106", "D", "E501", "TC001"]
+# Migrations: role/schema identifiers are constants, not user input (S608 false positive).
+"alembic/**/*.py" = ["S608", "E501"]
+# MCP stubs: JSON-RPC dispatch naturally branches per tool.
+"mcp_servers/**/*.py" = ["C901"]
+"scripts/**/*.py" = ["C901"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -168,19 +185,19 @@ warn_required_dynamic_aliases = true
 
 [tool.basedpyright]
 pythonVersion = "3.14"
-extraPaths = [".cursor/hooks"]
-executionEnvironments = [{ root = ".cursor/hooks" }]
+extraPaths = ["src", ".cursor/hooks"]
 
 [tool.pyright]
 pythonVersion = "3.14"
-extraPaths = [".cursor/hooks"]
-executionEnvironments = [{ root = ".cursor/hooks" }]
+extraPaths = ["src", ".cursor/hooks"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "live: hits a real LLM / network; opt-in via PALATIUM_LIVE_EVAL=1",
+    "llm_live: live llm_judge evals; opt-in via PALATIUM_EVAL_LIVE_JUDGE=1",
+    "integration: graph/service integration tests (fake LLM; no DATABASE_URL required)",
 ]
 
 # [[tool.mypy.overrides]]

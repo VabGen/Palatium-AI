@@ -8,6 +8,7 @@ import asyncio
 import re
 
 from palatium_ai.core.types.coerce import coerce_float
+from palatium_ai.domain.memory.pii import mask_memory_value, memory_contains_pii
 
 
 class InMemoryMemoryPort:
@@ -26,7 +27,9 @@ class InMemoryMemoryPort:
         """Fetch one item or None."""
         async with self._lock:
             item = self._items.get((namespace, key))
-            return dict(item) if item is not None else None
+            if item is None:
+                return None
+            return mask_memory_value(dict(item), contains_pii=memory_contains_pii(item))
 
     async def search(
         self,
@@ -47,8 +50,13 @@ class InMemoryMemoryPort:
                 confidence = max(0.0, min(1.0, coerce_float(value.get("confidence", 0.0))))
                 score = overlap * (0.5 + 0.5 * confidence)
                 if score > 0 or not tokens:
-                    enriched = dict(value)
+                    enriched = mask_memory_value(dict(value), contains_pii=memory_contains_pii(value))
                     enriched["_score"] = round(score, 4)
                     scored.append((score, enriched))
             scored.sort(key=lambda item: item[0], reverse=True)
             return [item for _, item in scored[: max(1, limit)]]
+
+    async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Remove one item from namespace/key."""
+        async with self._lock:
+            return self._items.pop((namespace, key), None) is not None

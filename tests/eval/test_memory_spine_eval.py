@@ -11,16 +11,14 @@ from uuid import uuid4
 
 import pytest
 
-from palatium_ai.application.agents.contextualizer_agent import ContextualizerAgent
 from palatium_ai.application.services.memory_recall import recall_for_thread
-from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.memory.budget import MemoryPromptBudget, clip_memory_hints
 from palatium_ai.domain.memory.contextualizer import ContextualizerInput
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace
 from palatium_ai.domain.memory.recall import MemoryHit, MemoryRecallBundle
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
-from tests.conftest import FakeLLMPort
+from tests.conftest import FakeLLMPort, run_contextualizer
 
 
 @pytest.mark.asyncio
@@ -108,7 +106,6 @@ async def test_eval_format_followup_rewritten_with_budget() -> None:
           "reasoning": "format request over prior plan"
         }"""
     )
-    agent = ContextualizerAgent(llm)
     window = DialogTurnWindow(
         thread_id="eval-format",
         turns=(
@@ -130,14 +127,14 @@ async def test_eval_format_followup_rewritten_with_budget() -> None:
             ),
         ),
     )
-    result = await agent.execute(
+    result = await run_contextualizer(
+        llm,
         ContextualizerInput(
             task_id="eval-format",
             user_text="дай в виде таблицы",
             dialog_window=window,
             prompt_budget=MemoryPromptBudget(dialog_max_chars=2000, memory_max_chars=400),
         ),
-        AgentContext(thread_id="eval-format"),
     )
     assert result.output is not None
     assert result.output.continuation_kind == "format"
@@ -195,7 +192,6 @@ async def test_eval_multi_hop_anaphora_fixture_shape() -> None:
           "reasoning": "anaphora over prior person"
         }"""
     )
-    agent = ContextualizerAgent(llm)
     window = DialogTurnWindow(
         thread_id="eval-hop",
         turns=(
@@ -217,14 +213,14 @@ async def test_eval_multi_hop_anaphora_fixture_shape() -> None:
             ),
         ),
     )
-    result = await agent.execute(
+    result = await run_contextualizer(
+        llm,
         ContextualizerInput(
             task_id="eval-hop",
             user_text="а её email?",
             dialog_window=window,
             prompt_budget=MemoryPromptBudget(),
         ),
-        AgentContext(thread_id="eval-hop"),
     )
     assert result.output is not None
     assert result.output.continuation_kind == "answer"

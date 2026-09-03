@@ -387,6 +387,137 @@ textarea {
   flex-shrink: 0;
 }
 
+.composer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.memory-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  border: 1px solid var(--stroke);
+  background: transparent;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.memory-toggle:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.memory-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.memory-actions.is-open .memory-chevron {
+  transform: rotate(180deg);
+}
+
+.memory-chevron {
+  transition: transform 0.18s ease;
+}
+
+.memory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+}
+
+.memory-modes {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.memory-mode {
+  border: 1px solid var(--stroke);
+  background: var(--bg-soft);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.memory-mode.is-active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.memory-input,
+.memory-textarea {
+  width: 100%;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 8px 10px;
+  outline: none;
+  font-size: 0.9rem;
+}
+
+.memory-textarea {
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.4;
+}
+
+.memory-input:focus,
+.memory-textarea:focus {
+  border-color: var(--accent);
+}
+
+.memory-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.memory-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: flex-start;
+  border: 0;
+  border-radius: 10px;
+  padding: 7px 12px;
+  background: var(--accent);
+  color: #06251d;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.memory-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .composer textarea {
   resize: none;
   border: 0;

@@ -1,0 +1,53 @@
+[
+  {
+    "id": "format_passthrough_with_source",
+    "cassette": "critic/noop.json",
+    "input": {
+      "user_text": "дай в виде таблицы",
+      "task_kind": "response_formatting",
+      "route": "formatter",
+      "route_plan": "Format prior answer",
+      "requires_mcp": false,
+      "selected_strategy": "format_only",
+      "continuation_kind": "format",
+      "classification_confidence": 0.9,
+      "worker_summary": "Prior answer body",
+      "user_input_chars": 0
+    },
+    "expect": { "status": "success", "requires_review": false, "llm_invoked": false }
+  },
+  {
+    "id": "answer_continuity_gate",
+    "cassette": "critic/answer_continuity.json",
+    "input": {
+      "user_text": "а подробнее?",
+      "task_kind": "knowledge_request",
+      "route": "researcher",
+      "route_plan": "Research then answer",
+      "requires_mcp": false,
+      "selected_strategy": "reason_only",
+      "continuation_kind": "answer",
+      "classification_confidence": 0.9,
+      "worker_summary": "Summary text",
+      "user_input_chars": 0
+    },
+    "expect": { "status": "success", "llm_invoked": true, "accuracy_score_min": 8 }
+  },
+  {
+    "id": "side_effect_risk_mcp",
+    "cassette": "critic/side_effect_risk.json",
+    "input": {
+      "user_text": "upload document to EDMS",
+      "task_kind": "tool_execution",
+      "route": "researcher",
+      "route_plan": "Execute MCP tool",
+      "requires_mcp": true,
+      "selected_strategy": "direct_tool_call",
+      "continuation_kind": "new_topic",
+      "classification_confidence": 0.95,
+      "worker_summary": null,
+      "user_input_chars": 0
+    },
+    "expect": { "llm_invoked": true, "requires_review": true, "accuracy_score_min": 7 }
+  }
+]

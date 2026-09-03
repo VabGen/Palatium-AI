@@ -71,6 +71,20 @@ class ExecutionPlanner:
                     rationale="Matching MCP capability was discovered from registered tool descriptors.",
                 )
 
+        caps = {c.strip().lower() for c in task_input.candidate_capabilities}
+        if caps & {"code", "coding", "sandbox", "code_exec"}:
+            return ToolExecutionPlan(
+                strategy="code_sandbox",
+                requires_tool_call=False,
+                rationale="Capability hints request a code draft/plan (sandbox exec remains HITL-gated).",
+            )
+        if caps & {"analytics", "analysis", "metrics", "trends"}:
+            return ToolExecutionPlan(
+                strategy="data_analysis",
+                requires_tool_call=False,
+                rationale="Capability hints request structured analysis without tool execution.",
+            )
+
         if executable_kind in {"knowledge_request", "tool_execution"}:
             if task_input.requires_mcp:
                 return ToolExecutionPlan(

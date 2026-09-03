@@ -12,12 +12,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from palatium_ai.application.services.document_export_service import DocumentExportService
+from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.kill_switch import KillSwitchService
+from palatium_ai.application.services.memory_consolidate_service import MemoryConsolidateService
+from palatium_ai.application.services.memory_forget_service import MemoryForgetService
+from palatium_ai.application.services.memory_save_service import MemorySaveService
 from palatium_ai.application.services.session_service import SessionService
+from palatium_ai.application.services.session_timeline_service import SessionTimelineService
 from palatium_ai.application.wiring import build_hitl_service, build_intent_service, warm_mcp_capability_cache
 from palatium_ai.core.logging import logger, setup_logging
-from palatium_ai.core.observability.langsmith_env import apply_langsmith_env
+from palatium_ai.core.observability import setup_observability
 from palatium_ai.infrastructure.cache.redis import create_redis_client, ensure_redis_connection
 from palatium_ai.infrastructure.database.init_db import (
     ensure_database_and_schema,
@@ -27,8 +33,11 @@ from palatium_ai.infrastructure.database.repositories import (
     SessionRepository,
 )
 from palatium_ai.infrastructure.database.runtime import create_session_factory
-from palatium_ai.infrastructure.embeddings.factory import create_embedding_client
+from palatium_ai.infrastructure.embeddings.factory import create_embedding_client_for_schema
+from palatium_ai.infrastructure.graph.factory import build_graph_port
+from palatium_ai.infrastructure.knowledge.postgres_knowledge_port import PostgresKnowledgePort
 from palatium_ai.infrastructure.mcp.consul_source import ConsulMCPSource
+from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
 from palatium_ai.infrastructure.mcp.registry import MCPRegistry
 from palatium_ai.infrastructure.memory.checkpointer import (
     CheckpointerHandle,
@@ -40,6 +49,7 @@ from palatium_ai.infrastructure.memory.embedding_rerank import EmbeddingRerankMe
 from palatium_ai.infrastructure.memory.graphiti_adapter import GraphitiMemoryPort, GraphitiSdkTransport
 from palatium_ai.infrastructure.memory.mem0_adapter import Mem0HttpTransport, Mem0MemoryPort
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
+from palatium_ai.infrastructure.web.factory import build_web_search_port
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -47,10 +57,14 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine
 
+    from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.intent_service import IntentService
     from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
     from palatium_ai.core.config.settings import Settings
+    from palatium_ai.domain.graph.port import GraphPort
+    from palatium_ai.domain.knowledge.port import KnowledgePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
+    from palatium_ai.domain.web.port import WebSearchPort
 
 _HITL_SWEEP_INTERVAL_SECONDS = 60
 
@@ -71,8 +85,17 @@ class AppResources:
     dialog_turn_store: DialogTurnStore | None = None
     memory_port: MemoryPort | None = None
     consolidation: MemoryConsolidationService | None = None
+    document_ingest_service: DocumentIngestService | None = None
+    memory_save_service: MemorySaveService | None = None
+    memory_forget_service: MemoryForgetService | None = None
+    memory_consolidate_service: MemoryConsolidateService | None = None
     checkpointer_handle: CheckpointerHandle | None = None
     background_tasks: tuple[asyncio.Task[None], ...] = field(default_factory=tuple)
+    document_export_service: DocumentExportService = field(default_factory=DocumentExportService)
+    session_timeline_service: SessionTimelineService | None = None
+    hitl_respond_facade: HitlRespondFacade | None = None
+    graph_port: GraphPort | None = None
+    web_search_port: WebSearchPort | None = None
 
 
 async def load_mcp_servers_from_json_file(file_path: str) -> dict[str, str]:
@@ -121,12 +144,23 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
         )
         logger.info("MemoryPort: Graphiti", uri=settings.memory.graphiti_neo4j_uri)
     else:
-        port = PostgresMemoryPort(session_factory)  # type: ignore[arg-type]
-        logger.info("MemoryPort: Postgres memory_items")
+        embedding_client = None
+        try:
+            embedding_client = create_embedding_client_for_schema(settings, "memory")
+        except Exception as exc:
+            logger.warning("Memory embeddings disabled", error=str(exc))
+        port = PostgresMemoryPort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]
+        logger.info(
+            "MemoryPort: Postgres memory.entries",
+            vector_search=embedding_client is not None,
+        )
 
     if settings.memory.embedding_rerank and backend == "postgres":
         try:
-            port = EmbeddingRerankMemoryPort(port, create_embedding_client(settings))
+            rerank_client = create_embedding_client_for_schema(settings, "memory")
+            if rerank_client is None:
+                raise RuntimeError("no memory-dim embedding provider for rerank")
+            port = EmbeddingRerankMemoryPort(port, rerank_client)
             logger.info("MemoryPort: Postgres + embedding rerank")
         except Exception as exc:
             logger.warning("Memory embedding rerank disabled", error=str(exc))
@@ -135,11 +169,46 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
     return port
 
 
+def _build_knowledge_port(settings: Settings, session_factory: object) -> KnowledgePort:
+    """KnowledgePort for platform.ingest_document (postgres or in-memory fallback)."""
+    embedding_client = None
+    try:
+        embedding_client = create_embedding_client_for_schema(settings, "knowledge")
+    except Exception as exc:
+        logger.warning("Knowledge embeddings disabled", error=str(exc))
+    return PostgresKnowledgePort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]
+
+
+def _wire_platform_handler(
+    mcp_registry: MCPRegistry,
+    knowledge_port: KnowledgePort,
+    memory_port: MemoryPort | None = None,
+    consolidation: object | None = None,
+    *,
+    graph_port: GraphPort,
+    web_search_port: WebSearchPort,
+) -> None:
+    if not mcp_registry.is_registered("platform"):
+        logger.info("Platform MCP not registered; local handler skipped")
+        return
+    mcp_registry.register_local_handler(
+        "platform",
+        PlatformToolHandler(
+            knowledge_port=knowledge_port,
+            memory_port=memory_port,
+            consolidation=consolidation,  # type: ignore[arg-type]
+            graph_port=graph_port,
+            web_search_port=web_search_port,
+        ),
+    )
+    logger.info("Platform MCP: local knowledge+memory+graph+web handler registered")
+
+
 async def startup(settings: Settings) -> AppResources:
     """Инициализирует логирование, БД, Redis и MCP-реестр."""
     ensure_psycopg_compatible_loop()
     setup_logging(settings)
-    apply_langsmith_env(settings.observability)
+    setup_observability(settings)
     # `environment` уже добавляется в контекстvars в `setup_logging`, поэтому не дублируем поле `env`.
     logger.info(f"{settings.app.name} starting...")
 
@@ -170,12 +239,14 @@ async def startup(settings: Settings) -> AppResources:
     await mcp_registry.initialize()
     logger.info("MCP registry initialized", servers_count=len(mcp_registry.list_servers()))
 
+    db_engine, session_factory = create_session_factory(settings)
+    knowledge_port = _build_knowledge_port(settings, session_factory)
+
     background_tasks: list[asyncio.Task[None]] = []
     if source is not None:
         background_tasks.append(asyncio.create_task(source.watch(mcp_registry.reload)))
         logger.info("MCP watch started")
 
-    db_engine, session_factory = create_session_factory(settings)
     session_repository = SessionRepository(session_factory)
     mcp_tool_call_repository = McpToolCallRepository(session_factory)
     session_service = SessionService(session_repository)
@@ -196,7 +267,7 @@ async def startup(settings: Settings) -> AppResources:
     dialog_turn_store = PostgresDialogTurnStore(session_factory)
     memory_port = _build_memory_port(settings, session_factory)
     checkpointer_handle = await create_checkpointer(settings)
-    intent_service, consolidation, capability_index = build_intent_service(
+    intent_service, consolidation, capability_index, document_ingest_service = build_intent_service(
         settings,
         mcp_registry,
         session_service=session_service,
@@ -210,6 +281,49 @@ async def startup(settings: Settings) -> AppResources:
         checkpointer=checkpointer_handle.saver,
     )
     hitl_service.bind_deny_resume(intent_service)
+    graph_port = build_graph_port(settings)
+    web_search_port = build_web_search_port(settings)
+    _wire_platform_handler(
+        mcp_registry,
+        knowledge_port,
+        memory_port,
+        consolidation,
+        graph_port=graph_port,
+        web_search_port=web_search_port,
+    )
+
+    session_timeline_service = SessionTimelineService(
+        dialog_turn_store=dialog_turn_store,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    memory_save_service = MemorySaveService(
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    memory_forget_service = MemoryForgetService(
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    memory_consolidate_service: MemoryConsolidateService | None = None
+    if consolidation is not None:
+        memory_consolidate_service = MemoryConsolidateService(
+            hitl_service=hitl_service,
+            mcp_registry=mcp_registry,
+            redis_client=redis_client,
+            mcp_tool_call_repository=mcp_tool_call_repository,
+        )
+    hitl_respond_facade = HitlRespondFacade(
+        hitl_service=hitl_service,
+        intent_service=intent_service,
+        document_ingest_service=document_ingest_service,
+        memory_save_service=memory_save_service,
+        memory_forget_service=memory_forget_service,
+        memory_consolidate_service=memory_consolidate_service,
+    )
 
     background_tasks.append(
         asyncio.create_task(
@@ -249,8 +363,17 @@ async def startup(settings: Settings) -> AppResources:
         dialog_turn_store=dialog_turn_store,
         memory_port=memory_port,
         consolidation=consolidation,
+        document_ingest_service=document_ingest_service,
+        memory_save_service=memory_save_service,
+        memory_forget_service=memory_forget_service,
+        memory_consolidate_service=memory_consolidate_service,
         checkpointer_handle=checkpointer_handle,
         background_tasks=tuple(background_tasks),
+        document_export_service=DocumentExportService(),
+        session_timeline_service=session_timeline_service,
+        hitl_respond_facade=hitl_respond_facade,
+        graph_port=graph_port,
+        web_search_port=web_search_port,
     )
 
 
@@ -273,6 +396,16 @@ async def _hitl_sweep_loop(hitl_service: HitlService) -> None:
             logger.error("HITL sweep failed", error=str(exc))
 
 
+async def _aclose_optional(resource: object | None) -> None:
+    """Call ``aclose()`` on a resource when present; swallow close errors."""
+    if resource is None:
+        return
+    closer = getattr(resource, "aclose", None)
+    if closer is not None:
+        with contextlib.suppress(Exception):
+            await closer()
+
+
 async def shutdown(resources: AppResources) -> None:
     """Корректно освобождает ресурсы приложения."""
     logger.info("Shutting down...")
@@ -290,9 +423,7 @@ async def shutdown(resources: AppResources) -> None:
     await resources.mcp_registry.close()
     await resources.db_engine.dispose()
     await resources.redis_client.aclose()
-    if resources.memory_port is not None:
-        closer = getattr(resources.memory_port, "aclose", None)
-        if closer is not None:
-            with contextlib.suppress(Exception):
-                await closer()
+    await _aclose_optional(resources.memory_port)
+    await _aclose_optional(resources.graph_port)
+    await _aclose_optional(resources.web_search_port)
     logger.info("Goodbye")

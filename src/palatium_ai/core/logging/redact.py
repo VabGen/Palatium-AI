@@ -8,6 +8,8 @@ import re
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.core.security.secret_scanner import secret_value_patterns
+
 if TYPE_CHECKING:
     import logging
 
@@ -54,13 +56,7 @@ _SENSITIVE_KEY_MARKERS: tuple[str, ...] = (
     "bearer",
 )
 
-_SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?i)\bsk-[a-z0-9]{16,}\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(r"(?i)\bpassword\s*=\s*\S+"),
-    re.compile(r"(?i)\bapi[_-]?key\s*=\s*\S+"),
-    re.compile(r"(?i)\bbearer\s+[a-z0-9\-._~+/]+=*"),
-)
+_SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = secret_value_patterns()
 
 
 def redact_secrets(

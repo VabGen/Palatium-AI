@@ -37,4 +37,3 @@ async def submit_feedback(
     )
     # TODO: Save feedback to database
     return {"status": "ok"}
-

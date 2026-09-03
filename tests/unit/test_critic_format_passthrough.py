@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from palatium_ai.application.agents.critic_agent import CriticAgent
 from palatium_ai.domain.agents.context_packet import ContextPacket
-from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.critic import CriticInput
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
-from tests.conftest import FakeLLMPort
+from tests.conftest import FakeLLMPort, run_critic
 
 
 def _packet(*, task_kind: str = "response_formatting") -> ContextPacket:
@@ -33,8 +31,7 @@ def _packet(*, task_kind: str = "response_formatting") -> ContextPacket:
 @pytest.mark.asyncio
 async def test_critic_skips_llm_for_format_only_with_prior_content() -> None:
     llm = FakeLLMPort("should-not-be-called")
-    agent = CriticAgent(llm)
-    result = await agent.execute(
+    result = await run_critic(
         CriticInput(
             task_id="t1",
             context_packet=_packet(),
@@ -44,7 +41,7 @@ async def test_critic_skips_llm_for_format_only_with_prior_content() -> None:
             selected_strategy="format_only",
             continuation_kind="format",
         ),
-        AgentContext(thread_id="th1"),
+        llm,
     )
     assert result.status == "success"
     assert result.requires_review is False
@@ -56,7 +53,6 @@ async def test_critic_skips_llm_for_format_only_with_prior_content() -> None:
 @pytest.mark.asyncio
 async def test_critic_skips_llm_for_ack_only_social() -> None:
     llm = FakeLLMPort("should-not-be-called")
-    agent = CriticAgent(llm)
     packet = ContextPacket(
         task_id="t3",
         user_text="привет",
@@ -72,7 +68,7 @@ async def test_critic_skips_llm_for_ack_only_social() -> None:
         ),
         context_summary="ack_only",
     )
-    result = await agent.execute(
+    result = await run_critic(
         CriticInput(
             task_id="t3",
             context_packet=packet,
@@ -82,7 +78,7 @@ async def test_critic_skips_llm_for_ack_only_social() -> None:
             selected_strategy="ack_only",
             continuation_kind="new_topic",
         ),
-        AgentContext(thread_id="th3"),
+        llm,
     )
     assert result.status == "success"
     assert result.requires_review is False
@@ -92,7 +88,6 @@ async def test_critic_skips_llm_for_ack_only_social() -> None:
 @pytest.mark.asyncio
 async def test_critic_still_calls_llm_for_research_path() -> None:
     llm = FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
-    agent = CriticAgent(llm)
     packet = ContextPacket(
         task_id="t2",
         user_text="What is the contract status?",
@@ -108,7 +103,7 @@ async def test_critic_still_calls_llm_for_research_path() -> None:
         ),
         context_summary="reason_only",
     )
-    result = await agent.execute(
+    result = await run_critic(
         CriticInput(
             task_id="t2",
             context_packet=packet,
@@ -117,7 +112,7 @@ async def test_critic_still_calls_llm_for_research_path() -> None:
             worker_summary="Contract is signed",
             selected_strategy="reason_only",
         ),
-        AgentContext(thread_id="th2"),
+        llm,
     )
     assert result.status == "success"
     assert len(llm.calls) == 1

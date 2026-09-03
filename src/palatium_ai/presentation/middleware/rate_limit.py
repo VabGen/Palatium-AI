@@ -26,6 +26,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         "/api/intents/",
         "/api/hitl/",
         "/api/documents/",
+        "/api/memory/",
         "/api/sessions/",
         "/api/admin/",
         "/api/agents/",

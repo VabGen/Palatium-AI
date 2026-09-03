@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from palatium_ai.domain.agents.critic_policy import CriticPolicy
+from palatium_ai.domain.policies import CriticPolicy
 
 
 def test_format_passthrough_with_source() -> None:

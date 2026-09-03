@@ -26,7 +26,7 @@ docker compose --env-file env/.env up --build
 
 | Сервис | Порт | Назначение |
 |--------|------|------------|
-| `postgres` | 5432 | DialogTurn / memory_items / LangGraph checkpointer |
+| `postgres` | 5432 | DialogTurn / memory / knowledge (образ `pgvector/pgvector:pg16`) |
 | `redis` | 6379 | HITL / cache |
 | `neo4j` | 7474 / 7687 | Graphiti (Browser + Bolt) |
 | `mcp-edms` | 8080 | MCP stub EDMS |

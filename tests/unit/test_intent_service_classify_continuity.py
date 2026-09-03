@@ -8,7 +8,7 @@ import pytest
 
 from palatium_ai.application.services.intent_service import IntentService
 from palatium_ai.domain.agents.intent import IntentClassifierOutput, IntentTaskResult
-from palatium_ai.domain.memory.continuity import EffectiveRoutingIntent
+from palatium_ai.domain.policies import EffectiveRoutingIntent
 
 
 class _FakeSessionService:

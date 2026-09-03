@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from .contracts import TaskResult
 from .intent import TaskKind
 
-WorkerRoute = Literal["researcher", "formatter", "clarification"]
+WorkerRoute = Literal["researcher", "coder", "analyst", "formatter", "clarification"]
 
 
 class SupervisorInput(BaseModel):

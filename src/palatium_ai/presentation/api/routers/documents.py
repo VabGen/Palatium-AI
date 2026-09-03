@@ -1,71 +1,1 @@
-# src/palatium_ai/presentation/api/routers/documents.py
-
-"""Экспорт ContentDocument в PDF."""
-
-from __future__ import annotations
-
-from urllib.parse import quote
-
-from fastapi import APIRouter, Request
-from fastapi.responses import Response
-from pydantic import BaseModel, Field
-
-from palatium_ai.domain.content import ContentDocument
-from palatium_ai.infrastructure.export.pdf import ContentDocumentPdfExporter
-from palatium_ai.presentation.resources import get_app_resources
-from palatium_ai.presentation.security.deps import get_principal
-from palatium_ai.presentation.security.ownership import load_session_for_principal
-
-router = APIRouter()
-_exporter = ContentDocumentPdfExporter()
-
-
-class PdfExportRequest(BaseModel):
-    """PDF export bound to an owned conversation thread."""
-
-    model_config = {"frozen": True}
-
-    thread_id: str = Field(min_length=1, max_length=128)
-    document: ContentDocument
-
-
-@router.post("/export/pdf")
-async def export_content_document_pdf(body: PdfExportRequest, request: Request) -> Response:
-    """Рендерит typed document в PDF after session ownership check."""
-    principal = get_principal(request)
-    resources = get_app_resources(request.app)
-    await load_session_for_principal(
-        request=request,
-        principal=principal,
-        session_service=resources.session_service,
-        thread_id=body.thread_id,
-        allow_missing=False,
-    )
-    pdf_bytes = _exporter.export(body.document)
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": _content_disposition(body.document.title)},
-    )
-
-
-def _content_disposition(title: str | None) -> str:
-    """ASCII filename= + RFC 5987 filename* (кириллица безопасна для HTTP headers)."""
-    display = _safe_download_stem(title)
-    ascii_name = _ascii_filename(display)
-    utf8_name = quote(f"{display}.pdf", safe="")
-    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
-
-
-def _safe_download_stem(title: str | None) -> str:
-    if not title:
-        return "palatium-answer"
-    cleaned = "".join(ch if ch.isalnum() or ch in "-_ " else "" for ch in title)
-    cleaned = cleaned.strip().replace(" ", "-")[:60]
-    return cleaned or "palatium-answer"
-
-
-def _ascii_filename(stem: str) -> str:
-    ascii_stem = "".join(ch if ord(ch) < 128 and (ch.isalnum() or ch in "-_") else "" for ch in stem)
-    ascii_stem = ascii_stem.strip("-_") or "palatium-answer"
-    return f"{ascii_stem[:60]}.pdf"
+# src/palatium_ai/presentation/api/routers/documents.py"""Document export and ingest preparation (off LangGraph hot path)."""from __future__ import annotationsfrom typing import Literalfrom urllib.parse import quotefrom uuid import uuid4from fastapi import APIRouter, HTTPException, Request, statusfrom fastapi.responses import Responsefrom pydantic import BaseModel, Fieldfrom palatium_ai.domain.content import ContentDocumentfrom palatium_ai.domain.hitl.cards import HITLCardViewfrom palatium_ai.presentation.resources import get_app_resourcesfrom palatium_ai.presentation.security.deps import get_principalfrom palatium_ai.presentation.security.ownership import load_session_for_principalrouter = APIRouter()class PdfExportRequest(BaseModel):    """PDF export bound to an owned conversation thread."""    model_config = {"frozen": True}    thread_id: str = Field(min_length=1, max_length=128)    document: ContentDocumentclass IngestChunkResponse(BaseModel):    model_config = {"frozen": True}    index: int = Field(ge=0)    text: str = Field(min_length=1)    char_start: int = Field(ge=0)    char_end: int = Field(gt=0)    contextual_prefix: str = ""class IngestPrepareRequest(BaseModel):    model_config = {"frozen": True}    thread_id: str = Field(min_length=1, max_length=128)    raw_text: str = Field(min_length=1, max_length=500_000)    document_id: str | None = Field(default=None, max_length=128)    document_title: str | None = Field(default=None, max_length=256)    mime_type: str | None = Field(default=None, max_length=128)    locale: str | None = Field(default=None, max_length=16)    max_chunk_chars: int = Field(default=1500, gt=0, le=8000)    enrich_context_prefix: bool = Falseclass IngestPrepareResponse(BaseModel):    model_config = {"frozen": True}    task_id: str    status: Literal["success", "failure", "partial"]    confidence: float = Field(ge=0.0, le=1.0)    chunk_count: int = Field(ge=0)    strategy: str    chunks: tuple[IngestChunkResponse, ...] = ()    error: str | None = Noneclass IngestCommitRequest(BaseModel):    model_config = {"frozen": True}    thread_id: str = Field(min_length=1, max_length=128)    prepare_task_id: str = Field(min_length=1, max_length=128)@router.post("/export/pdf")async def export_content_document_pdf(body: PdfExportRequest, request: Request) -> Response:    """Рендерит typed document в PDF after session ownership check."""    principal = get_principal(request)    resources = get_app_resources(request.app)    await load_session_for_principal(        request=request,        principal=principal,        session_service=resources.session_service,        thread_id=body.thread_id,        allow_missing=False,    )    pdf_bytes = resources.document_export_service.export_pdf(body.document)    return Response(        content=pdf_bytes,        media_type="application/pdf",        headers={"Content-Disposition": _content_disposition(body.document.title)},    )@router.post("/ingest/prepare", response_model=IngestPrepareResponse)async def prepare_document_ingest(body: IngestPrepareRequest, request: Request) -> IngestPrepareResponse:    """Chunk/normalize text for ingest; does not write to knowledge index."""    principal = get_principal(request)    resources = get_app_resources(request.app)    if resources.document_ingest_service is None:        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document ingest unavailable")    await load_session_for_principal(        request=request,        principal=principal,        session_service=resources.session_service,        thread_id=body.thread_id,        allow_missing=False,    )    task_id = f"ingest-prep-{uuid4().hex[:12]}"    result = await resources.document_ingest_service.prepare_chunks(        task_id=task_id,        thread_id=body.thread_id,        raw_text=body.raw_text,        document_id=body.document_id,        mime_type=body.mime_type,        locale=body.locale,        max_chunk_chars=body.max_chunk_chars,        enrich_context_prefix=body.enrich_context_prefix,        document_title=body.document_title,        trace_id=request.headers.get("X-Trace-Id"),    )    if result.output is None:        return IngestPrepareResponse(            task_id=task_id,            status=result.status,            confidence=result.confidence,            chunk_count=0,            strategy="paragraph",            error=result.error,        )    chunks = tuple(        IngestChunkResponse(            index=chunk.index,            text=chunk.text,            char_start=chunk.char_start,            char_end=chunk.char_end,            contextual_prefix=chunk.contextual_prefix,        )        for chunk in result.output.chunks    )    return IngestPrepareResponse(        task_id=task_id,        status=result.status,        confidence=result.confidence,        chunk_count=len(chunks),        strategy=result.output.chunking_strategy,        chunks=chunks,        error=result.error,    )@router.post("/ingest/commit", response_model=HITLCardView)async def commit_document_ingest(body: IngestCommitRequest, request: Request) -> HITLCardView:    """Mint HITL card for platform.ingest_document; write runs only after approve."""    principal = get_principal(request)    resources = get_app_resources(request.app)    if resources.document_ingest_service is None:        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document ingest unavailable")    await load_session_for_principal(        request=request,        principal=principal,        session_service=resources.session_service,        thread_id=body.thread_id,        allow_missing=False,    )    try:        card = await resources.document_ingest_service.request_commit(            prepare_task_id=body.prepare_task_id,            owner_user_id=principal.subject,            org_id=principal.org_id,        )    except ValueError as exc:        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc    return card.without_secrets()def _content_disposition(title: str | None) -> str:    """ASCII filename= + RFC 5987 filename* (кириллица безопасна для HTTP headers)."""    display = _safe_download_stem(title)    ascii_name = _ascii_filename(display)    utf8_name = quote(f"{display}.pdf", safe="")    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"def _safe_download_stem(title: str | None) -> str:    if not title:        return "palatium-answer"    cleaned = "".join(ch if ch.isalnum() or ch in "-_ " else "" for ch in title)    cleaned = cleaned.strip().replace(" ", "-")[:60]    return cleaned or "palatium-answer"def _ascii_filename(stem: str) -> str:    ascii_stem = "".join(ch if ord(ch) < 128 and (ch.isalnum() or ch in "-_") else "" for ch in stem)    ascii_stem = ascii_stem.strip("-_") or "palatium-answer"    return f"{ascii_stem[:60]}.pdf"

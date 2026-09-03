@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from palatium_ai.application.agents.formatter_agent import _parse_formatter_document
+from palatium_ai.application.agents.formatter import parse_formatter_document
 from palatium_ai.domain.llm.json_codec import extract_json_object, loads_llm_json
 
 
@@ -38,7 +38,7 @@ def test_formatter_parse_tolerates_trailing_commas() -> None:
       "meta": {"confidence": 0.9, "requires_review": false, "source_refs": [],},
     }
     """
-    doc = _parse_formatter_document(raw)
+    doc = parse_formatter_document(raw)
     assert doc.locale == "ru-RU"
     assert "62" in doc.blocks[0].text  # type: ignore[attr-defined]
 

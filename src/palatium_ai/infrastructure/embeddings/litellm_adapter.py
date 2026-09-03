@@ -10,6 +10,7 @@ import structlog
 
 from litellm import aembedding
 
+from palatium_ai.core.types.embeddings import MEMORY_EMBEDDING_DIM, assert_vector_dim
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
 
 if TYPE_CHECKING:
@@ -72,11 +73,15 @@ class LiteLLMEmbeddingAdapter:
             "api_key": self._api_key,
             "api_base": self._base_url,
         }
+        expected_dim = self._config.get_dimension()
+        # Do not send `dimensions`: corporate vLLM rejects Matryoshka
+        # ("does not support matryoshka representation"). Native width only.
         logger.debug(
             "Embedding request",
             provider=self._provider,
             texts_count=len(texts),
             model=resolved_model,
+            expected_dim=expected_dim,
         )
         try:
             response = await aembedding(**params)
@@ -85,6 +90,12 @@ class LiteLLMEmbeddingAdapter:
                 raise RuntimeError(
                     "Embedding provider returned an empty vector list. Check model name, api_base, and response format."
                 )
+            for vector in vectors:
+                if len(vector) != expected_dim:
+                    msg = f"Embedding dim {len(vector)} != configured {expected_dim}"
+                    raise ValueError(msg)
+                if expected_dim == MEMORY_EMBEDDING_DIM:
+                    assert_vector_dim(schema="memory", vector_len=len(vector))
             logger.debug(
                 "Embedding response received",
                 provider=self._provider,

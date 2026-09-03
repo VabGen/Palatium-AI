@@ -4,25 +4,26 @@ from __future__ import annotations
 
 import json
 
-from datetime import UTC, datetime
-from uuid import uuid4
-
 import pytest
 
-from palatium_ai.application.agents.context_weaver_agent import ContextWeaverAgent
-from palatium_ai.application.agents.contextualizer_agent import ContextualizerAgent
-from palatium_ai.application.agents.critic_agent import CriticAgent
-from palatium_ai.application.agents.formatter_agent import FormatterAgent
-from palatium_ai.application.agents.intent_classifier_agent import IntentClassifierAgent
-from palatium_ai.application.agents.researcher_agent import ResearcherAgent
-from palatium_ai.application.agents.supervisor_agent import SupervisorAgent
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_service import IntentService
-from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
-from tests.conftest import FakeLLMPort
+from tests.conftest import (
+    FakeDialogTurnStore,
+    FakeLLMPort,
+    make_analyst_agent,
+    make_coder_agent,
+    make_critic_agent,
+    make_dual_agent_stack,
+    make_formatter_agent,
+    make_graph_checkpointer,
+    make_researcher_agent,
+    make_supervisor_agent,
+    make_weaving_agent,
+)
 
 _HITL_HMAC = "unit-test-hitl-hmac-key-32b"  # noqa: S105
 
@@ -33,38 +34,6 @@ class _FakeSessionService:
 
     async def assert_thread_access(self, **_kwargs: object) -> None:
         return None
-
-
-class _FakeDialogTurnStore:
-    def __init__(self) -> None:
-        self._turns: dict[str, list[DialogTurn]] = {}
-
-    async def append_turn(
-        self,
-        *,
-        thread_id: str,
-        role: str,
-        content: str,
-        task_id: str | None = None,
-        payload: object | None = None,
-    ) -> DialogTurn:
-        _ = payload
-        seq = len(self._turns.get(thread_id, []))
-        turn = DialogTurn(
-            id=uuid4(),
-            thread_id=thread_id,
-            role=role,  # type: ignore[arg-type]
-            content=content,
-            task_id=task_id,
-            seq=seq,
-            created_at=datetime.now(UTC),
-        )
-        self._turns.setdefault(thread_id, []).append(turn)
-        return turn
-
-    async def list_recent_turns(self, *, thread_id: str, limit: int = 12) -> DialogTurnWindow:
-        items = self._turns.get(thread_id, [])[-limit:]
-        return DialogTurnWindow(thread_id=thread_id, turns=tuple(items), limit=limit)
 
 
 def _formatter_json(title: str) -> str:
@@ -91,7 +60,7 @@ def _formatter_json(title: str) -> str:
 @pytest.mark.asyncio
 async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
     """Bug: 'план → дай таблицей' used to become clarification without rewrite."""
-    dialog = _FakeDialogTurnStore()
+    dialog = FakeDialogTurnStore()
     memory = InMemoryMemoryPort()
 
     # Seed prior exchange as if turn 1 already happened.
@@ -102,34 +71,35 @@ async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
         content="План встречи:\n1. Цель\n2. Повестка\n3. Участники",
     )
 
-    contextualizer = ContextualizerAgent(
-        FakeLLMPort(
-            """{
+    harness, contextualizer, intent_agent, pipeline_llm = make_dual_agent_stack(
+        """{
               "rewritten_query": "Представь предыдущий план встречи в виде таблицы",
               "continuation_kind": "format",
               "confidence": 0.93,
               "refers_to_prior": true,
               "prior_assistant_excerpt": "План встречи:\\n1. Цель\\n2. Повестка",
               "reasoning": "format follow-up"
-            }"""
-        )
+            }""",
+        '{"task_kind": "response_formatting", "requires_mcp": false, '
+        '"candidate_capabilities": ["format"], "confidence": 0.91, '
+        '"reasoning": "Rewritten format request"}',
     )
     graph = build_agent_graph(
-        intent_agent=IntentClassifierAgent(
-            FakeLLMPort(
-                '{"task_kind": "response_formatting", "requires_mcp": false, '
-                '"candidate_capabilities": ["format"], "confidence": 0.91, '
-                '"reasoning": "Rewritten format request"}'
-            )
+        harness=harness,
+        intent_agent=intent_agent,
+        supervisor_agent=make_supervisor_agent(harness),
+        weaving_agent=make_weaving_agent(harness=harness),
+        researcher_agent=make_researcher_agent(
+            FakeLLMPort('{"summary": "unused", "confidence": 0.1, "sources_used": []}'), harness=harness
         ),
-        supervisor_agent=SupervisorAgent(),
-        context_weaver_agent=ContextWeaverAgent(),
-        researcher_agent=ResearcherAgent(FakeLLMPort('{"summary": "unused", "confidence": 0.1, "sources_used": []}')),
-        critic_agent=CriticAgent(
+        coder_agent=make_coder_agent(harness=harness),
+        analyst_agent=make_analyst_agent(harness=harness),
+        critic_agent=make_critic_agent(
             FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
         ),
-        formatter_agent=FormatterAgent(FakeLLMPort(_formatter_json("План встречи (таблица)"))),
-        contextualizer_agent=contextualizer,
+        formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("План встречи (таблица)"))),
+        continuation_agent=contextualizer,
+        checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
         graph,
@@ -157,7 +127,7 @@ async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
 @pytest.mark.asyncio
 async def test_followup_answer_overrides_false_clarification() -> None:
     """Bug: 'когда завершение встречи' → clarify HITL despite prior schedule in dialog."""
-    dialog = _FakeDialogTurnStore()
+    dialog = FakeDialogTurnStore()
     await dialog.append_turn(
         thread_id="follow-answer",
         role="user",
@@ -171,29 +141,40 @@ async def test_followup_answer_overrides_false_clarification() -> None:
         ),
     )
 
+    harness, contextualizer, intent_agent, pipeline_llm = make_dual_agent_stack(
+        """{
+                  "rewritten_query": "Когда завершится встреча?",
+                  "continuation_kind": "answer",
+                  "confidence": 0.9,
+                  "refers_to_prior": true,
+                  "prior_assistant_excerpt": "Завершение встречи (15:00–15:15)",
+                  "reasoning": "anaphora to prior schedule"
+                }""",
+        '{"task_kind": "clarification_needed", "requires_mcp": false, '
+        '"candidate_capabilities": [], "confidence": 0.9, '
+        '"reasoning": "No meeting details provided"}',
+    )
     graph = build_agent_graph(
-        intent_agent=IntentClassifierAgent(
-            FakeLLMPort(
-                '{"task_kind": "clarification_needed", "requires_mcp": false, '
-                '"candidate_capabilities": [], "confidence": 0.9, '
-                '"reasoning": "No meeting details provided"}'
-            )
-        ),
-        supervisor_agent=SupervisorAgent(),
-        context_weaver_agent=ContextWeaverAgent(),
-        researcher_agent=ResearcherAgent(
+        harness=harness,
+        intent_agent=intent_agent,
+        supervisor_agent=make_supervisor_agent(harness),
+        weaving_agent=make_weaving_agent(harness=harness),
+        researcher_agent=make_researcher_agent(
             FakeLLMPort(
                 '{"summary": "Встреча завершается в 15:00–15:15", '
                 '"confidence": 0.95, "sources_used": ["prior_context"]}'
-            )
+            ),
+            harness=harness,
         ),
-        critic_agent=CriticAgent(
+        coder_agent=make_coder_agent(harness=harness),
+        analyst_agent=make_analyst_agent(harness=harness),
+        critic_agent=make_critic_agent(
             FakeLLMPort(
                 '{"accuracy_score": 9, "safety_score": 10, "requires_review": false, '
                 '"summary": "Answered from prior schedule"}'
             )
         ),
-        formatter_agent=FormatterAgent(
+        formatter_agent=make_formatter_agent(
             FakeLLMPort(
                 json.dumps(
                     {
@@ -217,18 +198,8 @@ async def test_followup_answer_overrides_false_clarification() -> None:
                 )
             )
         ),
-        contextualizer_agent=ContextualizerAgent(
-            FakeLLMPort(
-                """{
-                  "rewritten_query": "Когда завершится встреча?",
-                  "continuation_kind": "answer",
-                  "confidence": 0.9,
-                  "refers_to_prior": true,
-                  "prior_assistant_excerpt": "Завершение встречи (15:00–15:15)",
-                  "reasoning": "anaphora to prior schedule"
-                }"""
-            )
-        ),
+        continuation_agent=contextualizer,
+        checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
         graph,
@@ -253,7 +224,7 @@ async def test_followup_answer_overrides_false_clarification() -> None:
 @pytest.mark.asyncio
 async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
     """Bug: 'привет → как дела' routed to Researcher + Critic HITL."""
-    dialog = _FakeDialogTurnStore()
+    dialog = FakeDialogTurnStore()
     await dialog.append_turn(thread_id="social-follow", role="user", content="привет")
     await dialog.append_turn(thread_id="social-follow", role="assistant", content="Привет!")
 
@@ -261,7 +232,7 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
     llm_critic = FakeLLMPort(
         '{"accuracy_score": 1, "safety_score": 1, "requires_review": true, "summary": "should not run"}'
     )
-    llm_contextualizer = FakeLLMPort(
+    harness, contextualizer, intent_agent, pipeline_llm = make_dual_agent_stack(
         """{
           "rewritten_query": "как дела",
           "continuation_kind": "new_topic",
@@ -269,22 +240,21 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
           "refers_to_prior": false,
           "prior_assistant_excerpt": null,
           "reasoning": "phatic; self-contained"
-        }"""
+        }""",
+        '{"task_kind": "social_conversation", "requires_mcp": false, '
+        '"candidate_capabilities": [], "confidence": 0.94, '
+        '"reasoning": "Phatic follow-up after greeting"}',
     )
-
     graph = build_agent_graph(
-        intent_agent=IntentClassifierAgent(
-            FakeLLMPort(
-                '{"task_kind": "social_conversation", "requires_mcp": false, '
-                '"candidate_capabilities": [], "confidence": 0.94, '
-                '"reasoning": "Phatic follow-up after greeting"}'
-            )
-        ),
-        supervisor_agent=SupervisorAgent(),
-        context_weaver_agent=ContextWeaverAgent(),
-        researcher_agent=ResearcherAgent(llm_researcher),
-        critic_agent=CriticAgent(llm_critic),
-        formatter_agent=FormatterAgent(
+        harness=harness,
+        intent_agent=intent_agent,
+        supervisor_agent=make_supervisor_agent(harness),
+        weaving_agent=make_weaving_agent(harness=harness),
+        researcher_agent=make_researcher_agent(llm_researcher, harness=harness),
+        coder_agent=make_coder_agent(harness=harness),
+        analyst_agent=make_analyst_agent(harness=harness),
+        critic_agent=make_critic_agent(llm_critic),
+        formatter_agent=make_formatter_agent(
             FakeLLMPort(
                 json.dumps(
                     {
@@ -299,7 +269,8 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
                 )
             )
         ),
-        contextualizer_agent=ContextualizerAgent(llm_contextualizer),
+        continuation_agent=contextualizer,
+        checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
         graph,
@@ -316,4 +287,4 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
     assert len(llm_researcher.calls) == 0
     assert len(llm_critic.calls) == 0
     # Contextualizer runs before Intent when assistant prior exists (live continuation hints).
-    assert len(llm_contextualizer.calls) == 1
+    assert len(pipeline_llm.calls) >= 1

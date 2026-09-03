@@ -15,10 +15,9 @@ async def list_agents(request: Request) -> dict[str, list[str]]:
     _ = require_admin(request)
     return {
         "agents": [
-            "contextualizer",
+            "context_enricher",
             "intent_classifier",
             "supervisor",
-            "context_weaver",
             "researcher",
             "critic",
             "formatter",

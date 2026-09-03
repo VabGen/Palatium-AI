@@ -7,7 +7,7 @@ from typing import cast
 from palatium_ai.application.orchestration.selectors import resolved_prior_assistant_content
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
-from palatium_ai.domain.memory.continuity import EffectiveRoutingIntent
+from palatium_ai.domain.policies import EffectiveRoutingIntent
 
 
 def test_trusted_prior_uses_worker_summary_budget() -> None:

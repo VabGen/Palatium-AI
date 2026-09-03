@@ -1,0 +1,32 @@
+[
+  {
+    "id": "minimal_document",
+    "cassette": "formatter/minimal_document.json",
+    "input": {
+      "user_text": "Краткий ответ пользователю.",
+      "task_kind": "social_conversation",
+      "route": "formatter",
+      "route_plan": "Format social reply",
+      "requires_mcp": false,
+      "selected_strategy": "ack_only",
+      "worker_summary": "Краткий ответ пользователю.",
+      "critic_summary": "ok"
+    },
+    "expect": { "schema_version": 1, "block_count_min": 1, "status": "success" }
+  },
+  {
+    "id": "structured_steps",
+    "cassette": "formatter/structured_steps.json",
+    "input": {
+      "user_text": "Show the plan as steps",
+      "task_kind": "response_formatting",
+      "route": "formatter",
+      "route_plan": "Format structured plan",
+      "requires_mcp": false,
+      "selected_strategy": "format_only",
+      "worker_summary": "Step 1: Do first. Step 2: Do second.",
+      "critic_summary": "ok"
+    },
+    "expect": { "schema_version": 1, "block_count_min": 2, "status": "success" }
+  }
+]
