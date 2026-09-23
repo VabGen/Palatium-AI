@@ -28,7 +28,8 @@ class PlatformKnowledgeMcpRegistry:
     def __init__(self, handler: object) -> None:
         self._handler = handler
 
-    async def call_tool(self, server_name: str, call: MCPToolCall) -> MCPToolResult:
+    async def call_tool(self, server_name: str, call: MCPToolCall, *, allow_unpinned: bool = False) -> MCPToolResult:
+        _ = allow_unpinned
         if server_name != "platform":
             msg = f"unexpected MCP server: {server_name}"
             raise ValueError(msg)
@@ -110,7 +111,7 @@ def make_memory_consolidate_hitl_stack(
     from palatium_ai.application.agents.memory_keeper import MEMORY_KEEPER_CONFIG, MemoryKeeperAgent
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.memory_consolidate_service import MemoryConsolidateService
-    from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+    from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
     from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
     from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
@@ -152,7 +153,7 @@ def make_memory_consolidate_hitl_stack(
             ("user", "Дай в виде таблицы"),
         ]
     )
-    consolidation = MemoryConsolidationService(
+    consolidation = MemoryExtractService(
         harness=harness,
         memory_keeper=keeper,
         memory_port=port,
@@ -314,8 +315,15 @@ class FakeMCPRegistry:
         tools = await self.list_tools(server_name)
         return next((tool for tool in tools if tool.name == tool_name), None)
 
-    async def call_tool(self, server_name: str, tool_call: MCPToolCall) -> MCPToolResult:
+    async def call_tool(
+        self,
+        server_name: str,
+        tool_call: MCPToolCall,
+        *,
+        allow_unpinned: bool = False,
+    ) -> MCPToolResult:
         """Запоминает вызов и возвращает stub content."""
+        _ = allow_unpinned
         self.calls.append((server_name, tool_call))
         return MCPToolResult(
             content=[{"type": "text", "text": f"Stub MCP result for {tool_call.arguments.get('query', '')}"}],

@@ -15,7 +15,7 @@ from palatium_ai.domain.memory.pii import resolve_contains_pii
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
-    from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+    from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.domain.memory.ports import MemoryPort
 
 _VALID_NAMESPACE_KINDS = frozenset({"thread", "user", "org"})
@@ -286,9 +286,13 @@ async def forget_memory(
 
 
 async def consolidate_memory(
-    consolidation: MemoryConsolidationService | None,
+    consolidation: MemoryExtractService | None,
     arguments: dict[str, object],
 ) -> MCPToolResult:
+    """Enqueue sleep-time extract (legacy MCP name ``consolidate_memory``).
+
+    Does not promote medium→graph; that is ``MemoryPromotionService``.
+    """
     user_id = arguments.get("user_id")
     thread_id = arguments.get("thread_id")
     if not isinstance(user_id, str) or not user_id.strip():
@@ -296,13 +300,13 @@ async def consolidate_memory(
     if not isinstance(thread_id, str) or not thread_id.strip():
         return _error_result("Invalid params: thread_id is required")
     if consolidation is None:
-        return _error_result("consolidate_memory unavailable: consolidation worker not configured")
+        return _error_result("consolidate_memory unavailable: extract worker not configured")
 
     task_id_raw = arguments.get("task_id", "")
     task_id = (
         task_id_raw.strip()
         if isinstance(task_id_raw, str) and task_id_raw.strip()
-        else f"mcp-consolidate-{thread_id.strip()[:32]}"
+        else f"mcp-extract-{thread_id.strip()[:32]}"
     )
     org_id_raw = arguments.get("org_id", "")
     org_id = org_id_raw.strip() if isinstance(org_id_raw, str) and org_id_raw.strip() else None
@@ -314,6 +318,7 @@ async def consolidate_memory(
     )
     payload = {
         "tool": "consolidate_memory",
+        "axis": "extract",
         "thread_id": thread_id.strip(),
         "task_id": task_id,
         "status": "queued" if queued else "queue_full",

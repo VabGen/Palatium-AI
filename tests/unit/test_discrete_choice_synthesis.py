@@ -93,7 +93,9 @@ def test_merge_synthesized_actions_sets_choice_interaction() -> None:
         None,
         actions,
         framing_text="Выберите тему анекдота:",
+        locale="ru-RU",
     )
+    assert doc.locale == "ru-RU"
     assert doc.meta.interaction == "choice"
     assert len(doc.actions) == 3
     plan = HitlInteractionPolicy.plan(doc, requires_review=False, requires_user_choice=True)

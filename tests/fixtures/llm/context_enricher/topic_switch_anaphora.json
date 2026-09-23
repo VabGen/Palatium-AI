@@ -1,0 +1,11 @@
+{
+  "model": "fake",
+  "response": {
+    "rewritten_query": "Предложи рецепт утки на ужин",
+    "continuation_kind": "answer",
+    "confidence": 0.91,
+    "refers_to_prior": true,
+    "prior_assistant_excerpt": "Хочу на ужин утку",
+    "reasoning": "Anaphora to earlier user dinner preference after topic switch"
+  }
+}

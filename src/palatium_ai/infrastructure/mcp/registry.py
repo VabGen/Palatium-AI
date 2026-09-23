@@ -17,8 +17,17 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from palatium_ai.core.observability.metrics import agent_metrics
+from palatium_ai.domain.mcp.execution_policy import (
+    LOCAL_EXECUTION_SERVERS,
+    has_local_capability,
+    requires_local_handler,
+)
 from palatium_ai.domain.mcp.models import MCPToolDescriptor, MCPToolSummary
 from palatium_ai.domain.mcp.server_url_policy import filter_mcp_server_map
+from palatium_ai.domain.mcp.tool_policy import (
+    assert_platform_pin_for_call,
+    local_capability_tool_descriptors,
+)
 from palatium_ai.infrastructure.mcp.base import MCPJsonRpcClient, MCPJsonRpcError
 from palatium_ai.infrastructure.mcp.circuit import McpServerCircuit
 
@@ -88,8 +97,16 @@ class MCPRegistry:
         self._initialized = True
 
     def _accept_servers(self, raw: dict[str, str]) -> dict[str, str]:
+        cleaned = dict(raw)
+        # Track B: platform is Host-local only — ignore accidental URLs (Compose/Consul drift).
+        platform_url = cleaned.pop("platform", None)
+        if platform_url:
+            logger.warning(
+                "MCP server URL for 'platform' ignored; Host-local capability only",
+                url=platform_url,
+            )
         accepted, rejected = filter_mcp_server_map(
-            raw,
+            cleaned,
             allow_http_loopback=self._settings.mcp.allow_http_loopback,
             http_allowed_hosts=self._settings.mcp.http_host_allowlist(),
         )
@@ -100,25 +117,48 @@ class MCPRegistry:
     def _assert_auth_coverage(self) -> None:
         if not self._settings.mcp.auth_required:
             return
-        missing = [name for name in self._servers if not self._settings.mcp.resolve_auth_token(name)]
+        signing = None
+        if hasattr(self._settings, "mcp_jwt_signing_secret"):
+            signing = self._settings.mcp_jwt_signing_secret()
+        missing: list[str] = []
+        for name in self._servers:
+            if signing:
+                continue
+            if not self._settings.mcp.resolve_static_token(name):
+                missing.append(name)
         if missing:
             raise RuntimeError(
-                "MCP_AUTH_REQUIRED=true but no token for servers: " + ", ".join(sorted(missing)),
+                "MCP_AUTH_REQUIRED=true but no MCP_JWT_SECRET/JWT_SECRET (HS*) "
+                "and no static token for servers: " + ", ".join(sorted(missing)),
             )
 
     def _auth_headers(self, server_name: str) -> dict[str, str]:
-        token = self._settings.mcp.resolve_auth_token(server_name)
+        token = self._resolve_bearer(server_name)
         if not token:
             return {}
         return {"Authorization": f"Bearer {token}"}
 
-    def is_registered(self, name: str) -> bool:
-        """Проверяет, зарегистрирован ли сервер с указанным именем."""
+    def _resolve_bearer(self, server_name: str) -> str | None:
+        if hasattr(self._settings, "resolve_mcp_bearer"):
+            return self._settings.resolve_mcp_bearer(server_name)
+        mcp = self._settings.mcp
+        if hasattr(mcp, "resolve_static_token"):
+            return mcp.resolve_static_token(server_name)
+        if hasattr(mcp, "resolve_auth_token"):
+            return mcp.resolve_auth_token(server_name)
+        return None
+
+    def has_remote_url(self, name: str) -> bool:
+        """True when a remote MCP HTTP URL is configured for this server."""
         return name in self._servers
 
+    def is_registered(self, name: str) -> bool:
+        """True for remote URL servers or Host-local capabilities (e.g. platform)."""
+        return name in self._servers or has_local_capability(name)
+
     def list_servers(self) -> list[str]:
-        """Возвращает список имён зарегистрированных серверов."""
-        return list(self._servers.keys())
+        """Remote MCP servers plus always-on local capabilities."""
+        return sorted(set(self._servers) | set(LOCAL_EXECUTION_SERVERS))
 
     @property
     def http_client(self) -> httpx.AsyncClient:
@@ -167,6 +207,10 @@ class MCPRegistry:
         """Проверяет доступность сервера; результат кешируется на cache_ttl_seconds."""
         if not self.is_registered(name):
             raise ValueError(f"Server '{name}' is not registered")
+
+        # Host-local capabilities need no HTTP health probe.
+        if has_local_capability(name):
+            return True
 
         now = time.time()
         if self._circuit_open(name, now):
@@ -241,9 +285,10 @@ class MCPRegistry:
 
     async def available_servers(self) -> list[str]:
         """Возвращает список имён серверов, которые в данный момент доступны."""
-        tasks = [self.is_available(name) for name in self._servers]
+        names = self.list_servers()
+        tasks = [self.is_available(name) for name in names]
         results = await asyncio.gather(*tasks)
-        return [name for name, ok in zip(self._servers, results, strict=False) if ok]
+        return [name for name, ok in zip(names, results, strict=False) if ok]
 
     def _circuit(self, server_name: str) -> McpServerCircuit:
         return self._circuits.setdefault(server_name, McpServerCircuit())
@@ -273,7 +318,13 @@ class MCPRegistry:
         agent_metrics.record_circuit_state(server_name, circuit.state_code())
 
     async def list_tools(self, server_name: str, *, force_refresh: bool = False) -> list[MCPToolDescriptor]:
-        """Получает tools/list; TTL-кэш + negative cache + circuit breaker."""
+        """Получает tools/list; TTL-кэш + negative cache + circuit breaker.
+
+        Host-local servers (platform) return pin SoT descriptors — no network.
+        """
+        if has_local_capability(server_name):
+            return local_capability_tool_descriptors(server_name)
+
         now = time.time()
         if self._circuit_open(server_name, now):
             logger.debug("MCP circuit open; skipping tools/list", server=server_name)
@@ -333,6 +384,9 @@ class MCPRegistry:
 
     async def list_tool_summaries(self, server_name: str, *, force_refresh: bool = False) -> list[MCPToolSummary]:
         """Discovery path: network omitInputSchema + separate TTL cache (no full-schema warm)."""
+        if has_local_capability(server_name):
+            return [tool.to_summary() for tool in local_capability_tool_descriptors(server_name)]
+
         now = time.time()
         if self._circuit_open(server_name, now):
             return self._cached_summaries_on_circuit_open(server_name)
@@ -402,16 +456,46 @@ class MCPRegistry:
         """In-process MCP tool execution (e.g. platform.ingest_document → KnowledgePort)."""
         self._local_handlers[server_name] = handler
 
-    async def call_tool(self, server_name: str, tool_call: MCPToolCall) -> MCPToolResult:
-        """Валидирует аргументы по JSON Schema 2020-12 и вызывает tools/call."""
+    def has_local_handler(self, server_name: str) -> bool:
+        """True when ``call_tool`` for this server is wired to an in-process handler."""
+        return server_name in self._local_handlers
+
+    def assert_local_handlers_wired(self) -> None:
+        """Fail startup when any LOCAL_EXECUTION_SERVERS member lacks a handler."""
+        missing = sorted(name for name in LOCAL_EXECUTION_SERVERS if name not in self._local_handlers)
+        if missing:
+            raise PlatformHandlerNotWiredError(
+                ", ".join(missing),
+                detail=(
+                    "register PlatformToolHandler via bootstrap before serving traffic "
+                    "(Host-local capability; not gated on MCP_SERVERS URL)"
+                ),
+            )
+
+    async def call_tool(
+        self,
+        server_name: str,
+        tool_call: MCPToolCall,
+        *,
+        allow_unpinned: bool = False,
+    ) -> MCPToolResult:
+        """Валидирует pin + JSON Schema и вызывает tools/call (Host control plane)."""
         local_handler = self._local_handlers.get(server_name)
         if local_handler is not None:
             tools = await self.list_tools(server_name)
             descriptor = next((tool for tool in tools if tool.name == tool_call.name), None)
             if descriptor is None:
                 raise ValueError(f"Tool '{tool_call.name}' is not declared by server '{server_name}'")
+            assert_platform_pin_for_call(
+                descriptor,
+                server_name=server_name,
+                allow_unpinned=allow_unpinned,
+            )
             MCPJsonRpcClient.validate_arguments(descriptor, tool_call.arguments)
             return await local_handler.call_tool(tool_call.name, tool_call.arguments)
+
+        if requires_local_handler(server_name):
+            raise PlatformHandlerNotWiredError(server_name)
 
         now = time.time()
         circuit = self._circuit(server_name)
@@ -424,6 +508,11 @@ class MCPRegistry:
         if descriptor is None:
             raise ValueError(f"Tool '{tool_call.name}' is not declared by server '{server_name}'")
 
+        assert_platform_pin_for_call(
+            descriptor,
+            server_name=server_name,
+            allow_unpinned=allow_unpinned,
+        )
         MCPJsonRpcClient.validate_arguments(descriptor, tool_call.arguments)
         if not self._circuit_allows(server_name, time.time()):
             logger.warning("MCP circuit open; refusing tools/call", server=server_name)
@@ -463,6 +552,17 @@ class MCPRegistry:
     def initialized(self) -> bool:
         """True, если реестр прошёл initialize()."""
         return self._initialized
+
+
+class PlatformHandlerNotWiredError(RuntimeError):
+    """Raised when a local-execution MCP server has no in-process handler."""
+
+    def __init__(self, server_name: str, *, detail: str | None = None) -> None:
+        self.server_name = server_name
+        message = f"MCP server '{server_name}' requires an in-process local handler; refusing HTTP stub tools/call"
+        if detail:
+            message = f"{message} ({detail})"
+        super().__init__(message)
 
 
 class MCPCircuitOpenError(RuntimeError):

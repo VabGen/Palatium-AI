@@ -2,14 +2,25 @@
 
 """MCP tool ACL patterns and side-effect / HITL-before policy (Zero Trust).
 
+Host control plane (Phase 5) — these gates stay on the platform Host, never on
+the MCP server:
+- ``PlatformToolPin`` + schema fingerprint
+- HITL / ``requires_interrupt_before_call``
+- Agent ACL (``is_tool_invocation_allowed``)
+- paired with ``argument_policy``, ``MemoryNamespacePolicy``, ``wrap_untrusted``
+
+Server ``annotations`` / self-attested readOnly are untrusted input only.
+
 Platform registration contract (every MCP tool used in production):
-1. Stub/server implements the tool + inputSchema.
+1. Add frozen I/O in ``external_schemas`` / ``platform_schemas`` (SoT).
 2. Add a ``PlatformToolPin`` here with side_effect, schema fingerprint,
    risk_tier, and requires_hitl (explicit; never trust server attestation).
 3. Add ``mcp:<server>.<tool>`` to Researcher ``allowed_tools``.
-4. Wire server URL in ``MCP_SERVERS``.
+4. Remote domains (edms/analytics): wire URL in ``MCP_SERVERS``.
+   Host-local ``platform``: handler branch in bootstrap (no URL).
 
-Unpinned or schema-mismatched tools classify as ``unknown`` → HITL interrupt.
+Unpinned or schema-mismatched tools classify as ``unknown`` → HITL interrupt;
+``MCPRegistry.call_tool`` refuses them unless ``allow_unpinned=True`` (post-HITL).
 """
 
 from __future__ import annotations
@@ -164,6 +175,53 @@ def iter_platform_pins() -> tuple[tuple[str, PlatformToolPin], ...]:
     return tuple(sorted(_PLATFORM_SIDE_EFFECTS.items(), key=lambda item: item[0]))
 
 
+def pinned_tool_names(server_name: str) -> frozenset[str]:
+    """Tool names pinned for one MCP server (gateway allowlist / audits)."""
+    prefix = f"mcp:{server_name}."
+    return frozenset(key.removeprefix(prefix) for key, _ in iter_platform_pins() if key.startswith(prefix))
+
+
+# Schemas for Host-local platform discovery (Track B — no HTTP tools/list).
+_PLATFORM_INPUT_SCHEMAS: dict[str, dict[str, object]] = {
+    "ingest_document": PLATFORM_INGEST_DOCUMENT_SCHEMA,
+    "search_knowledge": PLATFORM_SEARCH_KNOWLEDGE_SCHEMA,
+    "search_memory": PLATFORM_SEARCH_MEMORY_SCHEMA,
+    "save_memory": PLATFORM_SAVE_MEMORY_SCHEMA,
+    "forget_memory": PLATFORM_FORGET_MEMORY_SCHEMA,
+    "consolidate_memory": PLATFORM_CONSOLIDATE_MEMORY_SCHEMA,
+    "graph_query": PLATFORM_GRAPH_QUERY_SCHEMA,
+    "web_fallback": PLATFORM_WEB_FALLBACK_SCHEMA,
+}
+
+_PLATFORM_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "ingest_document": "Persist prepared document chunks into the knowledge index (write; HITL).",
+    "search_knowledge": "Hybrid search over ingested knowledge chunks (read).",
+    "search_memory": "Hybrid search over episodic memory entries (read).",
+    "save_memory": "Upsert episodic memory entry (write; HITL).",
+    "forget_memory": "Delete episodic memory entry by key (write; HITL).",
+    "consolidate_memory": "Enqueue sleep-time memory consolidation (write; HITL).",
+    "graph_query": "Read-only parameterized Cypher against the knowledge graph.",
+    "web_fallback": "External web search fallback after local retrieval empty.",
+}
+
+
+def local_capability_tool_descriptors(server_name: str) -> list[MCPToolDescriptor]:
+    """Build full tool descriptors from pin SoT (Host-local discovery, no network)."""
+    if server_name.strip() != "platform":
+        return []
+    descriptors: list[MCPToolDescriptor] = []
+    for tool_name in sorted(_PLATFORM_INPUT_SCHEMAS):
+        schema = _PLATFORM_INPUT_SCHEMAS[tool_name]
+        descriptors.append(
+            MCPToolDescriptor(
+                name=tool_name,
+                description=_PLATFORM_TOOL_DESCRIPTIONS.get(tool_name, tool_name),
+                input_schema=dict(schema),
+            )
+        )
+    return descriptors
+
+
 def resolve_platform_pin(
     descriptor: MCPToolDescriptor,
     *,
@@ -180,6 +238,33 @@ def resolve_platform_pin(
     if secrets.compare_digest(actual, pinned.schema_fingerprint):
         return pinned
     return None
+
+
+class UnpinnedMcpToolError(PermissionError):
+    """Raised when ``call_tool`` targets a tool without a matching platform pin."""
+
+    def __init__(self, server_name: str, tool_name: str) -> None:
+        self.server_name = server_name
+        self.tool_name = tool_name
+        super().__init__(
+            f"MCP tool mcp:{server_name}.{tool_name} is unpinned or schema-mismatched; "
+            "refusing tools/call (pass allow_unpinned=True only after Host HITL)"
+        )
+
+
+def assert_platform_pin_for_call(
+    descriptor: MCPToolDescriptor,
+    *,
+    server_name: str,
+    allow_unpinned: bool = False,
+) -> PlatformToolPin | None:
+    """Registry choke point: pinned schema required unless post-HITL override."""
+    pin = resolve_platform_pin(descriptor, server_name=server_name)
+    if pin is not None:
+        return pin
+    if allow_unpinned:
+        return None
+    raise UnpinnedMcpToolError(server_name, descriptor.name)
 
 
 def is_tool_invocation_allowed(
@@ -283,10 +368,10 @@ def binding_hitl_metadata_for_ref(
     server_name: str,
     tool_name: str,
 ) -> tuple[SideEffectClass, ToolRiskTier, bool]:
-    """Discovery-time HITL hints from platform pin name (no schema yet).
+    """Discovery-time HITL hints from platform pin **name** (schema not verified yet).
 
-    Execution must still call ``resolve_platform_pin`` with the full descriptor —
-    schema fingerprint is verified only at call time.
+    Tentative only: execution must ``resolve_platform_pin`` with the full descriptor.
+    Never skip an interrupt based solely on this helper — Researcher rechecks fingerprint.
     """
     ref = mcp_tool_ref(server_name, tool_name)
     pinned = _PLATFORM_SIDE_EFFECTS.get(ref.acl_key)

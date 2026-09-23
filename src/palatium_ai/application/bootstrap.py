@@ -16,7 +16,7 @@ from palatium_ai.application.services.document_export_service import DocumentExp
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.kill_switch import KillSwitchService
-from palatium_ai.application.services.memory_consolidate_service import MemoryConsolidateService
+from palatium_ai.application.services.memory_extract_hitl_service import MemoryExtractHitlService
 from palatium_ai.application.services.memory_forget_service import MemoryForgetService
 from palatium_ai.application.services.memory_save_service import MemorySaveService
 from palatium_ai.application.services.session_service import SessionService
@@ -34,7 +34,7 @@ from palatium_ai.infrastructure.database.repositories import (
 )
 from palatium_ai.infrastructure.database.runtime import create_session_factory
 from palatium_ai.infrastructure.embeddings.factory import create_embedding_client_for_schema
-from palatium_ai.infrastructure.graph.factory import build_graph_port
+from palatium_ai.infrastructure.graph.factory import build_graph_ports
 from palatium_ai.infrastructure.knowledge.postgres_knowledge_port import PostgresKnowledgePort
 from palatium_ai.infrastructure.mcp.consul_source import ConsulMCPSource
 from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
@@ -59,12 +59,14 @@ if TYPE_CHECKING:
 
     from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.intent_service import IntentService
-    from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+    from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.core.config.settings import Settings
     from palatium_ai.domain.graph.port import GraphPort
+    from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.knowledge.port import KnowledgePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.domain.web.port import WebSearchPort
+    from palatium_ai.infrastructure.graph.factory import GraphPorts
 
 _HITL_SWEEP_INTERVAL_SECONDS = 60
 
@@ -84,18 +86,29 @@ class AppResources:
     redis_client: Redis
     dialog_turn_store: DialogTurnStore | None = None
     memory_port: MemoryPort | None = None
-    consolidation: MemoryConsolidationService | None = None
+    memory_extract: MemoryExtractService | None = None
     document_ingest_service: DocumentIngestService | None = None
     memory_save_service: MemorySaveService | None = None
     memory_forget_service: MemoryForgetService | None = None
-    memory_consolidate_service: MemoryConsolidateService | None = None
+    memory_extract_hitl_service: MemoryExtractHitlService | None = None
     checkpointer_handle: CheckpointerHandle | None = None
     background_tasks: tuple[asyncio.Task[None], ...] = field(default_factory=tuple)
     document_export_service: DocumentExportService = field(default_factory=DocumentExportService)
     session_timeline_service: SessionTimelineService | None = None
     hitl_respond_facade: HitlRespondFacade | None = None
     graph_port: GraphPort | None = None
+    graph_write_port: GraphWritePort | None = None
+    graph_ports: GraphPorts | None = None
     web_search_port: WebSearchPort | None = None
+
+    # Legacy aliases (prefer memory_extract*).
+    @property
+    def consolidation(self) -> MemoryExtractService | None:
+        return self.memory_extract
+
+    @property
+    def memory_consolidate_service(self) -> MemoryExtractHitlService | None:
+        return self.memory_extract_hitl_service
 
 
 async def load_mcp_servers_from_json_file(file_path: str) -> dict[str, str]:
@@ -188,9 +201,7 @@ def _wire_platform_handler(
     graph_port: GraphPort,
     web_search_port: WebSearchPort,
 ) -> None:
-    if not mcp_registry.is_registered("platform"):
-        logger.info("Platform MCP not registered; local handler skipped")
-        return
+    # Track B: platform is always-on Host-local capability (no MCP_SERVERS URL required).
     mcp_registry.register_local_handler(
         "platform",
         PlatformToolHandler(
@@ -267,7 +278,8 @@ async def startup(settings: Settings) -> AppResources:
     dialog_turn_store = PostgresDialogTurnStore(session_factory)
     memory_port = _build_memory_port(settings, session_factory)
     checkpointer_handle = await create_checkpointer(settings)
-    intent_service, consolidation, capability_index, document_ingest_service = build_intent_service(
+    graph_ports = build_graph_ports(settings)
+    intent_service, memory_extract, capability_index, document_ingest_service = build_intent_service(
         settings,
         mcp_registry,
         session_service=session_service,
@@ -279,18 +291,20 @@ async def startup(settings: Settings) -> AppResources:
         dialog_turn_store=dialog_turn_store,
         memory_port=memory_port,
         checkpointer=checkpointer_handle.saver,
+        graph_write=graph_ports.write,
     )
     hitl_service.bind_deny_resume(intent_service)
-    graph_port = build_graph_port(settings)
+    graph_port = graph_ports.query
     web_search_port = build_web_search_port(settings)
     _wire_platform_handler(
         mcp_registry,
         knowledge_port,
         memory_port,
-        consolidation,
+        memory_extract,
         graph_port=graph_port,
         web_search_port=web_search_port,
     )
+    mcp_registry.assert_local_handlers_wired()
 
     session_timeline_service = SessionTimelineService(
         dialog_turn_store=dialog_turn_store,
@@ -308,9 +322,9 @@ async def startup(settings: Settings) -> AppResources:
         redis_client=redis_client,
         mcp_tool_call_repository=mcp_tool_call_repository,
     )
-    memory_consolidate_service: MemoryConsolidateService | None = None
-    if consolidation is not None:
-        memory_consolidate_service = MemoryConsolidateService(
+    memory_extract_hitl_service: MemoryExtractHitlService | None = None
+    if memory_extract is not None:
+        memory_extract_hitl_service = MemoryExtractHitlService(
             hitl_service=hitl_service,
             mcp_registry=mcp_registry,
             redis_client=redis_client,
@@ -322,7 +336,7 @@ async def startup(settings: Settings) -> AppResources:
         document_ingest_service=document_ingest_service,
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
-        memory_consolidate_service=memory_consolidate_service,
+        memory_consolidate_service=memory_extract_hitl_service,
     )
 
     background_tasks.append(
@@ -341,14 +355,14 @@ async def startup(settings: Settings) -> AppResources:
     )
     logger.info("HITL TTL sweep started", interval_seconds=_HITL_SWEEP_INTERVAL_SECONDS)
 
-    if consolidation is not None:
+    if memory_extract is not None:
         background_tasks.append(
             asyncio.create_task(
-                consolidation.run_worker(),
-                name="memory-consolidation",
+                memory_extract.run_worker(),
+                name="memory-extract",
             )
         )
-        logger.info("Memory consolidation worker started")
+        logger.info("Memory extract worker started")
 
     return AppResources(
         settings=settings,
@@ -362,17 +376,19 @@ async def startup(settings: Settings) -> AppResources:
         redis_client=redis_client,
         dialog_turn_store=dialog_turn_store,
         memory_port=memory_port,
-        consolidation=consolidation,
+        memory_extract=memory_extract,
         document_ingest_service=document_ingest_service,
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
-        memory_consolidate_service=memory_consolidate_service,
+        memory_extract_hitl_service=memory_extract_hitl_service,
         checkpointer_handle=checkpointer_handle,
         background_tasks=tuple(background_tasks),
         document_export_service=DocumentExportService(),
         session_timeline_service=session_timeline_service,
         hitl_respond_facade=hitl_respond_facade,
         graph_port=graph_port,
+        graph_write_port=graph_ports.write,
+        graph_ports=graph_ports,
         web_search_port=web_search_port,
     )
 
@@ -409,9 +425,9 @@ async def _aclose_optional(resource: object | None) -> None:
 async def shutdown(resources: AppResources) -> None:
     """Корректно освобождает ресурсы приложения."""
     logger.info("Shutting down...")
-    if resources.consolidation is not None:
+    if resources.memory_extract is not None:
         with contextlib.suppress(Exception):
-            await resources.consolidation.stop()
+            await resources.memory_extract.stop()
     if resources.checkpointer_handle is not None and resources.checkpointer_handle.aclose is not None:
         with contextlib.suppress(Exception):
             await resources.checkpointer_handle.aclose()
@@ -424,6 +440,11 @@ async def shutdown(resources: AppResources) -> None:
     await resources.db_engine.dispose()
     await resources.redis_client.aclose()
     await _aclose_optional(resources.memory_port)
-    await _aclose_optional(resources.graph_port)
+    if resources.graph_ports is not None:
+        with contextlib.suppress(Exception):
+            await resources.graph_ports.aclose()
+    else:
+        await _aclose_optional(resources.graph_port)
+        await _aclose_optional(resources.graph_write_port)
     await _aclose_optional(resources.web_search_port)
     logger.info("Goodbye")

@@ -436,6 +436,158 @@ def test_resolve_worker_prior_prefers_rich_user_payload() -> None:
     assert len(prior) == 900
 
 
+def _topic_switch_dinner_dialog() -> DialogTurnWindow:
+    """Screenshot regression: short user preference, then long assistant code dump."""
+    code = (
+        "Пример кода для поиска информации в интернете\n"
+        + "import requests\n"
+        + "def search(q):\n"
+        + "    r = requests.get('https://example.com', params={'q': q})\n"
+        + "    return r.json()\n"
+        + ("# " + "x" * 350)
+    )
+    return DialogTurnWindow(
+        thread_id="t-dinner",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-dinner",
+                role="user",
+                content="Хочу на ужин утку",
+                seq=0,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-dinner",
+                role="assistant",
+                content="Отлично, утка — хороший выбор. Не пересушите.",
+                seq=1,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-dinner",
+                role="user",
+                content="write python code that will look for info on the internet",
+                seq=2,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-dinner",
+                role="assistant",
+                content=code,
+                seq=3,
+                created_at=datetime.now(UTC),
+            ),
+        ),
+        limit=12,
+    )
+
+
+def test_resolve_worker_prior_prefers_user_intents_after_topic_switch() -> None:
+    dialog = _topic_switch_dinner_dialog()
+    last_asst = ContinuityPolicy.last_assistant_from_dialog(dialog)
+    assert last_asst is not None
+    prior = ContinuityPolicy.resolve_worker_prior(
+        assistant_prior=last_asst,
+        dialog=dialog,
+        continuation_kind="answer",
+        trust_prior_for_workers=True,
+    )
+    assert prior is not None
+    assert "утк" in prior.lower()
+    assert "import requests" not in prior
+
+
+def test_resolve_worker_prior_keeps_assistant_for_adjacent_anaphora() -> None:
+    """Adjacent follow-up must keep last assistant when it is not a topic dump."""
+    dialog = _dialog_with_prior()
+    prior = ContinuityPolicy.resolve_worker_prior(
+        assistant_prior="План\n• Завершение встречи (15:00–15:15)",
+        dialog=dialog,
+        continuation_kind="answer",
+        trust_prior_for_workers=True,
+    )
+    assert prior is not None
+    assert "15:00" in prior
+
+
+def test_false_clarify_recovers_on_topic_switch_user_anaphora() -> None:
+    """Contextualizer over-clarify after topic switch must not force HITL clarify."""
+    dialog = _topic_switch_dinner_dialog()
+    ctx = ContextualizerOutput(
+        rewritten_query="предложи рицепт того что я хотел на ужин",
+        continuation_kind="clarify",
+        confidence=0.55,
+        refers_to_prior=False,
+        prior_assistant_excerpt=None,
+        reasoning="ambiguous dinner ask",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="clarification_needed",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.6,
+        reasoning="underspecified",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.continuation_kind == "answer"
+    assert effective.task_kind == "knowledge_request"
+    assert effective.trust_prior_for_workers is True
+    assert effective.suppress_intent_hitl is True
+    assert effective.prior_context is not None
+    assert "утк" in effective.prior_context.lower()
+    assert "recovered false clarify" in effective.reasoning
+
+
+def test_false_clarify_recovers_when_excerpt_binds_user_fact() -> None:
+    dialog = _topic_switch_dinner_dialog()
+    ctx = ContextualizerOutput(
+        rewritten_query="Предложи рецепт утки на ужин",
+        continuation_kind="clarify",
+        confidence=0.7,
+        refers_to_prior=True,
+        prior_assistant_excerpt="Хочу на ужин утку",
+        reasoning="found user preference but still clarified",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="clarification_needed",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.5,
+        reasoning="no dish named in current turn",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.continuation_kind == "answer"
+    assert effective.task_kind == "knowledge_request"
+    assert effective.prior_context is not None
+    assert "утк" in effective.prior_context.lower()
+
+
+def test_true_clarify_without_history_still_clarifies() -> None:
+    ctx = ContextualizerOutput(
+        rewritten_query="уточните детали",
+        continuation_kind="clarify",
+        confidence=0.7,
+        refers_to_prior=False,
+        prior_assistant_excerpt=None,
+        reasoning="ambiguous",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.8,
+        reasoning="guessed",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=None, raw_intent=raw)
+    assert effective.task_kind == "clarification_needed"
+    assert effective.continuation_kind == "clarify"
+    assert effective.trust_prior_for_workers is False
+
+
 def test_prior_context_clipped_to_worker_budget() -> None:
     from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
 

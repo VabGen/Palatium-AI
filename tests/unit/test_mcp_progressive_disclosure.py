@@ -30,7 +30,9 @@ def test_tool_descriptor_to_summary_omits_full_schema() -> None:
     assert summary.name == "search_documents"
     assert "EDMS" in summary.description
     assert summary.property_names == ("query", "limit")
-    assert summary.side_effect == "read"
+    # Host pin metadata only — never copy server-attested side_effect (Phase 5).
+    assert summary.side_effect is None
+    assert summary.risk_tier is None
     assert not hasattr(summary, "input_schema")
     dumped = summary.model_dump()
     assert "input_schema" not in dumped

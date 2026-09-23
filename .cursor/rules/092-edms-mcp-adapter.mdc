@@ -1,0 +1,46 @@
+---
+description: >-
+  EDMS MCP adapter — MAX PRO: legacy-чат код → laconic FastMCP; JavaEdms
+  read-only; не выдумывать API/auth/DTO
+globs:
+  - "mcp_servers/edms/**"
+  - "mcp_servers/gateway/**"
+  - "src/palatium_ai/domain/mcp/external_schemas.py"
+  - "src/palatium_ai/domain/mcp/tool_policy.py"
+alwaysApply: false
+---
+
+# EDMS MCP adapter (092)
+
+Скилл процесса: `.cursor/skills/edms-mcp-max-pro/SKILL.md`.
+Справочник СЭД: **090**. Host control plane: **070 / 020 / Phase 5 pins**.
+
+## Цель
+
+Laconic **реальный** (или эволюционирующий) EDMS MCP server на FastMCP 2026:
+pinned schemas, JWT `aud=mcp:edms`, Host ToolPolicy/HITL — без переноса control
+plane на сервер. Legacy AI-Assistant / junior-код — **сырьё на разбор**, не эталон.
+
+## Жёстко
+
+| ❌ | ✅ |
+|---|---|
+| Править `JavaEdms/**` | Читать JavaEdms как reference |
+| Выдумать endpoint/auth/DTO/статус | Спросить пользователя или найти в JavaEdms |
+| Копировать «грязный» чат-код as-is | Извлечь intent → контракт → минимальный tool |
+| Доверять server `readOnlyHint` | Только `PlatformToolPin` + fingerprint (Host) |
+| Write без HITL | interrupt + irreversible pin (020) |
+| Новый tool молча | Правка pins + 070/RBAC обсуждение |
+
+## Источники истины (порядок)
+
+1. Поведение СЭД — **JavaEdms** (код), не UI-стенд и не legacy-чат.
+2. Контракт tool — `domain/mcp/external_schemas.py` + `tool_policy` pin.
+3. Транспорт/auth — FastMCP stub/gateway patterns (`mcp_stub_runtime`, Phase 1–6).
+4. Legacy-файлы пользователя — гипотезы; опровергать через JavaEdms.
+
+## Качество ответа агенту/пользователю
+
+- Сценарии: search / get / list / write / ambiguous / empty / permission denied.
+- Результат: типизированный, без галлюцинации id; truncate + `truncated` флаг.
+- Ошибка: fail-closed, mask internals (`mask_error_details`), без утечки PII в лог.

@@ -11,8 +11,9 @@ alwaysApply: true
   structlog, OpenTelemetry.
 - **Индекс правил:** 000-архитектура · 010-типизация · 020-безопасность ·
   030-контракты · 040-observability · 050-антипаттерны · 055-принципиальные фиксы ·
-  060-память · 065-контекст · 070-MCP · 075-тесты · 090-JavaEdms. Этот файл —
-  навигация; источники истины — указанные правила, дублей не создаём (050).
+  060-память · 065-контекст · 070-MCP · 075-тесты · 090-JavaEdms ·
+  **092-EDMS-MCP-adapter**. Этот файл — навигация; источники истины — указанные
+  правила, дублей не создаём (050).
 - Исходники: `src/palatium_ai/` — 5 слоёв (см. 000-architecture).
 - Точка входа API: `presentation/api/` → routers. WS: `presentation/websockets/`.
   Composition root (DI) — см. 000; запуск: `python -m palatium_ai` (или uvicorn-скриптом).
@@ -34,7 +35,10 @@ alwaysApply: true
   Фронтенд-craft скиллы (анимация/UI-полировка Emil Kowalski) — индекс в
   `.cursor/skills/web-craft/SKILL.md`.
 - EDMS-интеграция: `mcp_servers/edms/edms_mcp_server.py`; JavaEdms — read-only
-  reference (см. 090).
+  reference (090). MAX PRO процесс адаптера: правило **092** + скилл
+  `edms-mcp-max-pro` (legacy-чат → FastMCP, волны в `waves.md`).
+- **Полный план MCP (Host/stubs/gateway):** `.cursor/plans/mcp-roadmap.md`
+  (Track A DONE · Track B platform local discovery · Track C EDMS).
 - Инструменты: закрытый перечень и контракт — 070 (`ToolDefinition`).
 - Перед изменением: найди все использования через grep по порту/классу,
   не угадывай сигнатуры.

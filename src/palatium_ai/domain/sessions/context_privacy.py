@@ -25,6 +25,7 @@ SERVER_CONTROL_CONTEXT_KEYS: frozenset[str] = frozenset(
         "requires_mcp",
         "candidate_capabilities",
         "org_id",
+        "response_locale",
     }
 )
 

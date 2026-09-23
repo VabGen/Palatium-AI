@@ -301,13 +301,6 @@ textarea {
   margin-left: auto;
 }
 
-.msg.pending-review {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--text-muted);
-}
-
 .msg.pending {
   display: flex;
   align-items: center;

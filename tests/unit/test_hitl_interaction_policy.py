@@ -210,3 +210,11 @@ def test_plan_promotes_menu_reports_promoted_from_list() -> None:
     assert plan.menu_shaped is True
     assert plan.force_structural is True
     assert plan.required_choice is True
+
+
+def test_no_document_is_not_a_human_review_wait() -> None:
+    """Empty draft must not mint quality review (client used to hang on a spinner)."""
+    plan = HitlInteractionPolicy.plan(None, requires_review=True)
+    assert plan.mint_quality_review is False
+    assert plan.choice_actions == ()
+    assert plan.reason == "no_document"

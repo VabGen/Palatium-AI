@@ -1,10 +1,18 @@
 # src/palatium_ai/domain/mcp/external_schemas.py
 
-"""Frozen pydantic I/O for external MCP stubs — platform pin source of truth (070)."""
+"""Frozen pydantic I/O for external MCP stubs — platform pin source of truth (070).
+
+Stubs (mcp_servers/*) import these modules directly — do not mirror in contract.py.
+"""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Limits shared with stub truncation (single source — do not duplicate in mcp_servers).
+EDMS_QUERY_MAX_CHARS = 200
+EDMS_DOCUMENT_ID_MAX_CHARS = 128
+ANALYTICS_PERIOD_MAX_CHARS = 64
 
 
 class EdmsSearchDocumentsInput(BaseModel):
@@ -14,7 +22,7 @@ class EdmsSearchDocumentsInput(BaseModel):
 
     query: str = Field(
         min_length=1,
-        max_length=200,
+        max_length=EDMS_QUERY_MAX_CHARS,
         description="Search string for EDMS documents.",
     )
 
@@ -26,7 +34,7 @@ class EdmsArchiveDocumentInput(BaseModel):
 
     document_id: str = Field(
         min_length=1,
-        max_length=128,
+        max_length=EDMS_DOCUMENT_ID_MAX_CHARS,
         description="EDMS document identifier to archive.",
     )
 
@@ -38,7 +46,7 @@ class AnalyticsSalesMetricsInput(BaseModel):
 
     period: str = Field(
         min_length=1,
-        max_length=64,
+        max_length=ANALYTICS_PERIOD_MAX_CHARS,
         description="Reporting period (e.g. 2025-Q1).",
     )
 
@@ -58,8 +66,8 @@ def pinned_input_schema(model: type[BaseModel]) -> dict[str, object]:
         if "maxLength" in spec:
             entry["maxLength"] = spec["maxLength"]
         properties[name] = entry
+    # Align with FastMCP tool parameters (no $schema) for stable fingerprints.
     return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": properties,
         "required": list(raw.get("required", [])),
@@ -72,8 +80,11 @@ EDMS_ARCHIVE_DOCUMENT_SCHEMA = pinned_input_schema(EdmsArchiveDocumentInput)
 ANALYTICS_SALES_METRICS_SCHEMA = pinned_input_schema(AnalyticsSalesMetricsInput)
 
 __all__ = [
+    "ANALYTICS_PERIOD_MAX_CHARS",
     "ANALYTICS_SALES_METRICS_SCHEMA",
     "EDMS_ARCHIVE_DOCUMENT_SCHEMA",
+    "EDMS_DOCUMENT_ID_MAX_CHARS",
+    "EDMS_QUERY_MAX_CHARS",
     "EDMS_SEARCH_DOCUMENTS_SCHEMA",
     "AnalyticsSalesMetricsInput",
     "EdmsArchiveDocumentInput",

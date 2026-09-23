@@ -58,7 +58,14 @@ async def test_call_mcp_tool_writes_audit_event() -> None:
 
 
 class _FakeErrorMCPRegistry(FakeMCPRegistry):
-    async def call_tool(self, server_name: str, tool_call: MCPToolCall) -> MCPToolResult:
+    async def call_tool(
+        self,
+        server_name: str,
+        tool_call: MCPToolCall,
+        *,
+        allow_unpinned: bool = False,
+    ) -> MCPToolResult:
+        _ = allow_unpinned
         self.calls.append((server_name, tool_call))
         return MCPToolResult(
             content=[],

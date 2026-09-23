@@ -22,14 +22,19 @@ from .types import (
 )
 
 if TYPE_CHECKING:
+    from .compact import CompactPolicy
     from .contextualizer import ContextualizerGateDecision, ContextualizerPolicy
     from .continuity import ContinuityPolicy, EffectiveRoutingIntent
     from .critic import CriticGateDecision, CriticPolicy
+    from .locale import ReplyLocalePolicy
     from .memory_namespace import MemoryNamespaceBinding, MemoryNamespacePolicy
+    from .promotion import PromotionPolicy
     from .retrieval import LAST_RESORT_PLATFORM_TOOLS, RetrievalBindingDecision, RetrievalPolicy
+    from .scratchpad import SessionScratchpadPolicy
 
 __all__ = [
     "AgentRole",
+    "CompactPolicy",
     "ContinuationKind",
     "ContinuityPolicy",
     "ContextualizerGateDecision",
@@ -43,14 +48,18 @@ __all__ = [
     "MemoryNamespaceBinding",
     "MemoryNamespacePolicy",
     "ModelTier",
+    "PromotionPolicy",
+    "ReplyLocalePolicy",
     "RetrievalBindingDecision",
     "RetrievalPolicy",
     "RouteStrategy",
+    "SessionScratchpadPolicy",
     "TaskKind",
     "UnderspecificationKind",
 ]
 
 _LAZY: dict[str, tuple[str, str]] = {
+    "CompactPolicy": (".compact", "CompactPolicy"),
     "ContinuityPolicy": (".continuity", "ContinuityPolicy"),
     "EffectiveRoutingIntent": (".continuity", "EffectiveRoutingIntent"),
     "ContextualizerGateDecision": (".contextualizer", "ContextualizerGateDecision"),
@@ -59,9 +68,12 @@ _LAZY: dict[str, tuple[str, str]] = {
     "CriticPolicy": (".critic", "CriticPolicy"),
     "MemoryNamespaceBinding": (".memory_namespace", "MemoryNamespaceBinding"),
     "MemoryNamespacePolicy": (".memory_namespace", "MemoryNamespacePolicy"),
+    "PromotionPolicy": (".promotion", "PromotionPolicy"),
+    "ReplyLocalePolicy": (".locale", "ReplyLocalePolicy"),
     "LAST_RESORT_PLATFORM_TOOLS": (".retrieval", "LAST_RESORT_PLATFORM_TOOLS"),
     "RetrievalBindingDecision": (".retrieval", "RetrievalBindingDecision"),
     "RetrievalPolicy": (".retrieval", "RetrievalPolicy"),
+    "SessionScratchpadPolicy": (".scratchpad", "SessionScratchpadPolicy"),
 }
 
 

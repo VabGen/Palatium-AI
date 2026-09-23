@@ -21,6 +21,7 @@ description: >-
 - `production-audit` — DoD release gate
 - `agent-contracts` — контракты новых агентов
 - `agent-refactoring` — миграция legacy-агентов на BaseAgent
+- `edms-mcp-max-pro` — EDMS MCP / legacy-чат → FastMCP (092)
 
 Правила (единые источники; индекс — 099): `000-architecture`,
 `010-typing-strict`, `020-security-hitl`, `030-agent-contracts`,

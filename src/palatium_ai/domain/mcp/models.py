@@ -82,14 +82,18 @@ class MCPToolDescriptor(BaseModel):
     )
 
     def to_summary(self) -> MCPToolSummary:
-        """Progressive disclosure: name/description/risk without full inputSchema."""
+        """Progressive disclosure: name/description/property names without schema.
+
+        ``side_effect`` / ``risk_tier`` are omitted — Host pin metadata is applied
+        by the capability index, never copied from the MCP server.
+        """
         properties = self.input_schema.get("properties", {})
         property_names = tuple(str(key) for key in properties) if isinstance(properties, dict) else ()
         return MCPToolSummary(
             name=self.name,
             description=self.description,
-            side_effect=self.side_effect,
-            risk_tier=self.risk_tier,
+            side_effect=None,
+            risk_tier=None,
             property_names=property_names,
         )
 

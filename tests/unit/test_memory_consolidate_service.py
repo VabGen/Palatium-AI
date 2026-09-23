@@ -1,4 +1,4 @@
-"""MemoryConsolidateService — HITL-gated user-initiated consolidate_memory."""
+"""MemoryExtractHitlService — HITL-gated user-initiated consolidate_memory (= extract enqueue)."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ async def test_memory_consolidate_reject_discards_pending(
         org_id="org-2",
     )
     await service.discard_pending(task_id=card.task_id)
-    with pytest.raises(ValueError, match="pending memory consolidate missing"):
+    with pytest.raises(ValueError, match="pending memory extract enqueue missing"):
         await service.execute_after_approval(task_id=card.task_id)
     assert consolidation.jobs == []
 

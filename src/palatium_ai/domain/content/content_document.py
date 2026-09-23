@@ -267,7 +267,7 @@ class ContentDocument(BaseModel):
     model_config = {"frozen": True}
 
     schema_version: Literal[1] = 1
-    locale: str = Field(min_length=2, max_length=16, pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
+    locale: str = Field(min_length=2, max_length=16, pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
     title: str | None = Field(default=None, max_length=300)
     blocks: tuple[ContentBlock, ...] = Field(min_length=1)
     actions: tuple[ActionSpec, ...] = ()

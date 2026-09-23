@@ -81,6 +81,28 @@ class MemoryConfig(BaseConfig):
         default="in_memory",
         validation_alias="GRAPH_QUERY_BACKEND",
     )
+    promote_enabled: bool = Field(
+        default=True,
+        validation_alias="MEMORY_PROMOTE_ENABLED",
+    )
+    promote_min_access_frequency: int = Field(
+        default=3,
+        ge=1,
+        le=10_000,
+        validation_alias="MEMORY_PROMOTE_MIN_ACCESS_FREQUENCY",
+    )
+    promote_min_importance: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MEMORY_PROMOTE_MIN_IMPORTANCE",
+    )
+    promote_batch_limit: int = Field(
+        default=32,
+        ge=1,
+        le=128,
+        validation_alias="MEMORY_PROMOTE_BATCH_LIMIT",
+    )
 
     @field_validator("mem0_api_key", "graphiti_neo4j_password", mode="before")
     @classmethod

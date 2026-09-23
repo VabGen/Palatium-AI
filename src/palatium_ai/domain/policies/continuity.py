@@ -16,10 +16,14 @@ Choice / underspecification remapping is owned solely by UserChoiceIntentPolicy
 (called from Continuity after continuity ops). Continuity does not duplicate that axis.
 
 Source polarity for prior_context (workers):
-- Default: last assistant turn / Contextualizer excerpt (reformat / anaphora).
-- When follow-up trusts prior AND a prior *user* turn is substantially richer than
-  the assistant turn (e.g. user pasted a document, assistant only asked for input),
-  prefer that user payload. Structural length heuristic — no phrase lists.
+- Default: Contextualizer salient excerpt (user or assistant) / last assistant.
+- Format / document: rich user paste (≥N chars and clearly richer than assistant)
+  wins over thin assistant clarify/ack. Structural length heuristic — no phrase lists.
+- Answer / anaphora after topic-switch: when last assistant dwarfs short user
+  intents (code dump, long answer after a brief preference), prefer those user
+  intents over the dump so workers see the referent, not the intervening topic.
+- False clarify recovery: Contextualizer `clarify` with resolvable history
+  (excerpt, refers_to_prior, or topic-switch user intents) → treat as `answer`.
 
 Что ContinuityPolicy НЕ делает:
 - Не переписывает task_kind в knowledge_request «потому что есть диалог».
@@ -38,6 +42,7 @@ choice_slot_filled (слот закрыт после клика по карто�
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -55,7 +60,10 @@ if TYPE_CHECKING:
 _MIN_USER_PAYLOAD_CHARS = 400
 # Prefer user payload when it is clearly richer than assistant prior.
 _USER_OVER_ASSISTANT_RATIO = 2
+# Max short user intents to bundle under a topic-switched assistant dump.
+_MAX_SHORT_USER_INTENTS = 4
 _PRIOR_CAP = DEFAULT_PROMPT_BUDGET.worker_summary_max_chars
+_HITL_RESUME_MARKER = "HITL_CHOICE_RESUME"
 
 
 class EffectiveRoutingIntent(BaseModel):
@@ -95,11 +103,16 @@ class ContinuityPolicy:
         contextualizer: ContextualizerOutput | None,
         dialog: DialogTurnWindow | None,
     ) -> str | None:
-        """Excerpt из Contextualizer, иначе последняя assistant-реплика."""
+        """Salient excerpt from Contextualizer (user or assistant), else last assistant."""
         if contextualizer is not None:
             excerpt = contextualizer.prior_assistant_excerpt
             if isinstance(excerpt, str) and excerpt.strip():
                 return excerpt.strip()
+        return ContinuityPolicy.last_assistant_from_dialog(dialog)
+
+    @staticmethod
+    def last_assistant_from_dialog(dialog: DialogTurnWindow | None) -> str | None:
+        """Raw last assistant turn in the window (ignores Contextualizer excerpt)."""
         if dialog is None:
             return None
         for turn in reversed(dialog.turns):
@@ -121,9 +134,81 @@ class ContinuityPolicy:
             if turn.role != "user":
                 continue
             text = turn.content.strip()
+            if not text or _HITL_RESUME_MARKER in text:
+                continue
             if len(text) >= threshold:
                 return text
         return None
+
+    @classmethod
+    def recent_short_user_intents(
+        cls,
+        dialog: DialogTurnWindow | None,
+        *,
+        max_chars: int = _MIN_USER_PAYLOAD_CHARS,
+        max_items: int = _MAX_SHORT_USER_INTENTS,
+    ) -> tuple[str, ...]:
+        """Recent short user turns (preferences / asks), oldest→newest, capped."""
+        if dialog is None or max_items < 1:
+            return ()
+        cap = max(1, max_chars)
+        selected: list[str] = []
+        for turn in reversed(dialog.turns):
+            if turn.role != "user":
+                continue
+            text = turn.content.strip()
+            if not text or _HITL_RESUME_MARKER in text:
+                continue
+            if len(text) >= cap:
+                continue
+            selected.append(text)
+            if len(selected) >= max_items:
+                break
+        selected.reverse()
+        return tuple(selected)
+
+    @classmethod
+    def topic_switch_user_prior(
+        cls,
+        dialog: DialogTurnWindow | None,
+        assistant_prior: str | None,
+    ) -> str | None:
+        """User-intent bundle when last assistant is a long topic dump vs short asks.
+
+        Structural only: len(last_assistant) ≥ max(2× longest short user, payload floor).
+        Covers anaphora to earlier user facts after an intervening long assistant turn.
+        """
+        intents = cls.recent_short_user_intents(dialog)
+        if not intents:
+            return None
+        last_asst = (cls.last_assistant_from_dialog(dialog) or assistant_prior or "").strip()
+        if not last_asst:
+            return None
+        longest = max(len(text) for text in intents)
+        threshold = max(longest * _USER_OVER_ASSISTANT_RATIO, _MIN_USER_PAYLOAD_CHARS)
+        if len(last_asst) < threshold:
+            return None
+        return cls._clip_prior("\n".join(intents))
+
+    @classmethod
+    def should_recover_false_clarify(
+        cls,
+        *,
+        contextualizer: ContextualizerOutput | None,
+        dialog: DialogTurnWindow | None,
+        assistant_prior: str | None,
+    ) -> bool:
+        """True when history can resolve the ask — Contextualizer over-clarified."""
+        if contextualizer is None:
+            return False
+        has_history = assistant_prior is not None or cls.prior_user_content(dialog, min_chars=1) is not None
+        if not has_history:
+            return False
+        if (contextualizer.prior_assistant_excerpt or "").strip():
+            return True
+        if contextualizer.refers_to_prior:
+            return True
+        return cls.topic_switch_user_prior(dialog, assistant_prior) is not None
 
     @classmethod
     def resolve_worker_prior(
@@ -136,25 +221,42 @@ class ContinuityPolicy:
     ) -> str | None:
         """Choose source material for workers when continuity trusts prior.
 
-        Prefer a prior user payload when it is substantially richer than the
-        assistant prior (pasted document vs thin clarify/ack). Otherwise keep
-        assistant prior (reformat / anaphora on last answer).
+        Format: rich user paste over thin assistant; else assistant.
+        Answer: rich paste → LLM salient excerpt (≠ raw last assistant) →
+        topic-switch user intents → assistant fallback.
         """
         if not trust_prior_for_workers:
             return cls._clip_prior(assistant_prior)
         if continuation_kind not in {"answer", "format"}:
             return cls._clip_prior(assistant_prior)
 
-        user_prior = cls.prior_user_content(dialog)
-        if user_prior is None:
+        asst = (assistant_prior or "").strip()
+        user_rich = cls.prior_user_content(dialog)
+        if user_rich is not None:
+            if not asst:
+                return cls._clip_prior(user_rich)
+            if len(user_rich) >= max(len(asst) * _USER_OVER_ASSISTANT_RATIO, _MIN_USER_PAYLOAD_CHARS):
+                return cls._clip_prior(user_rich)
+
+        if continuation_kind == "format":
             return cls._clip_prior(assistant_prior)
 
-        asst = (assistant_prior or "").strip()
-        if not asst:
-            return cls._clip_prior(user_prior)
-        if len(user_prior) >= max(len(asst) * _USER_OVER_ASSISTANT_RATIO, _MIN_USER_PAYLOAD_CHARS):
-            return cls._clip_prior(user_prior)
+        # answer: prefer Contextualizer excerpt when it is not just the raw last assistant
+        last_raw = (cls.last_assistant_from_dialog(dialog) or "").strip()
+        if asst and last_raw and asst != last_raw:
+            return cls._clip_prior(asst)
+
+        topic_user = cls.topic_switch_user_prior(dialog, assistant_prior)
+        if topic_user is not None:
+            return topic_user
         return cls._clip_prior(assistant_prior)
+
+    @staticmethod
+    def _prior_source_label(*, prior: str | None, assistant_prior: str | None) -> str:
+        clipped_asst = ContinuityPolicy._clip_prior(assistant_prior)
+        if prior and prior != clipped_asst:
+            return "user_payload" if len(prior) >= _MIN_USER_PAYLOAD_CHARS else "user_intents"
+        return "assistant"
 
     @classmethod
     def _finalize(
@@ -211,128 +313,212 @@ class ContinuityPolicy:
         raw_intent: IntentClassifierOutput | None,
     ) -> EffectiveRoutingIntent:
         """Сводит continuity + Intent в один EffectiveRoutingIntent."""
+        snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
         assistant_prior = cls.prior_assistant_content(contextualizer, dialog)
-        kind: ContinuationKind = contextualizer.continuation_kind if contextualizer is not None else "new_topic"
-        refers_to_prior = bool(contextualizer.refers_to_prior) if contextualizer is not None else False
-        raw_task: TaskKind = raw_intent.task_kind if raw_intent is not None else "clarification_needed"
-        requires_mcp = raw_intent.requires_mcp if raw_intent is not None else False
-        requires_user_choice = bool(raw_intent.requires_user_choice) if raw_intent is not None else False
-        underspec: UnderspecificationKind = raw_intent.underspecification_kind if raw_intent is not None else "none"
-        caps = raw_intent.candidate_capabilities if raw_intent is not None else ()
-        intent_reasoning = raw_intent.reasoning if raw_intent is not None else "no intent"
-        confidence = float(raw_intent.confidence) if raw_intent is not None else 1.0
-        choice_slot_filled = bool(contextualizer.choice_slot_filled) if contextualizer is not None else False
-        # Completed HITL discrete pick: never re-open exclusive choice.
-        if choice_slot_filled:
-            requires_user_choice = False
-            underspec = "none"
+        if snap.choice_slot_filled:
+            snap.requires_user_choice = False
+            snap.underspec = "none"
 
-        # Format is a continuity *operation*: Intent cannot see prior without history.
-        if kind == "format" and assistant_prior is not None:
-            prior = cls.resolve_worker_prior(
-                assistant_prior=assistant_prior,
-                dialog=dialog,
-                continuation_kind=kind,
-                trust_prior_for_workers=True,
-            )
-            source = "user_payload" if prior != cls._clip_prior(assistant_prior) else "assistant"
-            return cls._finalize(
-                task_kind="response_formatting",
-                requires_mcp=False,
-                requires_user_choice=requires_user_choice,
-                underspec=underspec,
-                caps=("format",),
-                continuation_kind=kind,
-                prior_context=prior,
-                trust_prior_for_workers=True,
-                reasoning=f"continuity=format; prior={source}; intent was {raw_task}",
-                confidence=confidence,
-            )
-
-        # Format without assistant prior but with user payload (document still in thread).
-        if kind == "format":
-            user_prior = cls.prior_user_content(dialog)
-            if user_prior is not None:
-                return cls._finalize(
-                    task_kind="response_formatting",
-                    requires_mcp=False,
-                    requires_user_choice=requires_user_choice,
-                    underspec=underspec,
-                    caps=("format",),
-                    continuation_kind=kind,
-                    prior_context=user_prior,
-                    trust_prior_for_workers=True,
-                    reasoning=f"continuity=format; prior=user_payload; intent was {raw_task}",
-                    confidence=confidence,
-                )
-
-        # Answer continuity: enrich with prior; correct only history-blind false clarify.
-        # Do NOT remapa social / capability / tool / workflow → knowledge_request.
-        # Do NOT remapa exclusive-choice menus into knowledge_request (unless slot filled).
-        if (
-            kind == "answer"
-            and refers_to_prior
-            and (assistant_prior is not None or cls.prior_user_content(dialog) is not None)
+        recovered_false_clarify = False
+        if snap.kind == "clarify" and cls.should_recover_false_clarify(
+            contextualizer=contextualizer,
+            dialog=dialog,
+            assistant_prior=assistant_prior,
         ):
-            if choice_slot_filled and raw_task == "clarification_needed":
-                task_kind: TaskKind = "knowledge_request"
-                effective_caps = tuple(c for c in caps if c != "user_choice") or ("summarize",)
-                reasoning = f"continuity=answer; HITL choice slot filled → knowledge_request; {intent_reasoning}"
-            elif raw_task == "clarification_needed" and not requires_user_choice and underspec != "discrete_choice":
-                task_kind = "knowledge_request"
-                effective_caps = caps or ("summarize",)
-                reasoning = (
-                    f"continuity=answer; corrected history-blind clarify → knowledge_request; {intent_reasoning}"
-                )
-            else:
-                task_kind = raw_task
-                effective_caps = caps
-                reasoning = f"continuity=answer; trust intent task_kind={raw_task}; {intent_reasoning}"
-            prior = cls.resolve_worker_prior(
-                assistant_prior=assistant_prior,
-                dialog=dialog,
-                continuation_kind=kind,
-                trust_prior_for_workers=True,
-            )
-            source = "user_payload" if prior and prior != cls._clip_prior(assistant_prior) else "assistant"
-            return cls._finalize(
-                task_kind=task_kind,
-                requires_mcp=requires_mcp,
-                requires_user_choice=requires_user_choice,
-                underspec=underspec,
-                caps=effective_caps,
-                continuation_kind=kind,
-                prior_context=prior,
-                trust_prior_for_workers=True,
-                reasoning=f"{reasoning}; prior={source}",
-                confidence=confidence,
-            )
+            snap.kind = "answer"
+            snap.refers_to_prior = True
+            recovered_false_clarify = True
 
-        if kind == "clarify":
+        formatted = cls._try_resolve_format(snap=snap, assistant_prior=assistant_prior, dialog=dialog)
+        if formatted is not None:
+            return formatted
+
+        answered = cls._try_resolve_answer(
+            snap=snap,
+            assistant_prior=assistant_prior,
+            dialog=dialog,
+            recovered_false_clarify=recovered_false_clarify,
+        )
+        if answered is not None:
+            return answered
+
+        if snap.kind == "clarify":
             return cls._finalize(
                 task_kind="clarification_needed",
                 requires_mcp=False,
-                requires_user_choice=requires_user_choice,
-                underspec=underspec,
+                requires_user_choice=snap.requires_user_choice,
+                underspec=snap.underspec,
                 caps=(),
-                continuation_kind=kind,
+                continuation_kind=snap.kind,
                 prior_context=assistant_prior,
                 trust_prior_for_workers=False,
-                reasoning=f"continuity=clarify; {intent_reasoning}",
-                confidence=confidence,
+                reasoning=f"continuity=clarify; {snap.intent_reasoning}",
+                confidence=snap.confidence,
                 clarify_underspec_default=True,
             )
 
-        # new_topic, answer without refers_to_prior, or format/answer without prior: trust Intent
         return cls._finalize(
-            task_kind=raw_task,
-            requires_mcp=requires_mcp,
-            requires_user_choice=requires_user_choice,
-            underspec=underspec,
-            caps=caps,
-            continuation_kind=kind,
+            task_kind=snap.raw_task,
+            requires_mcp=snap.requires_mcp,
+            requires_user_choice=snap.requires_user_choice,
+            underspec=snap.underspec,
+            caps=snap.caps,
+            continuation_kind=snap.kind,
             prior_context=assistant_prior,
             trust_prior_for_workers=False,
-            reasoning=f"continuity={kind}; trust intent: {intent_reasoning}",
-            confidence=confidence,
+            reasoning=f"continuity={snap.kind}; trust intent: {snap.intent_reasoning}",
+            confidence=snap.confidence,
         )
+
+    @classmethod
+    def _try_resolve_format(
+        cls,
+        *,
+        snap: _ResolveSnapshot,
+        assistant_prior: str | None,
+        dialog: DialogTurnWindow | None,
+    ) -> EffectiveRoutingIntent | None:
+        if snap.kind != "format":
+            return None
+        if assistant_prior is not None:
+            prior = cls.resolve_worker_prior(
+                assistant_prior=assistant_prior,
+                dialog=dialog,
+                continuation_kind=snap.kind,
+                trust_prior_for_workers=True,
+            )
+            source = cls._prior_source_label(prior=prior, assistant_prior=assistant_prior)
+            return cls._finalize(
+                task_kind="response_formatting",
+                requires_mcp=False,
+                requires_user_choice=snap.requires_user_choice,
+                underspec=snap.underspec,
+                caps=("format",),
+                continuation_kind=snap.kind,
+                prior_context=prior,
+                trust_prior_for_workers=True,
+                reasoning=f"continuity=format; prior={source}; intent was {snap.raw_task}",
+                confidence=snap.confidence,
+            )
+        user_prior = cls.prior_user_content(dialog)
+        if user_prior is None:
+            return None
+        return cls._finalize(
+            task_kind="response_formatting",
+            requires_mcp=False,
+            requires_user_choice=snap.requires_user_choice,
+            underspec=snap.underspec,
+            caps=("format",),
+            continuation_kind=snap.kind,
+            prior_context=user_prior,
+            trust_prior_for_workers=True,
+            reasoning=f"continuity=format; prior=user_payload; intent was {snap.raw_task}",
+            confidence=snap.confidence,
+        )
+
+    @classmethod
+    def _try_resolve_answer(
+        cls,
+        *,
+        snap: _ResolveSnapshot,
+        assistant_prior: str | None,
+        dialog: DialogTurnWindow | None,
+        recovered_false_clarify: bool,
+    ) -> EffectiveRoutingIntent | None:
+        # Answer continuity: enrich with prior; correct only history-blind false clarify.
+        # Do NOT remapa social / capability / tool / workflow → knowledge_request.
+        # Do NOT remapa exclusive-choice menus into knowledge_request (unless slot filled).
+        has_resolvable_prior = assistant_prior is not None or cls.prior_user_content(dialog, min_chars=1) is not None
+        if not (snap.kind == "answer" and snap.refers_to_prior and has_resolvable_prior):
+            return None
+        task_kind, effective_caps, reasoning = _map_answer_task(
+            snap=snap,
+            recovered_false_clarify=recovered_false_clarify,
+        )
+        prior = cls.resolve_worker_prior(
+            assistant_prior=assistant_prior,
+            dialog=dialog,
+            continuation_kind=snap.kind,
+            trust_prior_for_workers=True,
+        )
+        source = cls._prior_source_label(prior=prior, assistant_prior=assistant_prior)
+        return cls._finalize(
+            task_kind=task_kind,
+            requires_mcp=snap.requires_mcp,
+            requires_user_choice=snap.requires_user_choice,
+            underspec=snap.underspec,
+            caps=effective_caps,
+            continuation_kind=snap.kind,
+            prior_context=prior,
+            trust_prior_for_workers=True,
+            reasoning=f"{reasoning}; prior={source}",
+            confidence=snap.confidence,
+        )
+
+
+@dataclass
+class _ResolveSnapshot:
+    """Mutable working set for ContinuityPolicy.resolve (keeps resolve() shallow)."""
+
+    kind: ContinuationKind
+    refers_to_prior: bool
+    raw_task: TaskKind
+    requires_mcp: bool
+    requires_user_choice: bool
+    underspec: UnderspecificationKind
+    caps: tuple[str, ...]
+    intent_reasoning: str
+    confidence: float
+    choice_slot_filled: bool
+
+    @classmethod
+    def from_inputs(
+        cls,
+        *,
+        contextualizer: ContextualizerOutput | None,
+        raw_intent: IntentClassifierOutput | None,
+    ) -> _ResolveSnapshot:
+        return cls(
+            kind=contextualizer.continuation_kind if contextualizer is not None else "new_topic",
+            refers_to_prior=bool(contextualizer.refers_to_prior) if contextualizer is not None else False,
+            raw_task=raw_intent.task_kind if raw_intent is not None else "clarification_needed",
+            requires_mcp=raw_intent.requires_mcp if raw_intent is not None else False,
+            requires_user_choice=bool(raw_intent.requires_user_choice) if raw_intent is not None else False,
+            underspec=raw_intent.underspecification_kind if raw_intent is not None else "none",
+            caps=raw_intent.candidate_capabilities if raw_intent is not None else (),
+            intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
+            confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
+            choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,
+        )
+
+
+def _map_answer_task(
+    *,
+    snap: _ResolveSnapshot,
+    recovered_false_clarify: bool,
+) -> tuple[TaskKind, tuple[str, ...], str]:
+    if snap.choice_slot_filled and snap.raw_task == "clarification_needed":
+        caps = tuple(c for c in snap.caps if c != "user_choice") or ("summarize",)
+        reasoning = f"continuity=answer; HITL choice slot filled → knowledge_request; {snap.intent_reasoning}"
+        return "knowledge_request", caps, reasoning
+    if (
+        snap.raw_task == "clarification_needed"
+        and not snap.requires_user_choice
+        and snap.underspec != "discrete_choice"
+    ):
+        caps = snap.caps or ("summarize",)
+        if recovered_false_clarify:
+            reasoning = f"continuity=answer; recovered false clarify → knowledge_request; {snap.intent_reasoning}"
+        else:
+            reasoning = (
+                f"continuity=answer; corrected history-blind clarify → knowledge_request; {snap.intent_reasoning}"
+            )
+        return "knowledge_request", caps, reasoning
+    if recovered_false_clarify:
+        reasoning = (
+            f"continuity=answer; recovered false clarify; "
+            f"trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
+        )
+    else:
+        reasoning = f"continuity=answer; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
+    return snap.raw_task, snap.caps, reasoning

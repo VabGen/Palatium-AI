@@ -40,7 +40,7 @@ class _DomainAgent(BaseAgent):
 _CONFIG = AgentConfig(
     name="intent_classifier",
     role="intent_classifier",
-    model_tier="standard",
+    model_tier="mid",
     allowed_tools=(),
     confidence_threshold=0.7,
 )

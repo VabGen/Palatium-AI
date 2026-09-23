@@ -371,15 +371,17 @@ async def formatter_node(
 ) -> AgentGraphState:
     async def run() -> tuple[AgentGraphState, object]:
         if state.get("requires_clarification"):
-            question = state.get("clarification_question", "Уточните, пожалуйста.")
+            from palatium_ai.application.orchestration import selectors as orch_selectors
             from palatium_ai.domain.content import ContentDocument
             from palatium_ai.domain.content.content_document import DocumentMeta, ParagraphBlock
 
+            question = state.get("clarification_question") or "?"
+            locale = orch_selectors.resolved_response_locale(state)
             doc = ContentDocument(
                 schema_version=1,
-                locale="ru-RU",
-                title="Уточнение",
-                blocks=(ParagraphBlock(type="paragraph", text=str(question)),),
+                locale=locale,
+                title=None,
+                blocks=(ParagraphBlock(type="paragraph", text=str(question)[:8000]),),
                 actions=(),
                 meta=DocumentMeta(
                     confidence=1.0,

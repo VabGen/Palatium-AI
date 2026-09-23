@@ -42,6 +42,7 @@ class Neo4jDriverTransport:
             msg = "GRAPHITI_NEO4J_URI and GRAPHITI_NEO4J_PASSWORD are required for neo4j graph port"
             raise ValueError(msg)
         self._driver = AsyncGraphDatabase.driver(uri.strip(), auth=(user.strip() or "neo4j", password))
+        self._closed = False
 
     async def run_query(
         self,
@@ -59,7 +60,32 @@ class Neo4jDriverTransport:
                     break
         return rows
 
+    async def run_write(
+        self,
+        *,
+        cypher: str,
+        params: dict[str, object],
+    ) -> list[dict[str, object]]:
+        """Execute write Cypher in a write transaction (promote MERGE)."""
+        from neo4j import WRITE_ACCESS
+
+        rows: list[dict[str, object]] = []
+
+        async def _work(tx: object) -> list[dict[str, object]]:
+            result = await tx.run(cypher, params)  # type: ignore[attr-defined]
+            out: list[dict[str, object]] = []
+            async for record in result:
+                out.append(record.data())
+            return out
+
+        async with self._driver.session(default_access_mode=WRITE_ACCESS) as session:
+            rows = await session.execute_write(_work)
+        return rows
+
     async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         await self._driver.close()
 
 

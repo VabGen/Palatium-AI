@@ -1,6 +1,9 @@
 # src/palatium_ai/domain/mcp/platform_schemas.py
 
-"""Frozen pydantic I/O for canonical platform MCP tools (070)."""
+"""Frozen pydantic I/O for canonical platform MCP tools (070).
+
+Stubs import this module for tools/list pins; Host executes via PlatformToolHandler.
+"""
 
 from __future__ import annotations
 
@@ -116,13 +119,17 @@ class PlatformForgetMemoryInput(BaseModel):
 
 
 class PlatformConsolidateMemoryInput(BaseModel):
-    """Input for ``mcp:platform.consolidate_memory`` (write; HITL required)."""
+    """Input for ``mcp:platform.consolidate_memory``.
+
+    Legacy name: enqueues sleep-time **extract** (MemoryKeeper → medium),
+    not graph promote. Rename to extract_* = 070 discussion.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     user_id: str = Field(min_length=1, max_length=128)
     thread_id: str = Field(min_length=1, max_length=128)
-    task_id: str = Field(default="", max_length=128, description="Optional job id; auto-generated if empty.")
+    task_id: str = Field(default="", max_length=128, description="Optional extract job id; auto-generated if empty.")
     org_id: str = Field(default="", max_length=128)
 
 

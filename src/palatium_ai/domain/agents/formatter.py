@@ -31,6 +31,8 @@ class FormatterInput(BaseModel):
     requires_user_choice: bool = False
     underspecification_kind: str = "none"
     revision_feedback: str | None = Field(default=None, max_length=4_000)
+    # BCP-47 pin from ReplyLocalePolicy — source of truth for document.locale + prose language.
+    response_locale: str = Field(default="und", min_length=2, max_length=16)
 
 
 class FormatterTaskResult(TaskResult):

@@ -1,6 +1,6 @@
 # src/palatium_ai/application/tools/mcp.py
 
-"""Typed wrapper for MCP tool execution."""
+"""Typed wrapper for MCP tool execution (Host control plane entry)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from palatium_ai.core.observability.audit import get_audit_logger
+from palatium_ai.domain.mcp.argument_policy import UnsafeToolArgumentError, assert_arguments_safe
 from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolResult
+from palatium_ai.domain.mcp.tool_policy import UnpinnedMcpToolError
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
@@ -27,10 +29,12 @@ class MCPToolCallParams(BaseModel):
     server_name: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
     arguments: dict[str, object] = Field(default_factory=dict)
-    # Trusted caller identity (JWT / ConsolidationJob) — never taken from tool args.
+    # Trusted caller identity (JWT / MemoryExtractJob) — never taken from tool args.
     actor_user_id: str = Field(default="", max_length=128)
     actor_org_id: str = Field(default="", max_length=128)
     actor_thread_id: str = Field(default="", max_length=128)
+    # Post-HITL only: allow tools without matching PlatformToolPin (Phase 5).
+    allow_unpinned: bool = False
 
 
 class MCPToolCallOutcome(BaseModel):
@@ -55,6 +59,13 @@ def _bind_arguments(params: MCPToolCallParams) -> dict[str, object]:
     )
 
 
+def _error_outcome(message: str) -> MCPToolCallOutcome:
+    return MCPToolCallOutcome(
+        content=[{"type": "text", "text": json.dumps({"error": message}, ensure_ascii=False)}],
+        is_error=True,
+    )
+
+
 async def call_mcp_tool(
     params: MCPToolCallParams,
     registry: MCPRegistryPort,
@@ -62,22 +73,25 @@ async def call_mcp_tool(
     conversation_id: str | None = None,
     repository: McpToolCallRecorderPort | None = None,
 ) -> MCPToolCallOutcome:
-    """Вызывает MCP tool через registry с JSON Schema validation."""
+    """Host entry: actor bind → argument_policy → registry pin gate → tools/call."""
     try:
         arguments = _bind_arguments(params)
-    except ValueError as exc:
-        return MCPToolCallOutcome(
-            content=[{"type": "text", "text": json.dumps({"error": str(exc)}, ensure_ascii=False)}],
-            is_error=True,
-        )
+        assert_arguments_safe(arguments)
+    except (ValueError, UnsafeToolArgumentError) as exc:
+        return _error_outcome(str(exc))
 
-    result: MCPToolResult = await registry.call_tool(
-        params.server_name,
-        MCPToolCall(
-            name=params.tool_name,
-            arguments=arguments,
-        ),
-    )
+    try:
+        result: MCPToolResult = await registry.call_tool(
+            params.server_name,
+            MCPToolCall(
+                name=params.tool_name,
+                arguments=arguments,
+            ),
+            allow_unpinned=params.allow_unpinned,
+        )
+    except UnpinnedMcpToolError as exc:
+        return _error_outcome(str(exc))
+
     event = "mcp_tool_failed" if result.is_error else "mcp_tool_succeeded"
     await _write_mcp_audit_event(
         conversation_id=conversation_id or f"{params.server_name}.{params.tool_name}",

@@ -19,6 +19,7 @@ from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text,
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion, LLMResponseFormat
+from palatium_ai.domain.memory.compact import CompactRequest
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -178,6 +179,8 @@ class Harness:
                     error_message=str(exc),
                 )
 
+        input = await self._maybe_compact_context(agent, input)
+
         try:
             output = await asyncio.wait_for(
                 agent.run(input),
@@ -211,6 +214,35 @@ class Harness:
             agent_metrics.record_human_escalation(f"low_confidence_{role}")
 
         return output
+
+    async def _maybe_compact_context(self, agent: BaseAgent, input: AgentInput) -> AgentInput:
+        """Compact dialog history at 80% tier budget; preserve goal/plan/last_results (065)."""
+        history = input.context.get("history")
+        if not isinstance(history, str) or not history.strip():
+            return input
+        thread_id = (input.context.get("_thread_id") or str(input.task_id)).strip()
+        user_id = input.context.get("_user_id")
+        result = await self._context_builder.compact(
+            CompactRequest(
+                dialog=history,
+                goal=input.context.get("goal", ""),
+                plan=input.context.get("plan", ""),
+                last_results=input.context.get("last_results", ""),
+                model_tier=agent._config.model_tier,
+                thread_id=thread_id,
+                user_id=user_id if isinstance(user_id, str) else None,
+            )
+        )
+        if not result.did_compact:
+            return input
+        updated = {
+            **input.context,
+            "history": result.dialog,
+            "goal": result.goal,
+            "plan": result.plan,
+            "last_results": result.last_results,
+        }
+        return input.model_copy(update={"context": updated})
 
 
 def _empty_output_payload(task_id: object) -> BaseModel:

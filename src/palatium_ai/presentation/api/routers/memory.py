@@ -132,13 +132,13 @@ async def request_memory_forget(body: MemoryForgetRequest, request: Request) -> 
 
 @router.post("/consolidate", response_model=HITLCardView)
 async def request_memory_consolidate(body: MemoryConsolidateRequest, request: Request) -> HITLCardView:
-    """Create HITL card for platform.consolidate_memory; does not enqueue until approve."""
+    """HITL card for MCP ``consolidate_memory`` = enqueue sleep-time extract (not promote)."""
     principal = get_principal(request)
     resources = get_app_resources(request.app)
     if resources.memory_consolidate_service is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Memory consolidate unavailable",
+            detail="Memory extract enqueue unavailable",
         )
 
     await load_session_for_principal(

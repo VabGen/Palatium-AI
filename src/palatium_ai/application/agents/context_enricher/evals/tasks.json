@@ -32,5 +32,26 @@
       "dialog": []
     },
     "expect": { "continuation_kind": "new_topic", "refers_to_prior": false }
+  },
+  {
+    "id": "continuation-topic-switch-user-anaphora",
+    "cassette": "context_enricher/topic_switch_anaphora.json",
+    "input": {
+      "user_text": "предложи рицепт того что я хотел на ужин",
+      "dialog": [
+        { "role": "user", "content": "Хочу на ужин утку" },
+        { "role": "assistant", "content": "Отлично, утка — хороший выбор." },
+        { "role": "user", "content": "write python code that will look for info on the internet" },
+        {
+          "role": "assistant",
+          "content": "Пример кода для поиска:\nimport requests\ndef search(q):\n    return requests.get('https://example.com', params={'q': q}).json()\n"
+        }
+      ]
+    },
+    "expect": {
+      "continuation_kind": "answer",
+      "refers_to_prior": true,
+      "rewritten_query": "Предложи рецепт утки на ужин"
+    }
   }
 ]

@@ -89,7 +89,7 @@ services:
 
   mcp-edms:
     build:
-      context: ./mcp_servers
+      context: .
       dockerfile: Dockerfile
       args:
         MCP_NAME: edms
@@ -99,6 +99,8 @@ services:
     restart: unless-stopped
     environment:
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-min-32-chars!!}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-palatium-mcp}
     ports:
       - "127.0.0.1:8080:8080"
     security_opt:
@@ -123,8 +125,8 @@ services:
 
   mcp-analytics:
     build:
-      context: ./mcp_servers
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: mcp_servers/Dockerfile
       args:
         MCP_NAME: analytics
         MCP_MODULE: analytics_mcp_server
@@ -133,6 +135,8 @@ services:
     restart: unless-stopped
     environment:
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-min-32-chars!!}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-palatium-mcp}
     ports:
       - "127.0.0.1:8081:8081"
     security_opt:
@@ -154,6 +158,95 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+  # Optional Phase 6 gateway (profile mcp-gateway): Host → gateway → stub/upstream.
+  # docker compose --profile mcp-gateway up
+  # Then point MCP_SERVERS edms/analytics at 8090/8091 (platform stays Host-local, never proxied).
+  mcp-gateway-edms:
+    profiles: ["mcp-gateway"]
+    build:
+      context: .
+      dockerfile: mcp_servers/Dockerfile
+      args:
+        MCP_NAME: gateway
+        MCP_MODULE: gateway_mcp_server
+        MCP_PORT: "8090"
+    image: palatium-mcp-gateway-edms:local
+    restart: unless-stopped
+    environment:
+      MCP_GATEWAY_SERVER: edms
+      MCP_UPSTREAM_URL: http://mcp-edms:8080
+      MCP_UPSTREAM_BEARER: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-min-32-chars!!}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-palatium-mcp}
+    ports:
+      - "127.0.0.1:8090:8090"
+    depends_on:
+      mcp-edms:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2)",
+        ]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  mcp-gateway-analytics:
+    profiles: ["mcp-gateway"]
+    build:
+      context: .
+      dockerfile: mcp_servers/Dockerfile
+      args:
+        MCP_NAME: gateway
+        MCP_MODULE: gateway_mcp_server
+        MCP_PORT: "8091"
+    image: palatium-mcp-gateway-analytics:local
+    restart: unless-stopped
+    environment:
+      MCP_GATEWAY_SERVER: analytics
+      MCP_UPSTREAM_URL: http://mcp-analytics:8081
+      MCP_UPSTREAM_BEARER: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
+      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-min-32-chars!!}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-palatium-mcp}
+    ports:
+      - "127.0.0.1:8091:8091"
+    depends_on:
+      mcp-analytics:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2)",
+        ]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
 
   api:
     build:

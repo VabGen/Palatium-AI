@@ -72,7 +72,7 @@ export function MemoryActions({
         label = 'Memory forget awaiting approval';
       } else {
         card = await requestMemoryConsolidate({ thread_id: threadId }, userId, orgId);
-        label = 'Memory consolidate awaiting approval';
+        label = 'Memory extract awaiting approval';
       }
       onCardCreated(card, label);
       setText('');
@@ -107,7 +107,7 @@ export function MemoryActions({
               [
                 ['save', 'Save'],
                 ['forget', 'Forget'],
-                ['consolidate', 'Consolidate'],
+                ['consolidate', 'Extract'],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -147,7 +147,8 @@ export function MemoryActions({
           )}
           {mode === 'consolidate' && (
             <p className="memory-hint">
-              Queue sleep-time consolidation for this thread (requires approve).
+              Queue sleep-time extract for this thread (transcript → medium; requires approve). Does
+              not promote facts into the knowledge graph.
             </p>
           )}
 
@@ -163,7 +164,7 @@ export function MemoryActions({
                 ? 'Request save'
                 : mode === 'forget'
                   ? 'Request forget'
-                  : 'Request consolidate'}
+                  : 'Request extract'}
             </span>
           </button>
         </div>

@@ -49,8 +49,14 @@ class MCPRegistryPort(Protocol):
         """Load one tool descriptor (schema) when executing / building args."""
         ...
 
-    async def call_tool(self, server_name: str, tool_call: MCPToolCall) -> MCPToolResult:
-        """Валидирует и вызывает tool на выбранном сервере."""
+    async def call_tool(
+        self,
+        server_name: str,
+        tool_call: MCPToolCall,
+        *,
+        allow_unpinned: bool = False,
+    ) -> MCPToolResult:
+        """Валидирует pin (Host) + schema и вызывает tool на выбранном сервере."""
         ...
 
 

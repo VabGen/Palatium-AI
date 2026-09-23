@@ -1,4 +1,4 @@
-"""MemoryPort + sleep-time consolidation unit tests."""
+"""MemoryPort + sleep-time extract unit tests."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.application.agents.memory_keeper import MEMORY_KEEPER_CONFIG, MemoryKeeperAgent
-from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+from palatium_ai.application.services.memory_extract import MemoryExtractService
 from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
@@ -20,16 +20,16 @@ from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from tests.conftest import FakeLLMPort, make_platform_mcp_registry
 
 
-def _consolidation_service(
+def _extract_service(
     *,
     harness: Harness,
     keeper: MemoryKeeperAgent,
     port: InMemoryMemoryPort,
     dialog: _FakeDialogTurnStore,
-) -> MemoryConsolidationService:
+) -> MemoryExtractService:
     registry = make_platform_mcp_registry(memory_port=port)
     persistence = MemoryFactPersistenceService(registry)
-    return MemoryConsolidationService(
+    return MemoryExtractService(
         harness=harness,
         memory_keeper=keeper,
         memory_port=port,
@@ -94,7 +94,7 @@ async def test_sleep_time_consolidation_stores_add_only_facts() -> None:
             ("user", "Дай в виде таблицы"),
         ]
     )
-    service = _consolidation_service(harness=harness, keeper=keeper, port=port, dialog=dialog)
+    service = _extract_service(harness=harness, keeper=keeper, port=port, dialog=dialog)
     worker = asyncio.create_task(service.run_worker())
     assert service.enqueue(thread_id="thread-a", task_id="task-1", user_id="user-a")
     await asyncio.sleep(0.05)
@@ -140,7 +140,7 @@ async def test_sleep_time_routes_preference_user_and_entity_org() -> None:
             ("assistant", "Сохранил предпочтение и контакт."),
         ]
     )
-    service = _consolidation_service(harness=harness, keeper=keeper, port=port, dialog=dialog)
+    service = _extract_service(harness=harness, keeper=keeper, port=port, dialog=dialog)
     worker = asyncio.create_task(service.run_worker())
     assert service.enqueue(
         thread_id="thread-b",

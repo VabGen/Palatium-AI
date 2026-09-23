@@ -102,9 +102,7 @@ if __name__ == "__main__":
         _emit(
             {
                 "permission": "ask",
-                "agentMessage": (
-                    f"beforeShellExecution упал ({type(exc).__name__}) — ask user (не silent deny)."
-                ),
+                "agentMessage": (f"beforeShellExecution упал ({type(exc).__name__}) — ask user (не silent deny)."),
                 "userMessage": "Guard безопасности завершился с ошибкой. Разрешить команду вручную?",
             }
         )

@@ -25,13 +25,15 @@ from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.turns import DialogTurnWindow
+from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from palatium_ai.application.services.cost_budget import CostBudgetService
-    from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+    from palatium_ai.application.services.memory_extract import MemoryExtractService
+    from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
     from palatium_ai.application.services.session_service import SessionService
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
 
@@ -53,7 +55,8 @@ class IntentGraphRunner:
         cost_budget: CostBudgetService,
         dialog_turn_store: DialogTurnStore | None = None,
         memory_port: MemoryPort | None = None,
-        consolidation: MemoryConsolidationService | None = None,
+        consolidation: MemoryExtractService | None = None,
+        scratchpad: SessionScratchpadService | None = None,
         dialog_window_size: int = _DEFAULT_DIALOG_WINDOW,
         recall_min_confidence: float = 0.7,
         recall_max_items: int = 4,
@@ -69,6 +72,7 @@ class IntentGraphRunner:
         self._dialog_turn_store = dialog_turn_store
         self._memory_port = memory_port
         self._consolidation = consolidation
+        self._scratchpad = scratchpad
         self._dialog_window_size = dialog_window_size
         self._recall_min_confidence = recall_min_confidence
         self._recall_max_items = recall_max_items
@@ -119,6 +123,9 @@ class IntentGraphRunner:
             turns=prior_turns,
             limit=dialog_window.limit,
         )
+        pad = None
+        if self._scratchpad is not None:
+            pad = await self._scratchpad.load(thread_id=thread_id)
         memory_recall = await recall_for_thread(
             self._memory_port,
             thread_id=thread_id,
@@ -128,6 +135,7 @@ class IntentGraphRunner:
             limit=self._recall_max_items,
             max_chars=self._recall_max_chars,
             min_confidence=self._recall_min_confidence,
+            scratchpad=pad,
         )
         prompt_budget = MemoryPromptBudget(
             dialog_max_chars=self._contextualizer_dialog_max_chars,
@@ -135,6 +143,19 @@ class IntentGraphRunner:
             memory_max_chars=self._recall_max_chars,
             worker_summary_max_chars=self._worker_summary_max_chars,
             mcp_tool_output_max_chars=self._mcp_tool_output_max_chars,
+        )
+        prior_locale: str | None = None
+        ui_locale: str | None = None
+        session = await self._session_service.get_session(thread_id=thread_id)
+        if session is not None and isinstance(session.context, dict):
+            prior_raw = session.context.get("response_locale")
+            ui_raw = session.context.get("ui_locale")
+            prior_locale = prior_raw if isinstance(prior_raw, str) else None
+            ui_locale = ui_raw if isinstance(ui_raw, str) else None
+        response_locale = ReplyLocalePolicy.resolve(
+            user_text=text,
+            prior_locale=prior_locale,
+            ui_locale=ui_locale,
         )
         with turn_hop_timings() as hops, turn_token_usage() as tokens:
             graph_input: AgentGraphState = {
@@ -148,6 +169,7 @@ class IntentGraphRunner:
                 "memory_recall": memory_recall,
                 "prompt_budget": prompt_budget,
                 "revisions_count": 0,
+                "response_locale": response_locale,
             }
             if revision_feedback and revision_feedback.strip():
                 graph_input["revision_feedback"] = revision_feedback.strip()[:4_000]
@@ -192,6 +214,13 @@ class IntentGraphRunner:
             thread_id=thread_id,
             limit=self._dialog_window_size,
         )
+
+    async def refresh_scratchpad(self, *, thread_id: str) -> None:
+        """Sync session notes from dialog so the next turn sees preferences immediately."""
+        if self._scratchpad is None:
+            return
+        window = await self.load_dialog_window(thread_id=thread_id)
+        await self._scratchpad.refresh_from_dialog(thread_id=thread_id, dialog=window)
 
     async def resolve_revision_user_text(self, *, thread_id: str, context: dict[str, object]) -> str:
         """Authoritative user text for quality revise: dialog turns, then session preview fallback."""
@@ -268,6 +297,12 @@ class IntentGraphRunner:
                     task_id=task_id,
                     payload=assistant_turn_payload(formatted),
                 )
+            await self.refresh_scratchpad(thread_id=thread_id)
+            pinned_locale = (
+                formatted.output.locale
+                if formatted.output is not None
+                else str(final_state.get("response_locale") or "und")
+            )
             await self._session_service.touch_session(
                 thread_id=thread_id,
                 user_id=user_id,
@@ -283,6 +318,7 @@ class IntentGraphRunner:
                         str(final_state.get("effective_user_text") or text)
                     ),
                     "last_critic_summary": critic_summary,
+                    "response_locale": pinned_locale,
                 },
                 status="needs_review" if formatted.requires_review else "active",
             )
@@ -297,7 +333,8 @@ class IntentGraphRunner:
                     "operation": operation,
                 },
             )
-            if self._consolidation is not None and formatted.status == "success" and not formatted.requires_review:
+            if self._consolidation is not None and formatted.status == "success":
+                # Memory write path ≠ answer path: still enqueue when HITL review is pending.
                 self._consolidation.enqueue(
                     thread_id=thread_id,
                     task_id=task_id,
@@ -311,7 +348,7 @@ class IntentGraphRunner:
             agent_role="formatter",
             status="failure",
             confidence=0.0,
-            requires_review=True,
+            requires_review=False,
             output=None,
             error="Graph did not produce formatted result",
         )

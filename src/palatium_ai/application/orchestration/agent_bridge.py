@@ -284,6 +284,7 @@ def formatter_to_agent_input(
             "requires_user_choice": "true" if task_input.requires_user_choice else "false",
             "underspecification_kind": task_input.underspecification_kind,
             "revision_feedback": task_input.revision_feedback or "",
+            "response_locale": task_input.response_locale,
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },

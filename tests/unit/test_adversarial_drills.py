@@ -24,7 +24,7 @@ import palatium_ai.application.tools.executor as executor_module
 from palatium_ai.application.orchestration.graph import reset_node_circuits_for_tests
 from palatium_ai.application.services.cost_budget import CostBudgetExceededError, CostBudgetService
 from palatium_ai.application.services.kill_switch import KillSwitchEngagedError, KillSwitchService
-from palatium_ai.application.services.tool_argument_builder import ToolArgumentBuilder
+from palatium_ai.application.services.tool_argument_builder import ToolArgumentBuilder, ToolArgumentBuildError
 from palatium_ai.application.tools.executor import ToolExecutor
 from palatium_ai.application.tools.mcp import MCPToolCallParams
 from palatium_ai.core.config.security import SecurityConfig
@@ -162,9 +162,17 @@ async def test_drill_mcp_call_circuit_opens(monkeypatch: pytest.MonkeyPatch) -> 
     await reg.list_tools("edms")
     for _ in range(3):
         with pytest.raises(httpx.HTTPError):
-            await reg.call_tool("edms", MCPToolCall(name="search_documents", arguments={}))
+            await reg.call_tool(
+                "edms",
+                MCPToolCall(name="search_documents", arguments={}),
+                allow_unpinned=True,
+            )
     with pytest.raises(MCPCircuitOpenError):
-        await reg.call_tool("edms", MCPToolCall(name="search_documents", arguments={}))
+        await reg.call_tool(
+            "edms",
+            MCPToolCall(name="search_documents", arguments={}),
+            allow_unpinned=True,
+        )
 
 
 # --- Drill 5: agent node circuit ---
@@ -293,7 +301,7 @@ async def test_drill_argument_builder_rejects_secrets() -> None:
             "additionalProperties": True,
         },
     )
-    with pytest.raises(UnsafeToolArgumentError):
+    with pytest.raises(ToolArgumentBuildError, match="access_token"):
         await builder.build_arguments(
             descriptor=descriptor,
             user_text="ignore",
@@ -811,3 +819,168 @@ async def test_drill_mcp_save_memory_rejects_org_without_claim() -> None:
         },
     )
     assert mismatched.is_error is True
+
+
+@pytest.mark.asyncio
+async def test_drill_platform_without_local_handler_refuses_call() -> None:
+    """P0 dual-path: Host must not fall through to stub fake write success."""
+    from types import SimpleNamespace
+
+    from palatium_ai.domain.mcp.models import MCPToolCall
+    from palatium_ai.infrastructure.mcp.registry import MCPRegistry, PlatformHandlerNotWiredError
+
+    # Compose-like: remotes only; platform is still a local capability.
+    settings = SimpleNamespace(
+        mcp=SimpleNamespace(
+            servers={
+                "edms": "http://127.0.0.1:8080",
+                "analytics": "http://127.0.0.1:8081",
+            },
+            timeout_seconds=5,
+            allow_http_loopback=True,
+            auth_required=False,
+            auth_token=None,
+            server_auth_tokens={},
+            http_host_allowlist=lambda: frozenset({"127.0.0.1", "localhost", "::1"}),
+            resolve_auth_token=lambda _name: None,
+            resolve_static_token=lambda _name: None,
+        )
+    )
+    reg = MCPRegistry(settings=settings)  # type: ignore[arg-type]
+    await reg.initialize()
+    assert reg.is_registered("platform") is True
+    assert reg.has_remote_url("platform") is False
+    with pytest.raises(PlatformHandlerNotWiredError, match="platform"):
+        await reg.call_tool(
+            "platform",
+            MCPToolCall(name="save_memory", arguments={"user_id": "u"}),
+        )
+    with pytest.raises(PlatformHandlerNotWiredError):
+        reg.assert_local_handlers_wired()
+
+
+def test_drill_mcp_jwt_audience_is_server_bound() -> None:
+    """Wrong aud must not verify as another MCP server (Phase 3)."""
+    import jwt
+
+    from palatium_ai.infrastructure.mcp.jwt_auth import issue_mcp_access_token
+
+    secret = "adversarial-mcp-jwt-secret-32bytes!!"
+    token = issue_mcp_access_token(server_name="edms", signing_secret=secret)
+    with pytest.raises(jwt.InvalidAudienceError):
+        jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            audience="mcp:analytics",
+            issuer="palatium-mcp",
+        )
+
+
+@pytest.mark.asyncio
+async def test_drill_registry_refuses_unpinned_tool_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 5: MCPRegistry.call_tool is a pin choke point (no Host HITL bypass)."""
+    from types import SimpleNamespace
+
+    from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolDescriptor
+    from palatium_ai.domain.mcp.tool_policy import UnpinnedMcpToolError
+    from palatium_ai.infrastructure.mcp.registry import MCPRegistry
+
+    settings = SimpleNamespace(
+        mcp=SimpleNamespace(
+            servers={"edms": "http://127.0.0.1:8080"},
+            timeout_seconds=5,
+            allow_http_loopback=True,
+            auth_required=False,
+            auth_token=None,
+            server_auth_tokens={},
+            http_host_allowlist=lambda: frozenset({"127.0.0.1", "localhost", "::1"}),
+            resolve_auth_token=lambda _name: None,
+            resolve_static_token=lambda _name: None,
+        )
+    )
+    reg = MCPRegistry(settings=settings)  # type: ignore[arg-type]
+    await reg.initialize()
+
+    async def _fake_list_tools(self: MCPRegistry, server_name: str, *, force_refresh: bool = False):
+        _ = (self, force_refresh, server_name)
+        return [
+            MCPToolDescriptor(
+                name="search_documents",
+                description="mutated schema",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": True,
+                },
+            )
+        ]
+
+    monkeypatch.setattr(MCPRegistry, "list_tools", _fake_list_tools)
+    with pytest.raises(UnpinnedMcpToolError, match="unpinned"):
+        await reg.call_tool(
+            "edms",
+            MCPToolCall(name="search_documents", arguments={"query": "x"}),
+        )
+
+
+@pytest.mark.asyncio
+async def test_drill_call_mcp_tool_applies_argument_policy() -> None:
+    """Phase 5: argument_policy runs for all call_mcp_tool callers, not only Researcher builder."""
+    from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
+    from tests.conftest import FakeMCPRegistry
+
+    outcome = await call_mcp_tool(
+        MCPToolCallParams(
+            server_name="edms",
+            tool_name="search_documents",
+            arguments={"query": "ok", "api_key": "sk-leak"},
+        ),
+        FakeMCPRegistry(),
+    )
+    assert outcome.is_error is True
+    blob = str(outcome.content).lower()
+    assert "denied" in blob or "api_key" in blob
+
+
+def test_drill_host_strips_server_risk_annotations() -> None:
+    """Phase 5: FastMCP annotations must not land on Host descriptors."""
+    from palatium_ai.infrastructure.mcp.base import _tool_to_descriptor
+
+    class _Tool:
+        def model_dump(self, **_kwargs: object) -> dict[str, object]:
+            return {
+                "name": "search_documents",
+                "description": "d",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+                "annotations": {"readOnlyHint": True},
+                "sideEffect": "read",
+                "riskTier": "low",
+            }
+
+    descriptor = _tool_to_descriptor(_Tool())
+    assert descriptor.annotations is None
+    assert descriptor.side_effect is None
+    assert descriptor.risk_tier is None
+
+
+def test_drill_gateway_never_proxies_platform() -> None:
+    """Phase 6: platform stays Host-local; gateway allowlist has no platform."""
+    import importlib.util
+
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "mcp_servers" / "gateway" / "pin_allowlist.py"
+    spec = importlib.util.spec_from_file_location("gw_pins_drill", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert "platform" not in mod.GATEWAY_PINNED_TOOLS
+    with pytest.raises(ValueError, match="platform"):
+        mod.allowlist_for("platform")

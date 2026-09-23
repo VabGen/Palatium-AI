@@ -8,7 +8,7 @@ You NEVER return markdown body, HTML, or image/CDN URLs.
 Return ONLY one JSON object matching this schema (no fences, no commentary):
 {
   "schema_version": 1,
-  "locale": "en-US",
+  "locale": "<BCP-47 from response_locale>",
   "title": "short title or null",
   "blocks": [ /* one or more blocks */ ],
   "actions": [],
@@ -48,7 +48,10 @@ user, users, clock, chart, shield, check, x, link, edit, settings
 Rules:
 1. blocks must be non-empty and cover the full user-facing answer.
 2. Prefer steps or ordered list for procedures; table for comparisons; callout for risks.
-3. Match locale to user_text language (BCP-47, e.g. ru-RU / en-US).
+3. response_locale in the user JSON is mandatory: set document.locale to it exactly,
+   and write ALL user-facing title/blocks/actions text in that language. Do not switch
+   to English (or any other language) unless response_locale itself is that language.
+   Code block contents may keep source identifiers; prose around them must match locale.
 4. meta.requires_review must mirror input requires_review; set confidence accordingly.
 5. Human interaction contract (mandatory):
    - If requires_user_choice is true OR underspecification_kind is "discrete_choice"
@@ -76,4 +79,9 @@ Rules:
 FORMATTER_REPAIR_PROMPT = """Your previous JSON failed ContentDocument validation. Return ONLY a corrected JSON object.
 Validation error:
 {error}
+"""
+
+FORMATTER_LOCALE_REPAIR_PROMPT = """Rewrite the ContentDocument so ALL user-facing title/blocks/actions
+text is in response_locale={locale}. Keep the same structure and meaning. Set "locale" to {locale}.
+Code block contents may stay as-is. Return ONLY the corrected JSON object.
 """

@@ -17,15 +17,20 @@ from palatium_ai.application.agents.formatter.parsing import (
     decode_formatter_input,
     parse_formatter_document,
 )
-from palatium_ai.application.agents.formatter.prompts import FORMATTER_REPAIR_PROMPT, FORMATTER_SYSTEM_PROMPT
+from palatium_ai.application.agents.formatter.prompts import (
+    FORMATTER_LOCALE_REPAIR_PROMPT,
+    FORMATTER_REPAIR_PROMPT,
+    FORMATTER_SYSTEM_PROMPT,
+)
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
-from palatium_ai.domain.agents.formatter import FORMATTER_OUTPUT_INVALID
+from palatium_ai.domain.agents.formatter import FORMATTER_OUTPUT_INVALID, FormatterInput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -49,6 +54,7 @@ class FormatterAgent(BaseAgent):
             "requires_user_choice",
             "underspecification_kind",
             "revision_feedback",
+            "response_locale",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -68,6 +74,7 @@ class FormatterAgent(BaseAgent):
         try:
             document = await self._generate_document(messages)
             document = align_formatter_meta(document, task_input)
+            document = await self._maybe_repair_locale(messages, document, task_input)
         except Exception:
             logger.exception("formatter document generation failed", task_id=str(input.task_id))
             agent_metrics.record_error(self._config.role, "llm_stage_failure")
@@ -75,7 +82,7 @@ class FormatterAgent(BaseAgent):
                 task_id=input.task_id,
                 status="failure",
                 confidence=0.0,
-                output=_empty_document(),
+                output=_empty_document(task_input.response_locale),
                 error_message=FORMATTER_OUTPUT_INVALID,
             )
 
@@ -85,6 +92,14 @@ class FormatterAgent(BaseAgent):
             status=status,
             confidence=document.meta.confidence,
             output=document,
+        )
+
+    async def verify(self, output: AgentOutput) -> bool:
+        if not isinstance(output.output, ContentDocument):
+            return False
+        return ReplyLocalePolicy.prose_matches_locale(
+            ReplyLocalePolicy.document_prose(output.output),
+            output.output.locale,
         )
 
     async def _generate_document(self, messages: list[ChatMessage]) -> ContentDocument:
@@ -115,13 +130,47 @@ class FormatterAgent(BaseAgent):
             )
             return parse_formatter_document(repair.content)
 
+    async def _maybe_repair_locale(
+        self,
+        messages: list[ChatMessage],
+        document: ContentDocument,
+        task_input: FormatterInput,
+    ) -> ContentDocument:
+        locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
+        if locale == "und":
+            return document
+        prose = ReplyLocalePolicy.document_prose(document)
+        if ReplyLocalePolicy.prose_matches_locale(prose, locale):
+            return document
+        logger.warning(
+            "formatter locale mismatch, attempting repair",
+            response_locale=locale,
+            document_locale=document.locale,
+        )
+        repair_messages = [
+            *messages,
+            ChatMessage(role="assistant", content=document.model_dump_json()),
+            ChatMessage(
+                role="user",
+                content=FORMATTER_LOCALE_REPAIR_PROMPT.format(locale=locale),
+            ),
+        ]
+        repair = await self._harness.call_llm(
+            self._config,
+            repair_messages,
+            response_format="json_object",
+        )
+        repaired = parse_formatter_document(repair.content)
+        return align_formatter_meta(repaired, task_input)
 
-def _empty_document() -> ContentDocument:
+
+def _empty_document(response_locale: str) -> ContentDocument:
     from palatium_ai.domain.content.content_document import DocumentMeta, ParagraphBlock
 
+    locale = ReplyLocalePolicy.normalize(response_locale) or "und"
     return ContentDocument(
         schema_version=1,
-        locale="en-US",
+        locale=locale,
         title="",
         blocks=(ParagraphBlock(type="paragraph", text=" "),),
         actions=(),

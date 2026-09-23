@@ -27,7 +27,7 @@ alwaysApply: true
 | Пропуск HITL для email/DB-write/EDMS-write/финансов/PII/code-exec | Необратимое действие без контроля | `interrupt()` + `Command(resume=...)` + одноразовая карточка (020) |
 | `print()` / прямой `logging` / `logger = logging.getLogger()` мимо structlog | Логи вне корреляции, секреты не сканируются | structlog через `core/observability`; перед логами — secret scanner (020, 040) |
 | Ослабление/удаление теста или eval, чтобы «прошёл» | Подрыв quality gate, регрессии невидимы | Тест правит только bugfix кода; при спорном ожидании — обсудить, не править тест молча (075) |
-| `datetime.now()` / naive datetime в логике TTL, retention, consolidation | Рассинхрон времени между процессами | Только `datetime.now(UTC)`; сравнение — только между timezone-aware (010) |
+| `datetime.now()` / naive datetime в логике TTL, retention, extract/promote | Рассинхрон времени между процессами | Только `datetime.now(UTC)`; сравнение — только между timezone-aware (010) |
 | Блокирующий вызов в `async def` (`time.sleep`, sync `requests`, sync-драйвер БД) | Блок event loop, деградация всего графа | `asyncio.sleep`, async-клиенты; блокирующее — через `asyncio.to_thread` |
 | Точечный хардкод фраз / if под один UX-сценарий | Хрупко, не покрывает класс багов | Контракт/политика домена — см. 055 |
 | Прямой доступ агента к БД/HTTP мимо MCP | Обход RBAC, audit, resilience | Только MCP-инструменты / порты (070) |

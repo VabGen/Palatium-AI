@@ -8,15 +8,17 @@ import json
 import re
 import time
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Float, cast, delete, func, or_, select
+from sqlalchemy import Float, cast, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.core.types.embeddings import assert_vector_dim
 from palatium_ai.domain.memory.pii import mask_memory_value
+from palatium_ai.domain.memory.promotion import PromotionCandidate
 from palatium_ai.domain.memory.types import MemoryType
 from palatium_ai.infrastructure.database.models.memory_entry import MemoryEntryORM
 from palatium_ai.infrastructure.database.rls import set_rls_user_scope
@@ -33,6 +35,13 @@ _VALID_MEMORY_TYPES: frozenset[str] = frozenset({"preference", "fact", "incident
 def encode_namespace(namespace: tuple[str, ...]) -> str:
     """Stable string key for namespace tuple."""
     return "/".join(part.replace("/", "_") for part in namespace)
+
+
+def decode_namespace(encoded: str) -> tuple[str, ...]:
+    """Inverse of encode_namespace for slash-separated namespaces without embedded ``/``."""
+    if not encoded:
+        return ()
+    return tuple(encoded.split("/"))
 
 
 def normalize_memory_type(value: dict[str, object]) -> MemoryType:
@@ -57,7 +66,9 @@ def merge_hybrid_scores(
         if current is None or blended > current[0]:
             merged[entry_key] = (blended, payload)
     ranked = sorted(merged.values(), key=lambda item: item[0], reverse=True)
-    return [_with_score(payload, score) for score, payload in ranked[:limit]]
+    return [
+        _with_score(payload, score, entry_key=str(payload.get("_entry_key", ""))) for score, payload in ranked[:limit]
+    ]
 
 
 class PostgresMemoryPort:
@@ -193,6 +204,101 @@ class PostgresMemoryPort:
             await session.commit()
             return bool(getattr(result, "rowcount", 0))
 
+    async def bump_access(self, *, namespace: tuple[str, ...], key: str) -> int:
+        """Increment access_frequency; return new count (0 if missing)."""
+        user_id = resolve_user_id(namespace)
+        ns = encode_namespace(namespace)
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, user_id)
+            stmt = (
+                update(MemoryEntryORM)
+                .where(
+                    MemoryEntryORM.user_id == user_id,
+                    MemoryEntryORM.namespace == ns,
+                    MemoryEntryORM.entry_key == key,
+                )
+                .values(
+                    access_frequency=MemoryEntryORM.access_frequency + 1,
+                    last_accessed=datetime.now(UTC),
+                )
+                .returning(MemoryEntryORM.access_frequency)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            count = result.scalar_one_or_none()
+            return int(count or 0)
+
+    async def list_promotion_candidates(
+        self,
+        *,
+        user_id: str,
+        min_access_frequency: int,
+        min_importance: float,
+        limit: int = 32,
+    ) -> list[PromotionCandidate]:
+        """Rows for one RLS user_id not yet promoted that meet hard floors."""
+        uid = user_id.strip()
+        if not uid:
+            return []
+        safe_limit = max(1, min(limit, 128))
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, uid)
+            result = await session.execute(
+                select(MemoryEntryORM)
+                .where(
+                    MemoryEntryORM.user_id == uid,
+                    MemoryEntryORM.promoted_at.is_(None),
+                    MemoryEntryORM.access_frequency >= min_access_frequency,
+                    MemoryEntryORM.importance >= min_importance,
+                )
+                .order_by(MemoryEntryORM.access_frequency.desc(), MemoryEntryORM.importance.desc())
+                .limit(safe_limit)
+            )
+            rows = list(result.scalars().all())
+        candidates: list[PromotionCandidate] = []
+        for row in rows:
+            text = str(row.value.get("text", "")).strip() if isinstance(row.value, dict) else ""
+            if not text:
+                text = (row.search_text or "").strip()[:2000]
+            if not text:
+                continue
+            confidence = _value_confidence(row.value if isinstance(row.value, dict) else {})
+            candidates.append(
+                PromotionCandidate(
+                    namespace=decode_namespace(row.namespace),
+                    entry_key=row.entry_key,
+                    text=text[:2000],
+                    kind=str(row.memory_type or "fact")[:32],
+                    importance=float(row.importance or 0.0),
+                    access_frequency=int(row.access_frequency or 0),
+                    user_id=row.user_id,
+                    confidence=confidence,
+                    last_accessed=row.last_accessed,
+                    promoted_at=row.promoted_at,
+                )
+            )
+        return candidates
+
+    async def mark_promoted(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Stamp promoted_at; returns True when a row was updated."""
+        user_id = resolve_user_id(namespace)
+        ns = encode_namespace(namespace)
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, user_id)
+            stmt = (
+                update(MemoryEntryORM)
+                .where(
+                    MemoryEntryORM.user_id == user_id,
+                    MemoryEntryORM.namespace == ns,
+                    MemoryEntryORM.entry_key == key,
+                    MemoryEntryORM.promoted_at.is_(None),
+                )
+                .values(promoted_at=datetime.now(UTC))
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return bool(getattr(result, "rowcount", 0))
+
     async def _search_fts(
         self,
         *,
@@ -221,7 +327,7 @@ class PostgresMemoryPort:
             (
                 row.entry_key,
                 float(score or 0.0),
-                mask_memory_value(dict(row.value), contains_pii=row.contains_pii),
+                _payload_from_row(row, float(score or 0.0)),
             )
             for row, score in rows
         ]
@@ -261,7 +367,7 @@ class PostgresMemoryPort:
             (
                 row.entry_key,
                 max(0.0, float(score or 0.0)),
-                mask_memory_value(dict(row.value), contains_pii=row.contains_pii),
+                _payload_from_row(row, max(0.0, float(score or 0.0))),
             )
             for row, score in rows
         ]
@@ -292,9 +398,7 @@ class PostgresMemoryPort:
             confidence = _value_confidence(row.value)
             score = overlap * (0.5 + 0.5 * confidence)
             if score > 0:
-                scored.append(
-                    (score, _with_score(mask_memory_value(dict(row.value), contains_pii=row.contains_pii), score)),
-                )
+                scored.append((score, _payload_from_row(row, score)))
         scored.sort(key=lambda item: item[0], reverse=True)
         return [item for _, item in scored[:limit]]
 
@@ -311,7 +415,15 @@ def _value_confidence(value: dict[str, Any]) -> float:
     return max(0.0, min(1.0, coerce_float(value.get("confidence", 0.0))))
 
 
-def _with_score(value: dict[str, object], score: float) -> dict[str, object]:
+def _payload_from_row(row: MemoryEntryORM, score: float) -> dict[str, object]:
+    payload = mask_memory_value(dict(row.value), contains_pii=row.contains_pii)
+    return _with_score(payload, score, entry_key=row.entry_key)
+
+
+def _with_score(value: dict[str, object], score: float, *, entry_key: str = "") -> dict[str, object]:
     enriched = dict(value)
     enriched["_score"] = round(score, 4)
+    key = entry_key or str(value.get("_entry_key", "")).strip()
+    if key:
+        enriched["_entry_key"] = key
     return enriched

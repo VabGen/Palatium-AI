@@ -1,6 +1,11 @@
 # src/palatium_ai/application/services/memory_fact_persistence.py
 
-"""Persist MemoryKeeper facts through platform ``save_memory`` MCP (060/070)."""
+"""Persist MemoryKeeper facts through platform ``save_memory`` MCP (060/070).
+
+EXCEPTION (020 interactive HITL): sleep-time ``MemoryExtractJob`` writes via the
+Host MCP path (actor bind + secret scan + PlatformToolPin), not an interactive
+HITL card. Do not move execution to the MCP stub/server.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ import re
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from palatium_ai.application.services.memory_consolidation import ConsolidationJob
+from palatium_ai.application.services.memory_extract import MemoryExtractJob
 from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text
@@ -45,7 +50,7 @@ class MemoryFactPersistenceService:
     async def persist_facts(
         self,
         *,
-        job: ConsolidationJob,
+        job: MemoryExtractJob,
         facts: tuple[MemoryFactCandidate, ...],
     ) -> int:
         """Persist ADD-only facts; returns count of successful MCP saves."""
@@ -59,7 +64,7 @@ class MemoryFactPersistenceService:
     async def _persist_one(
         self,
         *,
-        job: ConsolidationJob,
+        job: MemoryExtractJob,
         fact: MemoryFactCandidate,
         entry_key: str,
     ) -> bool:
@@ -127,17 +132,23 @@ class MemoryFactPersistenceService:
             repository=self._mcp_tool_call_repository,
         )
         if outcome.is_error:
+            err_text = ""
+            if outcome.content:
+                first = outcome.content[0]
+                if isinstance(first, dict):
+                    err_text = str(first.get("text", ""))[:240]
             logger.warning(
                 "memory_fact_persistence.save_failed",
                 thread_id=job.thread_id,
                 task_id=job.task_id,
                 entry_key=entry_key,
+                error=err_text,
             )
             return False
         return True
 
 
-def _resolve_fact_scope(*, fact: MemoryFactCandidate, job: ConsolidationJob) -> tuple[str, str]:
+def _resolve_fact_scope(*, fact: MemoryFactCandidate, job: MemoryExtractJob) -> tuple[str, str]:
     """Map fact kind to MCP namespace_kind + scope_id (same routing as consolidation worker)."""
     if job.user_id and fact.kind == "preference":
         return "user", job.user_id.strip()
@@ -146,7 +157,7 @@ def _resolve_fact_scope(*, fact: MemoryFactCandidate, job: ConsolidationJob) -> 
     return "thread", job.thread_id.strip()
 
 
-def _resolve_save_user_id(*, job: ConsolidationJob, namespace_kind: str, scope_id: str) -> str:
+def _resolve_save_user_id(*, job: MemoryExtractJob, namespace_kind: str, scope_id: str) -> str:
     """Actor id for MCP; user namespace must equal scope_id (MEM-HITL-04)."""
     if namespace_kind == "user":
         return scope_id.strip()
@@ -165,9 +176,10 @@ def _canonical_memory_type(kind: str) -> MemoryType:
 
 
 def _memory_key(key_hint: str | None, text: str) -> str:
+    # No ``scheme:`` shape — MCP argument_policy treats ``add:`` as a denied URI scheme.
     if key_hint:
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", key_hint.strip().lower()).strip("-")[:80]
         if slug:
-            return f"add:{slug}"
+            return f"add-{slug}"
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    return f"add:{digest}:{uuid4().hex[:8]}"
+    return f"add-{digest}-{uuid4().hex[:8]}"

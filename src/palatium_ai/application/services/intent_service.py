@@ -23,6 +23,7 @@ from palatium_ai.application.services.intent_turn_helpers import (
     write_audit as _write_audit,
 )
 from palatium_ai.application.services.kill_switch import KillSwitchService
+from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
 
     from palatium_ai.application.orchestration.state import AgentGraphState
     from palatium_ai.application.services.hitl_service import HitlService
-    from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+    from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
     from palatium_ai.application.services.session_service import SessionService
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
@@ -68,7 +69,7 @@ class IntentService:
         cost_budget: CostBudgetService | None = None,
         dialog_turn_store: DialogTurnStore | None = None,
         memory_port: MemoryPort | None = None,
-        consolidation: MemoryConsolidationService | None = None,
+        consolidation: MemoryExtractService | None = None,
         option_synthesizer: OptionSynthesizer | None = None,
         dialog_window_size: int = _DEFAULT_DIALOG_WINDOW,
         recall_min_confidence: float = 0.7,
@@ -95,6 +96,7 @@ class IntentService:
             dialog_turn_store=dialog_turn_store,
             memory_port=memory_port,
             consolidation=consolidation,
+            scratchpad=SessionScratchpadService(memory_port),
             dialog_window_size=dialog_window_size,
             recall_min_confidence=recall_min_confidence,
             recall_max_items=recall_max_items,

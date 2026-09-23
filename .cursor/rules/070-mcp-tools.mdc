@@ -18,6 +18,11 @@ alwaysApply: true
 Канонический набор мутаций памяти из 060 покрыт: `save_memory` / `forget_memory` /
 `consolidate_memory` — тонкие обёртки над `MemoryPort`.
 
+**Семантика `consolidate_memory` (legacy name):** enqueue sleep-time **extract**
+(transcript → medium via MemoryKeeper). Это **не** medium→graph promote
+(`MemoryPromotionService`). Переименование в `extract_transcript_memories` /
+добавление `promote_memory` — только правкой этого перечня + обсуждение.
+
 ## Контракт инструмента (application/tools/base.py — единственный источник)
 
 ```python
@@ -83,11 +88,13 @@ params = {"uid": user_id, "lim": limit}
 4. Результаты `web_fallback` — с пометкой источника в контексте, чтобы Critic
    оценивал надёжность внешних данных.
 
-## Сервер
+## Сервер / Host
 
-- FastMCP-сервер — stateless, запуск
-  `python -m palatium_ai.infrastructure.mcp.server`, транспорт — HTTP/SSE за
-  внутренней сетью; наружу порт не экспонируется (020: периметр).
+- **platform** (канон 070 tools): Host-local — discovery из `platform_schemas` /
+  pins, execute только через `PlatformToolHandler`. URL `platform` в
+  `MCP_SERVERS` игнорируется; отдельный процесс `:8082` не нужен для runtime.
+- **edms / analytics**: remote FastMCP (Streamable HTTP) за внутренней сетью;
+  наружу порты не экспонируются (020: периметр). Host — MCP client (`MCPRegistry`).
 - Каждый tool call — span + метрика (040, правило «никогда потом»).
 - Контракты интеграции с внешними системами (см. JavaEdms) — если данных
   не хватает, спроси пользователя, не выдумывай контракты (000, 090).

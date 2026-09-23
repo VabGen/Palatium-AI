@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from palatium_ai.core.resilience.circuit import ConsecutiveFailureCircuit
 from palatium_ai.infrastructure.memory.postgres_memory_port import (
+    decode_namespace,
     encode_namespace,
     merge_hybrid_scores,
     normalize_memory_type,
@@ -38,6 +39,7 @@ def test_merge_hybrid_scores_prefers_higher_blended_score() -> None:
 
 def test_encode_namespace_escapes_slashes() -> None:
     assert encode_namespace(("chat", "thread", "t/1")) == "chat/thread/t_1"
+    assert decode_namespace("chat/thread/t1") == ("chat", "thread", "t1")
 
 
 def test_circuit_half_open_allows_single_probe() -> None:

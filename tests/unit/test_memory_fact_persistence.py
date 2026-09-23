@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import pytest
 
-from palatium_ai.application.services.memory_consolidation import ConsolidationJob
-from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
+from palatium_ai.application.services.memory_extract import MemoryExtractJob
+from palatium_ai.application.services.memory_fact_persistence import (
+    MemoryFactPersistenceService,
+    _memory_key,
+)
 from palatium_ai.domain.agents.memory_keeper import MemoryFactCandidate
 from palatium_ai.domain.memory.namespaces import org_namespace, user_namespace
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from tests.conftest import make_platform_mcp_registry
+
+
+def test_memory_key_avoids_colon_uri_scheme_shape() -> None:
+    """MCP argument_policy treats ``add:slug`` as denied URI scheme ``add``."""
+    keyed = _memory_key("pref-bullets", "text")
+    hashed = _memory_key(None, "some durable fact text")
+    assert keyed == "add-pref-bullets"
+    assert ":" not in keyed
+    assert hashed.startswith("add-")
+    assert ":" not in hashed
 
 
 @pytest.mark.asyncio
@@ -17,7 +30,7 @@ async def test_persist_facts_uses_save_memory_mcp() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
     service = MemoryFactPersistenceService(registry)
-    job = ConsolidationJob(thread_id="thread-1", task_id="task-1", user_id="user-1")
+    job = MemoryExtractJob(thread_id="thread-1", task_id="task-1", user_id="user-1")
     fact = MemoryFactCandidate(
         text="User prefers concise bullet lists",
         kind="preference",
@@ -36,7 +49,7 @@ async def test_persist_facts_maps_entity_to_org_namespace() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
     service = MemoryFactPersistenceService(registry)
-    job = ConsolidationJob(thread_id="thread-2", task_id="task-2", user_id="user-2", org_id="org-x")
+    job = MemoryExtractJob(thread_id="thread-2", task_id="task-2", user_id="user-2", org_id="org-x")
     fact = MemoryFactCandidate(
         text="Acme billing contact is Petrov",
         kind="entity",
@@ -55,7 +68,7 @@ async def test_persist_facts_blocks_secrets() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
     service = MemoryFactPersistenceService(registry)
-    job = ConsolidationJob(thread_id="thread-sec", task_id="task-sec", user_id="user-sec")
+    job = MemoryExtractJob(thread_id="thread-sec", task_id="task-sec", user_id="user-sec")
     fact = MemoryFactCandidate(
         text="api key sk-abcdefghijklmnopqrstuvwxyz012345",
         kind="preference",
@@ -73,7 +86,7 @@ async def test_persist_facts_marks_pii_from_text() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
     service = MemoryFactPersistenceService(registry)
-    job = ConsolidationJob(thread_id="thread-pii", task_id="task-pii", user_id="user-pii")
+    job = MemoryExtractJob(thread_id="thread-pii", task_id="task-pii", user_id="user-pii")
     fact = MemoryFactCandidate(
         text="User email is alice@example.com",
         kind="preference",
@@ -82,6 +95,6 @@ async def test_persist_facts_marks_pii_from_text() -> None:
     )
     stored = await service.persist_facts(job=job, facts=(fact,))
     assert stored == 1
-    item = await port.get(namespace=user_namespace("user-pii"), key="add:email")
+    item = await port.get(namespace=user_namespace("user-pii"), key="add-email")
     assert item is not None
     assert item.get("contains_pii") is True or item.get("text") == "[PII]"

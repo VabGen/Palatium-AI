@@ -227,3 +227,71 @@ async def test_eval_multi_hop_anaphora_fixture_shape() -> None:
     assert result.output.refers_to_prior is True
     rewritten = result.output.rewritten_query.lower()
     assert any(token in rewritten for token in ("иванов", "acme", "email", "почт"))
+
+
+@pytest.mark.asyncio
+async def test_eval_topic_switch_user_anaphora_fixture_shape() -> None:
+    """Offline fixture: anaphora to earlier user fact after intervening code dump."""
+    llm = FakeLLMPort(
+        """{
+          "rewritten_query": "Предложи рецепт утки на ужин",
+          "continuation_kind": "answer",
+          "confidence": 0.91,
+          "refers_to_prior": true,
+          "prior_assistant_excerpt": "Хочу на ужин утку",
+          "reasoning": "anaphora to user dinner preference after topic switch"
+        }"""
+    )
+    code = "import requests\n" + ("x" * 400)
+    window = DialogTurnWindow(
+        thread_id="eval-topic",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="eval-topic",
+                role="user",
+                content="Хочу на ужин утку",
+                seq=0,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="eval-topic",
+                role="assistant",
+                content="Ок, утка.",
+                seq=1,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="eval-topic",
+                role="user",
+                content="write python search code",
+                seq=2,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="eval-topic",
+                role="assistant",
+                content=code,
+                seq=3,
+                created_at=datetime.now(UTC),
+            ),
+        ),
+    )
+    result = await run_contextualizer(
+        llm,
+        ContextualizerInput(
+            task_id="eval-topic",
+            user_text="предложи рицепт того что я хотел на ужин",
+            dialog_window=window,
+            prompt_budget=MemoryPromptBudget(),
+        ),
+    )
+    assert result.output is not None
+    assert result.output.continuation_kind == "answer"
+    assert result.output.refers_to_prior is True
+    assert "утк" in result.output.rewritten_query.lower()
+    assert result.output.prior_assistant_excerpt is not None
+    assert "утк" in result.output.prior_assistant_excerpt.lower()

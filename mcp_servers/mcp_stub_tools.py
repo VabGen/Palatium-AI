@@ -1,6 +1,11 @@
 # mcp_servers/mcp_stub_tools.py
 
-"""Shared helpers for MCP stub tools/list progressive disclosure."""
+"""Shared helpers for MCP progressive disclosure (Host-side / unit tests).
+
+Stubs on FastMCP always advertise full schemas; the Host strips to summaries
+via ``MCPToolDescriptor.to_summary()``. ``omitInputSchema`` remains a local
+test/helper flag for legacy progressive-disclosure drills.
+"""
 
 from __future__ import annotations
 

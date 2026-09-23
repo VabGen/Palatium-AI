@@ -49,6 +49,18 @@ def resolved_user_text(state: AgentGraphState) -> str:
     return state["user_text"]
 
 
+def resolved_response_locale(state: AgentGraphState) -> str:
+    """BCP-47 pin from graph state (ReplyLocalePolicy); fallback resolve from user_text."""
+    from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+
+    pinned = state.get("response_locale")
+    if isinstance(pinned, str) and pinned.strip():
+        normalized = ReplyLocalePolicy.normalize(pinned)
+        if normalized is not None:
+            return normalized
+    return ReplyLocalePolicy.resolve(user_text=resolved_user_text(state))
+
+
 def routing_intent(state: AgentGraphState) -> EffectiveRoutingIntent | None:
     """ContinuityPolicy result (single source of truth when present)."""
     return state.get("routing_intent")
@@ -69,7 +81,7 @@ def ensure_routing_intent(state: AgentGraphState) -> EffectiveRoutingIntent:
 
 
 def resolved_prior_assistant_content(state: AgentGraphState) -> str | None:
-    """Prior assistant text from ContinuityPolicy / dialog."""
+    """Prior text from ContinuityPolicy / dialog (assistant or salient user intents)."""
     intent = routing_intent(state)
     prior: str | None
     if intent is not None and intent.prior_context:

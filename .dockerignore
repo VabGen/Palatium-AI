@@ -37,7 +37,7 @@ logs
 scripts/.dev
 
 # Справочник СЭД / Java — не часть API-образа
-mcp_servers
+#mcp_servers
 JavaEdms
 docs
 deploy
@@ -47,4 +47,4 @@ deploy
 !README.md
 
 # Не тащим чужие Dockerfile в контекст лишний раз
-mcp_servers/**/Dockerfile
+#mcp_servers/**/Dockerfile

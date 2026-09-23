@@ -73,7 +73,7 @@ class HitlInteractionPolicy:
         """Decide choice card options and whether to mint quality review."""
         if document is None:
             return HitlCardPlan(
-                mint_quality_review=requires_review,
+                mint_quality_review=False,
                 reason="no_document",
             )
 

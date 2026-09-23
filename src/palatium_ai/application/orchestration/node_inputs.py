@@ -138,4 +138,5 @@ def build_formatter_input(
         requires_user_choice=selectors.requires_user_choice(state),
         underspecification_kind=selectors.underspecification_kind(state),
         revision_feedback=selectors.resolved_revision_feedback(state),
+        response_locale=selectors.resolved_response_locale(state),
     )

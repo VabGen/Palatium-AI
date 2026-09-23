@@ -1,6 +1,10 @@
 # mcp_servers/mcp_stub_auth.py
 
-"""Shared Bearer auth for local MCP JSON-RPC stubs."""
+"""Shared Bearer helpers for MCP stubs (opaque token + env flags).
+
+Phase 3 stubs prefer ``MCP_JWT_SECRET`` / ``JWT_SECRET`` via ``mcp_stub_runtime``;
+``MCP_AUTH_TOKEN`` remains a MultiAuth fallback for local/legacy.
+"""
 
 from __future__ import annotations
 

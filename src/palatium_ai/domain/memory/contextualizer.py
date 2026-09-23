@@ -43,6 +43,8 @@ class ContextualizerOutput(BaseModel):
     continuation_kind: ContinuationKind
     confidence: float = Field(ge=0.0, le=1.0)
     refers_to_prior: bool = False
+    # Salient dialog snippet the rewrite depends on (user or assistant). Field name kept
+    # for checkpoint serde; semantics are dialog-salient, not assistant-only.
     prior_assistant_excerpt: str | None = Field(default=None, max_length=4000)
     reasoning: str = Field(min_length=1, max_length=2000)
     # True when this turn is a completed HITL user_choice pick (deterministic resume).

@@ -31,13 +31,14 @@ from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock, ParagraphBlock
 from palatium_ai.domain.hitl.cards import HITLCardView, clamp_ttl_seconds
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
+from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 if TYPE_CHECKING:
     from palatium_ai.application.services.cost_budget import CostBudgetService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.intent_graph_runner import IntentGraphRunner
     from palatium_ai.application.services.kill_switch import KillSwitchService
-    from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+    from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
     from palatium_ai.application.services.session_service import SessionService
     from palatium_ai.domain.memory.ports import DialogTurnStore
@@ -69,7 +70,7 @@ class IntentHitlFlow:
         cost_budget: CostBudgetService,
         process_turn: ProcessTurn,
         dialog_turn_store: DialogTurnStore | None = None,
-        consolidation: MemoryConsolidationService | None = None,
+        consolidation: MemoryExtractService | None = None,
         option_synthesizer: OptionSynthesizer | None = None,
     ) -> None:
         self._graph_runner = graph_runner
@@ -350,6 +351,8 @@ class IntentHitlFlow:
                 task_id=task_id,
                 payload=assistant_turn_payload(formatted),
             )
+        await self._graph_runner.refresh_scratchpad(thread_id=thread_id)
+        pinned_locale = formatted.output.locale if formatted.output is not None else "und"
         await self._session_service.touch_session(
             thread_id=thread_id,
             user_id=user_id,
@@ -361,6 +364,7 @@ class IntentHitlFlow:
                 "last_response_preview": response_preview(formatted),
                 "hitl_card_ids": ",".join(card.card_id for card in formatted.hitl_cards),
                 "pending_tool_approval": "",
+                "response_locale": pinned_locale,
             },
             status="needs_review" if formatted.requires_review else "active",
         )
@@ -373,7 +377,7 @@ class IntentHitlFlow:
                 "requires_review": str(formatted.requires_review),
             },
         )
-        if self._consolidation is not None and formatted.status == "success" and not formatted.requires_review:
+        if self._consolidation is not None and formatted.status == "success":
             self._consolidation.enqueue(
                 thread_id=thread_id,
                 task_id=task_id,
@@ -488,6 +492,7 @@ class IntentHitlFlow:
                 tool=tool_name,
                 reason=str(exc),
             )
+            locale = await self._session_response_locale(thread_id=thread_id)
             return FormatterTaskResult(
                 task_id=task_id,
                 agent_role="formatter",
@@ -495,7 +500,7 @@ class IntentHitlFlow:
                 confidence=0.0,
                 requires_review=True,
                 output=ContentDocument(
-                    locale="en",
+                    locale=locale,
                     title="Tool approval unavailable",
                     blocks=(
                         HeadingBlock(level=2, text="Cannot open tool approval", icon="shield"),
@@ -511,8 +516,9 @@ class IntentHitlFlow:
                 hitl_cards=(),
                 error=str(exc),
             )
+        locale = await self._session_response_locale(thread_id=thread_id)
         document = ContentDocument(
-            locale="en",
+            locale=locale,
             title="Tool approval required",
             blocks=(
                 HeadingBlock(level=2, text="Human approval required before tool call", icon="shield"),
@@ -543,6 +549,7 @@ class IntentHitlFlow:
                 task_id=task_id,
                 payload=assistant_turn_payload(result),
             )
+        await self._graph_runner.refresh_scratchpad(thread_id=thread_id)
         await self._session_service.touch_session(
             thread_id=thread_id,
             user_id=user_id,
@@ -592,14 +599,23 @@ class IntentHitlFlow:
         from palatium_ai.domain.content import parse_content_document
         from palatium_ai.domain.hitl.option_synthesis import DiscreteChoiceSynthesisPolicy
 
-        if formatted.output is None and not formatted.requires_review:
-            return formatted.model_copy(update={"hitl_cards": ()})
+        if formatted.output is None:
+            # No draft to review: this is a pipeline failure, not a human wait (020 cards, not spinner).
+            error = formatted.error or "formatter_output_missing"
+            status = formatted.status if formatted.status == "failure" else "failure"
+            return formatted.model_copy(
+                update={
+                    "hitl_cards": (),
+                    "requires_review": False,
+                    "status": status,
+                    "error": error,
+                }
+            )
 
-        document = formatted.output
-        if document is not None:
-            # Heal degraded block types after LangGraph/checkpointer serde.
-            document = parse_content_document(document.model_dump(mode="json"))
-            formatted = formatted.model_copy(update={"output": document})
+        document: ContentDocument = formatted.output
+        # Heal degraded block types after LangGraph/checkpointer serde.
+        document = parse_content_document(document.model_dump(mode="json"))
+        formatted = formatted.model_copy(update={"output": document})
 
         strategy = (
             selected_strategy.value
@@ -639,6 +655,7 @@ class IntentHitlFlow:
                     document,
                     synthesis.actions,
                     framing_text=synthesis.framing,
+                    locale=document.locale,
                 )
                 formatted = formatted.model_copy(update={"output": document})
                 assembled = InteractionAssembler.assemble(
@@ -685,10 +702,11 @@ class IntentHitlFlow:
             )
 
         plan = assembled.plan
-        document = assembled.document
+        if assembled.document is not None:
+            document = assembled.document
         cards: list[HITLCardView] = []
 
-        if plan.choice_actions and document is not None:
+        if plan.choice_actions:
             choice = await self._hitl_service.create_choice_card(
                 thread_id=thread_id,
                 task_id=task_id,
@@ -700,7 +718,7 @@ class IntentHitlFlow:
             )
             cards.append(choice)
 
-        if plan.mint_quality_review and document is not None:
+        if plan.mint_quality_review:
             cards.append(
                 await self._hitl_service.create_review_card(
                     thread_id=thread_id,
@@ -712,12 +730,28 @@ class IntentHitlFlow:
                 )
             )
 
-        if document is None:
-            return formatted.model_copy(update={"hitl_cards": tuple(cards)})
-
         return formatted.model_copy(
             update={
                 "output": document,
                 "hitl_cards": tuple(cards),
             }
+        )
+
+    async def _session_response_locale(self, *, thread_id: str) -> str:
+        """Sticky BCP-47 from session; falls back to last_user_text script signal."""
+        session = await self._session_service.get_session(thread_id=thread_id)
+        prior: str | None = None
+        ui: str | None = None
+        user_text = ""
+        if session is not None and isinstance(session.context, dict):
+            prior_raw = session.context.get("response_locale")
+            ui_raw = session.context.get("ui_locale")
+            text_raw = session.context.get("last_user_text")
+            prior = prior_raw if isinstance(prior_raw, str) else None
+            ui = ui_raw if isinstance(ui_raw, str) else None
+            user_text = text_raw if isinstance(text_raw, str) else ""
+        return ReplyLocalePolicy.resolve(
+            user_text=user_text,
+            prior_locale=prior,
+            ui_locale=ui,
         )

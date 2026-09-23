@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, Index, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,6 +35,9 @@ class MemoryEntryORM(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     value: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     search_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     importance: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    access_frequency: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_accessed: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     contains_pii: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(MEMORY_EMBEDDING_DIM), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -7,7 +7,7 @@ import json
 import pytest
 
 from palatium_ai.application.agents.formatter import parse_formatter_document
-from palatium_ai.domain.llm.json_codec import extract_json_object, loads_llm_json
+from palatium_ai.domain.llm.json_codec import loads_llm_json, loads_llm_object
 
 
 def test_loads_trailing_comma() -> None:
@@ -22,7 +22,7 @@ def test_extract_from_fenced_markdown() -> None:
 
 def test_extract_balanced_not_greedy() -> None:
     raw = 'prefix {"inner": {"x": 1}} trailing }'
-    assert extract_json_object(raw) == '{"inner": {"x": 1}}'
+    assert loads_llm_object(raw) == '{"inner": {"x": 1}}'
 
 
 def test_formatter_parse_tolerates_trailing_commas() -> None:

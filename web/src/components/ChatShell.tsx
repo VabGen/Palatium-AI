@@ -275,14 +275,13 @@ export function ChatShell() {
           const hydratedCards = await hydratePendingHitlCards(hitlCards, userId, orgId);
           const feedback = (turn.payload as { feedback?: { like?: boolean; dislike?: boolean } })
             ?.feedback;
-          const hasHitl = hydratedCards.some(card => card.status === 'pending');
           restored.push({
             id: turn.id ?? crypto.randomUUID(),
             role: 'assistant',
             document,
             hitlCards: hydratedCards,
             _requiresReview: requiresReview,
-            _pendingReview: requiresReview && !document && !hasHitl,
+            _pendingReview: false,
             _feedbackLike: feedback?.like || false,
             _feedbackDislike: feedback?.dislike || false,
             status: 'success',
@@ -578,11 +577,6 @@ export function ChatShell() {
                     orgId={orgId}
                     onResolved={(card, resumed) => handleHitlResolved(message.id, card, resumed)}
                   />
-                ) : message._pendingReview ? (
-                  <div className="msg pending-review">
-                    <LoaderCircle className="spin" size={18} />
-                    <span>Ответ проверяется модератором…</span>
-                  </div>
                 ) : message.document ? (
                   <>
                     <BlockRenderer document={message.document} />

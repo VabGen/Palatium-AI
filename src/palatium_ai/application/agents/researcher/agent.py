@@ -227,7 +227,14 @@ class ResearcherAgent(BaseAgent):
             return approval_failure
 
         outcome_or_failure = await self._invoke_mcp_tool(
-            task_input, context, server_name, tool_name, arguments, mcp_registry, task_uuid
+            task_input,
+            context,
+            server_name,
+            tool_name,
+            arguments,
+            mcp_registry,
+            task_uuid,
+            allow_unpinned=resolve_platform_pin(descriptor, server_name=server_name) is None,
         )
         if isinstance(outcome_or_failure, AgentOutput):
             return outcome_or_failure
@@ -402,6 +409,8 @@ class ResearcherAgent(BaseAgent):
         arguments: dict[str, object],
         mcp_registry: MCPRegistryPort,
         task_uuid: UUID,
+        *,
+        allow_unpinned: bool = False,
     ) -> MCPToolCallOutcome | AgentOutput:
         task_input = _require_researcher_input(task_input)
         params = MCPToolCallParams(
@@ -411,6 +420,7 @@ class ResearcherAgent(BaseAgent):
             actor_user_id=(context.user_id or "").strip(),
             actor_org_id=(context.org_id or "").strip(),
             actor_thread_id=context.thread_id,
+            allow_unpinned=allow_unpinned,
         )
 
         async def _handle(payload: MCPToolCallParams) -> MCPToolCallOutcome:

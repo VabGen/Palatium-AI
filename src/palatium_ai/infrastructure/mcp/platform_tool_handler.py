@@ -20,7 +20,7 @@ from palatium_ai.infrastructure.mcp.memory_tool_ops import (
 )
 
 if TYPE_CHECKING:
-    from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+    from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.domain.graph.port import GraphPort
     from palatium_ai.domain.knowledge.port import KnowledgePort
     from palatium_ai.domain.memory.ports import MemoryPort
@@ -41,7 +41,7 @@ class PlatformToolHandler:
         *,
         knowledge_port: KnowledgePort,
         memory_port: MemoryPort | None = None,
-        consolidation: MemoryConsolidationService | None = None,
+        consolidation: MemoryExtractService | None = None,
         graph_port: GraphPort | None = None,
         web_search_port: WebSearchPort | None = None,
     ) -> None:

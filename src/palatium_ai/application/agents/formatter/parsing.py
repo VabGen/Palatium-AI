@@ -10,6 +10,7 @@ from palatium_ai.application.agents.formatter.config import MIN_PIPELINE_CONFIDE
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.llm.response_parser import parse_llm_response
+from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 
 def parse_formatter_document(raw_content: str) -> ContentDocument:
@@ -29,7 +30,7 @@ def parse_formatter_document(raw_content: str) -> ContentDocument:
 
 
 def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) -> ContentDocument:
-    """Синхронизирует meta с critic/HITL флагом (источник истины — пайплайн)."""
+    """Синхронизирует meta/locale с пайплайном (locale pin — source of truth)."""
     confidence = clamp_confidence(document.meta.confidence)
     if task_input.requires_review:
         confidence = min(confidence, REVIEW_CONFIDENCE_CAP)
@@ -42,15 +43,18 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     ) and interaction == "none":
         interaction = "choice"
 
+    locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
+
     return document.model_copy(
         update={
+            "locale": locale,
             "meta": document.meta.model_copy(
                 update={
                     "requires_review": task_input.requires_review,
                     "confidence": confidence,
                     "interaction": interaction,
                 }
-            )
+            ),
         }
     )
 
@@ -63,7 +67,9 @@ def clamp_confidence(value: float) -> float:
 
 
 def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object]:
+    locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
     return {
+        "response_locale": locale,
         "user_text": task_input.context_packet.user_text,
         "task_kind": task_input.context_packet.task_kind,
         "route": task_input.context_packet.route,
@@ -82,6 +88,7 @@ def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:
     from palatium_ai.domain.agents.context_packet import ContextPacket
 
     packet = ContextPacket.model_validate_json(input_context["context_packet_json"])
+    locale = ReplyLocalePolicy.normalize(input_context.get("response_locale")) or "und"
     return FormatterInput(
         task_id=input_context.get("_task_id", packet.task_id),
         context_packet=packet,
@@ -91,4 +98,5 @@ def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:
         requires_user_choice=input_context.get("requires_user_choice", "false").lower() == "true",
         underspecification_kind=input_context.get("underspecification_kind", "none"),
         revision_feedback=input_context.get("revision_feedback") or None,
+        response_locale=locale,
     )

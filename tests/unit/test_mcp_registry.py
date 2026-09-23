@@ -90,7 +90,7 @@ async def test_list_tools_still_returns_tools_from_available_server(monkeypatch:
     ]
 
     async def _conditional_list_tools(self: MCPJsonRpcClient) -> list[MCPToolDescriptor]:
-        if self._server_url.endswith(":8081"):
+        if ":8081" in self._server_url:
             raise httpx.ConnectError("analytics down")
         return expected
 

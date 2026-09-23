@@ -66,7 +66,18 @@ from palatium_ai.domain.memory.contextualizer import ContextualizerInput
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
 from palatium_ai.domain.policies.types import ExecutionStrategy
 
-_CASSETTE_ROOT = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "llm"
+
+# _CASSETTE_ROOT = Path(__file__).resolve().parents[5] / "tests" / "fixtures" / "llm"
+def _find_project_root(start: Path) -> Path:
+    """Ищем корень проекта по маркеру tests/fixtures/llm."""
+    for parent in (start, *start.parents):
+        if (parent / "tests" / "fixtures" / "llm").is_dir():
+            return parent
+    msg = "project root with tests/fixtures/llm not found"
+    raise FileNotFoundError(msg)
+
+
+_CASSETTE_ROOT = _find_project_root(Path(__file__).resolve()) / "tests" / "fixtures" / "llm"
 
 CassetteRunner = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -77,16 +88,30 @@ def _task_id(task: dict[str, Any]) -> str:
 
 
 def load_cassette_response(relative_path: str) -> str:
-    """Load recorded LLM response from tests/fixtures/llm/."""
+    """Load recorded LLM response from tests/fixtures/llm/.
+
+    Supports two on-disk shapes:
+      - {"response": "<json-string>"}  (canonical, most fixtures)
+      - {"response": {<object>}}       (serialized back to JSON string here)
+      - "<json-string>"                (bare string, no wrapper)
+    """
     path = _CASSETTE_ROOT / relative_path
     if not path.is_file():
         msg = f"cassette not found: {relative_path}"
         raise FileNotFoundError(msg)
+
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(payload, dict) and isinstance(payload.get("response"), str):
-        return cast("str", payload["response"])
+
     if isinstance(payload, str):
         return payload
+
+    if isinstance(payload, dict):
+        response = payload.get("response")
+        if isinstance(response, str):
+            return response
+        if isinstance(response, (dict, list)):
+            return json.dumps(response, ensure_ascii=False)
+
     msg = f'cassette {relative_path} must be a string or {{"response": ...}}'
     raise ValueError(msg)
 
@@ -213,7 +238,14 @@ class _ResearcherEvalMcpRegistry:
         tools = await self.list_tools(server_name)
         return next((tool for tool in tools if tool.name == tool_name), None)
 
-    async def call_tool(self, server_name: str, tool_call: MCPToolCall) -> MCPToolResult:
+    async def call_tool(
+            self,
+            server_name: str,
+            tool_call: MCPToolCall,
+            *,
+            allow_unpinned: bool = False,
+    ) -> MCPToolResult:
+        _ = allow_unpinned
         self.calls.append((server_name, tool_call))
         query = str(tool_call.arguments.get("query", ""))
         if tool_call.name == "graph_query":
@@ -306,6 +338,7 @@ async def run_context_enricher_cassette(task: dict[str, Any]) -> dict[str, Any]:
     if result.output is None:
         return {"status": result.status, "error": result.error}
     return {
+        "rewritten_query": result.output.rewritten_query,
         "continuation_kind": result.output.continuation_kind,
         "refers_to_prior": result.output.refers_to_prior,
         "status": result.status,
@@ -510,8 +543,7 @@ async def run_text_ingestor_cassette(task: dict[str, Any]) -> dict[str, Any]:
         context["max_chunk_chars"] = str(raw_input["max_chunk_chars"])
     if isinstance(raw_input.get("document_id"), str):
         context["document_id"] = raw_input["document_id"]
-    if raw_input.get("enrich_context_prefix") is True:
-        context["enrich_context_prefix"] = "true"
+    context["enrich_context_prefix"] = "true" if raw_input.get("enrich_context_prefix") is True else "false"
     if isinstance(raw_input.get("document_title"), str):
         context["document_title"] = raw_input["document_title"]
 

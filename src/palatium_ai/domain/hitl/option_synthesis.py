@@ -13,6 +13,7 @@ from palatium_ai.domain.content import (
     DocumentMeta,
     ParagraphBlock,
 )
+from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.intent import UnderspecificationKind
@@ -48,6 +49,7 @@ class DiscreteChoiceSynthesisPolicy:
         actions: tuple[ActionSpec, ...],
         *,
         framing_text: str | None = None,
+        locale: str | None = None,
     ) -> ContentDocument:
         """Build/replace document so actions become the exclusive selector."""
         _ = cls
@@ -56,17 +58,15 @@ class DiscreteChoiceSynthesisPolicy:
             raise ValueError("synthesized actions must have at least 2 options")
 
         if document is None:
-            locale = "en-US"
-            title = "Choose an option"
+            resolved = ReplyLocalePolicy.normalize(locale) or "und"
+            title = framing_text.strip()[:300] if framing_text and framing_text.strip() else None
             confidence = 0.85
         else:
-            locale = document.locale
-            title = document.title or "Choose an option"
+            resolved = document.locale
+            title = document.title
             confidence = document.meta.confidence
 
-        text = (framing_text or "").strip() or (
-            document.title if document and document.title else "Select one option to continue."
-        )
+        text = (framing_text or "").strip() or (document.title if document and document.title else "…")
         # Keep light framing only — cards own the selector.
         framing_blocks = (ParagraphBlock(type="paragraph", text=text[:2000]),)
         meta = DocumentMeta(
@@ -77,8 +77,8 @@ class DiscreteChoiceSynthesisPolicy:
         )
         return ContentDocument(
             schema_version=1,
-            locale=locale,
-            title=title[:300] if title else "Choose an option",
+            locale=resolved,
+            title=title[:300] if title else None,
             blocks=framing_blocks,
             actions=clean_actions,
             meta=meta,

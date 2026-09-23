@@ -27,11 +27,12 @@ from palatium_ai.application.agents.text_ingestor import TEXT_INGESTOR_CONFIG, T
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.context_builder import ContextBuilder
 from palatium_ai.application.services.cost_budget import CostBudgetService
+from palatium_ai.application.services.dialog_compact_summarizer import LlmDialogSummarizer
 from palatium_ai.application.services.document_ingest_service import DocumentIngestService
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_service import IntentService
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
-from palatium_ai.application.services.memory_consolidation import MemoryConsolidationService
+from palatium_ai.application.services.memory_extract import MemoryExtractService
 from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
 from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
 from palatium_ai.application.services.session_service import SessionService
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.kill_switch import KillSwitchService
     from palatium_ai.core.config.security import SecurityConfig
     from palatium_ai.core.config.settings import Settings
+    from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.infrastructure.mcp.registry import MCPRegistry
 
@@ -193,8 +195,9 @@ def build_intent_service(
     memory_port: MemoryPort | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     enable_sleep_time: bool = True,
-) -> tuple[IntentService, MemoryConsolidationService | None, MCPCapabilityIndex, DocumentIngestService]:
-    """Создаёт IntentService + optional sleep-time consolidation worker handle."""
+    graph_write: GraphWritePort | None = None,
+) -> tuple[IntentService, MemoryExtractService | None, MCPCapabilityIndex, DocumentIngestService]:
+    """Создаёт IntentService + optional sleep-time extract worker handle."""
     llm_factory = LLMClientFactory(settings)
 
     resolved_dialog_store = dialog_turn_store
@@ -227,9 +230,14 @@ def build_intent_service(
     )
 
     resolved_checkpointer = checkpointer if checkpointer is not None else MemorySaver(serde=build_checkpoint_serde())
+    compact_summarizer = LlmDialogSummarizer(
+        llm_factory.get_client_for_agent(CONTEXTUALIZER_CONFIG),
+        model=CONTEXTUALIZER_CONFIG.llm_model,
+    )
     context_builder = ContextBuilder(
         dialog_store=resolved_dialog_store,
         memory_port=resolved_memory,
+        summarizer=compact_summarizer,
     )
     harness = Harness(
         context_builder=context_builder,
@@ -276,21 +284,45 @@ def build_intent_service(
         checkpointer=resolved_checkpointer,
     )
 
-    consolidation: MemoryConsolidationService | None = None
+    memory_extract: MemoryExtractService | None = None
     if enable_sleep_time:
         memory_keeper = MemoryKeeperAgent(harness, MEMORY_KEEPER_CONFIG)
         memory_persistence = MemoryFactPersistenceService(
             mcp_registry=mcp_registry,
             mcp_tool_call_repository=mcp_tool_call_repository,
         )
-        consolidation = MemoryConsolidationService(
+        promotion = None
+        if settings.memory.promote_enabled and hasattr(resolved_memory, "bump_access"):
+            from palatium_ai.application.services.memory_promotion import MemoryPromotionService
+            from palatium_ai.domain.memory.promotion import PromotionThresholds
+            from palatium_ai.infrastructure.graph.factory import build_graph_write_port
+
+            # EXCEPTION (020): sleep-time promote batch; prefer shared GraphWritePort from bootstrap.
+            resolved_write = graph_write if graph_write is not None else build_graph_write_port(settings)
+            promotion = MemoryPromotionService(
+                memory=resolved_memory,  # type: ignore[arg-type]
+                graph_write=resolved_write,
+                thresholds=PromotionThresholds(
+                    min_access_frequency=settings.memory.promote_min_access_frequency,
+                    min_importance=settings.memory.promote_min_importance,
+                ),
+            )
+            logger.info(
+                "Memory promotion: after-extract batch enabled",
+                min_access_frequency=settings.memory.promote_min_access_frequency,
+                min_importance=settings.memory.promote_min_importance,
+                graph_write=type(resolved_write).__name__,
+            )
+        memory_extract = MemoryExtractService(
             harness=harness,
             memory_keeper=memory_keeper,
             memory_port=resolved_memory,
             memory_persistence=memory_persistence,
             dialog_turn_store=resolved_dialog_store,
+            promotion=promotion,
+            promote_batch_limit=settings.memory.promote_batch_limit,
         )
-        logger.info("Memory consolidation: sleep-time queue enabled (save_memory MCP)")
+        logger.info("Memory extract: sleep-time queue enabled (save_memory MCP)")
 
     text_ingestor = TextIngestorAgent(harness, TEXT_INGESTOR_CONFIG)
     document_ingest = DocumentIngestService(
@@ -311,7 +343,7 @@ def build_intent_service(
         cost_budget=cost_budget,
         dialog_turn_store=resolved_dialog_store,
         memory_port=resolved_memory,
-        consolidation=consolidation,
+        consolidation=memory_extract,
         option_synthesizer=option_synthesizer,
         recall_min_confidence=settings.memory.recall_min_confidence,
         recall_max_items=settings.memory.recall_max_items,
@@ -321,7 +353,7 @@ def build_intent_service(
         mcp_tool_output_max_chars=settings.memory.mcp_tool_output_max_chars,
         turn_hop_budget_ms=settings.observability.turn_hop_budget_ms,
     )
-    return intent_service, consolidation, capability_index, document_ingest
+    return intent_service, memory_extract, capability_index, document_ingest
 
 
 async def warm_mcp_capability_cache(index: MCPCapabilityIndex) -> None:

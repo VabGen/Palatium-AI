@@ -12,6 +12,7 @@ from palatium_ai.core.types.coerce import coerce_float
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.ports import MemoryPort
+    from palatium_ai.domain.memory.promotion import PromotionCandidate
     from palatium_ai.domain.ports.embeddings import EmbeddingPort
 
 
@@ -80,6 +81,41 @@ class EmbeddingRerankMemoryPort:
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         """Delegate delete to inner port."""
         return await self._inner.forget(namespace=namespace, key=key)
+
+    async def bump_access(self, *, namespace: tuple[str, ...], key: str) -> int:
+        """Forward access bump when inner supports promote tracking."""
+        bump = getattr(self._inner, "bump_access", None)
+        if bump is None:
+            return 0
+        return int(await bump(namespace=namespace, key=key))
+
+    async def list_promotion_candidates(
+        self,
+        *,
+        user_id: str,
+        min_access_frequency: int,
+        min_importance: float,
+        limit: int = 32,
+    ) -> list[PromotionCandidate]:
+        """Forward candidate listing when inner supports promote."""
+        listing = getattr(self._inner, "list_promotion_candidates", None)
+        if listing is None:
+            return []
+        return list(
+            await listing(
+                user_id=user_id,
+                min_access_frequency=min_access_frequency,
+                min_importance=min_importance,
+                limit=limit,
+            )
+        )
+
+    async def mark_promoted(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Forward promote stamp when inner supports promote."""
+        mark = getattr(self._inner, "mark_promoted", None)
+        if mark is None:
+            return False
+        return bool(await mark(namespace=namespace, key=key))
 
 
 def _cosine(left: list[float], right: list[float]) -> float:

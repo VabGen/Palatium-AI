@@ -8,6 +8,7 @@
     - palatium-ai API     8000
     - Analytics MCP stub  8081
     - EDMS MCP stub       8080
+    - Platform MCP stub   8082 (optional; only if started via -WithPlatformStub)
 
   Uses scripts/.dev/processes.json for service names when available;
   port listeners are always rescanned so manually started processes are included.
@@ -31,6 +32,7 @@ $StateFile = Join-Path $DevDir "processes.json"
 
 $DevPorts = @(
     @{ Name = "palatium-ai"; Port = 8000 },
+    @{ Name = "mcp-platform"; Port = 8082 },
     @{ Name = "mcp-analytics"; Port = 8081 },
     @{ Name = "mcp-edms"; Port = 8080 }
 )
@@ -145,7 +147,7 @@ foreach ($entry in $DevPorts) {
 }
 
 if (-not $anyListening) {
-    Write-Host "No dev services listening on ports 8000, 8080, 8081." -ForegroundColor Green
+    Write-Host "No dev services listening on ports 8000, 8080, 8081, 8082." -ForegroundColor Green
     if (Test-Path $StateFile) {
         Remove-Item -Path $StateFile -Force
     }

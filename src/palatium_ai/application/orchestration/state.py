@@ -46,3 +46,5 @@ class AgentGraphState(TypedDict, total=False):
     revision_feedback: str
     requires_clarification: bool
     clarification_question: str
+    # BCP-47 pin for user-facing replies (ReplyLocalePolicy); sticky across turns via session.
+    response_locale: str

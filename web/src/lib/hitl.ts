@@ -50,12 +50,15 @@ export function fieldsFromFormatterResult(result: FormatterTaskResult): Assistan
   const hitlCards = pendingHitlCards(result.hitl_cards);
   const requiresReview = Boolean(result.requires_review);
   const hasHitl = hitlCards.length > 0;
+  const document = result.output;
+  const emptyFailure = document === null && !hasHitl;
   return {
-    document: result.output,
+    document,
     hitlCards,
     _requiresReview: requiresReview,
-    _pendingReview: requiresReview && result.output === null && !hasHitl,
-    error: result.error ?? undefined,
-    status: result.status,
+    // Never a contentless "moderator" wait: HITL is cards on a draft, else it's a failure.
+    _pendingReview: false,
+    error: emptyFailure ? result.error?.trim() || 'Empty response' : (result.error ?? undefined),
+    status: emptyFailure ? 'failure' : result.status,
   };
 }
