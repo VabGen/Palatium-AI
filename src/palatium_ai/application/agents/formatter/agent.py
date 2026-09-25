@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
-from palatium_ai.application.agents.formatter.config import REPAIR_ERROR_HEAD
+from palatium_ai.application.agents.formatter.config import (
+    LOCALE_REPAIR_ATTEMPTS,
+    REPAIR_ERROR_HEAD,
+)
 from palatium_ai.application.agents.formatter.parsing import (
     align_formatter_meta,
     build_formatter_user_payload,
@@ -147,21 +150,29 @@ class FormatterAgent(BaseAgent):
             response_locale=locale,
             document_locale=document.locale,
         )
-        repair_messages = [
-            *messages,
-            ChatMessage(role="assistant", content=document.model_dump_json()),
-            ChatMessage(
-                role="user",
-                content=FORMATTER_LOCALE_REPAIR_PROMPT.format(locale=locale),
-            ),
-        ]
-        repair = await self._harness.call_llm(
-            self._config,
-            repair_messages,
-            response_format="json_object",
-        )
-        repaired = parse_formatter_document(repair.content)
-        return align_formatter_meta(repaired, task_input)
+        current = document
+        for _ in range(LOCALE_REPAIR_ATTEMPTS):
+            repair_messages = [
+                *messages,
+                ChatMessage(role="assistant", content=current.model_dump_json()),
+                ChatMessage(
+                    role="user",
+                    content=FORMATTER_LOCALE_REPAIR_PROMPT.format(locale=locale),
+                ),
+            ]
+            repair = await self._harness.call_llm(
+                self._config,
+                repair_messages,
+                response_format="json_object",
+            )
+            current = align_formatter_meta(parse_formatter_document(repair.content), task_input)
+            if ReplyLocalePolicy.prose_matches_locale(
+                ReplyLocalePolicy.document_prose(current),
+                locale,
+            ):
+                return current
+        logger.warning("formatter locale repair exhausted", response_locale=locale)
+        return current
 
 
 def _empty_document(response_locale: str) -> ContentDocument:

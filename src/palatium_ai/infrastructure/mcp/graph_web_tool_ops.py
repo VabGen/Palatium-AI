@@ -9,7 +9,7 @@ import json
 from typing import TYPE_CHECKING
 
 from palatium_ai.core.observability.audit import get_audit_logger
-from palatium_ai.domain.graph.cypher_safety import assert_params_cover_refs, assert_read_only_cypher
+from palatium_ai.domain.graph.cypher_safety import assert_graph_query_safe
 from palatium_ai.domain.graph.types import GraphQueryCommand
 from palatium_ai.domain.mcp.models import MCPToolResult
 from palatium_ai.domain.web.types import WebSearchQuery
@@ -50,8 +50,7 @@ async def graph_query(graph_port: GraphPort | None, arguments: dict[str, object]
     params["user_id"] = user_id.strip()
 
     try:
-        assert_read_only_cypher(cypher)
-        assert_params_cover_refs(cypher, params)
+        assert_graph_query_safe(cypher, params)
         result = await graph_port.query(
             GraphQueryCommand(
                 user_id=user_id.strip(),

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import math
 
+from pydantic import json
+
 from palatium_ai.application.agents.formatter.config import MIN_PIPELINE_CONFIDENCE, REVIEW_CONFIDENCE_CAP
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import ContentDocument
@@ -68,6 +70,17 @@ def clamp_confidence(value: float) -> float:
 
 def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object]:
     locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
+    dialog_block = "(no prior turns)"
+    if task_input.dialog_window is not None and task_input.dialog_window.turns:
+        dialog_block = task_input.dialog_window.as_prompt_block(
+            max_chars=8000,
+            per_turn_max_chars=1200,
+        )
+
+    memory_block = ""
+    if task_input.memory_hints:
+        memory_block = "\n".join(f"- {h}" for h in task_input.memory_hints[:4])
+
     return {
         "response_locale": locale,
         "user_text": task_input.context_packet.user_text,
@@ -81,22 +94,46 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
         "requires_user_choice": task_input.requires_user_choice,
         "underspecification_kind": task_input.underspecification_kind,
         "revision_feedback": task_input.revision_feedback,
+        "dialog_history": dialog_block,
+        "memory_hints": memory_block,
     }
 
 
 def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:
+    """Восстанавливает FormatterInput из AgentInput.context."""
     from palatium_ai.domain.agents.context_packet import ContextPacket
+    from palatium_ai.domain.memory.turns import DialogTurnWindow
 
     packet = ContextPacket.model_validate_json(input_context["context_packet_json"])
     locale = ReplyLocalePolicy.normalize(input_context.get("response_locale")) or "und"
+
+    dialog_window: DialogTurnWindow | None = None
+    raw_dw = input_context.get("dialog_window_json") or ""
+    if raw_dw:
+        try:
+            dialog_window = DialogTurnWindow.model_validate_json(raw_dw)
+        except ValueError, TypeError:
+            dialog_window = None
+
+    memory_hints: tuple[str, ...] = ()
+    raw_mh = input_context.get("memory_hints_json") or "[]"
+    try:
+        parsed_mh = json.loads(raw_mh)
+        if isinstance(parsed_mh, list):
+            memory_hints = tuple(str(h) for h in parsed_mh)
+    except ValueError, TypeError:
+        memory_hints = ()
+
     return FormatterInput(
         task_id=input_context.get("_task_id", packet.task_id),
         context_packet=packet,
-        worker_summary=input_context.get("worker_summary") or None,
-        critic_summary=input_context.get("critic_summary") or None,
+        worker_summary=input_context.get("worker_summary") or "",
+        critic_summary=input_context.get("critic_summary") or "",
         requires_review=input_context.get("requires_review", "false").lower() == "true",
         requires_user_choice=input_context.get("requires_user_choice", "false").lower() == "true",
         underspecification_kind=input_context.get("underspecification_kind", "none"),
         revision_feedback=input_context.get("revision_feedback") or None,
         response_locale=locale,
+        dialog_window=dialog_window,
+        memory_hints=memory_hints,
     )

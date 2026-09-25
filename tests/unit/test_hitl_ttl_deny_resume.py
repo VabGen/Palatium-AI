@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_hitl_flow import IntentHitlFlow
 from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock
@@ -176,6 +177,7 @@ async def test_resume_failure_compensates_with_deny(monkeypatch: pytest.MonkeyPa
         hitl_service=hitl_service,
         intent_service=intent_service,
         session_service=SimpleNamespace(),
+        hitl_respond_facade=HitlRespondFacade(hitl_service=hitl_service, intent_service=intent_service),
     )
     monkeypatch.setattr(hitl_router, "get_app_resources", lambda _app: resources)
     monkeypatch.setattr(

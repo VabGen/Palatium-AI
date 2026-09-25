@@ -28,8 +28,18 @@ jobs:
       - name: Install dependencies
         run: poetry install --with dev
 
+      # ruff + mypy --strict + full tests/ suite + coverage gates + SLA/evals.
+      # Coverage numbers surface in the job summary even when the gate is not pinned.
       - name: Quality baseline
         run: poetry run python scripts/ci_quality.py
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: artifacts/coverage.json
+          if-no-files-found: ignore
 
       - name: Upload agent eval report
         if: always()
@@ -38,3 +48,32 @@ jobs:
           name: agent-evals
           path: artifacts/agent_evals.json
           if-no-files-found: ignore
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the secret scan covers every commit, not just the tip.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      # SCA: known-vulnerable dependencies. Triaged advisories: security/pip-audit-ignore.txt
+      - name: Dependency audit (pip-audit)
+        run: poetry run python scripts/ci_security.py
+
+      # Secret scan: history-wide, blocking. Suppressions live in .gitleaks.toml.
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

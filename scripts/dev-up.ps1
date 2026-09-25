@@ -1,45 +1,82 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Start palatium-ai app and remote MCP stubs for development.
+  Start palatium-ai app and remote MCP stubs for development (Poetry-host profile).
 
 .DESCRIPTION
-  Launches:
-    - EDMS MCP stub       http://127.0.0.1:8080
-    - Analytics MCP stub  http://127.0.0.1:8081
-    - palatium-ai API     http://127.0.0.1:8000 (from env/.env)
+  Локальный запуск (НЕ в Docker):
+    - EDMS MCP stub        http://127.0.0.1:8080
+    - Analytics MCP stub   http://127.0.0.1:8081
+    - Gateway EDMS         http://127.0.0.1:8090   (opt-in: -WithGateway)
+    - Gateway Analytics    http://127.0.0.1:8091   (opt-in: -WithGateway)
+    - Platform MCP stub    http://127.0.0.1:8082   (opt-in: -WithPlatformStub)
+    - palatium-ai API      http://127.0.0.1:8000
 
-  Platform tools are Host-local (pins + PlatformToolHandler) — no :8082 by default.
-  Optional: -WithPlatformStub for external discovery-only smoke of mcp_servers/platform.
+  Требует, чтобы Docker-стек (Postgres, Redis, LiteLLM) был уже поднят:
+    docker compose --env-file env/.env up -d postgres redis litellm
 
-  Process IDs and logs are stored under scripts/.dev/ for manual cleanup.
-  Stop the stack with scripts/dev-down.ps1.
+  Скрипт сам:
+    • читает env/.env → POSTGRES_PUBLISH_PORT / REDIS_PUBLISH_PORT / LITELLM_PUBLISH_PORT;
+    • проверяет, что Docker-стек доступен на этих портах;
+    • выставляет ENV_FILE, MCP_SERVERS, PALATIUM_GATEWAY_URL для хоста;
+    • запускает MCP stubs и API через Poetry;
+    • сохраняет PID в scripts/.dev/processes.json.
+
+  Поведение при занятых портах:
+    • если процесс живой и отвечает на health → [skip]
+    • если процесс мёртвый → [kill] и запуск нового
 
 .PARAMETER SkipApi
-  Start only MCP stubs (skip palatium-ai on :8000).
+  Запустить только MCP stubs (без palatium-ai на :8000).
+
+.PARAMETER SkipDockerCheck
+  Не проверять, что Docker-стек (Postgres/Redis/LiteLLM) поднят.
 
 .PARAMETER WithPlatformStub
-  Also start optional platform stub on :8082 (discovery-only; Host never executes via it).
+  Дополнительно поднять platform stub на :8082.
 
-  .\scripts\dev-down.ps1 -Force   # полная остановка
-  .\scripts\dev-up.ps1            # чистый старт
+.PARAMETER WithGateway
+  Дополнительно поднять gateway-слой (proxy) на :8090 (EDMS) и :8091 (Analytics).
+  При этом API будет обращаться к MCP-серверам через gateway, а не напрямую.
+  Требует, чтобы upstream stubs (8080/8081) были запущены — они стартуют первыми.
+
+.PARAMETER EnvFile
+  Какой env-файл использовать. По умолчанию env/.env.
+
+.EXAMPLE
+  .\scripts\dev-up.ps1
+  .\scripts\dev-up.ps1 -SkipApi -WithPlatformStub
+  .\scripts\dev-up.ps1 -WithGateway
+  .\scripts\dev-up.ps1 -WithGateway -WithPlatformStub
+  .\scripts\dev-up.ps1 -EnvFile env/.env.dev
 #>
 
+[CmdletBinding()]
 param(
     [switch]$SkipApi,
-    [switch]$WithPlatformStub
+    [switch]$SkipDockerCheck,
+    [switch]$WithPlatformStub,
+    [switch]$WithGateway,
+    [string]$EnvFile = "env/.env"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$DevDir = Join-Path $PSScriptRoot ".dev"
-$LogDir = Join-Path $DevDir "logs"
+# =============================================================================
+# Пути
+# =============================================================================
+$RepoRoot  = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$DevDir    = Join-Path $PSScriptRoot ".dev"
+$LogDir    = Join-Path $DevDir "logs"
 $StateFile = Join-Path $DevDir "processes.json"
+$EnvPath   = Join-Path $RepoRoot $EnvFile
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
+# =============================================================================
+# Хелперы
+# =============================================================================
 function Test-CommandAvailable {
     param([Parameter(Mandatory = $true)][string]$Name)
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
@@ -47,17 +84,10 @@ function Test-CommandAvailable {
 
 function Get-PortListener {
     param([Parameter(Mandatory = $true)][int]$Port)
-
     $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    if (-not $conn) {
-        return $null
-    }
-
-    return [pscustomobject]@{
-        pid  = [int]$conn.OwningProcess
-        port = $Port
-    }
+    if (-not $conn) { return $null }
+    return [pscustomobject]@{ pid = [int]$conn.OwningProcess; port = $Port }
 }
 
 function Test-PortListening {
@@ -72,33 +102,144 @@ function Get-PoetryExe {
     return (Get-Command poetry).Source
 }
 
+function Read-DotEnv {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $map = @{}
+    if (-not (Test-Path $Path)) { return $map }
+    foreach ($raw in Get-Content -Path $Path) {
+        $line = $raw.Trim()
+        if (-not $line) { continue }
+        if ($line.StartsWith("#")) { continue }
+        $idx = $line.IndexOf("=")
+        if ($idx -lt 1) { continue }
+        $k = $line.Substring(0, $idx).Trim()
+        $v = $line.Substring($idx + 1).Trim()
+        if ($v.Length -ge 2 -and (
+            ($v.StartsWith('"') -and $v.EndsWith('"')) -or
+            ($v.StartsWith("'") -and $v.EndsWith("'"))
+        )) { $v = $v.Substring(1, $v.Length - 2) }
+        $map[$k] = $v
+    }
+    return $map
+}
+
+function Get-DotEnvInt {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Map,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][int]$Default
+    )
+    if ($Map.ContainsKey($Key) -and $Map[$Key] -match '^\d+$') {
+        return [int]$Map[$Key]
+    }
+    return $Default
+}
+
+function Get-DotEnvStr {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Map,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [string]$Default = ""
+    )
+    if ($Map.ContainsKey($Key) -and $Map[$Key]) {
+        return [string]$Map[$Key]
+    }
+    return $Default
+}
+
+function Assert-EnvFileExists {
+    if (-not (Test-Path $EnvPath)) {
+        throw "ENV_FILE not found: $EnvPath. Copy from env/.env.example and fill in secrets."
+    }
+}
+
+function Assert-DockerStackUp {
+    param([Parameter(Mandatory = $true)][hashtable]$DotEnv)
+
+    if (-not (Test-CommandAvailable "docker")) {
+        throw "docker not found in PATH. Install Docker Desktop."
+    }
+
+    $pgPort  = Get-DotEnvInt -Map $DotEnv -Key "POSTGRES_PUBLISH_PORT" -Default 5432
+    $rdPort  = Get-DotEnvInt -Map $DotEnv -Key "REDIS_PUBLISH_PORT"    -Default 6379
+    $llmPort = Get-DotEnvInt -Map $DotEnv -Key "LITELLM_PUBLISH_PORT"  -Default 4000
+
+    $required = @(
+        @{ Name = "postgres"; Port = $pgPort },
+        @{ Name = "redis";    Port = $rdPort },
+        @{ Name = "litellm";  Port = $llmPort }
+    )
+
+    $missing = @()
+    foreach ($svc in $required) {
+        if (-not (Test-PortListening -Port $svc.Port)) {
+            $missing += "$($svc.Name) (port $($svc.Port))"
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        Write-Host "[warn] Docker-сервисы не отвечают: $($missing -join ', ')" -ForegroundColor Yellow
+        Write-Host "       Поднимите их:" -ForegroundColor Yellow
+        Write-Host "         docker compose --env-file $EnvFile up -d postgres redis litellm" -ForegroundColor DarkYellow
+        Write-Host ""
+        $answer = Read-Host "Продолжить без Docker-стека? (y/N)"
+        if ($answer -ne "y") { exit 1 }
+    } else {
+        Write-Host "[ok]   Docker stack (postgres:$pgPort, redis:$rdPort, litellm:$llmPort) доступен" -ForegroundColor Green
+    }
+
+    return [pscustomobject]@{
+        PostgresPort = $pgPort
+        RedisPort    = $rdPort
+        LiteLLMPort  = $llmPort
+    }
+}
+
 function Start-DevService {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$Arguments,
         [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][string]$PoetryExe,
         [string]$HealthPath = "/docs",
         [hashtable]$Environment = @{},
-        [int]$StartupTimeoutSeconds = 20
+        [int]$StartupTimeoutSeconds = 30
     )
 
     $existing = Get-PortListener -Port $Port
     if ($existing) {
-        Write-Host "[skip] $Name - port $Port already in use (pid $($existing.pid))" -ForegroundColor Yellow
-        if ($Name -eq "mcp-platform") {
-            Write-Host "       Stale platform stub? Run scripts/dev-down.ps1 -Force, then dev-up again." -ForegroundColor DarkYellow
+        $healthUrl = "http://127.0.0.1:$Port$HealthPath"
+        $alive = $false
+        try {
+            $r = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 2 -UseBasicParsing
+            $alive = ($r.StatusCode -eq 200)
+        } catch {
+            $alive = $false
         }
-        return [pscustomobject]@{
-            name     = $Name
-            pid      = $existing.pid
-            port     = $Port
-            url      = "http://127.0.0.1:$Port"
-            external = $true
+
+        if ($alive) {
+            Write-Host "[skip] $Name — port $Port already in use (pid $($existing.pid)), healthy" -ForegroundColor Yellow
+            return [pscustomobject]@{
+                name     = $Name
+                pid      = $existing.pid
+                port     = $Port
+                url      = "http://127.0.0.1:$Port"
+                external = $true
+            }
+        }
+
+        Write-Host "[kill] $Name — port $Port held by dead pid $($existing.pid), killing..." -ForegroundColor Yellow
+        Stop-Process -Id $existing.pid -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 800
+
+        if (Get-PortListener -Port $Port) {
+            throw "$Name — port $Port still in use after kill. Try .\scripts\dev-down.ps1 -Force"
         }
     }
 
     $stdoutLog = Join-Path $LogDir "$Name.stdout.log"
     $stderrLog = Join-Path $LogDir "$Name.stderr.log"
+    Remove-Item -Path $stdoutLog, $stderrLog -Force -ErrorAction SilentlyContinue
 
     $previousEnv = @{}
     foreach ($key in $Environment.Keys) {
@@ -126,19 +267,23 @@ function Start-DevService {
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 400
         if ($proc.HasExited) {
-            $tail = Get-Content -Path $stderrLog -Tail 20 -ErrorAction SilentlyContinue
+            $tail = Get-Content -Path $stderrLog -Tail 30 -ErrorAction SilentlyContinue
             throw "$Name exited early (code $($proc.ExitCode)). stderr tail:`n$($tail -join [Environment]::NewLine)"
         }
-        if (Test-PortListening -Port $Port) {
-            break
-        }
+        if (Test-PortListening -Port $Port) { break }
     }
 
     if (-not (Test-PortListening -Port $Port)) {
-        throw "$Name did not bind port $Port within ${StartupTimeoutSeconds}s. See $stderrLog"
+        $tail = Get-Content -Path $stderrLog -Tail 30 -ErrorAction SilentlyContinue
+        $msg = "$Name did not bind port $Port within ${StartupTimeoutSeconds}s.`n"
+        $msg += "See $stderrLog"
+        if ($tail) {
+            $msg += "`n`nstderr tail:`n" + ($tail -join [Environment]::NewLine)
+        }
+        throw $msg
     }
 
-    Write-Host "[ok]   $Name - pid $($proc.Id), http://127.0.0.1:$Port$HealthPath" -ForegroundColor Green
+    Write-Host "[ok]   $Name — pid $($proc.Id), http://127.0.0.1:$Port$HealthPath" -ForegroundColor Green
     return [pscustomobject]@{
         name     = $Name
         pid      = $proc.Id
@@ -148,136 +293,234 @@ function Start-DevService {
     }
 }
 
+# =============================================================================
+# Preflight
+# =============================================================================
+Assert-EnvFileExists
 $PoetryExe = Get-PoetryExe
-$McpToken = if ($env:MCP_AUTH_TOKEN) { $env:MCP_AUTH_TOKEN } else { "dev-mcp-local-token" }
-$McpJwt = if ($env:MCP_JWT_SECRET) {
+$DotEnv = Read-DotEnv -Path $EnvPath
+
+$dockerPorts = [pscustomobject]@{
+    PostgresPort = Get-DotEnvInt -Map $DotEnv -Key "POSTGRES_PUBLISH_PORT" -Default 5432
+    RedisPort    = Get-DotEnvInt -Map $DotEnv -Key "REDIS_PUBLISH_PORT"    -Default 6379
+    LiteLLMPort  = Get-DotEnvInt -Map $DotEnv -Key "LITELLM_PUBLISH_PORT"  -Default 4000
+}
+
+if (-not $SkipDockerCheck) {
+    Write-Host ""
+    Write-Host "Проверка Docker-стека..." -ForegroundColor Cyan
+    $dockerPorts = Assert-DockerStackUp -DotEnv $DotEnv
+}
+
+# MCP токены
+$McpToken = if ($env:MCP_AUTH_TOKEN -and $env:MCP_AUTH_TOKEN.Trim()) {
+    $env:MCP_AUTH_TOKEN
+} else { "dev-mcp-local-token" }
+
+$McpJwt = if ($env:MCP_JWT_SECRET -and $env:MCP_JWT_SECRET.Trim()) {
     $env:MCP_JWT_SECRET
 } elseif ($McpToken.Length -ge 32) {
     $McpToken
 } else {
     "dev-mcp-jwt-secret-min-32-chars!!"
 }
-# mcp_servers (stub runtime) + src (domain schema SoT — Phase 4)
-$McpPythonPath = @(
-    (Join-Path $RepoRoot "mcp_servers"),
-    (Join-Path $RepoRoot "src")
-) -join [IO.Path]::PathSeparator
-if (-not $env:MCP_AUTH_TOKEN) {
-    $env:MCP_AUTH_TOKEN = $McpToken
-    Write-Host "MCP_AUTH_TOKEN not set; using dev-mcp-local-token for stubs + API process env" -ForegroundColor Yellow
-}
-if (-not $env:MCP_JWT_SECRET) {
-    $env:MCP_JWT_SECRET = $McpJwt
+
+if (-not $env:MCP_AUTH_TOKEN) { $env:MCP_AUTH_TOKEN = $McpToken }
+if (-not $env:MCP_JWT_SECRET) { $env:MCP_JWT_SECRET = $McpJwt }
+
+# =============================================================================
+# Общее окружение
+# =============================================================================
+$baseEnv = @{
+    ENV_FILE         = $EnvFile
+    MCP_AUTH_TOKEN   = $McpToken
+    MCP_JWT_SECRET   = $McpJwt
+    MCP_JWT_ISSUER   = "palatium-mcp"
+    PYTHONUTF8       = "1"
+    PYTHONIOENCODING = "utf-8"
 }
 
+$mcpEnv = $baseEnv.Clone()
+
+$apiEnv = $baseEnv.Clone()
+$apiEnv["POSTGRES_HOST"]          = "localhost"
+$apiEnv["POSTGRES_PORT"]          = "$($dockerPorts.PostgresPort)"
+$apiEnv["REDIS_HOST"]             = "localhost"
+$apiEnv["REDIS_PORT"]             = "$($dockerPorts.RedisPort)"
+$apiEnv["PALATIUM_GATEWAY_URL"]   = "http://127.0.0.1:$($dockerPorts.LiteLLMPort)"
+# Scoped app key (scripts/litellm-provision-key.ps1); fall back to the master key
+# from the env file so an unset app key can never cause a silent 401.
+$apiEnv["PALATIUM_GATEWAY_KEY"]   = Get-DotEnvStr -Map $DotEnv -Key "PALATIUM_GATEWAY_KEY" `
+                                        -Default (Get-DotEnvStr -Map $DotEnv -Key "LITELLM_MASTER_KEY" -Default "")
+$apiEnv["MCP_HTTP_ALLOWED_HOSTS"] = "localhost,127.0.0.1,::1"
+$apiEnv["APP_HOST"]               = "127.0.0.1"
+
+# Выбор MCP_SERVERS: если gateway включён — API ходит на gateway-порты,
+# иначе — напрямую на upstream stubs.
+if ($WithGateway) {
+    $apiEnv["MCP_SERVERS"] = '{"edms":"http://127.0.0.1:8090","analytics":"http://127.0.0.1:8091"}'
+} else {
+    $apiEnv["MCP_SERVERS"] = '{"edms":"http://127.0.0.1:8080","analytics":"http://127.0.0.1:8081"}'
+}
+
+# =============================================================================
+# Запуск
+# =============================================================================
 Write-Host ""
-Write-Host "palatium-ai dev stack" -ForegroundColor Cyan
-Write-Host "repo: $RepoRoot"
+Write-Host "palatium-ai dev stack (Poetry host profile)" -ForegroundColor Cyan
+Write-Host "repo:         $RepoRoot"
+Write-Host "env file:     $EnvFile"
+Write-Host "postgres:     localhost:$($dockerPorts.PostgresPort) (Docker)"
+Write-Host "redis:        localhost:$($dockerPorts.RedisPort) (Docker)"
+Write-Host "litellm:      http://127.0.0.1:$($dockerPorts.LiteLLMPort) (Docker)"
+if ($WithGateway) {
+    Write-Host "mode:         gateway (API → 8090/8091 → 8080/8081)" -ForegroundColor Magenta
+} else {
+    Write-Host "mode:         direct (API → 8080/8081)" -ForegroundColor Cyan
+}
 Write-Host ""
 
 $services = @()
 
-$mcpEnv = @{
-    MCP_AUTH_TOKEN = $McpToken
-    MCP_JWT_SECRET = $McpJwt
-    MCP_JWT_ISSUER = "palatium-mcp"
-    PYTHONPATH     = $McpPythonPath
-    PYTHONUTF8     = "1"
-    PYTHONIOENCODING = "utf-8"
-}
-
-$apiEnv = @{
-    MCP_AUTH_TOKEN = $McpToken
-    MCP_JWT_SECRET = $McpJwt
-    MCP_JWT_ISSUER = "palatium-mcp"
-    PYTHONUTF8     = "1"
-    PYTHONIOENCODING = "utf-8"
-}
-
+# --- 1. MCP EDMS (upstream) ---
 $edms = Start-DevService `
     -Name "mcp-edms" `
-    -Arguments "run uvicorn edms_mcp_server:app --app-dir mcp_servers/edms --host 127.0.0.1 --port 8080" `
+    -Arguments "run uvicorn mcp_servers.edms.edms_mcp_server:app --host 127.0.0.1 --port 8080" `
     -Port 8080 `
+    -PoetryExe $PoetryExe `
     -HealthPath "/health" `
     -Environment $mcpEnv
 $services += $edms
 
+# --- 2. MCP Analytics (upstream) ---
 $analytics = Start-DevService `
     -Name "mcp-analytics" `
-    -Arguments "run uvicorn analytics_mcp_server:app --app-dir mcp_servers/analytics --host 127.0.0.1 --port 8081" `
+    -Arguments "run uvicorn mcp_servers.analytics.analytics_mcp_server:app --host 127.0.0.1 --port 8081" `
     -Port 8081 `
+    -PoetryExe $PoetryExe `
     -HealthPath "/health" `
     -Environment $mcpEnv
 $services += $analytics
 
+# --- 3. Gateway EDMS (opt-in) ---
+if ($WithGateway) {
+    $gwEdmsEnv = $mcpEnv.Clone()
+    $gwEdmsEnv["MCP_GATEWAY_SERVER"]  = "edms"
+    $gwEdmsEnv["MCP_UPSTREAM_URL"]    = "http://127.0.0.1:8080"
+    $gwEdmsEnv["MCP_UPSTREAM_BEARER"] = $McpToken
+
+    $gwEdms = Start-DevService `
+        -Name "mcp-gateway-edms" `
+        -Arguments "run uvicorn mcp_servers.gateway.gateway_mcp_server:app --host 127.0.0.1 --port 8090" `
+        -Port 8090 `
+        -PoetryExe $PoetryExe `
+        -HealthPath "/health" `
+        -Environment $gwEdmsEnv
+    $services += $gwEdms
+}
+
+# --- 4. Gateway Analytics (opt-in) ---
+if ($WithGateway) {
+    $gwAnalyticsEnv = $mcpEnv.Clone()
+    $gwAnalyticsEnv["MCP_GATEWAY_SERVER"]  = "analytics"
+    $gwAnalyticsEnv["MCP_UPSTREAM_URL"]    = "http://127.0.0.1:8081"
+    $gwAnalyticsEnv["MCP_UPSTREAM_BEARER"] = $McpToken
+
+    $gwAnalytics = Start-DevService `
+        -Name "mcp-gateway-analytics" `
+        -Arguments "run uvicorn mcp_servers.gateway.gateway_mcp_server:app --host 127.0.0.1 --port 8091" `
+        -Port 8091 `
+        -PoetryExe $PoetryExe `
+        -HealthPath "/health" `
+        -Environment $gwAnalyticsEnv
+    $services += $gwAnalytics
+}
+
+# --- 5. Platform stub (opt-in) ---
 if ($WithPlatformStub) {
     $platform = Start-DevService `
         -Name "mcp-platform" `
-        -Arguments "run uvicorn platform_mcp_server:app --app-dir mcp_servers/platform --host 127.0.0.1 --port 8082" `
+        -Arguments "run uvicorn mcp_servers.platform.platform_mcp_server:app --host 127.0.0.1 --port 8082" `
         -Port 8082 `
+        -PoetryExe $PoetryExe `
         -HealthPath "/health" `
         -Environment $mcpEnv
     $services += $platform
 }
 
+# --- 6. API ---
 if (-not $SkipApi) {
     $app = Start-DevService `
         -Name "palatium-ai" `
         -Arguments "run python -m palatium_ai.main" `
         -Port 8000 `
+        -PoetryExe $PoetryExe `
         -HealthPath "/docs" `
         -Environment $apiEnv `
         -StartupTimeoutSeconds 90
     $services += $app
 } else {
-    Write-Host "[skip] palatium-ai - SkipApi" -ForegroundColor Yellow
+    Write-Host "[skip] palatium-ai — SkipApi" -ForegroundColor Yellow
 }
 
-$started = @($services | Where-Object { -not $_.external })
+# =============================================================================
+# Состояние
+# =============================================================================
+$started  = @($services | Where-Object { -not $_.external })
 $existing = @($services | Where-Object { $_.external })
 
 $state = @{
-    started_at = (Get-Date).ToString("o")
-    repo_root  = $RepoRoot
-    skip_api   = [bool]$SkipApi
+    started_at         = (Get-Date).ToString("o")
+    repo_root          = $RepoRoot
+    env_file           = $EnvFile
+    skip_api           = [bool]$SkipApi
     with_platform_stub = [bool]$WithPlatformStub
-    services   = $services
+    with_gateway       = [bool]$WithGateway
+    docker_ports       = @{
+        postgres = $dockerPorts.PostgresPort
+        redis    = $dockerPorts.RedisPort
+        litellm  = $dockerPorts.LiteLLMPort
+    }
+    services           = $services
 }
-$state | ConvertTo-Json -Depth 4 | Set-Content -Path $StateFile -Encoding UTF8
+$state | ConvertTo-Json -Depth 5 | Set-Content -Path $StateFile -Encoding UTF8
 
 Write-Host ""
 if ($started.Count -eq 0 -and $existing.Count -eq $services.Count) {
-    Write-Host "All requested dev services already running." -ForegroundColor Green
+    Write-Host "Все запрошенные сервисы уже запущены (внешние процессы)." -ForegroundColor Green
 } elseif ($started.Count -gt 0) {
-    Write-Host "Started $($started.Count) service(s), $($existing.Count) already running." -ForegroundColor Green
+    Write-Host "Запущено: $($started.Count) новых, $($existing.Count) уже работали." -ForegroundColor Green
 }
+
 Write-Host ""
 Write-Host "Ready:" -ForegroundColor Cyan
 if (-not $SkipApi) {
-    Write-Host "  API swagger:   http://127.0.0.1:8000/docs"
+    Write-Host "  API swagger:       http://127.0.0.1:8000/docs"
+    Write-Host "  API health:        http://127.0.0.1:8000/health"
 }
-Write-Host "  EDMS MCP:      http://127.0.0.1:8080/health"
-Write-Host "  Analytics MCP: http://127.0.0.1:8081/health"
-Write-Host "  Platform:      Host-local (no :8082)"
+Write-Host "  EDMS MCP:          http://127.0.0.1:8080/health"
+Write-Host "  Analytics MCP:     http://127.0.0.1:8081/health"
+if ($WithGateway) {
+    Write-Host "  Gateway EDMS:      http://127.0.0.1:8090/health" -ForegroundColor Magenta
+    Write-Host "  Gateway Analytics: http://127.0.0.1:8091/health" -ForegroundColor Magenta
+}
 if ($WithPlatformStub) {
-    Write-Host "  Platform stub: http://127.0.0.1:8082/health (optional discovery-only)"
+    Write-Host "  Platform stub:     http://127.0.0.1:8082/health (optional discovery-only)"
 }
-Write-Host "  Smoke auth:    poetry run python scripts/smoke_mcp_auth.py --skip-api"
+Write-Host "  LiteLLM:           http://127.0.0.1:$($dockerPorts.LiteLLMPort)/health/liveliness"
 Write-Host ""
-Write-Host "Logs:  $LogDir"
-Write-Host "State: $StateFile"
+
+if ($WithGateway) {
+    Write-Host "Mode: gateway — API обращается к MCP через проксирование." -ForegroundColor Magenta
+    Write-Host "      Проверка политик (pin_allowlist / pin_filter / upstream_policy)." -ForegroundColor DarkGray
+} else {
+    Write-Host "Mode: direct — API обращается к MCP stubs напрямую." -ForegroundColor Cyan
+}
 Write-Host ""
-if ($started.Count -gt 0) {
-    Write-Host "Stop processes started by this script:" -ForegroundColor DarkGray
-    foreach ($svc in $started) {
-        Write-Host "  Stop-Process -Id $($svc.pid)  # $($svc.name)" -ForegroundColor DarkGray
-    }
-    Write-Host ""
-}
-if ($existing.Count -gt 0) {
-    Write-Host "Already running (started outside dev-up):" -ForegroundColor DarkGray
-    foreach ($svc in $existing) {
-        Write-Host "  pid $($svc.pid) on port $($svc.port)  # $($svc.name)" -ForegroundColor DarkGray
-    }
-    Write-Host ""
-}
+Write-Host "Smoke auth:  poetry run python scripts/smoke_mcp_auth.py --skip-api"
+Write-Host ""
+Write-Host "Logs:   $LogDir"
+Write-Host "State:  $StateFile"
+Write-Host ""
+Write-Host "Остановить:  .\scripts\dev-down.ps1" -ForegroundColor DarkGray
+Write-Host ""

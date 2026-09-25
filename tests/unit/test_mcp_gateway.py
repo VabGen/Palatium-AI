@@ -33,13 +33,55 @@ def pin_allowlist() -> object:
 
 
 @pytest.fixture(scope="module")
+def upstream_policy() -> object:
+    return _load("gateway_upstream_policy", _GATEWAY / "upstream_policy.py")
+
+
+@pytest.fixture(scope="module")
 def pin_filter() -> object:
-    # pin_filter imports fastmcp — ensure allowlist path not required
-    if str(_REPO / "mcp_servers") not in sys.path:
-        sys.path.insert(0, str(_REPO / "mcp_servers"))
-    if str(_GATEWAY) not in sys.path:
-        sys.path.insert(0, str(_GATEWAY))
+    # pin_filter imports fastmcp — the package layout keeps `mcp_servers` importable
+    # without putting sub-dirs on sys.path (which would shadow stdlib `platform`).
     return _load("gateway_pin_filter", _GATEWAY / "pin_filter.py")
+
+
+def test_upstream_policy_accepts_loopback_and_compose_http(upstream_policy: object) -> None:
+    assert_fn = upstream_policy.assert_upstream_url_safe  # type: ignore[attr-defined]
+    for url in (
+        "http://127.0.0.1:8080",
+        "http://localhost:8080/",
+        "http://mcp-edms:8080",
+        "https://mcp.internal.example:8443",
+    ):
+        assert assert_fn(url) == url.strip()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "http://evil.example.com:8080",
+        "http://169.254.169.254/latest/meta-data",
+        "http://metadata.google.internal",
+        "http://user:pass@127.0.0.1:8080",
+        "ftp://127.0.0.1:8080",
+    ],
+)
+def test_upstream_policy_rejects_ssrf_pivots(upstream_policy: object, url: str) -> None:
+    assert_fn = upstream_policy.assert_upstream_url_safe  # type: ignore[attr-defined]
+    with pytest.raises(upstream_policy.UnsafeUpstreamUrlError):  # type: ignore[attr-defined]
+        assert_fn(url)
+
+
+def test_upstream_policy_env_allowlist_overrides_defaults(
+    upstream_policy: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MCP_UPSTREAM_HTTP_ALLOWED_HOSTS", "mcp-edms, internal-dns")
+    hosts = upstream_policy.env_http_allowed_hosts()  # type: ignore[attr-defined]
+    assert hosts == frozenset({"mcp-edms", "internal-dns"})
+    assert upstream_policy.assert_env_upstream_url_safe("http://internal-dns:9000")  # type: ignore[attr-defined]
+    with pytest.raises(upstream_policy.UnsafeUpstreamUrlError):  # type: ignore[attr-defined]
+        upstream_policy.assert_env_upstream_url_safe("http://analytics:9000")  # type: ignore[attr-defined]
 
 
 def test_gateway_allowlist_matches_host_pins(pin_allowlist: object) -> None:
@@ -98,15 +140,10 @@ def test_build_gateway_constructs_without_upstream_contact(monkeypatch: pytest.M
     monkeypatch.delenv("MCP_JWT_SECRET", raising=False)
     monkeypatch.delenv("JWT_SECRET", raising=False)
 
-    if str(_REPO / "mcp_servers") not in sys.path:
-        sys.path.insert(0, str(_REPO / "mcp_servers"))
-    if str(_GATEWAY) not in sys.path:
-        sys.path.insert(0, str(_GATEWAY))
-
-    for mod in ("gateway_mcp_server", "pin_allowlist", "pin_filter"):
+    for mod in ("mcp_servers.gateway.gateway_mcp_server", "mcp_servers.gateway.pin_allowlist"):
         sys.modules.pop(mod, None)
 
-    from gateway_mcp_server import build_gateway  # type: ignore[import-not-found]
+    from mcp_servers.gateway.gateway_mcp_server import build_gateway
 
     gateway = build_gateway(
         server_name="edms",
@@ -115,3 +152,6 @@ def test_build_gateway_constructs_without_upstream_contact(monkeypatch: pytest.M
     assert gateway is not None
     with pytest.raises(ValueError, match="platform"):
         build_gateway(server_name="platform", upstream_url="http://127.0.0.1:8082")
+    # SSRF gate (020): an off-allowlist upstream must fail closed at build time.
+    with pytest.raises(ValueError, match="upstream"):
+        build_gateway(server_name="edms", upstream_url="http://evil.example.com:8080")

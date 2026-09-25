@@ -1,0 +1,99 @@
+# Security / platform-integrity alerts (020, 040).
+#
+# These are not SLO burn alerts — they are control failures. Several are
+# page-worthy even at a single occurrence because they indicate an active
+# attempt or a broken compliance control.
+
+groups:
+  - name: palatium-security
+    interval: 30s
+    rules:
+      # Audit chain is a compliance control (§ 040). A single write failure means
+      # the hash chain may have a gap — never tolerate it.
+      - alert: PalatiumAuditChainWriteFailure
+        expr: increase(palatium_audit_write_failures_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit chain write failed"
+          description: "palatium_audit_write_failures_total increased — the hash chain may be broken. Verify the daily chain check and investigate storage."
+
+      # Replay of an HITL card is a security signal: someone is reusing a card_id.
+      - alert: PalatiumHitlCardReplayRejected
+        expr: increase(palatium_hitl_card_replay_rejected_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HITL card replay attempt rejected"
+          description: "A repeated answer to an already-consumed card_id was rejected (020: card is single-use). Audit event raised."
+
+      - alert: PalatiumRbacDenialSpike
+        expr: sum(rate(palatium_rbac_denied_total[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RBAC tool denials above baseline"
+          description: "Sustained denials > 0.2/s over 10m. Either a misconfigured agent allow-list or an attempt to call tools outside scope."
+
+      - alert: PalatiumHitlDenySpike
+        expr: sum(rate(palatium_hitl_deny_total[15m])) > 0.2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HITL denials above baseline"
+          description: "Break down by reason (forge/conflict/expired/forbidden) — a spike in `expired` means cards are timing out before users act."
+
+  - name: palatium-platform
+    interval: 30s
+    rules:
+      - alert: PalatiumTurnHopBudgetExceeded
+        expr: increase(palatium_turn_hop_budget_exceeded_total[15m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Turns exceeding the hop latency budget"
+          description: "More than 5 turns breached TURN_HOP_BUDGET_MS in 15m. Inspect per-node latency (palatium:agent_request_p95_seconds:5m)."
+
+      - alert: PalatiumHumanEscalationRate
+        expr: sum by (reason) (rate(palatium_agent_human_escalation_total[15m])) > 0.1
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Elevated human escalation rate ({{ $labels.reason }})"
+          description: "Escalations for reason {{ $labels.reason }} are above 0.1/s over 15m. Informational — a sustained rise usually tracks a confidence-threshold regression."
+
+      # Budget guard. Tune the threshold to DAILY_COST_BUDGET_USD so this fires
+      # before the app-level cap starts rejecting turns.
+      - alert: PalatiumLlmCostBurnHigh
+        expr: palatium:llm_cost_usd_per_hour:1h > 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM spend above $1/hour"
+          description: "Observed ${{ $value | printf \"%.2f\" }}/h. Compare with DAILY_COST_BUDGET_USD and per-turn TURN_COST_BUDGET_USD."
+
+      # Context dumping would show up as runaway delivered tokens (065).
+      - alert: PalatiumContextTokensHigh
+        expr: sum(rate(palatium_context_tokens_used[15m])) > 20000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Context token delivery rate is high"
+          description: ">20k tokens/s delivered to agents over 15m. Check ContextBuilder budgets — a probe for JIT/compact regressions (065)."
+
+      - alert: PalatiumMemoryEntryOversized
+        expr: histogram_quantile(0.95, sum(rate(palatium_memory_entry_size_bytes_bucket[15m])) by (le)) > 16384
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Memory entries above 16 KiB at p95"
+          description: "Oversized memory entries inflate recall cost and hurt precision (060). Inspect p95/p99 rather than the mean."

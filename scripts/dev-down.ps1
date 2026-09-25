@@ -1,20 +1,29 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Stop palatium-ai app and all local MCP server stubs.
+  Stop palatium-ai app and all local MCP server stubs (Poetry host profile).
 
 .DESCRIPTION
-  Stops processes listening on dev stack ports:
-    - palatium-ai API     8000
-    - Analytics MCP stub  8081
-    - EDMS MCP stub       8080
-    - Platform MCP stub   8082 (optional; only if started via -WithPlatformStub)
+  Останавливает процессы на портах локального dev-стека:
+    - palatium-ai API         8000
+    - Gateway Analytics       8091 (опционально)
+    - Gateway EDMS            8090 (опционально)
+    - Platform MCP stub       8082 (опционально)
+    - Analytics MCP stub      8081
+    - EDMS MCP stub           8080
 
-  Uses scripts/.dev/processes.json for service names when available;
-  port listeners are always rescanned so manually started processes are included.
+  Порядок остановки: gateway → upstream. Сначала снимаем прокси,
+  потом upstream, чтобы не оставить висящих соединений.
 
-  uvicorn --reload spawns child workers; this script stops the full process tree
-  and retries until each port is free.
+  Docker-сервисы (Postgres/Redis/Neo4j/LiteLLM) НЕ трогаются —
+  для них используйте: docker compose --env-file env/.env down
+
+  Использует scripts/.dev/processes.json для имён сервисов.
+  Слушатели портов пересканируются — вручную запущенные процессы
+  тоже будут остановлены.
+
+  uvicorn --reload spawns child workers; скрипт останавливает дерево
+  процессов и повторяет до освобождения порта.
 
   Pair with scripts/dev-up.ps1.
 #>
@@ -27,29 +36,24 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$DevDir = Join-Path $PSScriptRoot ".dev"
+$DevDir    = Join-Path $PSScriptRoot ".dev"
 $StateFile = Join-Path $DevDir "processes.json"
 
 $DevPorts = @(
-    @{ Name = "palatium-ai"; Port = 8000 },
-    @{ Name = "mcp-platform"; Port = 8082 },
-    @{ Name = "mcp-analytics"; Port = 8081 },
-    @{ Name = "mcp-edms"; Port = 8080 }
+    @{ Name = "palatium-ai";           Port = 8000 },
+    @{ Name = "mcp-gateway-analytics"; Port = 8091 },
+    @{ Name = "mcp-gateway-edms";      Port = 8090 },
+    @{ Name = "mcp-platform";          Port = 8082 },
+    @{ Name = "mcp-analytics";         Port = 8081 },
+    @{ Name = "mcp-edms";              Port = 8080 }
 )
 
 function Get-PortListener {
     param([Parameter(Mandatory = $true)][int]$Port)
-
     $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    if (-not $conn) {
-        return $null
-    }
-
-    return [pscustomobject]@{
-        pid  = [int]$conn.OwningProcess
-        port = $Port
-    }
+    if (-not $conn) { return $null }
+    return [pscustomobject]@{ pid = [int]$conn.OwningProcess; port = $Port }
 }
 
 function Test-PortListening {
@@ -59,7 +63,6 @@ function Test-PortListening {
 
 function Get-ChildProcessIds {
     param([Parameter(Mandatory = $true)][int]$ProcessId)
-
     Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue |
         ForEach-Object { [int]$_.ProcessId }
 }
@@ -69,16 +72,11 @@ function Stop-ProcessTree {
         [Parameter(Mandatory = $true)][int]$ProcessId,
         [switch]$UseForce
     )
-
     foreach ($childId in (Get-ChildProcessIds -ProcessId $ProcessId)) {
         Stop-ProcessTree -ProcessId $childId -UseForce:$UseForce
     }
-
     $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    if (-not $proc) {
-        return
-    }
-
+    if (-not $proc) { return }
     if ($UseForce) {
         Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
     } else {
@@ -126,6 +124,9 @@ function Stop-PortService {
     return $true
 }
 
+# =============================================================================
+# Читаем известные имена из state
+# =============================================================================
 $knownNames = @{}
 if (Test-Path $StateFile) {
     $state = Get-Content -Path $StateFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -147,10 +148,11 @@ foreach ($entry in $DevPorts) {
 }
 
 if (-not $anyListening) {
-    Write-Host "No dev services listening on ports 8000, 8080, 8081, 8082." -ForegroundColor Green
-    if (Test-Path $StateFile) {
-        Remove-Item -Path $StateFile -Force
-    }
+    Write-Host "Нет активных dev-сервисов на портах 8000, 8080, 8081, 8082, 8090, 8091." -ForegroundColor Green
+    if (Test-Path $StateFile) { Remove-Item -Path $StateFile -Force }
+    Write-Host ""
+    Write-Host "Docker-стек не тронут — для остановки используйте:" -ForegroundColor DarkGray
+    Write-Host "  docker compose --env-file env/.env down" -ForegroundColor DarkGray
     Write-Host ""
     exit 0
 }
@@ -162,22 +164,20 @@ foreach ($entry in $DevPorts) {
     } else {
         $entry.Name
     }
-
     $ok = Stop-PortService -Name $name -Port $entry.Port -Force:$Force
-    if (-not $ok) {
-        $failed = $true
-    }
+    if (-not $ok) { $failed = $true }
 }
 
-if (Test-Path $StateFile) {
-    Remove-Item -Path $StateFile -Force
-}
+if (Test-Path $StateFile) { Remove-Item -Path $StateFile -Force }
 
 Write-Host ""
 if ($failed) {
-    Write-Host "Some services may still be running. Re-run with -Force if needed." -ForegroundColor Yellow
+    Write-Host "Некоторые сервисы могут ещё работать. Попробуйте -Force." -ForegroundColor Yellow
     exit 1
 }
 
 Write-Host "Dev stack stopped." -ForegroundColor Green
+Write-Host ""
+Write-Host "Docker-сервисы (Postgres/Redis/Neo4j/LiteLLM) не тронуты." -ForegroundColor DarkGray
+Write-Host "Остановить их:  docker compose --env-file env/.env down" -ForegroundColor DarkGray
 Write-Host ""

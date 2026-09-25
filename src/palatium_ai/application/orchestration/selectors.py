@@ -49,6 +49,18 @@ def resolved_user_text(state: AgentGraphState) -> str:
     return state["user_text"]
 
 
+def memory_hints(state: AgentGraphState) -> tuple[str, ...]:
+    """Извлекает hint_texts из memory_recall в state.
+
+    Возвращает пустой tuple, если recall отсутствует или не содержит подсказок.
+    Используется в node_inputs для Formatter / Researcher / ContextWeaver.
+    """
+    recall = state.get("memory_recall")
+    if recall is None:
+        return ()
+    return tuple(getattr(recall, "hint_texts", ()) or ())
+
+
 def resolved_response_locale(state: AgentGraphState) -> str:
     """BCP-47 pin from graph state (ReplyLocalePolicy); fallback resolve from user_text."""
     from palatium_ai.domain.policies.locale import ReplyLocalePolicy

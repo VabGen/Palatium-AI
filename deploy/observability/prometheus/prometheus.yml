@@ -1,0 +1,40 @@
+# Prometheus scrape config (P1-7).
+#
+# Only the platform API exposes Prometheus metrics. MCP stubs expose GET /health
+# (not /metrics), so they are intentionally NOT scraped here — scraping them would
+# only produce `up=0` noise. Blackbox probing of their /health is a separate,
+# optional concern (see deploy/observability/README.md).
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    service: palatium-ai
+    # Prometheus does not expand env vars here. Override per environment (or run with
+    # --enable-feature=expand-external-labels and use ${PALATIUM_ENVIRONMENT}).
+    environment: development
+
+rule_files:
+  - /etc/prometheus/alerts/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: palatium-api
+    metrics_path: /metrics
+    scheme: http
+    # Ignored while /metrics is public (development). Required once
+    # metrics_public=false (staging/production) — see app.py and README.md.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/metrics_token
+    static_configs:
+      - targets: ["api:8000"]

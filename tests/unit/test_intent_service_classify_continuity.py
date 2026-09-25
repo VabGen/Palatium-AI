@@ -23,6 +23,10 @@ class _FakeSessionService:
     async def assert_thread_access(self, **_kwargs: object) -> None:
         return None
 
+    async def get_session(self, **_kwargs: object) -> None:
+        """Reply-locale lookup (065); no persisted session in unit tests."""
+        return None
+
 
 class _FakeHitlService:
     pass

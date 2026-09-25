@@ -43,6 +43,13 @@ class MCPConfig(BaseConfig):
     )
     servers_file: str | None = Field(default=None, validation_alias="MCP_SERVERS_FILE")
     timeout_seconds: int = Field(default=30, validation_alias="MCP_TIMEOUT_SECONDS")
+    # Per-tool overrides (070): keys are "server.tool" (most specific), bare "tool",
+    # or "default". Miss → timeout_seconds. Every value MUST stay below the calling
+    # AgentConfig.timeout_seconds (enforced at startup, see bootstrap wiring).
+    tool_timeouts: Annotated[dict[str, int], NoDecode] = Field(
+        default_factory=dict,
+        validation_alias="MCP_TOOL_TIMEOUT_SECONDS",
+    )
     retry_attempts: int = Field(default=3, validation_alias="MCP_RETRY_ATTEMPTS")
     retry_delay: float = Field(default=1.0, validation_alias="MCP_RETRY_DELAY")
     consul_watch_interval: int = Field(default=60, validation_alias="MCP_CONSUL_WATCH_INTERVAL")
@@ -102,6 +109,25 @@ class MCPConfig(BaseConfig):
         raw = _parse_json_object(value, env_name="MCP_SERVERS")
         return {k.strip(): str(v).strip() for k, v in raw.items() if str(k).strip() and str(v).strip()}
 
+    @field_validator("tool_timeouts", mode="before")
+    @classmethod
+    def _parse_tool_timeouts(cls, value: object) -> dict[str, int]:
+        """Accept JSON env string / dict; coerce positive integer seconds."""
+        raw = _parse_json_object(value, env_name="MCP_TOOL_TIMEOUT_SECONDS")
+        out: dict[str, int] = {}
+        for key, seconds in raw.items():
+            name = str(key).strip()
+            if not name:
+                continue
+            try:
+                parsed = int(str(seconds).strip())
+            except ValueError as exc:
+                raise ValueError(f"MCP_TOOL_TIMEOUT_SECONDS[{name}] must be an integer") from exc
+            if parsed <= 0:
+                raise ValueError(f"MCP_TOOL_TIMEOUT_SECONDS[{name}] must be > 0")
+            out[name] = parsed
+        return out
+
     @field_validator("server_auth_tokens", mode="before")
     @classmethod
     def _parse_server_auth_tokens(cls, value: object) -> dict[str, SecretStr]:
@@ -134,9 +160,17 @@ class MCPConfig(BaseConfig):
     def resolve_auth_token(self, server_name: str) -> str | None:
         """Backward-compatible alias: opaque static token only.
 
-        Prefer ``Settings.resolve_mcp_bearer`` / ``resolve_mcp_bearer`` for JWT.
+        Prefer the infrastructure resolver (``resolve_settings_bearer``) for JWT.
         """
         return self.resolve_static_token(server_name)
+
+    def resolve_tool_timeout(self, server_name: str, tool_name: str) -> int:
+        """Per-tool timeout seconds (070); most specific key wins, else MCP_TIMEOUT_SECONDS."""
+        for key in (f"{server_name}.{tool_name}", tool_name, "default"):
+            override = self.tool_timeouts.get(key)
+            if override is not None:
+                return override
+        return self.timeout_seconds
 
     def configured_jwt_secret(self) -> str | None:
         """Return MCP_JWT_SECRET when set."""

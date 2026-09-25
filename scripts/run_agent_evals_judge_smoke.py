@@ -7,7 +7,18 @@ import asyncio
 import os
 import sys
 
-from palatium_ai.application.agents.evals.llm_judge import llm_judge
+from palatium_ai.application.agents.evals.llm_judge import LlmJudgeGrader
+from palatium_ai.core.config.settings import get_settings
+from palatium_ai.domain.ports.llm import LLMPort
+from palatium_ai.infrastructure.llm.factory import create_llm_client
+
+
+def _judge_llm_factory(provider: str) -> LLMPort:
+    """Composition root for the eval judge: injects the concrete LLM adapter."""
+    return create_llm_client(get_settings(), provider)
+
+
+judge = LlmJudgeGrader(llm_factory=_judge_llm_factory)
 
 _SMOKE_TASK: dict[str, object] = {
     "rubric": (
@@ -47,7 +58,7 @@ async def _main() -> int:
         **_SMOKE_TASK,
         "generator_provider": os.environ.get("PALATIUM_EVAL_AGENT_PROVIDER", "openai"),
     }
-    result = await llm_judge.grade(task, _SMOKE_OUTPUT)
+    result = await judge.grade(task, _SMOKE_OUTPUT)
     print(f"score={result.score:.3f} passed={result.passed} details={result.details}")
     if not result.passed:
         print("agent_evals_judge_smoke: FAIL")

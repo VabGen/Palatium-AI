@@ -1,0 +1,30 @@
+# =============================================================================
+# docker-compose.override.yml — dev-разделение режимов (Host / Docker / Gateway)
+# =============================================================================
+# Compose автоматически подхватывает этот файл при запуске из корня репозитория.
+#
+# Зачем: без явных --profile этот файл НЕ даёт подняться MCP/API в Docker,
+# поэтому `docker compose up -d` (без списка сервисов) поднимает только
+# инфраструктуру (postgres, redis, neo4j, litellm). Это защищает от конфликта
+# портов 8080/8081/8000 с host-профилем Poetry (`scripts/dev-up.ps1`).
+#
+# Полный Docker-стек:
+#   docker compose --profile docker-mcp --profile docker-api up -d --build
+#
+# Gateway-профиль (Docker):
+#   docker compose --profile mcp-gateway up -d
+#
+# Подробно: docs/docker.md, START.md §2.7.
+# =============================================================================
+
+services:
+  mcp-edms:
+    profiles: ["docker-mcp"]
+  mcp-analytics:
+    profiles: ["docker-mcp"]
+  mcp-gateway-edms:
+    profiles: ["mcp-gateway"]
+  mcp-gateway-analytics:
+    profiles: ["mcp-gateway"]
+  api:
+    profiles: ["docker-api"]

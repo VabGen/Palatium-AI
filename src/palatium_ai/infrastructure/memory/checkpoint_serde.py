@@ -77,29 +77,58 @@ def _remap_legacy_node_id(node_id: str) -> str:
     return LEGACY_GRAPH_NODE_IDS.get(node_id, node_id)
 
 
-def migrate_graph_checkpoint(value: object) -> object:
-    """Rewrite pre-rename LangGraph node ids in deserialized checkpoint payloads."""
+# Keys whose value *is* a graph node id (LangGraph checkpoint payloads). ``next`` is
+# handled separately: it carries a collection of ids and keeps its container type.
+_NODE_ID_VALUE_KEYS: frozenset[str] = frozenset({"node", "node_id"})
+_NEXT_KEY = "next"
+
+
+def migrate_graph_checkpoint(value: object, *, normalize_next_tuples: bool = False) -> object:
+    """Rewrite pre-rename LangGraph node ids in deserialized checkpoint payloads.
+
+    Pure id remap: containers keep their type, so a nested ``next`` list stays a list.
+    Node ids appear in the resume frontier (``next``), in task records (``node``) and in
+    nested mappings, so the walk is recursive.
+
+    ``normalize_next_tuples`` additionally restores LangGraph's ``next: tuple`` shape,
+    which JSON/msgpack widen to a list on the way through the serializer. Only the
+    checkpoint serializer sets it — it is the call site that owns the LangGraph contract.
+    """
     if isinstance(value, dict):
-        migrated: dict[Any, object] = {key: migrate_graph_checkpoint(item) for key, item in value.items()}
-        next_nodes = migrated.get("next")
-        if isinstance(next_nodes, tuple):
-            migrated["next"] = tuple(_remap_legacy_node_id(str(node)) for node in next_nodes)
-        elif isinstance(next_nodes, list):
-            migrated["next"] = [_remap_legacy_node_id(str(node)) for node in next_nodes]
+        migrated: dict[Any, object] = {}
+        for key, item in value.items():
+            if key == _NEXT_KEY and isinstance(item, list | tuple):
+                migrated[key] = _migrate_next(item, normalize_tuples=normalize_next_tuples)
+            elif isinstance(key, str) and key in _NODE_ID_VALUE_KEYS and isinstance(item, str):
+                migrated[key] = _remap_legacy_node_id(item)
+            else:
+                migrated[key] = migrate_graph_checkpoint(item, normalize_next_tuples=normalize_next_tuples)
         return migrated
     if isinstance(value, list):
-        return [migrate_graph_checkpoint(item) for item in value]
+        return [migrate_graph_checkpoint(item, normalize_next_tuples=normalize_next_tuples) for item in value]
     if isinstance(value, tuple):
-        return tuple(migrate_graph_checkpoint(item) for item in value)
+        return tuple(migrate_graph_checkpoint(item, normalize_next_tuples=normalize_next_tuples) for item in value)
     return value
 
 
+def _migrate_next(
+    nodes: list[object] | tuple[object, ...],
+    *,
+    normalize_tuples: bool,
+) -> tuple[str, ...] | list[str]:
+    """Remap the resume frontier, keeping (or restoring) its container type."""
+    remapped = [_remap_legacy_node_id(str(node)) for node in nodes]
+    if normalize_tuples or isinstance(nodes, tuple):
+        return tuple(remapped)
+    return remapped
+
+
 class MigratingJsonPlusSerializer(JsonPlusSerializer):
-    """JsonPlusSerializer that remaps legacy graph node ids on load."""
+    """JsonPlusSerializer that remaps legacy node ids and restores the ``next`` tuple."""
 
     def loads_typed(self, data: tuple[str, bytes]) -> object:
         restored = super().loads_typed(data)
-        return migrate_graph_checkpoint(restored)
+        return migrate_graph_checkpoint(restored, normalize_next_tuples=True)
 
 
 def build_checkpoint_serde() -> SerializerProtocol:

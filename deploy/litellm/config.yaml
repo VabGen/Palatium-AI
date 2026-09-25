@@ -1,0 +1,121 @@
+# deploy/litellm/config.yaml
+# -----------------------------------------------------------------------------
+# LiteLLM Gateway — маршрутизатор "tier-*" → реальные провайдеры.
+# Все TIER_* переменные приходят из docker-compose.yml (environment).
+# Смена модели/провайдера — правка docker-compose.yml + restart litellm.
+# -----------------------------------------------------------------------------
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/LITELLM_DB_URL
+
+model_list:
+  # ============================================================
+  # TIER NANO — простые задачи, greetings, FAQ
+  # ============================================================
+  - model_name: tier-nano
+    litellm_params:
+      model: os.environ/TIER_NANO_MODEL
+      api_key: os.environ/TIER_NANO_API_KEY
+      api_base: os.environ/TIER_NANO_API_BASE
+      timeout: os.environ/TIER_NANO_TIMEOUT
+    model_info:
+      access_groups: ["default"]
+
+  # ============================================================
+  # TIER SMALL — стандартные задачи
+  # ============================================================
+  - model_name: tier-small
+    litellm_params:
+      model: os.environ/TIER_SMALL_MODEL
+      api_key: os.environ/TIER_SMALL_API_KEY
+      api_base: os.environ/TIER_SMALL_API_BASE
+      timeout: os.environ/TIER_SMALL_TIMEOUT
+    model_info:
+      access_groups: ["default"]
+
+  # ============================================================
+  # TIER MID — умеренная сложность
+  # ============================================================
+  - model_name: tier-mid
+    litellm_params:
+      model: os.environ/TIER_MID_MODEL
+      api_key: os.environ/TIER_MID_API_KEY
+      api_base: os.environ/TIER_MID_API_BASE
+      timeout: os.environ/TIER_MID_TIMEOUT
+    model_info:
+      access_groups: ["default"]
+
+  # ============================================================
+  # TIER FRONTIER — сложные задачи
+  # ============================================================
+  - model_name: tier-frontier
+    litellm_params:
+      model: os.environ/TIER_FRONTIER_MODEL
+      api_key: os.environ/TIER_FRONTIER_API_KEY
+      api_base: os.environ/TIER_FRONTIER_API_BASE
+      timeout: os.environ/TIER_FRONTIER_TIMEOUT
+    model_info:
+      access_groups: ["default"]
+
+  # ============================================================
+  # TIER DEEP — agentic coding, long-horizon
+  # ============================================================
+  - model_name: tier-deep
+    litellm_params:
+      model: os.environ/TIER_DEEP_MODEL
+      api_key: os.environ/TIER_DEEP_API_KEY
+      api_base: os.environ/TIER_DEEP_API_BASE
+      timeout: os.environ/TIER_DEEP_TIMEOUT
+    model_info:
+      access_groups: ["default"]
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 120
+  fallbacks:
+    - tier-deep:     ["tier-frontier", "tier-mid"]
+    - tier-frontier: ["tier-mid", "tier-small"]
+    - tier-mid:      ["tier-small", "tier-nano"]
+    - tier-small:    ["tier-nano"]
+
+litellm_settings:
+  drop_params: true
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+    similarity_threshold: 0.95
+    ttl: 3600
+
+
+## 1. Валидация compose + интерполяции
+#  docker compose --env-file env/.env config --quiet
+#
+#  # 2. Посмотреть, во что развернулись TIER_* (до старта контейнера)
+#  docker compose --env-file env/.env config | Select-String "TIER_NANO|TIER_MID"
+#
+#  # Ожидаемый вывод:
+#  #   TIER_NANO_API_BASE: http://model-generative.shared.du.iba/v1
+#  #   TIER_NANO_API_KEY: corporate-llm
+#  #   TIER_NANO_MODEL: openai/generative-model
+#  #   TIER_NANO_TIMEOUT: "60"
+#
+#  # 3. Перезапуск litellm
+#  docker compose --env-file env/.env up -d --force-recreate litellm
+#
+#  # 4. Проверка переменных внутри контейнера
+#  docker compose exec litellm env | Select-String "TIER_NANO"
+#  # Ожидаем: TIER_NANO_API_KEY=corporate-llm (без ${...})
+#
+#  # 5. Проверка health и моделей
+#  curl http://localhost:4000/health/liveliness
+#curl http://localhost:4000/v1/models -H "Authorization: Bearer sk-palatium-master"
+#
+## 6. Тестовый запрос
+#  curl http://localhost:4000/v1/chat/completions `
+#-H "Authorization: Bearer sk-palatium-master" `
+#-H "Content-Type: application/json" `
+#  -d '{\"model\":\"tier-mid\",\"messages\":[{\"role\":\"user\",\"content\":\"Say OK\"}]}'

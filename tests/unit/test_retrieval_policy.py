@@ -28,6 +28,15 @@ def test_non_last_resort_tools_always_allowed() -> None:
 
 
 class _PlatformWebRegistry(FakeMCPRegistry):
+    """Platform-only registry: these cases assert the ``web_fallback`` last-resort gate.
+
+    ``FakeMCPRegistry`` also exposes an EDMS ``search_documents`` tool; leaving it in
+    scope would let a non-last-resort tool win the capability match and hide the gate.
+    """
+
+    def list_servers(self) -> list[str]:
+        return ["platform"]
+
     async def list_tool_summaries(self, server_name: str, *, force_refresh: bool = False) -> list[object]:
         if server_name != "platform":
             return await super().list_tool_summaries(server_name, force_refresh=force_refresh)

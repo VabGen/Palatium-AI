@@ -60,6 +60,8 @@ def build_researcher_input(
         prior_context=selectors.resolved_prior_assistant_content(state),
         mcp_tool_output_max_chars=selectors.prompt_budget(state).mcp_tool_output_max_chars,
         revision_feedback=selectors.resolved_revision_feedback(state),
+        # dialog_window=state.get("dialog_window"),
+        # memory_hints=selectors.memory_hints(state),
     )
 
 
@@ -139,4 +141,6 @@ def build_formatter_input(
         underspecification_kind=selectors.underspecification_kind(state),
         revision_feedback=selectors.resolved_revision_feedback(state),
         response_locale=selectors.resolved_response_locale(state),
+        dialog_window=state.get("dialog_window"),
+        memory_hints=selectors.memory_hints(state),
     )

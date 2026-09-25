@@ -239,11 +239,11 @@ class _ResearcherEvalMcpRegistry:
         return next((tool for tool in tools if tool.name == tool_name), None)
 
     async def call_tool(
-            self,
-            server_name: str,
-            tool_call: MCPToolCall,
-            *,
-            allow_unpinned: bool = False,
+        self,
+        server_name: str,
+        tool_call: MCPToolCall,
+        *,
+        allow_unpinned: bool = False,
     ) -> MCPToolResult:
         _ = allow_unpinned
         self.calls.append((server_name, tool_call))

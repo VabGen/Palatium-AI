@@ -1,0 +1,141 @@
+# Observability overlay (P1-7). Opt-in — merged on top of the main stack:
+#
+#   docker compose -f docker-compose.yml -f deploy/observability/compose.observability.yml up -d
+#
+# Everything binds to 127.0.0.1 only (020: no perimeter exposure).
+# Two environments, one config:
+#   * development — METRICS_PUBLIC default true, the scrape token is ignored.
+#   * staging/prod — app.py forces metrics_public=false, so /metrics needs a valid
+#     JWT. Put one in PROMETHEUS_METRICS_TOKEN (env/.env is gitignored).
+#
+# Images are pinned to tags that are guaranteed to exist; pin digests in production
+# and let Dependabot (`docker` ecosystem) bump them.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PUBLISH_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - palatium_prometheus:/prometheus
+    configs:
+      # Bearer for GET /metrics. Ignored while /metrics is public (development);
+      # required once metrics_public=false (staging/production).
+      - source: metrics_scrape_token
+        target: /etc/prometheus/secrets/metrics_token
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # Real readiness probe (busybox wget is present in the official image).
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PUBLISH_PORT:-9093}:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - palatium_alertmanager:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana:11.5.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in env/.env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Dashboards/datasources are provisioned from files, not clicked in the UI.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/palatium-overview.json
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    ports:
+      - "127.0.0.1:${GRAFANA_PUBLISH_PORT:-3000}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - palatium_grafana:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  loki:
+    image: grafana/loki:3.3.2
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yml
+    ports:
+      - "127.0.0.1:${LOKI_PUBLISH_PORT:-3100}:3100"
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - palatium_loki:/loki
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      # Container stdout/stderr == structlog JSON (040 correlation by trace_id).
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - palatium_promtail:/positions
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9080/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+configs:
+  # Inline (never committed as a secret). Override in staging/production with a
+  # real JWT minted for scraping; see deploy/observability/README.md.
+  #
+  # Requires Docker Compose >= 2.23 for inline `content` on non-swarm configs.
+  # On older versions, replace this with a bind-mounted file and update the
+  # `credentials_file` path in prometheus/prometheus.yml accordingly.
+  metrics_scrape_token:
+    content: ${PROMETHEUS_METRICS_TOKEN:-dev-metrics-token}
+
+volumes:
+  palatium_prometheus:
+  palatium_alertmanager:
+  palatium_grafana:
+  palatium_loki:
+  palatium_promtail:

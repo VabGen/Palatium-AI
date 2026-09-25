@@ -11,6 +11,7 @@ Platform is never proxied — Host ``PlatformToolHandler`` only.
 Env (uvicorn):
   MCP_GATEWAY_SERVER=edms|analytics
   MCP_UPSTREAM_URL=http://127.0.0.1:8080
+  MCP_UPSTREAM_HTTP_ALLOWED_HOSTS= optional comma-separated http:// upstream allowlist
   MCP_UPSTREAM_BEARER= optional Bearer for upstream
   MCP_JWT_* / MCP_AUTH_TOKEN — same Host-facing auth as stubs (aud=mcp:<server>)
 """
@@ -19,12 +20,16 @@ from __future__ import annotations
 
 import os
 
+from collections.abc import Collection
 from typing import Any
 
 from fastmcp.server.providers.proxy import FastMCPProxy, ProxyClient
-from mcp_stub_runtime import build_stub_auth, mount_health
-from pin_allowlist import allowlist_for
-from pin_filter import PinAllowlistMiddleware
+
+from mcp_servers.gateway.pin_allowlist import allowlist_for
+from mcp_servers.gateway.pin_filter import PinAllowlistMiddleware
+from mcp_servers.gateway.upstream_policy import assert_upstream_url_safe, env_http_allowed_hosts
+from mcp_servers.mcp_stub_hardening import harden_asgi_app
+from mcp_servers.mcp_stub_runtime import build_stub_auth, mount_health
 
 
 def _upstream_client(upstream_url: str) -> ProxyClient[Any]:
@@ -34,12 +39,19 @@ def _upstream_client(upstream_url: str) -> ProxyClient[Any]:
     return ProxyClient(upstream_url)
 
 
-def build_gateway(*, server_name: str, upstream_url: str) -> FastMCPProxy:
-    """Build Host-facing FastMCP proxy with pin-name filter."""
+def build_gateway(
+    *,
+    server_name: str,
+    upstream_url: str,
+    http_allowed_hosts: Collection[str] | None = None,
+) -> FastMCPProxy:
+    """Build Host-facing FastMCP proxy with pin-name filter + upstream SSRF gate."""
     if server_name not in {"edms", "analytics"}:
         raise ValueError(f"MCP gateway does not proxy {server_name!r} (platform is Host-local only; never proxied)")
     if not upstream_url.strip():
         raise ValueError("upstream_url is required")
+    # Fail closed before any proxy is built (020): a proxied URL is attacker-reachable.
+    assert_upstream_url_safe(upstream_url, http_allowed_hosts=http_allowed_hosts)
     allowed = allowlist_for(server_name)
     proxy = FastMCPProxy(
         client_factory=lambda: _upstream_client(upstream_url),
@@ -70,7 +82,13 @@ def build_app_from_env() -> object:
         )
     if not upstream:
         raise RuntimeError("MCP_UPSTREAM_URL is required (stub URL today; real MCP adapter later)")
-    return build_gateway(server_name=server, upstream_url=upstream).http_app(path="/")
+    return harden_asgi_app(
+        build_gateway(
+            server_name=server,
+            upstream_url=upstream,
+            http_allowed_hosts=env_http_allowed_hosts(),
+        ).http_app(path="/"),
+    )
 
 
 # Uvicorn target: ``gateway_mcp_server:app``

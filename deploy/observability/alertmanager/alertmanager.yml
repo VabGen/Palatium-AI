@@ -1,0 +1,54 @@
+# Alertmanager routing (P1-7).
+#
+# Default receiver is intentionally a no-op: alert routing must never be
+# "configured" by accident. Replace `null` with a real receiver (Slack / webhook /
+# pager) before relying on this stack in staging/production.
+#
+# Secrets (`ALERTMANAGER_WEBHOOK_URL`, `ALERTMANAGER_SLACK_WEBHOOK_URL`) come from
+# the environment — never commit them (020).
+
+route:
+  receiver: default
+  # Group by alertname+target so one flapping target is a single notification.
+  group_by: ["alertname", "target", "reason"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Compliance / security control failures page immediately and repeatedly.
+    - matchers:
+        - severity = "critical"
+      receiver: default
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: false
+    - matchers:
+        - severity = "warning"
+      receiver: default
+      group_wait: 30s
+      repeat_interval: 4h
+      continue: false
+    - matchers:
+        - severity = "info"
+      receiver: default
+      repeat_interval: 24h
+
+receivers:
+  # The `null` receiver is a documented Alertmanager type — it accepts and drops.
+  # Swap for a real one and keep `null` out of staging/production.
+  - name: default
+    # webhook_configs:
+    #   - url: ${ALERTMANAGER_WEBHOOK_URL}
+    #     send_resolved: true
+    # slack_configs:
+    #   - api_url: ${ALERTMANAGER_SLACK_WEBHOOK_URL}
+    #     channel: "#palatium-alerts"
+    #     send_resolved: true
+
+inhibit_rules:
+  # If the API is down, its downstream symptom alerts add no information.
+  - source_matchers:
+      - alertname = "PalatiumApiDown"
+    target_matchers:
+      - severity =~ "warning|info"
+    equal: ["service"]

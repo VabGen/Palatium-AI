@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from pydantic import SecretStr
-
+from palatium_ai.domain.mcp.models import MCPToolCall
 from palatium_ai.infrastructure.mcp.base import MCPJsonRpcClient, MCPJsonRpcError
 
 
-def _settings(*, retry_attempts: int = 3, retry_delay: float = 0.0) -> SimpleNamespace:
-    mcp = SimpleNamespace(
-        auth_token=SecretStr("tok"),
+def _settings(*, retry_attempts: int = 3, retry_delay: float = 0.0, timeout_seconds: float = 5.0) -> SimpleNamespace:
+    # Real MCPConfig (env-file disabled) — a `SimpleNamespace` double drifts from the
+    # contract and silently resolved the bearer to None (070/000).
+    from palatium_ai.core.config.mcp import MCPConfig
+
+    mcp = MCPConfig(
+        _env_file=None,  # type: ignore[call-arg]
+        auth_token="tok",
         retry_attempts=retry_attempts,
         retry_delay=retry_delay,
-        timeout_seconds=5,
-        resolve_auth_token=lambda _name: "tok",
+        timeout_seconds=int(timeout_seconds),
     )
     return SimpleNamespace(mcp=mcp)
 
@@ -94,3 +99,24 @@ async def test_mcp_client_does_not_retry_unauthorized(monkeypatch: pytest.Monkey
         await client.list_tools()
     assert seen_auth == ["tok"]
     assert len(_CaptureClient.behavior) == 0  # raised on first attempt; queue empty after pop
+
+
+class _SlowCallClient(_FakeFastMcpClient):
+    """Client whose tools/call never returns inside the configured timeout."""
+
+    async def call_tool(self, name: str, arguments: object) -> object:
+        await asyncio.sleep(5)
+        return SimpleNamespace(content=[], is_error=False)
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_call_tool_enforces_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """050: a hung upstream must surface as a typed MCP error, not hang the agent."""
+    monkeypatch.setattr("fastmcp.Client", _SlowCallClient)
+    client = MCPJsonRpcClient(
+        "http://127.0.0.1:8080/",
+        _settings(retry_attempts=1, retry_delay=0.0, timeout_seconds=0.05),  # type: ignore[arg-type]
+        server_name="edms",
+    )
+    with pytest.raises(MCPJsonRpcError, match="timed out"):
+        await client.call_tool(MCPToolCall(name="slow_tool", arguments={}))

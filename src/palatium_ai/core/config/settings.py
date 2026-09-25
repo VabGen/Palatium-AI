@@ -50,16 +50,6 @@ class Settings(BaseConfig):
         text = self.security.jwt_secret.get_secret_value().strip()
         return text or None
 
-    def resolve_mcp_bearer(self, server_name: str) -> str | None:
-        """Bearer for Host→MCP: per-server static, else aud=mcp:<server> JWT, else shared static."""
-        from palatium_ai.infrastructure.mcp.jwt_auth import resolve_mcp_bearer
-
-        return resolve_mcp_bearer(
-            self.mcp,
-            server_name,
-            signing_secret=self.mcp_jwt_signing_secret(),
-        )
-
 
 @lru_cache
 def get_settings() -> Settings:

@@ -469,14 +469,10 @@ def test_drill_agents_roster_requires_admin() -> None:
 def _mcp_stub_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     import sys
 
-    from pathlib import Path
-
     from fastapi import Depends
 
-    mcp_root = Path(__file__).resolve().parents[2] / "mcp_servers"
-    monkeypatch.syspath_prepend(str(mcp_root))
-    sys.modules.pop("mcp_stub_auth", None)
-    from mcp_stub_auth import require_mcp_bearer  # type: ignore[import-not-found]
+    sys.modules.pop("mcp_servers.mcp_stub_auth", None)
+    from mcp_servers.mcp_stub_auth import require_mcp_bearer
 
     app = FastAPI()
 
@@ -513,6 +509,7 @@ def test_drill_mcp_stub_fail_closed_without_token(monkeypatch: pytest.MonkeyPatc
     """Unset MCP_AUTH_TOKEN must reject JSON-RPC unless MCP_ALLOW_ANON is explicit."""
     monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MCP_ALLOW_ANON", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
     client = _mcp_stub_client(monkeypatch)
     denied = client.post("/", json={"jsonrpc": "2.0", "method": "tools/list", "id": "1"})
     assert denied.status_code == 401
@@ -522,13 +519,24 @@ def test_drill_mcp_stub_fail_closed_without_token(monkeypatch: pytest.MonkeyPatc
     assert open_client.post("/", json={"jsonrpc": "2.0", "method": "tools/list", "id": "1"}).status_code == 200
 
 
+def test_drill_mcp_stub_denies_anon_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """020: MCP_ALLOW_ANON must never open an anonymous perimeter in staging/production."""
+    monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("MCP_ALLOW_ANON", "1")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    client = _mcp_stub_client(monkeypatch)
+    assert client.post("/", json={"jsonrpc": "2.0", "method": "tools/list", "id": "1"}).status_code == 401
+
+
 def test_drill_mcp_client_sends_bearer_from_config() -> None:
-    mcp = SimpleNamespace(
-        auth_token=SecretStr("platform-mcp-token"),
+    from palatium_ai.core.config.mcp import MCPConfig
+
+    mcp = MCPConfig(
+        _env_file=None,  # type: ignore[call-arg]
+        auth_token="platform-mcp-token",
         retry_attempts=1,
         retry_delay=0.0,
         timeout_seconds=5,
-        resolve_auth_token=lambda _name: "platform-mcp-token",
     )
     client = MCPJsonRpcClient(
         "http://127.0.0.1:8080",

@@ -1,0 +1,24 @@
+# .gitleaks.toml — secret-scanning policy for palatium-ai.
+
+title = "palatium-ai secret scanning policy"
+
+[extend]
+# Keep the upstream default ruleset (high-signal provider/credential patterns).
+useDefault = true
+
+[allowlist]
+description = "Reviewed non-secret locations. Narrow on purpose — see comments."
+
+# Path allowlist. Every entry is a place where a "secret-looking" literal is
+# structurally guaranteed to be a placeholder, never a credential.
+paths = [
+  # Env templates ship documented placeholders ("", "CHANGE_ME"). Real env files
+  # are gitignored (.gitignore: env/.env*) and must never appear in history.
+  '''env/\.env\..*\.example$''',
+  # Test fixtures use obviously-fake literals (e.g. "tok", "unit-test-...-key").
+  # Rule: a REAL credential must never be written into a test — if one ever is,
+  # it is already compromised and rotation (not allowlisting) is the response.
+  '''tests/.*\.py$''',
+  # Docs quote header/pattern names and sample shapes, not live values.
+  '''docs/.*\.md$''',
+]

@@ -24,6 +24,7 @@ from palatium_ai.application.agents.memory_keeper import MEMORY_KEEPER_CONFIG, M
 from palatium_ai.application.agents.researcher import RESEARCHER_CONFIG, ResearcherAgent
 from palatium_ai.application.agents.supervisor import SUPERVISOR_CONFIG, SupervisorAgent
 from palatium_ai.application.agents.text_ingestor import TEXT_INGESTOR_CONFIG, TextIngestorAgent
+from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.context_builder import ContextBuilder
 from palatium_ai.application.services.cost_budget import CostBudgetService
@@ -37,6 +38,11 @@ from palatium_ai.application.services.memory_fact_persistence import MemoryFactP
 from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.core.logging import logger
+from palatium_ai.domain.mcp.timeout_policy import (
+    McpAgentBudget,
+    assert_tool_timeouts_within_agent_budget,
+    mcp_tool_keys,
+)
 from palatium_ai.infrastructure.database.repositories import McpToolCallRepository
 from palatium_ai.infrastructure.embeddings.factory import create_embedding_client_for_schema
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
@@ -59,6 +65,43 @@ if TYPE_CHECKING:
     from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.infrastructure.mcp.registry import MCPRegistry
+
+
+_AGENT_CONFIGS = (
+    INTENT_CLASSIFIER_CONFIG,
+    CONTEXTUALIZER_CONFIG,
+    CONTEXT_WEAVER_CONFIG,
+    CRITIC_CONFIG,
+    FORMATTER_CONFIG,
+    RESEARCHER_CONFIG,
+    CODER_CONFIG,
+    ANALYST_CONFIG,
+    SUPERVISOR_CONFIG,
+    MEMORY_KEEPER_CONFIG,
+    TEXT_INGESTOR_CONFIG,
+)
+
+# Per-tool MCP timeouts must stay below the budget of every agent that may call the tool (070).
+_MCP_AGENT_BUDGETS = tuple(
+    McpAgentBudget(
+        name=config.name,
+        timeout_seconds=config.timeout_seconds,
+        tools=mcp_tool_keys(config.allowed_tools),
+    )
+    for config in _AGENT_CONFIGS
+)
+
+
+def _assert_mcp_timeout_budget(settings: Settings) -> None:
+    """Fail startup when a configured MCP timeout can outlive its calling agent (070)."""
+    mcp = settings.mcp
+    if not getattr(mcp, "enabled", True):
+        return
+    assert_tool_timeouts_within_agent_budget(
+        default_timeout_seconds=int(mcp.timeout_seconds),
+        tool_timeouts=dict(getattr(mcp, "tool_timeouts", {})),
+        agent_budgets=_MCP_AGENT_BUDGETS,
+    )
 
 
 def build_hitl_service(
@@ -199,6 +242,7 @@ def build_intent_service(
 ) -> tuple[IntentService, MemoryExtractService | None, MCPCapabilityIndex, DocumentIngestService]:
     """Создаёт IntentService + optional sleep-time extract worker handle."""
     llm_factory = LLMClientFactory(settings)
+    _assert_mcp_timeout_budget(settings)
 
     resolved_dialog_store = dialog_turn_store
     if resolved_dialog_store is None and session_factory is not None:
@@ -267,19 +311,20 @@ def build_intent_service(
         mcp_tool_call_repository=mcp_tool_call_repository,
         capability_index=capability_index,
     )
-    coder = CoderAgent(harness, CODER_CONFIG)
-    analyst = AnalystAgent(harness, ANALYST_CONFIG)
-    supervisor = SupervisorAgent(harness, SUPERVISOR_CONFIG)
+    # Composition root (000): construct the roster; the graph builder itself is
+    # agent-agnostic and reads node↔agent mapping from the registry (3.2).
     graph = build_agent_graph(
-        intent_agent=intent_agent,
-        supervisor_agent=supervisor,
-        continuation_agent=continuation,
-        weaving_agent=weaving,
-        researcher_agent=researcher,
-        coder_agent=coder,
-        analyst_agent=analyst,
-        critic_agent=critic,
-        formatter_agent=formatter,
+        GraphAgents(
+            intent_agent=intent_agent,
+            supervisor_agent=SupervisorAgent(harness, SUPERVISOR_CONFIG),
+            continuation_agent=continuation,
+            weaving_agent=weaving,
+            researcher_agent=researcher,
+            coder_agent=CoderAgent(harness, CODER_CONFIG),
+            analyst_agent=AnalystAgent(harness, ANALYST_CONFIG),
+            critic_agent=critic,
+            formatter_agent=formatter,
+        ),
         harness=harness,
         checkpointer=resolved_checkpointer,
     )

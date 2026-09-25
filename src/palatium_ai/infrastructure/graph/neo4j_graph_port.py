@@ -8,7 +8,7 @@ import json
 
 from typing import Protocol
 
-from palatium_ai.domain.graph.cypher_safety import assert_params_cover_refs, assert_read_only_cypher
+from palatium_ai.domain.graph.cypher_safety import TENANT_SCOPE_PARAM, assert_graph_query_safe
 from palatium_ai.domain.graph.types import GraphQueryCommand, GraphQueryResult, GraphQueryRow
 
 
@@ -51,8 +51,12 @@ class Neo4jDriverTransport:
         params: dict[str, object],
         limit: int,
     ) -> list[dict[str, object]]:
+        from neo4j import READ_ACCESS
+
         rows: list[dict[str, object]] = []
-        async with self._driver.session() as session:
+        # Read path runs on a READ_ACCESS session: write clauses fail structurally, so the
+        # regex guard stays defense-in-depth rather than the only barrier (020/070).
+        async with self._driver.session(default_access_mode=READ_ACCESS) as session:
             result = await session.run(cypher, params)
             async for record in result:
                 rows.append(record.data())
@@ -96,10 +100,10 @@ class Neo4jGraphPort:
         self._transport = transport
 
     async def query(self, command: GraphQueryCommand) -> GraphQueryResult:
-        assert_read_only_cypher(command.cypher)
-        assert_params_cover_refs(command.cypher, command.params)
         params = dict(command.params)
-        params.setdefault("user_id", command.user_id)
+        # Force tenant scope: client-supplied params must never win over the authenticated user (020/070).
+        params[TENANT_SCOPE_PARAM] = command.user_id
+        assert_graph_query_safe(command.cypher, params)
 
         raw_rows = await self._transport.run_query(
             cypher=command.cypher,

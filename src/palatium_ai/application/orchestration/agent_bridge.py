@@ -285,6 +285,10 @@ def formatter_to_agent_input(
             "underspecification_kind": task_input.underspecification_kind,
             "revision_feedback": task_input.revision_feedback or "",
             "response_locale": task_input.response_locale,
+            "dialog_window_json": (
+                task_input.dialog_window.model_dump_json() if task_input.dialog_window is not None else ""
+            ),
+            "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },
@@ -402,6 +406,10 @@ def researcher_to_agent_input(
             "prior_context": task_input.prior_context or "",
             "mcp_tool_output_max_chars": str(task_input.mcp_tool_output_max_chars),
             "revision_feedback": task_input.revision_feedback or "",
+            "dialog_window_json": (
+                task_input.dialog_window.model_dump_json() if task_input.dialog_window is not None else ""
+            ),
+            "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
             "_user_id": user_id,

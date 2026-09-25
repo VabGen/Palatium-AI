@@ -1,0 +1,32 @@
+# Grafana datasource provisioning (P1-7).
+#
+# Dashboards reference these datasource UIDs; changing a uid without updating the
+# dashboard JSON breaks panels silently. Keep uids stable.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: palatium-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Must match prometheus.yml `scrape_interval` so rate() windows line up.
+      timeInterval: 15s
+      httpMethod: POST
+
+  - name: Loki
+    uid: palatium-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 1000
+      # Logs are structlog JSON, so `trace_id` is a field on every line (040) and can
+      # be filtered directly in Explore:  {service="palatium-ai"} | json | trace_id="…"
+      # A click-through to spans needs a tracing datasource (Tempo/Jaeger); add one
+      # here once an OTLP trace store is part of the stack.

@@ -11,7 +11,9 @@ import pytest
 
 from palatium_ai.infrastructure.hitl.idp_acr_step_up import IdpAcrHitlStepUpProvider
 
-_TEST_HS_KEY = "unit-test-hs-key-16"  # noqa: S105
+# ≥32 bytes: the platform rejects shorter HS secrets (infrastructure/mcp/jwt_auth.py) and
+# PyJWT warns below RFC 7518 §3.2 minimum — the fixture must honour the real contract (020).
+_TEST_HS_KEY = "unit-test-hs-key-32-bytes-long!!"  # noqa: S105
 
 
 def _mint(

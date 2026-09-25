@@ -1,14 +1,23 @@
 # src/palatium_ai/application/agents/evals/judge_client.py
 
-"""LLM client factory for nightly eval judge (040 — separate provider from generator)."""
+"""LLM client factory for nightly eval judge (040 — separate provider from generator).
+
+The concrete LLM adapter is built by the caller (composition root / eval script)
+and injected as ``EvalJudgeClientFactory``: rule 000 forbids ``application/``
+importing ``infrastructure/`` directly.
+"""
 
 from __future__ import annotations
 
 import os
 
-from palatium_ai.core.config.settings import get_settings
+from collections.abc import Callable
+
 from palatium_ai.domain.ports.llm import LLMPort
-from palatium_ai.infrastructure.llm.factory import create_llm_client
+
+#: ``provider name → LLMPort``. Built from ``infrastructure.llm.factory`` at the
+#: composition root (``application/wiring``, ``application/bootstrap``, scripts).
+EvalJudgeClientFactory = Callable[[str], LLMPort]
 
 _SUPPORTED = frozenset({"openai", "anthropic", "ollama", "qwen"})
 
@@ -37,6 +46,6 @@ def assert_provider_independence(*, judge_provider: str, generator_provider: str
         raise ValueError(msg)
 
 
-def create_eval_judge_llm() -> LLMPort:
-    provider = resolve_judge_provider()
-    return create_llm_client(get_settings(), provider)
+def create_eval_judge_llm(factory: EvalJudgeClientFactory) -> LLMPort:
+    """Build the judge client for ``PALATIUM_EVAL_JUDGE_PROVIDER`` via injected factory."""
+    return factory(resolve_judge_provider())

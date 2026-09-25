@@ -60,6 +60,38 @@ async def test_neo4j_graph_port_rejects_write_cypher() -> None:
 
 
 @pytest.mark.asyncio
+async def test_neo4j_graph_port_rejects_unscoped_cypher() -> None:
+    """070: an unscoped read must never reach the driver (cross-tenant leak)."""
+    port = Neo4jGraphPort(_FakeNeo4jTransport())
+    with pytest.raises(ValueError, match="tenant"):
+        await port.query(
+            GraphQueryCommand(
+                user_id="u1",
+                cypher="MATCH (n) RETURN n LIMIT $lim",
+                params={"lim": 5},
+                limit=5,
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_neo4j_graph_port_forces_tenant_param() -> None:
+    """Client-supplied user_id in params must be overwritten by the authenticated user (020)."""
+    transport = _FakeNeo4jTransport()
+    port = Neo4jGraphPort(transport)
+    await port.query(
+        GraphQueryCommand(
+            user_id="u-actor",
+            cypher="MATCH (f:Fact {user_id: $user_id}) RETURN f.text AS fact LIMIT $lim",
+            params={"user_id": "u-victim", "lim": 5},
+            limit=5,
+        )
+    )
+    assert transport.last_query is not None
+    assert transport.last_query[1]["user_id"] == "u-actor"
+
+
+@pytest.mark.asyncio
 async def test_neo4j_graph_port_closes_transport() -> None:
     transport = _FakeNeo4jTransport()
     port = Neo4jGraphPort(transport)

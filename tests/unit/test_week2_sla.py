@@ -15,6 +15,7 @@ from palatium_ai.core.config.llm import TierBinding
 from palatium_ai.core.observability.turn_tokens import turn_token_usage
 from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
+from palatium_ai.domain.mcp.external_schemas import EDMS_SEARCH_DOCUMENTS_SCHEMA
 from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolResult
 from palatium_ai.infrastructure.llm.factory import LLMClientFactory
 from palatium_ai.infrastructure.mcp.circuit import McpServerCircuit
@@ -49,7 +50,10 @@ def _settings_with_fallback(*, fallback: tuple[str, ...] = ("anthropic",)) -> Si
         build_provider_chain=_chain,
         fallback_provider_list=fallback,
     )
-    return SimpleNamespace(llm=llm)
+    # Settings always carries `app`; omitting it silently violates the contract that
+    # get_client_for_agent() relies on for the staging/production chain assertion.
+    app = SimpleNamespace(environment="development")
+    return SimpleNamespace(llm=llm, app=app)
 
 
 @pytest.mark.asyncio
@@ -100,7 +104,10 @@ async def test_registry_call_tool_trips_circuit_on_http_error(monkeypatch: pytes
                 MCPToolDescriptor(
                     name="search_documents",
                     description="",
-                    inputSchema={"type": "object", "properties": {}},
+                    # Registry call_tool enforces the platform pin, so the descriptor must
+                    # carry the real pinned schema — an empty one is refused before the
+                    # transport (and thus the circuit) is ever exercised.
+                    inputSchema=dict(EDMS_SEARCH_DOCUMENTS_SCHEMA),
                     annotations={"readOnlyHint": True},
                 )
             ]

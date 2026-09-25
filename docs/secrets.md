@@ -98,6 +98,11 @@ env:
 
 Скелет: [`deploy/compose.secrets.example.yml`](../deploy/compose.secrets.example.yml).
 
+> **PowerShell:** при `$env:COMPOSE_ENV_FILES = "env/.env"` (см.
+> [`../START.md`](../START.md) §3) все команды `docker compose ...`
+> подхватывают `env/.env` автоматически. Без этой переменной нужен
+> явный `--env-file env/.env`.
+
 Идея:
 - `env/.env.prod` монтируется как **не-секретный** каркас (хосты, порты, имена моделей).
 - Пароли/ключи — через `environment:` из host env или Docker secrets.
@@ -117,8 +122,10 @@ docker compose -f deploy/compose.secrets.example.yml up
 ```
 secret/palatium/staging/postgres   → password
 secret/palatium/staging/ollama     → api_key
+secret/palatium/staging/qwen       → api_key      # если используете corporate Qwen
 secret/palatium/prod/postgres      → password
 secret/palatium/prod/ollama        → api_key
+secret/palatium/prod/qwen          → api_key      # если используете corporate Qwen
 ```
 
 Варианты инъекции:

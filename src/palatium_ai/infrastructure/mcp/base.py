@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -25,6 +27,7 @@ from palatium_ai.domain.mcp.models import (
     MCPToolResult,
     MCPToolSummary,
 )
+from palatium_ai.infrastructure.mcp.jwt_auth import resolve_settings_bearer
 
 if TYPE_CHECKING:
     from palatium_ai.core.config.settings import Settings
@@ -126,14 +129,9 @@ class MCPJsonRpcClient:
         return self._http_client
 
     def _auth_token(self) -> str | None:
-        if self._server_name is not None and hasattr(self._settings, "resolve_mcp_bearer"):
-            return self._settings.resolve_mcp_bearer(self._server_name)
-        mcp = self._settings.mcp
         if self._server_name is not None:
-            if hasattr(mcp, "resolve_static_token"):
-                return mcp.resolve_static_token(self._server_name)
-            if hasattr(mcp, "resolve_auth_token"):
-                return mcp.resolve_auth_token(self._server_name)
+            return resolve_settings_bearer(self._settings, self._server_name)
+        mcp = self._settings.mcp
         if getattr(mcp, "auth_token", None) is not None:
             token = mcp.auth_token
             if token is None:
@@ -186,17 +184,32 @@ class MCPJsonRpcClient:
                 return await operation()
         raise RuntimeError("MCP client retry loop exited without result")
 
+    def _timeout_seconds(self, tool_name: str | None = None) -> float:
+        """Per-tool timeout from MCP config (050/070: no magic numbers).
+
+        Resolution order: ``server.tool`` → ``tool`` → ``default`` → ``MCP_TIMEOUT_SECONDS``.
+        """
+        mcp = self._settings.mcp
+        resolver = getattr(mcp, "resolve_tool_timeout", None)
+        if tool_name is not None and self._server_name is not None and callable(resolver):
+            return float(resolver(self._server_name, tool_name))
+        return float(mcp.timeout_seconds)
+
     async def _list_tools_once(self) -> list[MCPToolDescriptor]:
         from fastmcp import Client
 
         logger.debug("mcp.client.list_tools", server_url=self._server_url)
+        timeout = self._timeout_seconds()
         try:
-            async with Client(
-                self._server_url,
-                auth=self._auth_token(),
-                mode="auto",
-            ) as client:
-                tools = await client.list_tools()
+            async with asyncio.timeout(timeout):
+                async with Client(
+                    self._server_url,
+                    auth=self._auth_token(),
+                    mode="auto",
+                ) as client:
+                    tools = await client.list_tools()
+        except TimeoutError as exc:
+            raise _timeout_error("tools/list", timeout) from exc
         except Exception as exc:
             raise _map_client_error(exc) from exc
         return [_tool_to_descriptor(tool) for tool in tools]
@@ -209,13 +222,17 @@ class MCPJsonRpcClient:
             server_url=self._server_url,
             tool=tool_call.name,
         )
+        timeout = self._timeout_seconds(tool_call.name)
         try:
-            async with Client(
-                self._server_url,
-                auth=self._auth_token(),
-                mode="auto",
-            ) as client:
-                result = await client.call_tool(tool_call.name, tool_call.arguments)
+            async with asyncio.timeout(timeout):
+                async with Client(
+                    self._server_url,
+                    auth=self._auth_token(),
+                    mode="auto",
+                ) as client:
+                    result = await client.call_tool(tool_call.name, tool_call.arguments)
+        except TimeoutError as exc:
+            raise _timeout_error(f"tools/call {tool_call.name}", timeout) from exc
         except Exception as exc:
             raise _map_client_error(exc) from exc
         return MCPToolResult(
@@ -236,6 +253,13 @@ def _map_client_error(exc: BaseException) -> BaseException:
         return exc
     message = str(exc) or type(exc).__name__
     return MCPJsonRpcError(JsonRpcError(code=-32000, message=message[:500]))
+
+
+def _timeout_error(operation: str, timeout_seconds: float) -> MCPJsonRpcError:
+    """Typed MCP error for a call that exceeded ``MCP_TIMEOUT_SECONDS`` (050)."""
+    return MCPJsonRpcError(
+        JsonRpcError(code=-32000, message=f"MCP {operation} timed out after {timeout_seconds:g}s"),
+    )
 
 
 class MCPJsonRpcError(RuntimeError):

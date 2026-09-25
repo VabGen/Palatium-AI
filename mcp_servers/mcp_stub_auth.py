@@ -13,6 +13,9 @@ import secrets
 
 from fastapi import Header, HTTPException, status
 
+# 020: anonymous MCP is a local-bootstrap escape hatch; never valid on a hardened perimeter.
+_HARDENED_ENVIRONMENTS = frozenset({"staging", "production"})
+
 
 def configured_mcp_token() -> str | None:
     """Return MCP_AUTH_TOKEN when set (empty string → None)."""
@@ -20,10 +23,24 @@ def configured_mcp_token() -> str | None:
     return raw or None
 
 
+def _runtime_environment() -> str:
+    """Best-effort deployment environment for the standalone MCP stub processes."""
+    for key in ("ENVIRONMENT", "PALATIUM_ENVIRONMENT", "APP_ENVIRONMENT"):
+        value = os.environ.get(key, "").strip().lower()
+        if value:
+            return value
+    return "development"
+
+
 def anon_mcp_allowed() -> bool:
-    """Explicit local-only opt-in when MCP_AUTH_TOKEN is unset (default: deny)."""
+    """Explicit local-only opt-in when MCP_AUTH_TOKEN is unset (default: deny).
+
+    Ignored in staging/production: the flag can never open an anonymous MCP perimeter there.
+    """
     raw = os.environ.get("MCP_ALLOW_ANON", "").strip().lower()
-    return raw in {"1", "true", "yes"}
+    if raw not in {"1", "true", "yes"}:
+        return False
+    return _runtime_environment() not in _HARDENED_ENVIRONMENTS
 
 
 def require_mcp_bearer(authorization: str | None = Header(default=None)) -> None:

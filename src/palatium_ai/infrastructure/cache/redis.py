@@ -30,5 +30,15 @@ async def ensure_redis_connection(settings: Settings) -> None:
 
 
 async def create_redis_client(settings: Settings) -> redis.Redis:
-    """Создаёт asyncio Redis-клиент по DSN из настроек."""
-    return redis.from_url(settings.redis.dsn, protocol=2, decode_responses=False)
+    """Создаёт asyncio Redis-клиент по DSN и pool/timeout из настроек (050)."""
+    cfg = settings.redis
+    return redis.from_url(
+        cfg.dsn,
+        protocol=2,
+        decode_responses=False,
+        max_connections=cfg.max_connections,
+        socket_timeout=cfg.socket_timeout_seconds,
+        socket_connect_timeout=cfg.socket_connect_timeout_seconds,
+        health_check_interval=cfg.health_check_interval_seconds,
+        socket_keepalive=cfg.socket_keepalive,
+    )

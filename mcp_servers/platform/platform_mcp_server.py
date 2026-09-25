@@ -9,8 +9,7 @@ All tools/call raise PermissionError (no fake success).
 
 from __future__ import annotations
 
-from mcp_stub_runtime import build_http_app, create_stub_mcp, register_pinned_tool
-
+from mcp_servers.mcp_stub_runtime import build_http_app, create_stub_mcp, register_pinned_tool
 from palatium_ai.domain.mcp.platform_schemas import (
     PLATFORM_CONSOLIDATE_MEMORY_SCHEMA,
     PLATFORM_FORGET_MEMORY_SCHEMA,

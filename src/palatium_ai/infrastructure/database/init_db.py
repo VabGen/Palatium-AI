@@ -12,6 +12,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from palatium_ai.core.logging import logger
+from palatium_ai.core.security.identifiers import quote_sql_identifier
+from palatium_ai.infrastructure.database.runtime import engine_pool_kwargs
 
 if TYPE_CHECKING:
     from palatium_ai.core.config import Settings
@@ -31,6 +33,7 @@ async def ensure_database_and_schema(settings: Settings) -> None:
         user=db_cfg.user,
         password=db_cfg.password.get_secret_value(),
         database="postgres",
+        timeout=db_cfg.connect_timeout_seconds,
     )
 
     try:
@@ -40,7 +43,8 @@ async def ensure_database_and_schema(settings: Settings) -> None:
         )
 
         if not db_exists:
-            await sys_conn.execute(f'CREATE DATABASE "{db_cfg.db}"')
+            # DDL cannot bind params; the identifier is validated + quoted (020).
+            await sys_conn.execute(f"CREATE DATABASE {quote_sql_identifier(db_cfg.db, kind='database name')}")
             logger.info("База данных '%s' создана.", db_cfg.db)
         else:
             logger.info("База данных '%s' уже существует.", db_cfg.db)
@@ -49,7 +53,7 @@ async def ensure_database_and_schema(settings: Settings) -> None:
         await sys_conn.close()
 
     should_echo_sql = db_cfg.echo and settings.logging.level.upper() == "DEBUG"
-    engine = create_async_engine(db_cfg.async_dsn, echo=should_echo_sql)
+    engine = create_async_engine(db_cfg.async_dsn, echo=should_echo_sql, **engine_pool_kwargs(db_cfg))
     try:
         async with engine.connect() as conn:
             schema_exists = await conn.execute(
@@ -58,7 +62,8 @@ async def ensure_database_and_schema(settings: Settings) -> None:
             )
 
             if not schema_exists.scalar():
-                await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{db_cfg.db_schema}"'))
+                schema_ddl = quote_sql_identifier(db_cfg.db_schema, kind="schema name")
+                await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_ddl}"))
                 await conn.commit()
                 logger.info("Схема '%s' создана.", db_cfg.db_schema)
             else:

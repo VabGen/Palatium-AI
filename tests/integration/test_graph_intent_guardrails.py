@@ -8,6 +8,7 @@ import pytest
 
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
+from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_service import IntentService
@@ -39,14 +40,18 @@ class _FakeSessionService:
     async def assert_thread_access(self, **_kwargs: object) -> None:
         return None
 
+    async def get_session(self, **_kwargs: object) -> None:
+        """Reply-locale lookup (065); no persisted session in integration tests."""
+        return None
 
-def _formatter_json(title: str) -> str:
+
+def _formatter_json(title: str, *, locale: str = "en-US") -> str:
     import json
 
     return json.dumps(
         {
             "schema_version": 1,
-            "locale": "en-US",
+            "locale": locale,
             "title": title,
             "blocks": [{"type": "paragraph", "text": title}],
             "actions": [],
@@ -66,20 +71,22 @@ async def test_graph_intent_classifier_via_harness_guardrails() -> None:
     harness, intent_agent = make_intent_stack(FakeLLMPort(intent_json))
     continuation = make_continuation_agent(harness=harness)
     graph = build_agent_graph(
+        GraphAgents(
+            continuation_agent=continuation,
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(
+                FakeLLMPort('{"summary": "x", "confidence": 0.9, "sources_used": []}'), harness=harness
+            ),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(
+                FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
+            ),
+            formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("Answer"))),
+        ),
         harness=harness,
-        continuation_agent=continuation,
-        intent_agent=intent_agent,
-        supervisor_agent=make_supervisor_agent(harness),
-        weaving_agent=make_weaving_agent(harness=harness),
-        researcher_agent=make_researcher_agent(
-            FakeLLMPort('{"summary": "x", "confidence": 0.9, "sources_used": []}'), harness=harness
-        ),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(
-            FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
-        ),
-        formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("Answer"))),
         checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
@@ -106,21 +113,23 @@ async def test_graph_process_full_pipeline_fake_llm() -> None:
     harness, intent_agent = make_intent_stack(FakeLLMPort(intent_json))
     continuation = make_continuation_agent(harness=harness)
     graph = build_agent_graph(
+        GraphAgents(
+            continuation_agent=continuation,
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(
+                FakeLLMPort('{"summary": "Palatium is an agent platform.", "confidence": 0.94, "sources_used": []}'),
+                harness=harness,
+            ),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(
+                FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
+            ),
+            formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("Palatium overview"))),
+        ),
         harness=harness,
-        continuation_agent=continuation,
-        intent_agent=intent_agent,
-        supervisor_agent=make_supervisor_agent(harness),
-        weaving_agent=make_weaving_agent(harness=harness),
-        researcher_agent=make_researcher_agent(
-            FakeLLMPort('{"summary": "Palatium is an agent platform.", "confidence": 0.94, "sources_used": []}'),
-            harness=harness,
-        ),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(
-            FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
-        ),
-        formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("Palatium overview"))),
         checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
@@ -149,16 +158,18 @@ async def test_graph_social_phatic_skips_researcher() -> None:
     intent_agent = IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG)
     unused_researcher = FakeLLMPort('{"summary": "must-not-run", "confidence": 0.1, "sources_used": []}')
     graph = build_agent_graph(
+        GraphAgents(
+            continuation_agent=make_continuation_agent(harness=harness),
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(unused_researcher, harness=harness),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(FakeLLMPort("should-not-be-called")),
+            formatter_agent=make_formatter_agent(llm, harness=harness),
+        ),
         harness=harness,
-        continuation_agent=make_continuation_agent(harness=harness),
-        intent_agent=intent_agent,
-        supervisor_agent=make_supervisor_agent(harness),
-        weaving_agent=make_weaving_agent(harness=harness),
-        researcher_agent=make_researcher_agent(unused_researcher, harness=harness),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(FakeLLMPort("should-not-be-called")),
-        formatter_agent=make_formatter_agent(llm, harness=harness),
         checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
@@ -201,19 +212,23 @@ async def test_graph_format_followup_with_dialog_memory() -> None:
     )
     unused_researcher = FakeLLMPort('{"summary": "unused", "confidence": 0.1, "sources_used": []}')
     graph = build_agent_graph(
-        harness=harness,
-        continuation_agent=continuation,
-        intent_agent=intent_agent,
-        supervisor_agent=make_supervisor_agent(harness),
-        weaving_agent=make_weaving_agent(harness=harness),
-        researcher_agent=make_researcher_agent(unused_researcher, harness=harness),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(FakeLLMPort("should-not-be-called")),
-        formatter_agent=make_formatter_agent(
-            FakeLLMPort(_formatter_json("Meeting plan table")),
-            harness=harness,
+        GraphAgents(
+            continuation_agent=continuation,
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(unused_researcher, harness=harness),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(FakeLLMPort("should-not-be-called")),
+            formatter_agent=make_formatter_agent(
+                # The turn is a Russian follow-up, so the pinned reply locale is ru-RU:
+                # English prose would fail the Formatter locale verify() and correctly
+                # downgrade the turn to ``partial`` (055/065).
+                FakeLLMPort(_formatter_json("План встречи — таблица", locale="ru-RU")),
+            ),
         ),
+        harness=harness,
         checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
@@ -227,6 +242,6 @@ async def test_graph_format_followup_with_dialog_memory() -> None:
 
     assert result.status == "success"
     assert result.output is not None
-    assert "table" in result.output.title.lower() or "meeting" in result.output.title.lower()
+    assert "встреч" in (result.output.title or "").lower() or "таблиц" in (result.output.title or "").lower()
     assert len(unused_researcher.calls) == 0
     assert pipeline_llm._index == 2

@@ -13,7 +13,7 @@ license = "MIT"
 authors = [ {name = "VabGen",email = "VabGen@gmail.com"} ]
 # maintainers = [
 #     { name = "John Smith", email = "johnsmith@example.org" },
-#     { name = "Jane Smith", email = "janesmith@example.org" },  
+#     { name = "Jane Smith", email = "janesmith@example.org" },
 # ]
 keywords = [ "ai", "edms", "automation", "assistant" ]
 classifiers = [
@@ -29,15 +29,18 @@ classifiers = [
 ]
 # requires-python = "~=3.14"
 requires-python = ">=3.14,<3.15"
-# === === === === === === === === === === === === === === === === === === === === === === === === === === === === poetry remove 
-# === === === === === === A B C D E F G H I J K L M N O P Q R S T U V W X Y Z === === === === === === === === === poetry add 
-# === === === === === === === === === === === === === === === === === === === === === === === === === === === === 
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === poetry remove
+# === === === === === === A B C D E F G H I J K L M N O P Q R S T U V W X Y Z === === === === === === === === === poetry add
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
 # ===============================================================================================================
 dependencies = [
     "alembic (>=1.19.1,<2.0.0)",
     "asyncpg (>=0.30.0,<0.40.0)",
-    "colorama (>=0.4.6,<0.5.0)",  
-    "cryptography (>=44.0.0,<47.0.0)",
+    "colorama (>=0.4.6,<0.5.0)",
+    # Security floor: pip-audit flags cryptography <48 (PYSEC-2026-3552/3553/3554,
+    # GHSA-537c-gmf6-5ccf) — the old `<47` bound pinned the project onto vulnerable
+    # releases with no way to raise it, so `scripts/ci_security.py` could never pass.
+    "cryptography (>=50.0.0,<51.0.0)",
     "fastapi (>=0.140.0,<0.150.0)",
     "fpdf2 (>=2.8.8,<3.0.0)",
     "httpx (>=0.28.0,<0.29.0)",
@@ -45,7 +48,13 @@ dependencies = [
     "json-repair (>=0.63.4,<0.64.0)",
     "langgraph (>=1.2.10,<2.0.0)",
     "langgraph-checkpoint-postgres (>=2.0.0,<4.0.0)",
-    "litellm (>=1.97.0,<2.0.0)",                                 
+    "litellm (>=1.97.0,<2.0.0)",
+    "langfuse (>=3.0.0,<4.0.0)",
+    # litellm >=1.97 requires openai>=2.20, so the old `openai (<2.0.0)` bound made the
+    # whole project unresolvable: `poetry lock` / `poetry install` failed with
+    # "version solving failed", i.e. the CI install step could never succeed.
+    # Widened to match what litellm actually requires (and what runs in the env).
+    "openai (>=2.20.0,<3.0.0)",
     "opentelemetry-api (>=1.29.0,<2.0.0)",
     "opentelemetry-exporter-otlp-proto-http (>=1.29.0,<2.0.0)",
     "opentelemetry-sdk (>=1.29.0,<2.0.0)",
@@ -58,7 +67,7 @@ dependencies = [
     "pyjwt (>=2.9.0,<3.0.0)",
     "redis (>=8.0.0,<9.0.0)",
     "sqlalchemy[asyncio] (>=2.0.50,<3.0.0)",
-    "structlog (>=26.1.0,<27.0.0)",                                 
+    "structlog (>=26.1.0,<27.0.0)",
     "tenacity (>=9.0.0,<10.0.0)",
 #    "typing (>=3.10.0.0,<4.0.0.0)",
     "uvicorn[standard] (>=0.50.0,<0.60.0)",
@@ -73,8 +82,12 @@ graph = ["neo4j (>=5.28.0,<6.0.0)"]
 
 [dependency-groups]
 test = [
-    "pytest (>=8.2.0,<9.0.0)",
-    "pytest-asyncio (>=0.25.0,<0.26.0)",
+    # Security floor: PYSEC-2026-1845 affects pytest <9.0.3 (`pip-audit` gate).
+    # pytest-asyncio >=1.x is the line that supports pytest 9 (0.25 does not).
+    "pytest (>=9.0.3,<10.0.0)",
+    "pytest-asyncio (>=1.0.0,<2.0.0)",
+    "pytest-cov (>=6.0.0,<9.0.0)",
+    "pyyaml (>=6.0.0,<7.0.0)",
 ]
 lint = [
     "ruff (>=0.16.0,<0.17.0)",
@@ -85,18 +98,31 @@ type-check = [
     "types-PyYAML (>=6.0.0,<7.0.0)",
     "types-toml (>=0.10.0,<0.11.0)",
 ]
+security = [
+    "pip-audit (>=2.7.0,<4.0.0)",
+]
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
     { include-group = "type-check" },
-    "tox (>=4.60.0,<5.0.0)",
+    { include-group = "security" },
+    # Upper bound kept below 4.60: tox >=4.60 requires `packaging>=26`, while
+    # `langfuse` (runtime dep, optional observability) caps `packaging<26` — the two
+    # together made `poetry lock` unsolvable. tox is local-only tooling (CI uses
+    # scripts/ci_quality.py), so the dev tool yields the bound.
+    "tox (>=4.20.0,<4.60.0)",
+    # Mirrors the fast CI gates (.pre-commit-config.yaml).
+    "pre-commit (>=3.5.0,<5.0.0)",
 ]
 graph = [
     "neo4j (>=5.28.0,<6.0.0)",
 ]
 
 [tool.poetry]
-packages = [ {include = "palatium_ai", from = "src"} ]
+packages = [
+    { include = "palatium_ai", from = "src" },
+#    { include = "mcp_servers" },
+]
 
 [project.urls]
 homepage = "https://github.com/your-org/palatium-ai"
@@ -144,14 +170,19 @@ ignore = [
     "D401",  # imperative mood (RU/EN mix in codebase)
     "TC001",
     "TC003",
-]  # docstring gaps + typing-only-import; keep D for style conflicts only via ignores above
+]
 fixable = ["ALL"]
+
+[tool.ruff.lint.mccabe]
+# Explicit ratchet for `C90`: ruff's implicit default is 10, but an unpinned value
+# can drift with a tool upgrade and silently loosen the gate (050: no implicit config).
+# Lowering this is a deliberate, separate refactoring wave — at 8 the repo currently
+# reports 29 offenders, so 10 is the enforced baseline for this wave.
+max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S105", "S106", "D", "E501", "TC001"]
-# Migrations: role/schema identifiers are constants, not user input (S608 false positive).
 "alembic/**/*.py" = ["S608", "E501"]
-# MCP stubs: JSON-RPC dispatch naturally branches per tool.
 "mcp_servers/**/*.py" = ["C901"]
 "scripts/**/*.py" = ["C901"]
 
@@ -174,8 +205,8 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
-exclude = ["tests/", "build/", "dist/", ".venv/"]
-mypy_path = "src"
+exclude = ["tests/", "build/", "dist/", ".venv/","mcp_servers/"]
+mypy_path = ["src"]
 explicit_package_bases = true
 ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
@@ -194,7 +225,7 @@ pythonVersion = "3.14"
 extraPaths = ["src", ".cursor/hooks"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
+asyncio_mode = "strict"
 testpaths = ["tests"]
 markers = [
     "live: hits a real LLM / network; opt-in via PALATIUM_LIVE_EVAL=1",
@@ -202,12 +233,30 @@ markers = [
     "integration: graph/service integration tests (fake LLM; no DATABASE_URL required)",
 ]
 
+[tool.coverage.run]
+source = ["palatium_ai"]
+branch = false
+omit = [
+    "*/migrations/*",
+    "*/alembic/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
 # [[tool.mypy.overrides]]
 # module = "langgraph"
 # ignore_missing_imports = true
-# 
+#
 # [[tool.mypy.overrides]]
-# module = "fastapi.*" 
+# module = "fastapi.*"
 # ignore_missing_imports = true
 
 # ===================================================================================================================

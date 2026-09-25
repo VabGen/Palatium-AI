@@ -603,9 +603,31 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Skip llm_live tests unless PALATIUM_EVAL_LIVE_JUDGE=1 (075)."""
     import os
 
-    if os.environ.get("PALATIUM_EVAL_LIVE_JUDGE") == "1":
-        return
-    skip_live = pytest.mark.skip(reason="llm_live requires PALATIUM_EVAL_LIVE_JUDGE=1")
-    for item in items:
-        if "llm_live" in item.keywords:
-            item.add_marker(skip_live)
+    if os.environ.get("PALATIUM_EVAL_LIVE_JUDGE") != "1":
+        skip_live = pytest.mark.skip(reason="llm_live requires PALATIUM_EVAL_LIVE_JUDGE=1")
+        for item in items:
+            if "llm_live" in item.keywords:
+                item.add_marker(skip_live)
+
+    _assert_async_tests_are_marked(items)
+
+
+def _assert_async_tests_are_marked(items: list[pytest.Item]) -> None:
+    """Fail collection if an async test lacks @pytest.mark.asyncio (075).
+
+    Under ``asyncio_mode = "strict"`` an unmarked ``async def`` test is not run.
+    Silently not-running a test is worse than not having it, so this is a hard error.
+    """
+    import inspect
+
+    unmarked = [
+        item.nodeid
+        for item in items
+        if inspect.iscoroutinefunction(getattr(item, "function", None)) and item.get_closest_marker("asyncio") is None
+    ]
+    if unmarked:
+        listing = "\n".join(f"  - {nodeid}" for nodeid in unmarked)
+        message = (
+            'Async tests must be decorated with @pytest.mark.asyncio (asyncio_mode = "strict", see 075):\n' + listing
+        )
+        raise pytest.UsageError(message)

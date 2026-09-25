@@ -1,0 +1,18 @@
+# Grafana dashboard provisioning (P1-7).
+#
+# Dashboards live in git as JSON — the UI is not the source of truth.
+# `allowUiUpdates: false` makes that explicit: edits must come through a PR.
+
+apiVersion: 1
+
+providers:
+  - name: palatium
+    orgId: 1
+    folder: Palatium
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

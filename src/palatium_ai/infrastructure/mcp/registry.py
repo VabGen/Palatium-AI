@@ -30,6 +30,7 @@ from palatium_ai.domain.mcp.tool_policy import (
 )
 from palatium_ai.infrastructure.mcp.base import MCPJsonRpcClient, MCPJsonRpcError
 from palatium_ai.infrastructure.mcp.circuit import McpServerCircuit
+from palatium_ai.infrastructure.mcp.jwt_auth import resolve_settings_bearer
 
 if TYPE_CHECKING:
     from palatium_ai.core.config.settings import Settings
@@ -139,14 +140,7 @@ class MCPRegistry:
         return {"Authorization": f"Bearer {token}"}
 
     def _resolve_bearer(self, server_name: str) -> str | None:
-        if hasattr(self._settings, "resolve_mcp_bearer"):
-            return self._settings.resolve_mcp_bearer(server_name)
-        mcp = self._settings.mcp
-        if hasattr(mcp, "resolve_static_token"):
-            return mcp.resolve_static_token(server_name)
-        if hasattr(mcp, "resolve_auth_token"):
-            return mcp.resolve_auth_token(server_name)
-        return None
+        return resolve_settings_bearer(self._settings, server_name)
 
     def has_remote_url(self, name: str) -> bool:
         """True when a remote MCP HTTP URL is configured for this server."""

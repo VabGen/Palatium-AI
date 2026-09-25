@@ -4,8 +4,7 @@
 
 from __future__ import annotations
 
-from mcp_stub_runtime import build_http_app, create_stub_mcp, register_pinned_tool
-
+from mcp_servers.mcp_stub_runtime import build_http_app, create_stub_mcp, register_pinned_tool
 from palatium_ai.domain.mcp.external_schemas import (
     EDMS_ARCHIVE_DOCUMENT_SCHEMA,
     EDMS_DOCUMENT_ID_MAX_CHARS,

@@ -15,6 +15,7 @@ from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.core.observability.turn_tokens import get_turn_token_collector
+from palatium_ai.core.resilience import CircuitOpenError
 from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text, scan_text_fields
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
@@ -123,6 +124,10 @@ class Harness:
                 return completion
             except CostBudgetExceededError:
                 raise
+            except CircuitOpenError as exc:
+                # All provider breakers are open: every retry would just re-check the
+                # breaker and sleep, so fail immediately with the platform error type.
+                raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
             except Exception as exc:
                 last_error = exc
                 if attempt >= config.max_retries - 1:

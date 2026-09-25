@@ -15,8 +15,8 @@
 3. [Клонирование](#3-клонирование)
 4. [Конфигурация окружения](#4-конфигурация-окружения)
 5. [Запуск локально (Poetry)](#5-запуск-локально-poetry)
-6. [Запуск в Docker](#6-запуск-в-docker)
-7. [MCP stubs для разработки](#7-mcp-stubs-для-разработки)
+6. [Запуск: три режима](#6-запуск-три-режима)
+7. [MCP stubs](#7-mcp-stubs)
 8. [Проверка и первое использование API](#8-проверка-и-первое-использование-api)
 9. [Контракт API](#9-контракт-api)
 10. [Архитектура и runtime workflow](#10-архитектура-и-runtime-workflow)
@@ -98,10 +98,35 @@ Copy-Item env\.env.local.example env\.env   # Ollama local
 
 Заполните минимум:
 
-- `POSTGRES_*`, `REDIS_*`
-- `LLM_DEFAULT_PROVIDER` + ключи выбранного провайдера
-- `EMBEDDING_DEFAULT_PROVIDER` + ключи
-- `MCP_SERVERS` (если нужны tools)
+```bash
+# --- App DB ---
+POSTGRES_USER="postgres"
+POSTGRES_PASSWORD="1234"
+POSTGRES_DB="postgres"            # ← именно postgres, НЕ palatium_dev
+POSTGRES_SCHEMA="palatium_ai"
+POSTGRES_PUBLISH_PORT=5432        # 5433, если на хосте уже есть Postgres
+
+# --- Gateway (LiteLLM) ---
+LITELLM_MASTER_KEY="sk-palatium-master"
+LITELLM_PUBLISH_PORT=4000
+PALATIUM_GATEWAY_KEY=""           # сгенерировать: .\scripts\litellm-provision-key.ps1
+
+# --- Провайдер ---
+QWEN_API_KEY="corporate-llm"
+QWEN_BASE_URL="http://model-generative.shared.du.iba/v1"
+QWEN_DEFAULT_MODEL="generative-model"
+
+# --- Прочее ---
+EMBEDDING_DEFAULT_PROVIDER="qwen"
+MCP_SERVERS='{"edms":"http://localhost:8080","analytics":"http://localhost:8081"}'
+```
+
+> **`POSTGRES_DB=postgres`** — все схемы приложения (`palatium_ai`,
+> `edms_assistant`, `knowledge`, `memory`) внутри. Отдельная БД нужна только
+> для Langfuse (`langfuse`).
+
+Остальные ключи (`REDIS_*`, `LLM_DEFAULT_PROVIDER` и ключи провайдера,
+`EMBEDDING_*`) — из `env/.env.example` (там легенда `[MUST-SET]`/`[SECRET]`).
 
 ### 4.2. Профили файлов
 
@@ -159,46 +184,95 @@ Health: http://127.0.0.1:8000/health
 
 ---
 
-## 6. Запуск в Docker
+## 6. Запуск: три режима
 
-Полная пошаговая инструкция: **[`docker.md`](docker.md)**.
+Проект поддерживает **три** режима, которые **нельзя смешивать**
+(конфликт по портам 8080/8081/8000):
 
-Полный стек (Postgres + Redis + Neo4j + MCP + API):
+| Режим | Где MCP | Где API | Gateway | Когда использовать |
+|---|---|---|---|---|
+| **Host** | Poetry (host) | Poetry (host) | — | Ежедневная разработка (hot-reload) |
+| **Docker** | Docker | Docker | — | CI / демо / prod-like |
+| **Gateway** | Poetry (host) | Poetry (host) | :8090/8091 | Тест политик MCP |
+
+> **Про `docker compose` ниже.** Команды предполагают, что в `$PROFILE` задано
+> `$env:COMPOSE_ENV_FILES = "env/.env"` (см. [`../START.md`](../START.md) §3).
+> Без этого Compose не подставит `${POSTGRES_*}` / `${QWEN_*}` и упадёт с
+> `POSTGRES_PASSWORD is not set` — тогда добавляйте `--env-file env/.env` вручную.
+
+### 6.1. Host-профиль (рекомендуется для разработки)
 
 ```powershell
-docker compose --env-file env/.env up --build
+# 1. Docker только для инфраструктуры
+docker compose up -d postgres redis neo4j litellm
+
+# 2. MCP stubs + API через Poetry
+.\scripts\dev-up.ps1
+
+# 3. Проверка
+.\scripts\dev-status.ps1
 ```
 
-Только API-образ (зависимости на хосте):
+**Что запустится:**
+- API :8000 — Poetry (hot-reload)
+- MCP EDMS :8080 — Poetry
+- MCP Analytics :8081 — Poetry
+
+**Остановка:** `.\scripts\dev-down.ps1 -Force`
+
+### 6.2. Docker-профиль
+
+Полный стек в Docker:
 
 ```powershell
-docker build -t palatium-ai:local .
+# Убить host-процессы
+.\scripts\dev-down.ps1 -Force
 
-docker run --rm -p 8000:8000 `
-  --env-file env/.env `
-  -e POSTGRES_HOST=host.docker.internal `
-  -e REDIS_HOST=host.docker.internal `
-  -e APP_HOST=0.0.0.0 `
-  palatium-ai:local
+# Поднять всё в Docker
+docker compose --profile docker-mcp --profile docker-api up -d --build
+
+# Проверить
+docker compose ps
 ```
 
-> В контейнере `localhost` ≠ хост. В Compose используйте DNS-имена сервисов (`postgres`, `redis`, `neo4j`).
+> **`docker-compose.override.yml`** отключает MCP/API в Docker по умолчанию —
+> они поднимаются только по профилям. Это правильно и защищает от конфликта
+> портов с host-профилем.
+
+Полная пошаговая инструкция: [`docker.md`](docker.md).
+
+### 6.3. Gateway-профиль
+
+```powershell
+.\scripts\dev-down.ps1 -Force
+.\scripts\dev-up.ps1 -WithGateway
+```
+
+API ходит на gateway :8090/8091 → gateway проксирует на upstream :8080/:8081.
+Нужен для тестирования `pin_allowlist` / `pin_filter` / `upstream_policy`.
+
+**Стартовая инструкция:** [`../START.md`](../START.md) — все 3 режима подробно.
 
 ---
 
-## 7. MCP stubs для разработки
+## 7. MCP stubs
 
-### Вариант A — Docker Compose (рекомендуется с API в Docker)
+> Профили и режимы — см. §6. Ниже — оба варианта.
 
-Корневой [`docker-compose.yml`](../docker-compose.yml) поднимает `mcp-edms` и `mcp-analytics` вместе с API.  
-Dockerfile stubs: [`mcp_servers/Dockerfile`](../mcp_servers/Dockerfile).
-
-### Вариант B — на хосте (Poetry)
+### Вариант A — Host (Poetry) — рекомендуется
 
 ```powershell
-.\scripts\dev-up.ps1    # EDMS :8080, Analytics :8081 (+ опционально API)
-.\scripts\dev-down.ps1
+.\scripts\dev-up.ps1               # API + MCP stubs (direct)
+.\scripts\dev-up.ps1 -WithGateway  # + gateway :8090/8091
+.\scripts\dev-up.ps1 -SkipApi      # только MCP stubs
+.\scripts\dev-down.ps1 -Force
 ```
+
+### Вариант B — Docker
+
+Корневой [`docker-compose.yml`](../docker-compose.yml) поднимает `mcp-edms` и
+`mcp-analytics` вместе с API по профилю `docker-mcp`.
+Dockerfile stubs: [`mcp_servers/Dockerfile`](../mcp_servers/Dockerfile).
 
 Проверка Bearer на stubs (после `dev-up` или Compose):
 
@@ -626,10 +700,14 @@ Dockerfile          # multi-stage runtime / test / devtools
 
 | Документ | Содержание |
 |----------|------------|
+| [`../START.md`](../START.md) | стартовая инструкция: setup + `$PROFILE` + 3 режима |
 | [`handbook.md`](handbook.md) | этот полный гайд |
 | [`docker.md`](docker.md) | Docker от А до Я |
+| [`runbook.md`](runbook.md) | операторский runbook: симптомы, фиксы, полный сброс |
 | [`secrets.md`](secrets.md) | Vault / CI / Compose secrets |
 | [`ops-readiness.md`](ops-readiness.md) | staging/prod чеклист после Weeks 0–8 |
+| [`agent-evals.md`](agent-evals.md) | agent evals: PR baseline / cassette / nightly judge |
+| [`../deploy/observability/README.md`](../deploy/observability/README.md) | Prometheus / Grafana / Loki / Alertmanager + SLO |
 | [`README.md`](README.md) | индекс документации |
 
 ---

@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_service import IntentService
@@ -38,6 +39,10 @@ class _FakeSessionService:
         return None
 
     async def assert_thread_access(self, **_kwargs: object) -> None:
+        return None
+
+    async def get_session(self, **_kwargs: object) -> None:
+        """Reply-locale lookup (065); no persisted session in unit tests."""
         return None
 
 
@@ -89,18 +94,20 @@ def _service_for_case(case: BenchmarkCase) -> IntentService:
 
     harness, intent_agent = make_intent_stack(FakeLLMPort(_intent_payload(case)))
     graph = build_agent_graph(
-        harness=harness,
-        continuation_agent=make_continuation_agent(harness=harness),
-        intent_agent=intent_agent,
-        supervisor_agent=make_supervisor_agent(harness),
-        weaving_agent=make_weaving_agent(mcp, harness=harness),
-        researcher_agent=make_researcher_agent(researcher_llm, mcp, harness=harness),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(
-            FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
+        GraphAgents(
+            continuation_agent=make_continuation_agent(harness=harness),
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(mcp, harness=harness),
+            researcher_agent=make_researcher_agent(researcher_llm, mcp, harness=harness),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(
+                FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
+            ),
+            formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_document_json(case.case_id))),
         ),
-        formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_document_json(case.case_id))),
+        harness=harness,
         checkpointer=make_graph_checkpointer(),
     )
     return IntentService(

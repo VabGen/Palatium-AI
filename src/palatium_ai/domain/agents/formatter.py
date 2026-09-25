@@ -10,6 +10,7 @@ from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.contracts import TaskResult
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.hitl.cards import HITLCardView
+from palatium_ai.domain.memory import DialogTurnWindow
 
 # Canonical structured answer (no markdown fallback field).
 FormatterOutput = ContentDocument
@@ -33,6 +34,8 @@ class FormatterInput(BaseModel):
     revision_feedback: str | None = Field(default=None, max_length=4_000)
     # BCP-47 pin from ReplyLocalePolicy — source of truth for document.locale + prose language.
     response_locale: str = Field(default="und", min_length=2, max_length=16)
+    dialog_window: DialogTurnWindow | None = None
+    memory_hints: tuple[str, ...] = ()
 
 
 class FormatterTaskResult(TaskResult):

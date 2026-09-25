@@ -25,7 +25,7 @@ class AgentConfig(BaseModel):
     max_retries: int = Field(default=3, ge=0)
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
 
-    llm_provider: Literal["openai", "anthropic", "ollama", "qwen"] | None = None
+    llm_provider: Literal["openai", "anthropic", "ollama", "qwen", "gateway"] | None = None
     llm_model: str | None = None
 
     embedding_provider: Literal["openai", "ollama", "qwen"] | None = None

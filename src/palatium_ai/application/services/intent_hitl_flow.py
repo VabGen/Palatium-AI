@@ -642,6 +642,7 @@ class IntentHitlFlow:
             synthesis = await self._option_synthesizer.synthesize(
                 user_text=user_text,
                 prior_context=prior_context,
+                response_locale=document.locale,
             )
             logger.info(
                 "hitl.option_synthesis",

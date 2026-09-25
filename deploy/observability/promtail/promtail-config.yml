@@ -1,0 +1,55 @@
+# Promtail: ship container stdout/stderr to Loki (P1-7).
+#
+# Reads the Docker json-file logs directly from disk. Deliberately does NOT mount
+# /var/run/docker.sock: that socket is root-equivalent, and log shipping is not a
+# reason to grant it (020). Trade-off: no compose-service auto-discovery, so labels
+# are derived from the log payload and the log filename.
+#
+# The app emits structlog JSON on stdout (040), so container logs already carry
+# trace_id / app_name / environment as fields.
+
+server:
+  http_listen_port: 9080
+  log_level: warn
+
+positions:
+  filename: /positions/positions.yml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker-containers
+    static_configs:
+      - targets: ["localhost"]
+        labels:
+          job: docker-containers
+          __path__: /var/lib/docker/containers/*/*-json.log
+    pipeline_stages:
+      # Docker json-file wrapper: {"log":"<line>","stream":"stdout","time":"…"}
+      - json:
+          expressions:
+            raw: log
+            docker_stream: stream
+      # Derive a bounded container label from the file path (≈10 containers).
+      - regex:
+          source: filename
+          expression: ".*/containers/(?P<container_id>[0-9a-f]{12}).*"
+      # structlog payload (app containers). Non-JSON lines (MCP stubs) simply
+      # yield no extracted fields — the stage does not drop the line.
+      - json:
+          source: raw
+          expressions:
+            level: level
+            service: app_name
+            environment: environment
+            trace_id: trace_id
+      - labels:
+          level:
+          service:
+          environment:
+          container_id:
+          docker_stream:
+      # Ship the clean structlog line, not the Docker wrapper.
+      - output:
+          source: raw

@@ -9,20 +9,15 @@
 #   test                — runtime + pytest (CI)
 #   devtools            — runtime + Poetry (отладка в контейнере, НЕ для prod)
 #
-# Почему Poetry НЕТ в runtime:
-#   • меньше attack surface / CVE (pip, poetry, gcc, headers)
-#   • меньше размер образа и быстрее pull
-#   • immutable runtime: только то, что нужно процессу uvicorn
-#   • reproducible: зависимости зафиксированы poetry.lock на этапе builder
+# NOTE:
+#   • mcp_servers/ НЕ входит в этот образ. Это отдельные приложения
+#     с собственным Dockerfile (mcp_servers/Dockerfile) и PYTHONPATH=/app.
+#   • В pyproject.toml → [tool.poetry].packages только palatium_ai.
 #
 # Build:
 #   docker build -t palatium-ai:local .
 #   docker build --target test -t palatium-ai:test .
 #   docker build --target devtools -t palatium-ai:devtools .
-#
-# Run:
-#   docker run --rm -p 8000:8000 --env-file env/.env palatium-ai:local
-#   docker run --rm -e RUN_MIGRATIONS=1 --env-file env/.env palatium-ai:local
 #
 # syntax=docker/dockerfile:1.7
 
@@ -35,30 +30,30 @@ ARG BUILD_DATE=unknown
 ARG WITH_GRAPHITI=0
 
 # ---------------------------------------------------------------------------
-# Stage: base — общий Python runtime foundation
+# Stage: base
 # ---------------------------------------------------------------------------
-    FROM python:${PYTHON_VERSION}-slim AS base
+FROM python:${PYTHON_VERSION}-slim AS base
 
-    ARG PYTHON_VERSION
-    ENV PYTHONDONTWRITEBYTECODE=1 \
-        PYTHONUNBUFFERED=1 \
-        PYTHONFAULTHANDLER=1 \
-        PIP_DISABLE_PIP_VERSION_CHECK=1 \
-        PIP_NO_CACHE_DIR=1 \
-        LANG=C.UTF-8 \
-        LC_ALL=C.UTF-8
+ARG PYTHON_VERSION
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 
-    RUN apt-get update \
-        && apt-get install -y --no-install-recommends \
-            ca-certificates \
-            curl \
-            tini \
-            fonts-liberation \
-        && rm -rf /var/lib/apt/lists/* \
-        && apt-get clean
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        tini \
+        fonts-liberation \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # ---------------------------------------------------------------------------
-# Stage: deps — Poetry + lockfile install (кэш BuildKit)
+# Stage: deps
 # ---------------------------------------------------------------------------
 FROM base AS deps
 
@@ -79,34 +74,38 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# poetry.lock должен быть в репо и в build context (не в .dockerignore).
 COPY pyproject.toml poetry.lock README.md ./
 
+# poetry check --lock — не пересчитывает lock, только валидирует.
+# Если lock расходится с pyproject → fail fast (reproducible builds).
 RUN --mount=type=cache,target=/tmp/poetry_cache \
-    poetry lock --no-ansi \
-    && poetry install --only main --no-ansi --no-root
+    poetry check --lock \
+    && poetry install --only main --no-root
 
 # ---------------------------------------------------------------------------
-# Stage: builder — установка пакета + исходники
+# Stage: builder
 # ---------------------------------------------------------------------------
-    FROM deps AS builder
+FROM deps AS builder
 
-    ARG WITH_GRAPHITI=0
+ARG WITH_GRAPHITI=0
 
-    COPY src ./src
-    COPY alembic.ini ./
-    COPY alembic ./alembic
+# Только src — mcp_servers идёт через свой Dockerfile (не часть этого образа).
+COPY src ./src
+COPY alembic.ini ./
+COPY alembic ./alembic
 
-    RUN --mount=type=cache,target=/tmp/poetry_cache \
-        poetry install --only main --no-ansi \
-        && if [ "${WITH_GRAPHITI}" = "1" ]; then \
-             /app/.venv/bin/pip install --no-cache-dir "graphiti-core>=0.11.0,<1.0.0"; \
-           fi \
-        && find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
-        && find /app/.venv -type f -name "*.pyc" -delete \
-        && find /app/.venv -type f -name "*.pyo" -delete
+RUN --mount=type=cache,target=/tmp/poetry_cache \
+    poetry install --only main \
+    && if [ "${WITH_GRAPHITI}" = "1" ]; then \
+         /app/.venv/bin/pip install --no-cache-dir "graphiti-core>=0.11.0,<1.0.0"; \
+       fi \
+    && find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
+    && find /app/.venv -type f -name "*.pyc" -delete \
+    && find /app/.venv -type f -name "*.pyo" -delete
 
 # ---------------------------------------------------------------------------
-# Stage: runtime — production image (DEFAULT)
+# Stage: runtime (default)
 # ---------------------------------------------------------------------------
 FROM base AS runtime
 
@@ -145,7 +144,6 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=app:app /app/alembic /app/alembic
-COPY --chown=app:app env/.env.example /app/env/.env.example
 COPY --chown=app:app scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
 
 RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
@@ -154,9 +152,7 @@ RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
     && chmod u+w /app/logs /app/tmp
 
 USER app
-
 EXPOSE 8000
-
 STOPSIGNAL SIGTERM
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
@@ -166,7 +162,7 @@ ENTRYPOINT ["/usr/bin/tini", "--", "sh", "/app/scripts/docker-entrypoint.sh"]
 CMD ["uvicorn"]
 
 # ---------------------------------------------------------------------------
-# Stage: test — CI image (runtime + test deps + pytest)
+# Stage: test
 # ---------------------------------------------------------------------------
 FROM builder AS test
 
@@ -177,7 +173,7 @@ COPY tests ./tests
 COPY tox.ini ./tox.ini
 
 RUN --mount=type=cache,target=/tmp/poetry_cache \
-    poetry install --with test --no-ansi
+    poetry install --with test
 
 USER root
 RUN groupadd --system --gid 999 app 2>/dev/null || true \
@@ -190,7 +186,7 @@ ENTRYPOINT []
 CMD ["pytest", "-q", "--tb=short"]
 
 # ---------------------------------------------------------------------------
-# Stage: devtools — отладка ВНУТРИ контейнера (Poetry + shell). НЕ для prod.
+# Stage: devtools
 # ---------------------------------------------------------------------------
 FROM builder AS devtools
 
@@ -203,9 +199,7 @@ RUN groupadd --system --gid 999 app 2>/dev/null || true \
     && chown -R app:app /app \
     && apt-get update \
     && apt-get install -y --no-install-recommends bash \
-    && rm -rf /var/lib/apt/lists/*\
-    && curl -L -o src/palatium_ai/infrastructure/export/fonts/DejaVuSans.ttf \
-  https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf
+    && rm -rf /var/lib/apt/lists/*
 USER app
 
 WORKDIR /app

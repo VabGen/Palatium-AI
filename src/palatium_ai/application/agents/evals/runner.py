@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from palatium_ai.application.agents.evals.cassette import run_cassette_task
-from palatium_ai.application.agents.evals.llm_judge import llm_judge
+from palatium_ai.application.agents.evals.judge_client import EvalJudgeClientFactory
+from palatium_ai.application.agents.evals.llm_judge import LlmJudgeGrader, llm_judge
 from palatium_ai.application.agents.evals.report import AgentEvalReport, EvalSuiteReport, TaskEvalReport
 from palatium_ai.domain.agents.evals import (
     EVAL_BASELINE_TOLERANCE,
@@ -161,8 +162,9 @@ def load_nightly_tasks() -> list[dict[str, Any]]:
     raise ValueError(msg)
 
 
-async def run_nightly_evals() -> AgentEvalReport:
+async def run_nightly_evals(*, llm_factory: EvalJudgeClientFactory | None = None) -> AgentEvalReport:
     tasks = load_nightly_tasks()
+    grader = llm_judge if llm_factory is None else LlmJudgeGrader(llm_factory=llm_factory)
     task_reports: list[TaskEvalReport] = []
     for raw_task in tasks:
         task_id = str(raw_task.get("id") or raw_task.get("task_id") or "nightly-task")
@@ -180,7 +182,7 @@ async def run_nightly_evals() -> AgentEvalReport:
             continue
         agent_output, mode = await _resolve_task_output(agent.strip(), raw_task, {})
         merged = {**raw_task, "id": task_id}
-        grade = await llm_judge.grade(merged, agent_output)
+        grade = await grader.grade(merged, agent_output)
         threshold = float(raw_task.get("pass_threshold", 0.7))
         passed_task = grade.passed and grade.score >= threshold
         final = grade if passed_task else grade.model_copy(update={"passed": False})
@@ -206,11 +208,14 @@ async def run_nightly_evals() -> AgentEvalReport:
     )
 
 
-async def run_all_nightly_evals() -> dict[str, AgentEvalReport]:
+async def run_all_nightly_evals(
+    *,
+    llm_factory: EvalJudgeClientFactory | None = None,
+) -> dict[str, AgentEvalReport]:
     tasks = load_nightly_tasks()
     if not tasks:
         return {}
-    return {"nightly": await run_nightly_evals()}
+    return {"nightly": await run_nightly_evals(llm_factory=llm_factory)}
 
 
 def build_suite_report(reports: dict[str, AgentEvalReport]) -> EvalSuiteReport:

@@ -45,7 +45,11 @@ class TextIngestorAgent(BaseAgent):
         return self._config
 
     def get_required_context_keys(self) -> list[str]:
-        return ["task_id", "thread_id", "raw_text", "enrich_context_prefix"]
+        # Ingest-job parameters the caller (DocumentIngestService / agent bridge) always
+        # supplies. ``enrich_context_prefix`` is deliberately absent: it is optional in
+        # ``TextIngestorInput`` (default ``False``) and no ContextBuilder source can build
+        # it, so declaring it required would fail closed on a valid job (065).
+        return ["task_id", "thread_id", "raw_text"]
 
     def get_available_tools(self) -> list[str]:
         return list(self._config.allowed_tools)

@@ -34,6 +34,7 @@ from palatium_ai.infrastructure.database.repositories import (
 )
 from palatium_ai.infrastructure.database.runtime import create_session_factory
 from palatium_ai.infrastructure.embeddings.factory import create_embedding_client_for_schema
+from palatium_ai.infrastructure.export.pdf import ContentDocumentPdfExporter
 from palatium_ai.infrastructure.graph.factory import build_graph_ports
 from palatium_ai.infrastructure.knowledge.postgres_knowledge_port import PostgresKnowledgePort
 from palatium_ai.infrastructure.mcp.consul_source import ConsulMCPSource
@@ -50,6 +51,16 @@ from palatium_ai.infrastructure.memory.graphiti_adapter import GraphitiMemoryPor
 from palatium_ai.infrastructure.memory.mem0_adapter import Mem0HttpTransport, Mem0MemoryPort
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
 from palatium_ai.infrastructure.web.factory import build_web_search_port
+
+# 050: narrow the previously generic ``except Exception`` — embedding wiring is optional,
+# but KeyboardInterrupt/SystemExit/MemoryError must never be swallowed.
+_EMBEDDING_WIRING_ERRORS: tuple[type[Exception], ...] = (
+    ValueError,
+    RuntimeError,
+    ImportError,
+    AttributeError,
+    KeyError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -93,7 +104,9 @@ class AppResources:
     memory_extract_hitl_service: MemoryExtractHitlService | None = None
     checkpointer_handle: CheckpointerHandle | None = None
     background_tasks: tuple[asyncio.Task[None], ...] = field(default_factory=tuple)
-    document_export_service: DocumentExportService = field(default_factory=DocumentExportService)
+    document_export_service: DocumentExportService = field(
+        default_factory=lambda: DocumentExportService(ContentDocumentPdfExporter()),
+    )
     session_timeline_service: SessionTimelineService | None = None
     hitl_respond_facade: HitlRespondFacade | None = None
     graph_port: GraphPort | None = None
@@ -124,7 +137,7 @@ async def load_mcp_servers_from_json_file(file_path: str) -> dict[str, str]:
             logger.warning("MCP servers file must contain a dict", path=str(path))
             return {}
         return {str(key): str(value) for key, value in data.items()}
-    except Exception as exc:
+    except (OSError, ValueError, TypeError) as exc:
         logger.error("Failed to load MCP servers from file", path=str(path), error=str(exc))
         return {}
 
@@ -160,7 +173,7 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
         embedding_client = None
         try:
             embedding_client = create_embedding_client_for_schema(settings, "memory")
-        except Exception as exc:
+        except _EMBEDDING_WIRING_ERRORS as exc:
             logger.warning("Memory embeddings disabled", error=str(exc))
         port = PostgresMemoryPort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]
         logger.info(
@@ -175,7 +188,7 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
                 raise RuntimeError("no memory-dim embedding provider for rerank")
             port = EmbeddingRerankMemoryPort(port, rerank_client)
             logger.info("MemoryPort: Postgres + embedding rerank")
-        except Exception as exc:
+        except _EMBEDDING_WIRING_ERRORS as exc:
             logger.warning("Memory embedding rerank disabled", error=str(exc))
     elif settings.memory.embedding_rerank:
         logger.info("MEMORY_EMBEDDING_RERANK ignored for non-postgres backend", backend=backend)
@@ -187,7 +200,7 @@ def _build_knowledge_port(settings: Settings, session_factory: object) -> Knowle
     embedding_client = None
     try:
         embedding_client = create_embedding_client_for_schema(settings, "knowledge")
-    except Exception as exc:
+    except _EMBEDDING_WIRING_ERRORS as exc:
         logger.warning("Knowledge embeddings disabled", error=str(exc))
     return PostgresKnowledgePort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]
 
@@ -223,7 +236,10 @@ async def startup(settings: Settings) -> AppResources:
     # `environment` уже добавляется в контекстvars в `setup_logging`, поэтому не дублируем поле `env`.
     logger.info(f"{settings.app.name} starting...")
 
-    await ensure_database_and_schema(settings)
+    try:
+        await asyncio.wait_for(ensure_database_and_schema(settings), timeout=settings.db.startup_timeout_seconds)
+    except TimeoutError as exc:
+        raise RuntimeError(f"Database init did not finish within {settings.db.startup_timeout_seconds:g}s") from exc
     await ensure_redis_connection(settings)
     redis_client = await create_redis_client(settings)
     await redis_client.ping()
@@ -383,7 +399,7 @@ async def startup(settings: Settings) -> AppResources:
         memory_extract_hitl_service=memory_extract_hitl_service,
         checkpointer_handle=checkpointer_handle,
         background_tasks=tuple(background_tasks),
-        document_export_service=DocumentExportService(),
+        document_export_service=DocumentExportService(ContentDocumentPdfExporter()),
         session_timeline_service=session_timeline_service,
         hitl_respond_facade=hitl_respond_facade,
         graph_port=graph_port,

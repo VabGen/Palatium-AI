@@ -23,9 +23,15 @@ class WorkflowExecutionPolicy:
         requires_mcp: bool,
     ) -> TaskKind:
         """Map declared kind → kind the Supervisor/Planner can actually execute."""
-        if task_kind != "multi_step_workflow":
-            return task_kind
-        return "tool_execution" if requires_mcp else "knowledge_request"
+        if task_kind == "multi_step_workflow":
+            return "tool_execution" if requires_mcp else "knowledge_request"
+        if task_kind == "social_conversation" and requires_mcp:
+            # Phatic handling (formatter route + ``ack_only``) is only valid while the
+            # turn needs no external tool: an MCP-needing ask is a tool request, and
+            # routing it to the Formatter would answer without ever calling the tool.
+            # Intent still labels it ``social_conversation`` for metrics (055).
+            return "tool_execution"
+        return task_kind
 
     @classmethod
     def plan_for(
@@ -35,14 +41,11 @@ class WorkflowExecutionPolicy:
         requires_mcp: bool,
         default_plans: dict[TaskKind, str],
     ) -> str:
-        """Honest plan text (no false multi-step claims)."""
+        """Honest plan text (no false multi-step claims, no plan contradicting the route)."""
+        executable = cls.executable_task_kind(task_kind, requires_mcp=requires_mcp)
+        base = default_plans.get(executable) or default_plans["clarification_needed"]
         if task_kind == "multi_step_workflow":
-            executable = cls.executable_task_kind(task_kind, requires_mcp=requires_mcp)
-            base = default_plans.get(executable) or default_plans["clarification_needed"]
             return (
                 f"multi_step_workflow is not decomposable yet; collapse to single worker pass as {executable}. {base}"
             )
-        plan = default_plans.get(task_kind)
-        if plan is None:
-            return default_plans["clarification_needed"]
-        return plan
+        return base

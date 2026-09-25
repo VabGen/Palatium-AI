@@ -108,6 +108,7 @@ class LiteLLMAdapter:
         self._base_url = config.get_base_url()
         self._default_model = config.get_default_model()
         self._provider = config.provider_name
+        self._timeout_seconds = config.get_timeout_seconds()
 
     def _build_params(
         self,
@@ -129,6 +130,9 @@ class LiteLLMAdapter:
             "api_base": self._base_url,
             "stream": stream,
         }
+        if self._timeout_seconds is not None:
+            # Forward the provider timeout so a hung completion cannot outlive the agent (020/050).
+            params["timeout"] = self._timeout_seconds
         if temperature is not None:
             params["temperature"] = temperature
         if max_tokens is not None:

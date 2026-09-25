@@ -18,7 +18,9 @@ alwaysApply: true
 - Точка входа API: `presentation/api/` → routers. WS: `presentation/websockets/`.
   Composition root (DI) — см. 000; запуск: `python -m palatium_ai` (или uvicorn-скриптом).
 - Оркестратор: `application/orchestration/graph.py` (StateGraph, узлы в `nodes.py`,
-  state — `orchestration/state.py`, 065).
+  state — `orchestration/state.py`, 065). Реестр агентов графа —
+  `orchestration/agent_registry.py` (`GraphAgents`): новый агент = строка реестра,
+  а не правки builder'а (3.2/OCP); id узлов — `core/types/graph_nodes.py`.
 - Контракты агентов: `domain/agents/base.py` + пакеты `application/agents/<name>/`
   (030). Harness: `application/agents/harness.py` (порт — `domain/ports/harness.py`).
 - Политики (ContinuityPolicy, CriticPolicy, RouteStrategy): `domain/policies/`,

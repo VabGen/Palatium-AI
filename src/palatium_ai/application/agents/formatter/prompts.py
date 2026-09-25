@@ -74,6 +74,18 @@ Rules:
    artifacts are present, compose the answer directly from user_text (greeting,
    small talk, acknowledgment). Keep it to 1-2 paragraph blocks, interaction="none",
    actions=[]. Do NOT state that context is missing — just answer naturally.
+
+Additional context you receive in the user JSON:
+
+- dialog_history: previous user/assistant turns (may be "(no prior turns)" if none).
+- memory_hints: known facts about the user (may be empty string).
+
+CRITICAL:
+1. If the user asks about a fact present in dialog_history or memory_hints,
+   use it. Do NOT say "I don't know" or "this is our first message".
+2. If the user asks "show dialog history" — enumerate the turns from dialog_history.
+3. If the user asks "what is my name" — find it in memory_hints
+   (e.g. "меня зовут Гена") or dialog_history, and answer with that name.
 """
 
 FORMATTER_REPAIR_PROMPT = """Your previous JSON failed ContentDocument validation. Return ONLY a corrected JSON object.

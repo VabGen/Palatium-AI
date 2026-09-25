@@ -43,6 +43,41 @@ def test_promotion_policy_requires_access_and_importance() -> None:
     assert PromotionPolicy.should_promote(already, thresholds=thresholds) is False
 
 
+def test_promotion_policy_rejects_blank_text() -> None:
+    """A row whose text is only whitespace is not promotable (nothing to store)."""
+    thresholds = PromotionThresholds(min_access_frequency=1, min_importance=0.0)
+    blank = PromotionCandidate(
+        namespace=("user", "u1"),
+        entry_key="blank",
+        text="   ",
+        importance=0.9,
+        access_frequency=5,
+        user_id="u1",
+        confidence=0.9,
+    )
+    assert PromotionPolicy.should_promote(blank, thresholds=thresholds) is False
+
+
+def test_effective_importance_treats_naive_timestamp_as_utc() -> None:
+    """Legacy rows may carry naive timestamps; recency must still be computed (060/010)."""
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    candidate = PromotionCandidate(
+        namespace=("user", "u1"),
+        entry_key="naive",
+        text="likes duck for dinner",
+        importance=0.0,
+        access_frequency=3,
+        user_id="u1",
+        confidence=0.9,
+        last_accessed=datetime(2026, 1, 1, 11, 0),  # naive on purpose
+    )
+
+    with_tz = candidate.model_copy(update={"last_accessed": datetime(2026, 1, 1, 11, 0, tzinfo=UTC)})
+    assert PromotionPolicy.effective_importance(candidate, now=now) == PromotionPolicy.effective_importance(
+        with_tz, now=now
+    )
+
+
 @pytest.mark.asyncio
 async def test_recall_bumps_access_frequency() -> None:
     port = InMemoryMemoryPort()

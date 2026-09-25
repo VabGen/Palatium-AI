@@ -1,43 +1,59 @@
-# Full local stack: Postgres + Redis + Neo4j + MCP stubs + API
+# =============================================================================
+# Full local stack: Postgres + Redis + Neo4j + MCP + LiteLLM Gateway + API
+# =============================================================================
+# From repo root — полный Docker-стек (docker-compose.override.yml держит
+# MCP/API за профилями, чтобы не конфликтовать с host-профилем Poetry):
+#   docker compose --env-file env/.env --profile docker-mcp --profile docker-api up --build
 #
-# From repo root:
-#   docker compose --env-file env/.env up --build
+# Только инфраструктура (host-профиль Poetry, см. START.md §4):
+#   docker compose --env-file env/.env up -d postgres redis neo4j litellm
 #
-# With Graphiti SDK in the API image (optional, needs Neo4j + poetry group):
+# With Graphiti SDK in the API image (optional):
 #   docker compose --env-file env/.env build --build-arg WITH_GRAPHITI=1 api
-#   docker compose --env-file env/.env up
 #
-# Switch memory backend (default postgres):
-#   MEMORY_BACKEND=postgres|mem0|graphiti
-# Mem0 is SaaS — set MEM0_API_KEY; no local Mem0 container.
+# Optional observability (Langfuse):
+#   docker compose --env-file env/.env --profile observability up -d langfuse
+#
+# Optional MCP gateways:
+#   docker compose --env-file env/.env --profile mcp-gateway up -d
 #
 # Health:
-#   API http://localhost:8000/health
-#   Neo4j Browser http://localhost:7474
-#   MCP EDMS http://localhost:8080/docs
+#   API         http://localhost:8000/health
+#   LiteLLM     http://localhost:4000/health/liveliness
+#   LiteLLM UI  http://localhost:4000/ui
+#   Neo4j       http://localhost:7474
+#   Langfuse    http://localhost:3000   (with --profile observability)
+#   MCP EDMS    http://localhost:8080/docs
 #   MCP Analytics http://localhost:8081/docs
+#
+# После смены модели:
+#   docker compose --env-file env/.env up -d --force-recreate litellm
+# =============================================================================
 
 name: palatium-ai
 
 services:
+  # ============================================================
+  # Data stores
+  # ============================================================
   postgres:
     # pgvector required by alembic memory/knowledge migrations (060).
-    # Official tags are Debian-based (no alpine): pg16, pg16-bookworm, …
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
-      POSTGRES_DB: ${POSTGRES_DB:-palatium_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
     ports:
       - "${POSTGRES_PUBLISH_PORT:-5432}:5432"
     volumes:
       - palatium_pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-palatium_dev}",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}",
         ]
       interval: 5s
       timeout: 5s
@@ -56,7 +72,7 @@ services:
     volumes:
       - palatium_redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -76,7 +92,6 @@ services:
     volumes:
       - palatium_neo4j:/data
     healthcheck:
-      # Password must match NEO4J_AUTH (default neo4j/palatium-neo4j).
       test:
         [
           "CMD-SHELL",
@@ -87,13 +102,101 @@ services:
       retries: 12
       start_period: 45s
 
+    # ============================================================
+  # LiteLLM Gateway — маршрутизатор tier-* → реальные провайдеры
+  # ============================================================
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: unless-stopped
+    ports:
+      - "${LITELLM_PUBLISH_PORT:-4000}:4000"
+    volumes:
+      - ./deploy/litellm/config.yaml:/app/config.yaml:ro
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--port"
+      - "4000"
+      - "--num_workers"
+      - "2"
+    env_file:
+      - ./env/.env
+    environment:
+      # --- LiteLLM scalars ---
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_DB_URL: ${LITELLM_DB_URL}
+      LITELLM_LOG: ${LITELLM_LOG:-INFO}
+
+      # =====================================================================
+      # TIER MAPPING — вот здесь задаётся какой провайдер обслуживает tier.
+      # Compose подставит ${QWEN_API_KEY} / ${QWEN_BASE_URL} / etc.
+      # из env/.env ДО старта контейнера. LiteLLM увидит TIER_* как обычные env.
+      #
+      # Чтобы переключить tier на другого провайдера — правьте здесь:
+      #   TIER_MID_API_KEY: ${OPENAI_API_KEY}
+      #   TIER_MID_API_BASE: ${OPENAI_BASE_URL}
+      #   TIER_MID_MODEL: openai/gpt-4o
+      # и делайте: docker compose up -d --force-recreate litellm
+      # =====================================================================
+
+      # ---- TIER NANO ----
+      TIER_NANO_MODEL: "openai/generative-model"
+      TIER_NANO_API_KEY: ${QWEN_API_KEY}
+      TIER_NANO_API_BASE: ${QWEN_BASE_URL}
+      TIER_NANO_TIMEOUT: "60"
+
+      # ---- TIER SMALL ----
+      TIER_SMALL_MODEL: "openai/generative-model"
+      TIER_SMALL_API_KEY: ${QWEN_API_KEY}
+      TIER_SMALL_API_BASE: ${QWEN_BASE_URL}
+      TIER_SMALL_TIMEOUT: "60"
+
+      # ---- TIER MID ----
+      TIER_MID_MODEL: "openai/generative-model"
+      TIER_MID_API_KEY: ${QWEN_API_KEY}
+      TIER_MID_API_BASE: ${QWEN_BASE_URL}
+      TIER_MID_TIMEOUT: "60"
+
+      # ---- TIER FRONTIER ----
+      TIER_FRONTIER_MODEL: "openai/generative-model"
+      TIER_FRONTIER_API_KEY: ${QWEN_API_KEY}
+      TIER_FRONTIER_API_BASE: ${QWEN_BASE_URL}
+      TIER_FRONTIER_TIMEOUT: "60"
+
+      # ---- TIER DEEP ----
+      TIER_DEEP_MODEL: "openai/generative-model"
+      TIER_DEEP_API_KEY: ${QWEN_API_KEY}
+      TIER_DEEP_API_BASE: ${QWEN_BASE_URL}
+      TIER_DEEP_TIMEOUT: "120"
+
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  # ============================================================
+  # MCP servers
+  # ============================================================
   mcp-edms:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: mcp_servers/Dockerfile
       args:
         MCP_NAME: edms
-        MCP_MODULE: edms_mcp_server
+        MCP_MODULE: mcp_servers.edms.edms_mcp_server
         MCP_PORT: "8080"
     image: palatium-mcp-edms:local
     restart: unless-stopped
@@ -129,7 +232,7 @@ services:
       dockerfile: mcp_servers/Dockerfile
       args:
         MCP_NAME: analytics
-        MCP_MODULE: analytics_mcp_server
+        MCP_MODULE: mcp_servers.analytics.analytics_mcp_server
         MCP_PORT: "8081"
     image: palatium-mcp-analytics:local
     restart: unless-stopped
@@ -159,17 +262,17 @@ services:
       retries: 3
       start_period: 10s
 
-  # Optional Phase 6 gateway (profile mcp-gateway): Host → gateway → stub/upstream.
-  # docker compose --profile mcp-gateway up
-  # Then point MCP_SERVERS edms/analytics at 8090/8091 (platform stays Host-local, never proxied).
+  # ============================================================
+  # Optional MCP gateways (profile: mcp-gateway)
+  # ============================================================
   mcp-gateway-edms:
-    profiles: ["mcp-gateway"]
+    profiles: [ "mcp-gateway" ]
     build:
       context: .
       dockerfile: mcp_servers/Dockerfile
       args:
         MCP_NAME: gateway
-        MCP_MODULE: gateway_mcp_server
+        MCP_MODULE: mcp_servers.gateway.gateway_mcp_server
         MCP_PORT: "8090"
     image: palatium-mcp-gateway-edms:local
     restart: unless-stopped
@@ -206,13 +309,13 @@ services:
       start_period: 15s
 
   mcp-gateway-analytics:
-    profiles: ["mcp-gateway"]
+    profiles: [ "mcp-gateway" ]
     build:
       context: .
       dockerfile: mcp_servers/Dockerfile
       args:
         MCP_NAME: gateway
-        MCP_MODULE: gateway_mcp_server
+        MCP_MODULE: mcp_servers.gateway.gateway_mcp_server
         MCP_PORT: "8091"
     image: palatium-mcp-gateway-analytics:local
     restart: unless-stopped
@@ -248,6 +351,30 @@ services:
       retries: 3
       start_period: 15s
 
+  # ============================================================
+  # Optional observability (profile: observability)
+  # docker compose --env-file env/.env up -d postgres
+  # docker compose --env-file env/.env exec postgres psql -U postgres -c "CREATE DATABASE langfuse;"
+  # docker compose exec postgres psql -U postgres -c "\l" | Select-String "litellm"
+  # ============================================================
+  langfuse:
+    profiles: [ "observability" ]
+    image: langfuse/langfuse:2
+    restart: unless-stopped
+    ports:
+      - "${LANGFUSE_PUBLISH_PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: ${LANGFUSE_DB_URL:-postgresql://postgres:1234@postgres:5432/langfuse}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-in-production-min-32-chars}
+      SALT: ${LANGFUSE_SALT:-change-me-in-production-min-32-chars}
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ============================================================
+  # Main API
+  # ============================================================
   api:
     build:
       context: .
@@ -269,26 +396,30 @@ services:
       neo4j:
         condition: service_healthy
       mcp-edms:
-        condition: service_healthy
+        condition: service_started
       mcp-analytics:
+        condition: service_started
+      litellm:
         condition: service_healthy
     env_file:
       - ./env/.env
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
-      # Compose DNS — never localhost from env/.env (Poetry host profile)
+      # Compose DNS overrides — never localhost from env/.env (Poetry host profile)
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
-      POSTGRES_DB: ${POSTGRES_DB:-palatium_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # MCP service discovery
       MCP_SERVERS: '{"edms":"http://mcp-edms:8080","analytics":"http://mcp-analytics:8081"}'
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
       MCP_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,::1,mcp-edms,mcp-analytics,mcp-platform
+      # Graph/checkpoint
       LANGGRAPH_CHECKPOINT_POSTGRES: ${LANGGRAPH_CHECKPOINT_POSTGRES:-true}
       MEMORY_BACKEND: ${MEMORY_BACKEND:-postgres}
       MEMORY_EMBEDDING_RERANK: ${MEMORY_EMBEDDING_RERANK:-false}
@@ -297,13 +428,22 @@ services:
       GRAPHITI_NEO4J_PASSWORD: ${GRAPHITI_NEO4J_PASSWORD:-palatium-neo4j}
       MEM0_API_KEY: ${MEM0_API_KEY:-}
       MEM0_HOST: ${MEM0_HOST:-https://api.mem0.ai}
+      # Runtime
       RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
       UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       AUDIT_LOG_FILE: /app/logs/audit-chain.log
+      # LLM Gateway — приложение ходит ТОЛЬКО сюда
+      PALATIUM_GATEWAY_URL: ${PALATIUM_GATEWAY_URL:-http://litellm:4000}
+      # Scoped virtual key (scripts/litellm-provision-key.ps1). Falls back to the
+      # master key if unset/empty so a missing app key can never cause a silent 401.
+      PALATIUM_GATEWAY_KEY: ${PALATIUM_GATEWAY_KEY:-${LITELLM_MASTER_KEY}}
+      # Observability (optional)
       LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
-      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
     read_only: true
     tmpfs:
       - /app/tmp:size=64m,mode=1777
@@ -321,12 +461,31 @@ services:
           "-c",
           "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
         ]
-      interval: 30s
+      interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 30s
 
 volumes:
   palatium_pgdata:
   palatium_redis:
   palatium_neo4j:
+
+networks:
+  default:
+    name: palatium-net
+    external: true
+
+
+
+## 1. Поднять прокси на хосте
+#  pip install mitmproxy
+#  mitmdump --listen-port 8899
+#
+## 2. В docker-compose.yml → litellm.environment добавить:
+# HTTP_PROXY: "http://host.docker.internal:8899"
+# HTTPS_PROXY: "http://host.docker.internal:8899"
+# NO_PROXY: "localhost,127.0.0.1,redis,postgres"
+#
+## 3. Перезапустить
+#  docker compose up -d --force-recreate litellm

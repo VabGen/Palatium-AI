@@ -106,6 +106,7 @@ def test_route_after_quality_revision_by_strategy() -> None:
 def test_graph_topology_has_revision_loop() -> None:
     from palatium_ai.application.agents.harness import Harness
     from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
+    from palatium_ai.application.orchestration.agent_registry import GraphAgents
     from palatium_ai.application.orchestration.graph import build_agent_graph
     from tests.conftest import (
         FakeLLMPort,
@@ -121,16 +122,18 @@ def test_graph_topology_has_revision_loop() -> None:
 
     harness = Harness(llm=FakeLLMPort("{}"))
     graph = build_agent_graph(
+        GraphAgents(
+            intent_agent=IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG),  # type: ignore[arg-type]
+            supervisor_agent=make_supervisor_agent(harness),
+            continuation_agent=make_continuation_agent(harness=harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(FakeLLMPort("{}"), harness=harness),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(FakeLLMPort("{}")),
+            formatter_agent=make_formatter_agent(FakeLLMPort("{}")),
+        ),
         harness=harness,
-        intent_agent=IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG),  # type: ignore[arg-type]
-        supervisor_agent=make_supervisor_agent(harness),
-        continuation_agent=make_continuation_agent(harness=harness),
-        weaving_agent=make_weaving_agent(harness=harness),
-        researcher_agent=make_researcher_agent(FakeLLMPort("{}"), harness=harness),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(FakeLLMPort("{}")),
-        formatter_agent=make_formatter_agent(FakeLLMPort("{}")),
     )
     edges = {(e.source, e.target) for e in graph.get_graph().edges}
     assert (NODE_CODER, "critic") in edges

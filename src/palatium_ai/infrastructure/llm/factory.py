@@ -4,9 +4,14 @@
 
 from __future__ import annotations
 
+import time
+
 from typing import TYPE_CHECKING
 
 import structlog
+
+from palatium_ai.core.observability.metrics import agent_metrics
+from palatium_ai.core.resilience import CircuitOpenError, ConsecutiveFailureCircuit
 
 from .litellm_adapter import LiteLLMAdapter
 
@@ -26,16 +31,39 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "anthropic", "ollama", "qwen"})
+_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "anthropic", "ollama", "qwen", "gateway"})
 # One log line per missing-key provider per process (wiring calls this per agent).
 _SKIPPED_NO_KEY_LOGGED: set[str] = set()
+# Fallbacks when Settings has no observability block (unit tests, ad-hoc factories).
+_FALLBACK_FAILURES_TO_OPEN = 3
+_FALLBACK_OPEN_SECONDS = 30.0
+# Prometheus label for palatium_circuit_breaker_state (040: single label `target`).
+_LLM_CIRCUIT_PREFIX = "llm:"
 
 
 class LLMClientFactory:
-    """Создаёт LLMPort для указанного провайдера."""
+    """Создаёт LLMPort для указанного провайдера.
+
+    Owns the per-provider circuit breakers. State is keyed by provider name and lives
+    on the factory, which the composition root creates once — so a provider that is
+    failing fast for one agent is skipped fast for every other agent too.
+    """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._circuits: dict[str, ConsecutiveFailureCircuit] = {}
+
+    def _circuit_for(self, provider: str) -> ConsecutiveFailureCircuit:
+        """Shared breaker for one provider (thresholds from ObservabilityConfig)."""
+        circuit = self._circuits.get(provider)
+        if circuit is None:
+            observability = getattr(self._settings, "observability", None)
+            circuit = ConsecutiveFailureCircuit(
+                failures_to_open=int(getattr(observability, "circuit_failures_to_open", _FALLBACK_FAILURES_TO_OPEN)),
+                open_seconds=float(getattr(observability, "circuit_open_seconds", _FALLBACK_OPEN_SECONDS)),
+            )
+            self._circuits[provider] = circuit
+        return circuit
 
     def get_client(self, provider_name: str | None = None) -> LLMPort:
         """Возвращает адаптер для провайдера (или default из настроек)."""
@@ -67,7 +95,8 @@ class LLMClientFactory:
         model = agent_config.llm_model or tier.model
         chain = self._settings.llm.build_provider_chain(primary)
         env = self._settings.app.environment
-        if env in {"staging", "production"} and len(chain) < 2:
+        is_single_gateway = chain == ("gateway",)
+        if env in {"staging", "production"} and len(chain) < 2 and not is_single_gateway:
             msg = "LLM fallback chain must include >=2 providers in staging/production"
             raise RuntimeError(msg)
         if len(chain) < 2:
@@ -100,7 +129,7 @@ class LLMClientFactory:
         if not adapters:
             raise ValueError(f"No usable LLM providers in chain starting with {primary!r}")
 
-        if env in {"staging", "production"} and len(adapters) < 2:
+        if env in {"staging", "production"} and len(adapters) < 2 and not is_single_gateway:
             msg = "LLM fallback chain must resolve to >=2 credentialed providers in staging/production"
             raise RuntimeError(msg)
 
@@ -108,7 +137,8 @@ class LLMClientFactory:
             port = adapters[0][1]
             return _AgentModelLLMAdapter(port, model) if model else port
 
-        return _FallbackChainLLMAdapter(adapters, primary_model=model)
+        circuits = {provider: self._circuit_for(provider) for provider, _ in adapters}
+        return _FallbackChainLLMAdapter(adapters, primary_model=model, circuits=circuits)
 
 
 class _AgentModelLLMAdapter:
@@ -155,16 +185,67 @@ class _AgentModelLLMAdapter:
 
 
 class _FallbackChainLLMAdapter:
-    """Try providers in order; model override applies only to the primary entry."""
+    """Try providers in order; model override applies only to the primary entry.
+
+    Per-provider circuit breakers make a dead provider cheap to skip: without them,
+    every call pays the full provider timeout before failing over (see 020).
+    """
 
     def __init__(
         self,
         adapters: list[tuple[str, LLMPort]],
         *,
         primary_model: str | None,
+        circuits: dict[str, ConsecutiveFailureCircuit] | None = None,
     ) -> None:
         self._adapters = adapters
         self._primary_model = primary_model
+        self._circuits: dict[str, ConsecutiveFailureCircuit] = dict(circuits or {})
+
+    def _circuit(self, provider: str) -> ConsecutiveFailureCircuit:
+        circuit = self._circuits.get(provider)
+        if circuit is None:
+            circuit = ConsecutiveFailureCircuit()
+            self._circuits[provider] = circuit
+        return circuit
+
+    def _acquire(self, provider: str, errors: list[str], open_circuits: list[tuple[str, float]]) -> bool:
+        """Claim permission to call ``provider``; record why when refused.
+
+        ``is_open`` is a pure read (it may promote open → half_open); ``allow_request``
+        is what consumes the single half-open probe, so it must run exactly once.
+        """
+        circuit = self._circuit(provider)
+        now = time.monotonic()
+        if circuit.is_open(now):
+            agent_metrics.record_circuit_state(f"{_LLM_CIRCUIT_PREFIX}{provider}", circuit.state_code())
+            retry_after = max(0.0, circuit.open_until - now)
+            open_circuits.append((provider, retry_after))
+            errors.append(f"{provider}: circuit open (retry after ~{retry_after:.0f}s)")
+            return False
+        if not circuit.allow_request(now):
+            # Lost the half-open probe race against a concurrent call.
+            errors.append(f"{provider}: half-open probe already in flight")
+            return False
+        return True
+
+    def _record(self, provider: str, *, failed: bool) -> None:
+        circuit = self._circuit(provider)
+        if failed:
+            circuit.record_failure(time.monotonic())
+        else:
+            circuit.record_success()
+        agent_metrics.record_circuit_state(f"{_LLM_CIRCUIT_PREFIX}{provider}", circuit.state_code())
+
+    def _raise_exhausted(self, errors: list[str], open_circuits: list[tuple[str, float]]) -> None:
+        """Fail fast when every provider is breaker-open; otherwise report real errors."""
+        if open_circuits and len(open_circuits) == len(self._adapters):
+            provider, retry_after = min(open_circuits, key=lambda item: item[1])
+            raise CircuitOpenError(
+                f"{_LLM_CIRCUIT_PREFIX}{provider}",
+                retry_after_seconds=retry_after,
+            )
+        raise RuntimeError("All LLM providers in fallback chain failed: " + " | ".join(errors))
 
     async def generate(
         self,
@@ -176,7 +257,10 @@ class _FallbackChainLLMAdapter:
         response_format: LLMResponseFormat | None = None,
     ) -> LLMCompletion:
         errors: list[str] = []
+        open_circuits: list[tuple[str, float]] = []
         for index, (provider, port) in enumerate(self._adapters):
+            if not self._acquire(provider, errors, open_circuits):
+                continue
             model_arg = model
             if model_arg is None and index == 0:
                 model_arg = self._primary_model
@@ -188,15 +272,8 @@ class _FallbackChainLLMAdapter:
                     max_tokens=max_tokens,
                     response_format=response_format,
                 )
-                if index > 0:
-                    logger.warning(
-                        "llm.fallback.used",
-                        provider=provider,
-                        attempt=index + 1,
-                        chain_size=len(self._adapters),
-                    )
-                return completion
             except Exception as exc:
+                self._record(provider, failed=True)
                 errors.append(f"{provider}: {exc}")
                 logger.warning(
                     "llm.fallback.try_next",
@@ -204,7 +281,18 @@ class _FallbackChainLLMAdapter:
                     attempt=index + 1,
                     error=str(exc),
                 )
-        raise RuntimeError("All LLM providers in fallback chain failed: " + " | ".join(errors))
+                continue
+            self._record(provider, failed=False)
+            if index > 0:
+                logger.warning(
+                    "llm.fallback.used",
+                    provider=provider,
+                    attempt=index + 1,
+                    chain_size=len(self._adapters),
+                )
+            return completion
+        self._raise_exhausted(errors, open_circuits)
+        raise AssertionError("unreachable: _raise_exhausted always raises")  # pragma: no cover
 
     async def generate_stream(
         self,
@@ -216,7 +304,10 @@ class _FallbackChainLLMAdapter:
         response_format: LLMResponseFormat | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         errors: list[str] = []
+        open_circuits: list[tuple[str, float]] = []
         for index, (provider, port) in enumerate(self._adapters):
+            if not self._acquire(provider, errors, open_circuits):
+                continue
             model_arg = model
             if model_arg is None and index == 0:
                 model_arg = self._primary_model
@@ -230,8 +321,8 @@ class _FallbackChainLLMAdapter:
                 )
                 async for delta in stream:
                     yield delta
-                return
             except Exception as exc:
+                self._record(provider, failed=True)
                 errors.append(f"{provider}: {exc}")
                 logger.warning(
                     "llm.fallback.stream_try_next",
@@ -239,7 +330,10 @@ class _FallbackChainLLMAdapter:
                     attempt=index + 1,
                     error=str(exc),
                 )
-        raise RuntimeError("All LLM providers in fallback chain failed (stream): " + " | ".join(errors))
+                continue
+            self._record(provider, failed=False)
+            return
+        self._raise_exhausted(errors, open_circuits)
 
 
 def create_llm_client(settings: Settings, provider_name: str | None = None) -> LLMPort:

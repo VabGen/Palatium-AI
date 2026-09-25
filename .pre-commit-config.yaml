@@ -1,0 +1,68 @@
+# Local quality gates that mirror `scripts/ci_quality.py` (rules 000 / 050 / 075).
+#
+# Install once:  poetry run pre-commit install
+# Run on all files: poetry run pre-commit run --all-files
+#
+# Scope note: this file mirrors *fast* CI gates only. The full pytest suite +
+# coverage floors stay in CI (`ci_quality.py`) because they are too slow for a
+# commit hook. Secret scanning stays in CI too — the gitleaks job runs with
+# `fetch-depth: 0` so it scans every commit of the PR; a pre-commit hook would
+# only see the staged diff and would give false confidence (050).
+minimum_pre_commit_version: "3.5.0"
+default_install_hook_types: [pre-commit, pre-push]
+fail_fast: false
+
+# Rule 090: `mcp_servers/edms/JavaEdms/` is a read-only reference (someone else's
+# code) — no hook may rewrite a byte of it.
+exclude: ^mcp_servers/edms/JavaEdms/
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-case-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+        exclude: ^(\.cursor/|web/src/)
+      - id: trailing-whitespace
+        # Markdown uses two trailing spaces as a hard line break — stripping them
+        # silently joins paragraph lines and changes rendered docs.
+        exclude: ^(\.cursor/|web/src/)|\.md$
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Keep in sync with the `ruff` version in pyproject.toml (dev group).
+    rev: v0.16.8
+    hooks:
+      - id: ruff
+        name: ruff check (includes S/security selectors)
+        # `--force-exclude`: pre-commit passes files explicitly, and ruff only applies
+        # the repo's `exclude`/`respect-gitignore` rules to *discovered* paths — so
+        # without this flag the hook lints files `ruff check .` (CI) never sees.
+        args: ["--fix", "--exit-non-zero-on-fix", "--force-exclude"]
+      - id: ruff-format
+        args: ["--force-exclude"]
+
+  - repo: local
+    hooks:
+      # Rule 000 hexagonal contract — same checker CI runs, no extra dependency
+      # (import-linter cannot currently be installed; see the script docstring).
+      - id: check-import-layers
+        name: import layers (000-architecture)
+        entry: python scripts/check_import_layers.py
+        language: system
+        pass_filenames: false
+        files: ^src/palatium_ai/.*\.py$
+
+      # `--strict` on the platform package + MCP stubs (pyproject: mypy_path).
+      - id: mypy-strict
+        name: mypy --strict (src/palatium_ai)
+        entry: mypy --strict src/palatium_ai
+        language: system
+        pass_filenames: false
+        files: \.py$
+        stages: [pre-push]

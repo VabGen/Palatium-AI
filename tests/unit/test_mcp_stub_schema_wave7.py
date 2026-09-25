@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 
 from pathlib import Path
@@ -33,34 +34,40 @@ from palatium_ai.domain.mcp.tool_policy import (
     schema_fingerprint,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_MCP_ROOT = _REPO_ROOT / "mcp_servers"
+_MCP_ROOT = Path(__file__).resolve().parents[2] / "mcp_servers"
 
 
-def _load_stub_server(module_name: str, package_dir: Path) -> object:
-    """Import stub server with mcp_servers + src on path (same as Docker/dev-up)."""
-    for path in (_MCP_ROOT, _REPO_ROOT / "src", package_dir):
-        path_s = str(path)
-        if path_s not in sys.path:
-            sys.path.insert(0, path_s)
-    for mod in (module_name, "mcp_stub_runtime", "mcp_stub_auth", "contract", "schema_util"):
-        sys.modules.pop(mod, None)
-    return __import__(module_name)
+def _load_stub_server(module_path: str) -> object:
+    """Import a stub server as a package module — the layout dev-up and the image use.
+
+    No ``sys.path`` juggling: putting ``mcp_servers/`` (or ``mcp_servers/platform``) on
+    the path shadows the stdlib ``platform`` module and breaks unrelated imports.
+    """
+    for mod in tuple(sys.modules):
+        if mod == module_path or mod == "mcp_servers" or mod.startswith("mcp_servers."):
+            sys.modules.pop(mod, None)
+    # Stub auth is fail-closed (020): a token must exist while the module mints its
+    # verifier. The value is never used here — only the registered tool schemas are read.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("MCP_AUTH_TOKEN", "wave7-stub-schema-token")
+        mp.delenv("MCP_JWT_SECRET", raising=False)
+        mp.delenv("MCP_ALLOW_ANON", raising=False)
+        return importlib.import_module(module_path)
 
 
 @pytest.fixture(scope="module")
 def edms_stub() -> object:
-    return _load_stub_server("edms_mcp_server", _MCP_ROOT / "edms")
+    return _load_stub_server("mcp_servers.edms.edms_mcp_server")
 
 
 @pytest.fixture(scope="module")
 def analytics_stub() -> object:
-    return _load_stub_server("analytics_mcp_server", _MCP_ROOT / "analytics")
+    return _load_stub_server("mcp_servers.analytics.analytics_mcp_server")
 
 
 @pytest.fixture(scope="module")
 def platform_stub() -> object:
-    return _load_stub_server("platform_mcp_server", _MCP_ROOT / "platform")
+    return _load_stub_server("mcp_servers.platform.platform_mcp_server")
 
 
 @pytest.mark.asyncio

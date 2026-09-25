@@ -44,6 +44,9 @@ htmlcov/
 .ruff_cache/
 .tox/
 
+# Диагностический отчёт (scripts/diag-report.ps1) — env-зависимый вывод логов
+diag-report.txt
+
 # Редакторы
 # .vscode/
 .idea/

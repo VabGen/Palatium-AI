@@ -11,6 +11,7 @@ from typing import Any
 
 from palatium_ai.application.agents.evals.cassette import load_cassette_response
 from palatium_ai.application.agents.evals.judge_client import (
+    EvalJudgeClientFactory,
     assert_provider_independence,
     create_eval_judge_llm,
     resolve_judge_model,
@@ -33,6 +34,10 @@ def grade_from_judge_payload(payload: dict[str, Any], *, threshold: float) -> Gr
 
 class LlmJudgeGrader:
     kind = "llm_judge"
+
+    def __init__(self, *, llm_factory: EvalJudgeClientFactory | None = None) -> None:
+        # Injected by the composition root; cassette grading needs no factory at all.
+        self._llm_factory = llm_factory
 
     async def grade(self, task: dict[str, Any], output: dict[str, Any]) -> GradeResult:
         if not output:
@@ -78,9 +83,17 @@ class LlmJudgeGrader:
                 judge_provider=judge_provider,
                 generator_provider=generator_provider if isinstance(generator_provider, str) else None,
             )
-            llm = create_eval_judge_llm()
         except ValueError as exc:
             return failed(0.0, details=str(exc))
+
+        # Config validation comes first, so a misconfigured provider surfaces the
+        # provider-independence error rather than the missing-factory error.
+        if self._llm_factory is None:
+            return failed(
+                0.0,
+                details="live judge requires an injected EvalJudgeClientFactory (composition root)",
+            )
+        llm = create_eval_judge_llm(self._llm_factory)
 
         messages = [
             ChatMessage(role="system", content=JUDGE_SYSTEM_PROMPT),

@@ -29,3 +29,14 @@ class LLMProviderConfig(BaseConfig, ABC):
     def get_default_model(self) -> str:
         """Возвращает модель по умолчанию для данного провайдера."""
         ...
+
+    def get_timeout_seconds(self) -> float | None:
+        """Per-provider request timeout (seconds); ``None`` → provider/LiteLLM default.
+
+        Concrete providers declare a ``timeout`` field; the adapter must forward it so the
+        configured value is not dead config (050, 020).
+        """
+        raw = getattr(self, "timeout", None)
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+            return float(raw)
+        return None

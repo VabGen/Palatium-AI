@@ -14,6 +14,14 @@ from palatium_ai.application.agents.evals.runner import (
     load_nightly_tasks,
     run_all_nightly_evals,
 )
+from palatium_ai.core.config.settings import get_settings
+from palatium_ai.domain.ports.llm import LLMPort
+from palatium_ai.infrastructure.llm.factory import create_llm_client
+
+
+def _judge_llm_factory(provider: str) -> LLMPort:
+    """Composition root for the eval judge: injects the concrete LLM adapter."""
+    return create_llm_client(get_settings(), provider)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -47,7 +55,7 @@ async def _main() -> int:
         print("agent_evals_nightly: no llm_judge tasks configured (SKIP)")
         return 0
 
-    reports = await run_all_nightly_evals()
+    reports = await run_all_nightly_evals(llm_factory=_judge_llm_factory)
     report = reports["nightly"]
     print(f"nightly: {report.passed}/{report.total} passed (score={report.score:.3f})")
     for detail in report.details:

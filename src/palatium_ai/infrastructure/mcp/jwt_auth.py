@@ -19,6 +19,7 @@ from palatium_ai.domain.mcp.auth_policy import (
 
 if TYPE_CHECKING:
     from palatium_ai.core.config.mcp import MCPConfig
+    from palatium_ai.core.config.settings import Settings
 
 
 def issue_mcp_access_token(
@@ -78,3 +79,14 @@ def resolve_mcp_bearer(
     if mcp.auth_token is None:
         return None
     return mcp.auth_token.get_secret_value()
+
+
+def resolve_settings_bearer(settings: Settings, server_name: str) -> str | None:
+    """Resolve the Host→MCP bearer straight from ``Settings`` (infrastructure-side).
+
+    Lives here — not on ``Settings`` — so ``core/`` never imports ``infrastructure/``
+    (rule 000 layer contract, enforced by ``scripts/check_import_layers.py``).
+    """
+    resolver = getattr(settings, "mcp_jwt_signing_secret", None)
+    signing_secret = resolver() if callable(resolver) else None
+    return resolve_mcp_bearer(settings.mcp, server_name, signing_secret=signing_secret)

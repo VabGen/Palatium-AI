@@ -68,8 +68,13 @@ def ws_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     app.state.security_config = security
     app.state.token_service = JwtTokenService(security)
     resources = SimpleNamespace(
-        session_service=AsyncMock(
-            return_value=SimpleNamespace(user_id="user-1", thread_id="th-1"),
+        # ``AsyncMock(return_value=...)`` only configures the mock itself; attribute
+        # access yields a *different* child mock, so the session lookup would return a
+        # bare AsyncMock and the ownership check would deny the owner (020).
+        session_service=SimpleNamespace(
+            get_session=AsyncMock(
+                return_value=SimpleNamespace(user_id="user-1", thread_id="th-1"),
+            ),
         ),
     )
     monkeypatch.setattr(ws_session, "get_app_resources", lambda _app: resources)

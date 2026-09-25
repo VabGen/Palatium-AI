@@ -1,1 +1,182 @@
-# tests/unit/test_graph_web_mcp.py"""graph_query / web_fallback MCP tools + Cypher safety."""from __future__ import annotationsimport jsonimport pytestfrom palatium_ai.domain.graph.cypher_safety import assert_params_cover_refs, assert_read_only_cypherfrom palatium_ai.infrastructure.graph.in_memory_graph_port import InMemoryGraphPortfrom palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePortfrom palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandlerfrom palatium_ai.infrastructure.web.stub_web_search_port import StubWebSearchPortdef test_cypher_rejects_write_clauses() -> None:    with pytest.raises(ValueError, match="read-only"):        assert_read_only_cypher("MATCH (n) DELETE n RETURN n")def test_cypher_rejects_string_interpolation() -> None:    with pytest.raises(ValueError, match="interpolation"):        assert_read_only_cypher('MATCH (n) WHERE n.id = " + user_id + " RETURN n')def test_cypher_requires_bound_params() -> None:    with pytest.raises(ValueError, match="missing Cypher params"):        assert_params_cover_refs(            "MATCH (d:Document) WHERE d.user_id = $uid RETURN d LIMIT $lim",            {"uid": "u1"},        )@pytest.mark.asyncioasync def test_graph_query_handler_returns_row() -> None:    handler = PlatformToolHandler(        knowledge_port=InMemoryKnowledgePort(),        graph_port=InMemoryGraphPort(),    )    result = await handler.call_tool(        "graph_query",        {            "user_id": "user-1",            "cypher": "MATCH (d:Document) WHERE d.user_id = $user_id RETURN d LIMIT $lim",            "params_json": json.dumps({"user_id": "user-1", "lim": 5}),        },    )    assert result.is_error is False    payload = json.loads(result.content[0]["text"])    assert payload["row_count"] == 1    assert payload["rows"][0]["user_id"] == "user-1"@pytest.mark.asyncioasync def test_graph_query_overwrites_params_user_id() -> None:    """Defense-in-depth: params_json.user_id must not stick to a foreign tenant."""    handler = PlatformToolHandler(        knowledge_port=InMemoryKnowledgePort(),        graph_port=InMemoryGraphPort(),    )    result = await handler.call_tool(        "graph_query",        {            "user_id": "user-actor",            "cypher": "MATCH (d:Document) WHERE d.user_id = $user_id RETURN d LIMIT $lim",            "params_json": json.dumps({"user_id": "user-victim", "lim": 5}),        },    )    assert result.is_error is False    payload = json.loads(result.content[0]["text"])    assert payload["rows"][0]["user_id"] == "user-actor"@pytest.mark.asyncioasync def test_graph_query_rejects_merge() -> None:    handler = PlatformToolHandler(        knowledge_port=InMemoryKnowledgePort(),        graph_port=InMemoryGraphPort(),    )    result = await handler.call_tool(        "graph_query",        {            "user_id": "user-1",            "cypher": "MERGE (n:Doc {id: $id}) RETURN n",            "params_json": json.dumps({"id": "x"}),        },    )    assert result.is_error is True@pytest.mark.asyncioasync def test_web_fallback_tags_source() -> None:    handler = PlatformToolHandler(        knowledge_port=InMemoryKnowledgePort(),        web_search_port=StubWebSearchPort(),    )    result = await handler.call_tool(        "web_fallback",        {"user_id": "user-1", "query": "Palatium architecture", "max_results": "3"},    )    assert result.is_error is False    payload = json.loads(result.content[0]["text"])    assert payload["source"] == "web"    assert payload["reliability"] == "external_unverified"    assert payload["provider"] == "stub"
+# tests/unit/test_graph_web_mcp.py
+
+"""graph_query / web_fallback MCP tools + Cypher safety."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from palatium_ai.domain.graph.cypher_safety import (
+    assert_graph_query_safe,
+    assert_params_cover_refs,
+    assert_read_only_cypher,
+)
+from palatium_ai.infrastructure.graph.in_memory_graph_port import InMemoryGraphPort
+from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
+from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
+from palatium_ai.infrastructure.web.stub_web_search_port import StubWebSearchPort
+
+
+def test_cypher_rejects_write_clauses() -> None:
+    with pytest.raises(ValueError, match="read-only"):
+        assert_read_only_cypher("MATCH (n) DELETE n RETURN n")
+
+
+def test_cypher_rejects_string_interpolation() -> None:
+    with pytest.raises(ValueError, match="interpolation"):
+        assert_read_only_cypher('MATCH (n) WHERE n.id = " + user_id + " RETURN n')
+
+
+@pytest.mark.parametrize(
+    "cypher",
+    [
+        "MATCH (n) WHERE n.id = %s RETURN n",  # noqa: UP031 - % formatting is the thing under test
+        'MATCH (n) WHERE n.id = f"{uid}" RETURN n',
+        "MATCH (n {user_id}) RETURN n",  # f-string placeholder left in the text
+        "MATCH (n {kind: 'fact'}) RETURN n",  # inlined literal instead of $param
+        "MATCH (n {user_id: $user_id, kind: 'fact'}) RETURN n",  # mixed: literal still inlined
+    ],
+)
+def test_cypher_rejects_values_embedded_in_query_text(cypher: str) -> None:
+    """Rule 070: values must be bound, so any embedded value is refused."""
+    with pytest.raises(ValueError, match="interpolation"):
+        assert_read_only_cypher(cypher)
+
+
+@pytest.mark.parametrize(
+    "cypher",
+    [
+        "MATCH (f:Fact {user_id: $user_id}) RETURN f.text AS fact LIMIT $lim",
+        "MATCH (n {}) RETURN n",
+        "MATCH (n {user_id: $user_id, org_id: $org_id}) RETURN n",
+    ],
+)
+def test_cypher_allows_property_maps_bound_to_params(cypher: str) -> None:
+    """Regression: the property-map form is the canonical pattern, not interpolation."""
+    assert_read_only_cypher(cypher)
+
+
+def test_cypher_requires_bound_params() -> None:
+    with pytest.raises(ValueError, match="missing Cypher params"):
+        assert_params_cover_refs(
+            "MATCH (d:Document) WHERE d.user_id = $uid RETURN d LIMIT $lim",
+            {"uid": "u1"},
+        )
+
+
+def test_graph_query_requires_tenant_scope() -> None:
+    """070: an unscoped read must be rejected before it reaches the driver (cross-tenant leak)."""
+    with pytest.raises(ValueError, match="tenant"):
+        assert_graph_query_safe("MATCH (n) RETURN n", {"user_id": "u1"})
+
+
+@pytest.mark.asyncio
+async def test_graph_query_handler_returns_row() -> None:
+    handler = PlatformToolHandler(
+        knowledge_port=InMemoryKnowledgePort(),
+        graph_port=InMemoryGraphPort(),
+    )
+
+    result = await handler.call_tool(
+        "graph_query",
+        {
+            "user_id": "user-1",
+            "cypher": "MATCH (d:Document) WHERE d.user_id = $user_id RETURN d LIMIT $lim",
+            "params_json": json.dumps({"user_id": "user-1", "lim": 5}),
+        },
+    )
+
+    assert result.is_error is False
+
+    payload = json.loads(result.content[0]["text"])
+
+    assert payload["row_count"] == 1
+    assert payload["rows"][0]["user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_graph_query_handler_rejects_unscoped_cypher() -> None:
+    """070: handler must surface tenant-scope violations as a structured MCP error, not rows."""
+    handler = PlatformToolHandler(
+        knowledge_port=InMemoryKnowledgePort(),
+        graph_port=InMemoryGraphPort(),
+    )
+
+    result = await handler.call_tool(
+        "graph_query",
+        {
+            "user_id": "user-1",
+            "cypher": "MATCH (n) RETURN n LIMIT $lim",
+            "params_json": json.dumps({"lim": 5}),
+        },
+    )
+
+    assert result.is_error is True
+    assert "tenant" in result.content[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_graph_query_overwrites_params_user_id() -> None:
+    """Defense-in-depth: params_json.user_id must not stick to a foreign tenant."""
+
+    handler = PlatformToolHandler(
+        knowledge_port=InMemoryKnowledgePort(),
+        graph_port=InMemoryGraphPort(),
+    )
+
+    result = await handler.call_tool(
+        "graph_query",
+        {
+            "user_id": "user-actor",
+            "cypher": "MATCH (d:Document) WHERE d.user_id = $user_id RETURN d LIMIT $lim",
+            "params_json": json.dumps({"user_id": "user-victim", "lim": 5}),
+        },
+    )
+
+    assert result.is_error is False
+
+    payload = json.loads(result.content[0]["text"])
+
+    assert payload["rows"][0]["user_id"] == "user-actor"
+
+
+@pytest.mark.asyncio
+async def test_graph_query_rejects_merge() -> None:
+    handler = PlatformToolHandler(
+        knowledge_port=InMemoryKnowledgePort(),
+        graph_port=InMemoryGraphPort(),
+    )
+
+    result = await handler.call_tool(
+        "graph_query",
+        {
+            "user_id": "user-1",
+            "cypher": "MERGE (n:Doc {id: $id}) RETURN n",
+            "params_json": json.dumps({"id": "x"}),
+        },
+    )
+
+    assert result.is_error is True
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_tags_source() -> None:
+    handler = PlatformToolHandler(
+        knowledge_port=InMemoryKnowledgePort(),
+        web_search_port=StubWebSearchPort(),
+    )
+
+    result = await handler.call_tool(
+        "web_fallback",
+        {"user_id": "user-1", "query": "Palatium architecture", "max_results": "3"},
+    )
+
+    assert result.is_error is False
+
+    payload = json.loads(result.content[0]["text"])
+
+    assert payload["source"] == "web"
+    assert payload["reliability"] == "external_unverified"
+    assert payload["provider"] == "stub"

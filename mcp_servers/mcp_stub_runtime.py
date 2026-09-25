@@ -14,8 +14,10 @@ from fastmcp.server.auth import AuthProvider, MultiAuth
 from fastmcp.server.auth.providers.jwt import JWTVerifier, StaticTokenVerifier
 from fastmcp.tools.function_tool import FunctionTool
 from mcp.types import ToolAnnotations
-from mcp_stub_auth import anon_mcp_allowed, configured_mcp_token
 from starlette.responses import JSONResponse
+
+from mcp_servers.mcp_stub_auth import anon_mcp_allowed, configured_mcp_token
+from mcp_servers.mcp_stub_hardening import harden_asgi_app
 
 if TYPE_CHECKING:
     from fastmcp.server.auth.auth import TokenVerifier
@@ -120,6 +122,9 @@ def mount_health(mcp: FastMCP[Any], *, server: str) -> None:
 
 
 def build_http_app(mcp: FastMCP[Any], *, server: str) -> ASGIApp:
-    """ASGI app: MCP at ``/`` (keeps existing MCP_SERVERS URLs) + ``/health``."""
+    """ASGI app: MCP at ``/`` (keeps existing MCP_SERVERS URLs) + ``/health``.
+
+    Wrapped with the shared body-size + rate-limit hardening (020).
+    """
     mount_health(mcp, server=server)
-    return mcp.http_app(path="/")
+    return harden_asgi_app(mcp.http_app(path="/"))

@@ -1,0 +1,12 @@
+# pip-audit triage allowlist — accepted dependency vulnerabilities.
+#
+# One advisory ID per line (e.g. GHSA-xxxx-xxxx-xxxx or CVE-2024-12345).
+# `#` starts a comment. Anything listed here is consumed by scripts/ci_security.py.
+#
+# Empty by default: an unlisted advisory FAILS CI. Adding a line is an explicit,
+# reviewable risk-acceptance decision — not a way to make the gate green.
+#
+# Required alongside every entry: reason + tracking issue + expiry.
+#
+# Example (do not uncomment without triage):
+# GHSA-0000-0000-0000  # transitive: <pkg> via <parent>; no fix upstream; PAL-1234; review 2026-12-01

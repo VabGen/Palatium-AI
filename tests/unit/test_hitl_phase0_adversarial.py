@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlCardGoneError, HitlService
 from palatium_ai.application.services.intent_service import _assistant_turn_payload
 from palatium_ai.core.config.security import SecurityConfig
@@ -103,6 +104,7 @@ def _client(
         hitl_service=hitl_service,
         intent_service=intent_service,
         session_service=SimpleNamespace(),
+        hitl_respond_facade=HitlRespondFacade(hitl_service=hitl_service, intent_service=intent_service),
     )
     monkeypatch.setattr(hitl_router, "get_app_resources", lambda _app: resources)
 

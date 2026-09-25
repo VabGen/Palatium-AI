@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from ..memory import DialogTurnWindow
 from .context_packet import ContextPacket
 from .contracts import TaskResult
 
@@ -23,6 +24,8 @@ class ResearcherInput(BaseModel):
     prior_context: str | None = Field(default=None, max_length=8_000)
     mcp_tool_output_max_chars: int = Field(default=3000, ge=500, le=16_000)
     revision_feedback: str | None = Field(default=None, max_length=4_000)
+    dialog_window: DialogTurnWindow | None = None
+    memory_hints: tuple[str, ...] = ()
 
 
 class ResearcherOutput(BaseModel):

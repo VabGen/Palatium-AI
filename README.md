@@ -16,6 +16,7 @@
 
 <br/>
 
+[🚀 Старт](START.md) ·
 [📖 Полный гайд](docs/handbook.md) ·
 [🐳 Docker](docs/docker.md) ·
 [🔐 Секреты](docs/secrets.md) ·
@@ -94,6 +95,7 @@
 
 ## 🚀 Быстрый старт
 
+> Старт — в **[START.md](START.md)** (setup + `$PROFILE` + три режима).
 > Полный путь от `git clone` до API, Docker и эксплуатации — в **[docs/handbook.md](docs/handbook.md)**.
 
 ```bash
@@ -105,12 +107,27 @@ poetry run alembic upgrade head
 poetry run python -m palatium_ai.main
 ```
 
+> **Windows PowerShell:** используйте `Copy-Item` вместо `cp`,
+> `.\scripts\dev-up.ps1` вместо `poetry run python -m palatium_ai.main`.
+> Полная инструкция — [START.md](START.md).
+
+```powershell
+git clone https://github.com/your-org/palatium-ai.git
+cd palatium-ai
+poetry install --with dev
+Copy-Item env\.env.example env\.env   # заполнить POSTGRES_*, LLM_*, REDIS_*
+poetry run alembic upgrade head
+.\scripts\dev-up.ps1                   # host-профиль (hot-reload)
+```
+
 Откройте: **http://127.0.0.1:8000/docs**
 
 | Ссылка | Зачем |
 |--------|--------|
+| 🚀 [START.md](START.md) | **Стартовая инструкция** — setup + `$PROFILE` + 3 режима |
 | 📖 [Handbook](docs/handbook.md) | Clone → env → Poetry/Docker → API → ops |
 | 🐳 [Docker guide](docs/docker.md) | Сборка образа, Compose, troubleshooting |
+| 🧰 [Runbook](docs/runbook.md) | Диагностика по симптому, фиксы, полный сброс |
 | 🔐 [Secrets](docs/secrets.md) | Локально / CI / Vault |
 
 ---
@@ -152,6 +169,6 @@ MIT © Palatium AI contributors — см. [`src/palatium_ai/LICENSE`](src/palati
 
 **Built for teams that treat agents like production software.**
 
-[Get started →](docs/handbook.md)
+[Get started →](START.md)
 
 </div>

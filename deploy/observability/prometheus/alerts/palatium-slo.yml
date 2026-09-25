@@ -1,0 +1,98 @@
+# SLO alerts + recording rules for palatium-ai.
+#
+# Every metric name referenced here MUST exist in the app registry
+# (src/palatium_ai/core/observability/metrics.py, rule 040). That contract is
+# enforced by tests/unit/test_observability_assets.py — inventing a metric name
+# in this file fails CI rather than silently never firing.
+#
+# Recording rules are Prometheus-side aggregations, not app metrics; they use the
+# conventional `level:metric:operations` naming and are NOT part of the 040 registry.
+
+groups:
+  - name: palatium-recording
+    interval: 30s
+    rules:
+      # SLI: share of agent node executions that did not end in an error.
+      - record: palatium:agent_success_ratio:5m
+        expr: |
+          1 - (
+            sum(rate(palatium_agent_errors_total[5m]))
+            / clamp_min(sum(rate(palatium_agent_request_duration_seconds_count[5m])), 0.001)
+          )
+
+      # SLI: memory query latency.
+      - record: palatium:memory_query_p95_seconds:5m
+        expr: histogram_quantile(0.95, sum(rate(palatium_memory_query_duration_seconds_bucket[5m])) by (le))
+
+      # SLI: agent node latency.
+      - record: palatium:agent_request_p95_seconds:5m
+        expr: histogram_quantile(0.95, sum(rate(palatium_agent_request_duration_seconds_bucket[5m])) by (le))
+
+      # Spend signal for budget burn alerts (USD per hour).
+      - record: palatium:llm_cost_usd_per_hour:1h
+        expr: sum(increase(palatium_agent_cost_usd_total[1h]))
+
+  - name: palatium-slo
+    interval: 30s
+    rules:
+      - alert: PalatiumApiDown
+        expr: up{job="palatium-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          slo: availability
+        annotations:
+          summary: "Palatium API is not scrapeable"
+          description: "up{job=\"palatium-api\"} has been 0 for 2m. Liveness (/health) or the process itself is failing."
+          runbook_url: "deploy/observability/README.md#palatiumapidown"
+
+      - alert: PalatiumAgentSuccessRateBelowSlo
+        expr: palatium:agent_success_ratio:5m < 0.95
+        for: 15m
+        labels:
+          severity: warning
+          slo: agent_success_rate
+        annotations:
+          summary: "Agent success rate below 95% SLO"
+          description: "Observed {{ $value | humanizePercentage }} over 15m (target > 95%, docs/max-pro-level-tz.md §15)."
+
+      - alert: PalatiumAgentSuccessRateCritical
+        expr: palatium:agent_success_ratio:5m < 0.90
+        for: 10m
+        labels:
+          severity: critical
+          slo: agent_success_rate
+        annotations:
+          summary: "Agent success rate below 90% — severe degradation"
+          description: "Observed {{ $value | humanizePercentage }} over 10m. Check palatium_agent_errors_total by error_type."
+
+      # Circuit breaker open (2) means half-open probes already failed. Half-open (1)
+      # is normal recovery and must never page.
+      - alert: PalatiumCircuitBreakerOpen
+        expr: max_over_time(palatium_circuit_breaker_state[5m]) == 2
+        for: 5m
+        labels:
+          severity: warning
+          slo: circuit_breaker_false_open
+        annotations:
+          summary: "Circuit breaker open for {{ $labels.target }}"
+          description: "Target {{ $labels.target }} stayed open 5m (3 consecutive failures). SLO: false-open rate ~0 (§15)."
+
+      - alert: PalatiumMemoryQueryLatencyHigh
+        expr: palatium:memory_query_p95_seconds:5m > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          slo: memory_query_latency
+        annotations:
+          summary: "Memory query p95 above 200 ms SLO"
+          description: "p95 = {{ $value | humanizeDuration }} over 5m (target < 200 ms, §15)."
+
+      - alert: PalatiumAgentLatencyHigh
+        expr: palatium:agent_request_p95_seconds:5m > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent node p95 above 5s"
+          description: "p95 = {{ $value | humanizeDuration }}. Compare with TURN_HOP_BUDGET_MS and palatium_turn_hop_budget_exceeded_total."

@@ -7,6 +7,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -134,6 +135,32 @@ def _assert_environment_hardening(settings: Settings) -> None:
             "HITL_STEP_UP_METHOD=hmac_stub is forbidden when ENVIRONMENT is staging or production "
             "(use idp_acr or webauthn)"
         )
+    # 020 / 055: symmetric JWT in a hardened environment is a shared-secret footgun — require
+    # asymmetric signing/verification (JWKS). Default HS256 must not silently reach production.
+    algorithm = str(settings.security.jwt_algorithm).strip().upper()
+    if algorithm.startswith("HS"):
+        raise RuntimeError("JWT_ALGORITHM must be asymmetric (RS*/ES*) when ENVIRONMENT is staging or production")
+    # 020: allowed origins are an explicit allow-list; loopback defaults must not leak into a hardened env.
+    loopback = tuple(origin for origin in settings.security.cors_origin_list if _is_loopback_origin(origin))
+    if loopback:
+        raise RuntimeError(
+            f"CORS_ORIGINS must not include loopback origins {loopback!r} when ENVIRONMENT is staging or production"
+        )
+    # 020: HITL action tokens are HMAC even with asymmetric JWT — require a non-trivial key.
+    hitl_secret = getattr(settings.security, "hitl_signing_secret", None)
+    if hitl_secret is not None and 0 < len(hitl_secret.get_secret_value().strip()) < 32:
+        raise RuntimeError(
+            "HITL_SIGNING_SECRET must be at least 32 characters when ENVIRONMENT is staging or production"
+        )
+
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104 — CORS origin allowlist, not a bind address
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    """True when a CORS origin resolves to a loopback/any-local host (020)."""
+    host = (urlsplit(origin).hostname or "").strip().lower()
+    return host in _LOOPBACK_HOSTS or host.endswith(".localhost")
 
 
 def _mount_chat_ui(application: FastAPI) -> None:

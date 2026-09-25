@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.core.config.security import SecurityConfig
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
@@ -79,6 +80,7 @@ def hitl_api_client(
         hitl_service=hitl_service,
         intent_service=intent_service,
         session_service=session_service,
+        hitl_respond_facade=HitlRespondFacade(hitl_service=hitl_service, intent_service=intent_service),
     )
     monkeypatch.setattr(hitl_router, "get_app_resources", lambda _app: resources)
 

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -54,9 +51,7 @@ def test_mcp_tool_summary_accepts_wire_property_names() -> None:
 
 
 def test_stub_tools_list_omits_input_schema() -> None:
-    stubs_root = Path(__file__).resolve().parents[2] / "mcp_servers"
-    sys.path.insert(0, str(stubs_root))
-    from mcp_stub_tools import tools_list_payload
+    from mcp_servers.mcp_stub_tools import tools_list_payload
 
     tools = [
         {

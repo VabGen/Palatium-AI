@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_service import IntentService
@@ -33,6 +34,10 @@ class _FakeSessionService:
         return None
 
     async def assert_thread_access(self, **_kwargs: object) -> None:
+        return None
+
+    async def get_session(self, **_kwargs: object) -> None:
+        """Reply-locale lookup (065); no persisted session in unit tests."""
         return None
 
 
@@ -85,20 +90,22 @@ async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
         '"reasoning": "Rewritten format request"}',
     )
     graph = build_agent_graph(
+        GraphAgents(
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(
+                FakeLLMPort('{"summary": "unused", "confidence": 0.1, "sources_used": []}'), harness=harness
+            ),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(
+                FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
+            ),
+            formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("План встречи (таблица)"))),
+            continuation_agent=contextualizer,
+        ),
         harness=harness,
-        intent_agent=intent_agent,
-        supervisor_agent=make_supervisor_agent(harness),
-        weaving_agent=make_weaving_agent(harness=harness),
-        researcher_agent=make_researcher_agent(
-            FakeLLMPort('{"summary": "unused", "confidence": 0.1, "sources_used": []}'), harness=harness
-        ),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(
-            FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
-        ),
-        formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("План встречи (таблица)"))),
-        continuation_agent=contextualizer,
         checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
@@ -155,50 +162,52 @@ async def test_followup_answer_overrides_false_clarification() -> None:
         '"reasoning": "No meeting details provided"}',
     )
     graph = build_agent_graph(
-        harness=harness,
-        intent_agent=intent_agent,
-        supervisor_agent=make_supervisor_agent(harness),
-        weaving_agent=make_weaving_agent(harness=harness),
-        researcher_agent=make_researcher_agent(
-            FakeLLMPort(
-                '{"summary": "Встреча завершается в 15:00–15:15", '
-                '"confidence": 0.95, "sources_used": ["prior_context"]}'
+        GraphAgents(
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(
+                FakeLLMPort(
+                    '{"summary": "Встреча завершается в 15:00–15:15", '
+                    '"confidence": 0.95, "sources_used": ["prior_context"]}'
+                ),
+                harness=harness,
             ),
-            harness=harness,
-        ),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(
-            FakeLLMPort(
-                '{"accuracy_score": 9, "safety_score": 10, "requires_review": false, '
-                '"summary": "Answered from prior schedule"}'
-            )
-        ),
-        formatter_agent=make_formatter_agent(
-            FakeLLMPort(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "locale": "ru-RU",
-                        "title": "Завершение встречи",
-                        "blocks": [
-                            {
-                                "type": "paragraph",
-                                "text": "Встреча завершается в 15:00–15:15.",
-                            }
-                        ],
-                        "actions": [],
-                        "meta": {
-                            "confidence": 0.95,
-                            "requires_review": False,
-                            "source_refs": [],
-                        },
-                    },
-                    ensure_ascii=False,
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(
+                FakeLLMPort(
+                    '{"accuracy_score": 9, "safety_score": 10, "requires_review": false, '
+                    '"summary": "Answered from prior schedule"}'
                 )
-            )
+            ),
+            formatter_agent=make_formatter_agent(
+                FakeLLMPort(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "locale": "ru-RU",
+                            "title": "Завершение встречи",
+                            "blocks": [
+                                {
+                                    "type": "paragraph",
+                                    "text": "Встреча завершается в 15:00–15:15.",
+                                }
+                            ],
+                            "actions": [],
+                            "meta": {
+                                "confidence": 0.95,
+                                "requires_review": False,
+                                "source_refs": [],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            ),
+            continuation_agent=contextualizer,
         ),
-        continuation_agent=contextualizer,
+        harness=harness,
         checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(
@@ -246,30 +255,32 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
         '"reasoning": "Phatic follow-up after greeting"}',
     )
     graph = build_agent_graph(
-        harness=harness,
-        intent_agent=intent_agent,
-        supervisor_agent=make_supervisor_agent(harness),
-        weaving_agent=make_weaving_agent(harness=harness),
-        researcher_agent=make_researcher_agent(llm_researcher, harness=harness),
-        coder_agent=make_coder_agent(harness=harness),
-        analyst_agent=make_analyst_agent(harness=harness),
-        critic_agent=make_critic_agent(llm_critic),
-        formatter_agent=make_formatter_agent(
-            FakeLLMPort(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "locale": "ru-RU",
-                        "title": "Ответ",
-                        "blocks": [{"type": "paragraph", "text": "У меня всё хорошо, спасибо!"}],
-                        "actions": [],
-                        "meta": {"confidence": 0.95, "requires_review": False, "source_refs": []},
-                    },
-                    ensure_ascii=False,
+        GraphAgents(
+            intent_agent=intent_agent,
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(llm_researcher, harness=harness),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(llm_critic),
+            formatter_agent=make_formatter_agent(
+                FakeLLMPort(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "locale": "ru-RU",
+                            "title": "Ответ",
+                            "blocks": [{"type": "paragraph", "text": "У меня всё хорошо, спасибо!"}],
+                            "actions": [],
+                            "meta": {"confidence": 0.95, "requires_review": False, "source_refs": []},
+                        },
+                        ensure_ascii=False,
+                    )
                 )
-            )
+            ),
+            continuation_agent=contextualizer,
         ),
-        continuation_agent=contextualizer,
+        harness=harness,
         checkpointer=make_graph_checkpointer(),
     )
     service = IntentService(

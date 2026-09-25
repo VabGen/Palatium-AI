@@ -11,6 +11,7 @@ import pytest
 from palatium_ai.application.agents.context_enricher import CONTEXTUALIZER_CONFIG, ContextualizerAgent
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
+from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.intent_service import IntentService
 from palatium_ai.domain.content import HeadingBlock
@@ -38,6 +39,10 @@ class _FakeSessionService:
     async def assert_thread_access(self, **_kwargs: object) -> None:
         return None
 
+    async def get_session(self, **_kwargs: object) -> None:
+        """Reply-locale lookup (065); no persisted session in unit tests."""
+        return None
+
 
 def _intent_service(graph: object) -> IntentService:
     from palatium_ai.application.services.hitl_service import HitlService
@@ -54,22 +59,14 @@ def _graph(**kwargs: object) -> object:
     """build_agent_graph with a no-op continuation LLM (empty history → pass-through)."""
     from tests.conftest import make_analyst_agent, make_coder_agent
 
-    continuation = kwargs.pop("continuation_agent", None)
-    harness = kwargs.get("harness")
-    if continuation is None:
-        if harness is None:
-            harness = Harness(llm=FakeLLMPort("{}"))
-            kwargs["harness"] = harness
-        continuation = ContextualizerAgent(harness, CONTEXTUALIZER_CONFIG)  # type: ignore[arg-type]
-    if "coder_agent" not in kwargs:
-        kwargs["coder_agent"] = make_coder_agent(harness=harness)  # type: ignore[arg-type]
-    if "analyst_agent" not in kwargs:
-        kwargs["analyst_agent"] = make_analyst_agent(harness=harness)  # type: ignore[arg-type]
-    return build_agent_graph(
-        continuation_agent=continuation,
-        checkpointer=make_graph_checkpointer(),
-        **kwargs,
-    )  # type: ignore[arg-type]
+    harness = kwargs.pop("harness", None)
+    if harness is None:
+        harness = Harness(llm=FakeLLMPort("{}"))
+    checkpointer = kwargs.pop("checkpointer", None) or make_graph_checkpointer()
+    kwargs.setdefault("continuation_agent", ContextualizerAgent(harness, CONTEXTUALIZER_CONFIG))  # type: ignore[arg-type]
+    kwargs.setdefault("coder_agent", make_coder_agent(harness=harness))
+    kwargs.setdefault("analyst_agent", make_analyst_agent(harness=harness))
+    return build_agent_graph(GraphAgents(**kwargs), harness=harness, checkpointer=checkpointer)  # type: ignore[arg-type]
 
 
 def _formatter_document_json(title: str, *, locale: str = "en-US") -> str:

@@ -18,6 +18,9 @@ def _settings(
     default_provider: str = "ollama",
     fallback: str = "openai",
     hitl_step_up_method: str = "idp_acr",
+    jwt_algorithm: str = "RS256",
+    cors_origin_list: tuple[str, ...] = ("https://app.palatium.example",),
+    hitl_signing_secret: object | None = None,
 ) -> SimpleNamespace:
     llm = SimpleNamespace(
         default_provider=default_provider,
@@ -40,6 +43,9 @@ def _settings(
         security=SimpleNamespace(
             auth_enabled=auth_enabled,
             hitl_step_up_method=hitl_step_up_method,
+            jwt_algorithm=jwt_algorithm,
+            cors_origin_list=cors_origin_list,
+            hitl_signing_secret=hitl_signing_secret,
         ),
         observability=SimpleNamespace(
             turn_cost_budget_usd=turn_budget,
@@ -68,3 +74,30 @@ def test_hardening_requires_auth_budgets_and_fallback() -> None:
         _assert_environment_hardening(_settings(hitl_step_up_method="hmac_stub"))
     _assert_environment_hardening(_settings())
     _assert_environment_hardening(_settings(hitl_step_up_method="webauthn"))
+
+
+def test_hardening_rejects_symmetric_jwt_in_production() -> None:
+    with pytest.raises(RuntimeError, match="JWT_ALGORITHM"):
+        _assert_environment_hardening(_settings(jwt_algorithm="HS256"))
+
+
+def test_hardening_rejects_loopback_cors_in_production() -> None:
+    with pytest.raises(RuntimeError, match="loopback"):
+        _assert_environment_hardening(_settings(cors_origin_list=("http://localhost:8000",)))
+    with pytest.raises(RuntimeError, match="loopback"):
+        _assert_environment_hardening(_settings(cors_origin_list=("https://app.example", "http://127.0.0.1:8000")))
+
+
+def test_hardening_rejects_short_hitl_signing_secret() -> None:
+    short_secret = SimpleNamespace(get_secret_value=lambda: "too-short")
+    with pytest.raises(RuntimeError, match="HITL_SIGNING_SECRET"):
+        _assert_environment_hardening(_settings(hitl_signing_secret=short_secret))
+
+
+def test_hardening_accepts_asymmetric_jwt_and_public_cors() -> None:
+    long_secret = SimpleNamespace(get_secret_value=lambda: "x" * 48)
+    _assert_environment_hardening(
+        _settings(
+            jwt_algorithm="ES256", cors_origin_list=("https://app.palatium.example",), hitl_signing_secret=long_secret
+        )
+    )

@@ -35,7 +35,10 @@ def _settings(
         build_provider_chain=_chain,
         fallback_provider_list=fallback_providers,
     )
-    return SimpleNamespace(llm=llm)
+    # Settings always carries `app`; a double missing it silently violates the contract
+    # get_client_for_agent() relies on (fallback-chain strictness is env-gated).
+    app = SimpleNamespace(environment="development")
+    return SimpleNamespace(llm=llm, app=app)
 
 
 def _agent_config(**overrides: Any) -> AgentConfig:
@@ -194,7 +197,8 @@ def test_fallback_skips_provider_without_api_key(monkeypatch: pytest.MonkeyPatch
         ollama=SimpleNamespace(get_api_key=lambda: "ollama-key"),
         openai=SimpleNamespace(get_api_key=lambda: None),
     )
-    factory = LLMClientFactory(settings=SimpleNamespace(llm=llm))  # type: ignore[arg-type]
+    app = SimpleNamespace(environment="development")
+    factory = LLMClientFactory(settings=SimpleNamespace(llm=llm, app=app))  # type: ignore[arg-type]
     captured: list[str | None] = []
     fake = FakeLLMPort("{}")
 

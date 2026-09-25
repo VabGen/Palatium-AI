@@ -9,6 +9,7 @@ from typing import Literal, NamedTuple, cast
 from pydantic import Field, model_validator
 
 from palatium_ai.core.config.base import BaseConfig
+from palatium_ai.core.config.llm.gateway import GatewayLLMConfig
 
 from .anthropic import AnthropicLLMConfig
 from .base import LLMProviderConfig
@@ -16,8 +17,8 @@ from .ollama import OllamaLLMConfig
 from .openai import OpenAILLMConfig
 from .qwen import QwenLLMConfig
 
-LLMProviderName = Literal["openai", "anthropic", "ollama", "qwen"]
-_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "anthropic", "ollama", "qwen"})
+LLMProviderName = Literal["openai", "anthropic", "ollama", "qwen", "gateway"]
+_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "anthropic", "ollama", "qwen", "gateway"})
 ModelTierName = Literal["nano", "small", "mid", "frontier", "deep_reasoning"]
 
 
@@ -35,6 +36,7 @@ class LLMConfig(BaseConfig):
     anthropic: AnthropicLLMConfig = Field(default_factory=AnthropicLLMConfig)
     ollama: OllamaLLMConfig = Field(default_factory=OllamaLLMConfig)
     qwen: QwenLLMConfig = Field(default_factory=QwenLLMConfig)
+    gateway: GatewayLLMConfig = Field(default_factory=GatewayLLMConfig)
 
     tier_nano_provider: str | None = Field(default=None, validation_alias="LLM_TIER_NANO_PROVIDER")
     tier_small_provider: str | None = Field(default=None, validation_alias="LLM_TIER_SMALL_PROVIDER")
@@ -153,6 +155,7 @@ __all__ = [
     "AnthropicLLMConfig",
     "OllamaLLMConfig",
     "QwenLLMConfig",
+    "GatewayLLMConfig",
     "LLMProviderConfig",
     "TierBinding",
 ]

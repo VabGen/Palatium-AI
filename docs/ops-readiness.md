@@ -89,11 +89,17 @@ poetry run python scripts/run_agent_evals_nightly.py
 
 ## 4. Observability
 
-- [ ] Scrape `GET /metrics` from Prometheus
+- [ ] Scrape `GET /metrics` from Prometheus (isolated stack: `deploy/observability/`, см. `deploy/observability/README.md`)
 - [ ] Verify kill switch: `POST /api/admin/kill-switch/engage` (admin JWT) → classify/process 503
 - [ ] Audit chain writable (`AUDIT_LOG_FILE`); corrupt tail fails closed (`AuditChainIntegrityError`)
 - [ ] Daily audit verify: `python scripts/verify_audit_chain.py` (workflow `audit-chain-daily.yml`)
 - [ ] Session context stores user-text **preview** only; full text in `dialog_turns`
+- [ ] **Host-профиль**: после `.\scripts\dev-up.ps1 -WithGateway` команда
+      `.\scripts\dev-status.ps1` показывает `8090/8091` healthy
+- [ ] **Docker-профиль**: без явных `--profile` MCP/API **не поднимаются**
+      (`docker compose config --services` → только postgres/redis/neo4j/litellm).
+      Учтите: `docker compose ps` без имени сервиса показывает всё *запущенное*,
+      включая профильные контейнеры.
 
 ## 5. Evidence map (code DoD)
 

@@ -1,16 +1,21 @@
 # src/palatium_ai/application/orchestration/graph.py
 
-"""LangGraph StateGraph — Context enricher → Intent → Supervisor → Weaver → Worker → Critic → Formatter."""
+"""LangGraph StateGraph — Context enricher → Intent → Supervisor → Weaver → Worker → Critic → Formatter.
+
+Agent-agnostic by construction (3.2 / OCP): the node roster arrives as `GraphAgents`
+(`agent_registry.py`), this module only compiles nodes and declares the topology.
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.application.orchestration import nodes
+from palatium_ai.application.orchestration.agent_registry import GraphAgents, NodeCallable
 from palatium_ai.application.orchestration.node_runtime import reset_node_circuits_for_tests
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.core.types.graph_nodes import (
@@ -24,101 +29,55 @@ from palatium_ai.core.types.graph_nodes import (
     NODE_QUALITY_REVISION,
     NODE_RESEARCHER,
     NODE_SUPERVISOR,
+    GraphNodeId,
 )
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
 
-    from palatium_ai.application.agents.analyst import AnalystAgent
-    from palatium_ai.application.agents.coder import CoderAgent
-    from palatium_ai.application.agents.context_enricher import ContextualizerAgent, ContextWeaverAgent
-    from palatium_ai.application.agents.critic import CriticAgent
-    from palatium_ai.application.agents.formatter import FormatterAgent
-    from palatium_ai.application.agents.intent_classifier import IntentClassifierAgent
-    from palatium_ai.application.agents.researcher import ResearcherAgent
-    from palatium_ai.application.agents.supervisor import SupervisorAgent
-
 __all__ = ["build_agent_graph", "reset_node_circuits_for_tests"]
 
 
-def _bind_node(node_fn: Any, agent: object, harness: Harness) -> Any:
-    """Bind agent+harness into a LangGraph node callable (typed Any for StateGraph overloads)."""
-
-    async def _run(state: AgentGraphState) -> AgentGraphState:
-        return cast("AgentGraphState", await node_fn(state, agent, harness))
-
-    return _run
-
-
 def build_agent_graph(
-    intent_agent: IntentClassifierAgent,
-    supervisor_agent: SupervisorAgent,
-    researcher_agent: ResearcherAgent,
-    critic_agent: CriticAgent,
-    formatter_agent: FormatterAgent,
+    agents: GraphAgents,
     *,
-    coder_agent: CoderAgent,
-    analyst_agent: AnalystAgent,
-    continuation_agent: ContextualizerAgent,
-    weaving_agent: ContextWeaverAgent,
     harness: Harness | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> CompiledStateGraph[AgentGraphState]:
-    """Собирает StateGraph с checkpointer (thread-scoped working memory)."""
+    """Собирает StateGraph с checkpointer (thread-scoped working memory).
+
+    Nodes come from the registry (`agents.bindings`); the builder never names an agent,
+    so the roster can change without touching this file (3.2). Topology stays here —
+    LangGraph needs static edges and conditional paths.
+    """
     resolved_harness = harness or Harness()
     graph = StateGraph(AgentGraphState)
-    _register_agent_nodes(
-        graph,
-        harness=resolved_harness,
-        intent_agent=intent_agent,
-        supervisor_agent=supervisor_agent,
-        researcher_agent=researcher_agent,
-        critic_agent=critic_agent,
-        formatter_agent=formatter_agent,
-        coder_agent=coder_agent,
-        analyst_agent=analyst_agent,
-        continuation_agent=continuation_agent,
-        weaving_agent=weaving_agent,
-    )
+    for node, run in agents.bindings(resolved_harness):
+        _add_node(graph, node, run)
     _wire_agent_edges(graph)
     saver = checkpointer if checkpointer is not None else MemorySaver()
     return graph.compile(checkpointer=saver)
 
 
-def _register_agent_nodes(
-    graph: Any,
-    *,
-    harness: Harness,
-    intent_agent: IntentClassifierAgent,
-    supervisor_agent: SupervisorAgent,
-    researcher_agent: ResearcherAgent,
-    critic_agent: CriticAgent,
-    formatter_agent: FormatterAgent,
-    coder_agent: CoderAgent,
-    analyst_agent: AnalystAgent,
-    continuation_agent: ContextualizerAgent,
-    weaving_agent: ContextWeaverAgent,
-) -> None:
-    graph.add_node(
-        NODE_CONTEXT_ENRICHER_CONTINUATION,
-        _bind_node(nodes.continuation_node, continuation_agent, harness),
-    )
-    graph.add_node(NODE_INTENT_CLASSIFIER, _bind_node(nodes.intent_classifier_node, intent_agent, harness))
-    graph.add_node(NODE_SUPERVISOR, _bind_node(nodes.supervisor_node, supervisor_agent, harness))
-    graph.add_node(
-        NODE_CONTEXT_ENRICHER_WEAVING,
-        _bind_node(nodes.weaving_node, weaving_agent, harness),
-    )
-    graph.add_node(NODE_RESEARCHER, _bind_node(nodes.researcher_node, researcher_agent, harness))
-    graph.add_node(NODE_CODER, _bind_node(nodes.coder_node, coder_agent, harness))
-    graph.add_node(NODE_ANALYST, _bind_node(nodes.analyst_node, analyst_agent, harness))
-    graph.add_node(NODE_CRITIC, _bind_node(nodes.critic_node, critic_agent, harness))
-    graph.add_node(NODE_QUALITY_REVISION, nodes.quality_revision_node)
-    graph.add_node(NODE_FORMATTER, _bind_node(nodes.formatter_node, formatter_agent, harness))
+def _add_node(graph: Any, node: GraphNodeId, run: NodeCallable) -> None:
+    """Add one bound node to the graph.
+
+    LangGraph's ``add_node`` overloads cannot bind ``NodeInputT`` for a precisely typed
+    node callable (none of them accepts a ``TypedDict`` state), so the call crosses an
+    ``Any`` boundary. The registry keeps the strict types; this single helper is the only
+    place they are erased — deliberately, not as a blanket ``Any`` on the builder.
+    """
+    graph.add_node(node, run)
 
 
 def _wire_agent_edges(graph: Any) -> None:
+    """Topology (START → … → END) with the Critic→quality_revision→worker loop.
+
+    ``Any`` for the same reason as `_add_node`: LangGraph's conditional-edge overloads
+    cannot be satisfied for a ``TypedDict`` state. The node ids themselves stay typed;
+    only the graph handle is dynamic.
+    """
     graph.add_edge(START, NODE_CONTEXT_ENRICHER_CONTINUATION)
     graph.add_edge(NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_INTENT_CLASSIFIER)
     graph.add_edge(NODE_INTENT_CLASSIFIER, NODE_SUPERVISOR)

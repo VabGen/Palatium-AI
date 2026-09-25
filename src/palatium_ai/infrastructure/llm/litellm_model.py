@@ -39,6 +39,9 @@ def resolve_litellm_model(*, provider: str, model: str, base_url: str) -> str:
         if prefix in _KNOWN_PREFIXES:
             return model
 
+    if provider == "gateway":
+        return f"openai/{model}"
+
     if provider == "ollama":
         if is_openai_compatible_base_url(base_url):
             return f"openai/{model}"
