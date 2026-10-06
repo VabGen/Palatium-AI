@@ -1445,7 +1445,9 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 4. `POST /api/attachments/{id}/complete` — пайплайн:
    `stat` объекта → magic-byte MIME sniff (несовпадение с заявленным → `mime_mismatch`) →
    AV-scan → (DOCX) проверка active content → парсинг с лимитами декодирования изображений →
-   secret scan на извлечённом тексте → prompt-injection gate (`UntrustedContentPolicy`) →
+   secret scan на извлечённом тексте → prompt-injection gate
+   (`prepare_fenced_attachment`: полный scan → mask+admit при любом severity;
+   только truncated scan → quarantine; текст в ход всегда в `<<<UNTRUSTED_TOOL_OUTPUT>>>`) →
    persist derived text → fencing на чтение в ход.
    Статус строки на время пайплайна — `scanning` (UI может показывать фазу до ответа).
    Audit: `attachment_completed`.
@@ -1468,7 +1470,7 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 | `parse_failed` | rejected | парсер не смог извлечь текст |
 | `malware_detected` | quarantined | сработала сигнатура clamd |
 | `scan_failed` | quarantined | clamd недоступен/не ответил — **не** вирус (§3.18) |
-| `injection_detected` | quarantined / rejected | сигнал prompt-injection (OWASP LLM01) |
+| `injection_detected` | quarantined / rejected | на вложениях обычно только truncated scan; иначе mask+`ready` (fence-first, §16.4) |
 
 На этапе `init` добавляются `filename_invalid`, `extension_mismatch`, `turn_limit_exceeded`.
 

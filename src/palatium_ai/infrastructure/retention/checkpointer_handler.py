@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
-from palatium_ai.domain.policies.retention import RetentionPolicy, RetentionWindows
+from palatium_ai.domain.policies.retention import RetentionClass, RetentionPolicy, RetentionWindows
 from palatium_ai.domain.ports.retention import RetentionClassReport
 
 if TYPE_CHECKING:
@@ -37,7 +37,7 @@ _DELETE_BY_THREAD: dict[str, str] = {
 class CheckpointerRetentionHandler:
     """checkpointer: drop LG rows for inactive sessions and orphan thread keys."""
 
-    retention_class = "checkpointer"
+    retention_class: RetentionClass = "checkpointer"
 
     def __init__(
         self,

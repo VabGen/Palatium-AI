@@ -603,6 +603,7 @@ class IntentHitlFlow:
         prior_context: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
+        has_turn_attachments: bool = False,
     ) -> FormatterTaskResult:
         """Сервер создаёт HITL-карточки; LLM actions не являются источником истины."""
         from palatium_ai.application.services.interaction_assembler import (
@@ -636,6 +637,7 @@ class IntentHitlFlow:
             selected_strategy=selected_strategy,
             task_kind=task_kind,
             requires_user_choice=requires_user_choice,
+            has_turn_attachments=has_turn_attachments,
         )
 
         if (
@@ -643,6 +645,7 @@ class IntentHitlFlow:
                 requires_user_choice=requires_user_choice,
                 underspecification_kind=underspecification_kind,
                 plan=assembled.plan,
+                has_turn_attachments=has_turn_attachments,
             )
             and self._option_synthesizer is not None
             and user_text
@@ -673,6 +676,7 @@ class IntentHitlFlow:
                     selected_strategy=selected_strategy,
                     task_kind=task_kind,
                     requires_user_choice=True,
+                    has_turn_attachments=has_turn_attachments,
                 )
 
         logger.info(

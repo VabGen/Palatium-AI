@@ -154,15 +154,22 @@ async def continuation_node(
         )
         output = getattr(result, "output", None)
         rewritten = output.rewritten_query if output is not None else selectors.resolved_user_text(state)
+        has_turn_attachments = bool((state.get("untrusted_context") or "").strip())
         routing_intent = resolve_routing_intent(
             contextualizer=output,
             dialog=window,
             raw_intent=raw_intent,
-            has_turn_attachments=bool((state.get("untrusted_context") or "").strip()),
+            has_turn_attachments=has_turn_attachments,
+        )
+        raw_user = state.get("user_text")
+        effective_user_text = ContinuityPolicy.resolve_effective_user_text(
+            raw_user_text=raw_user if isinstance(raw_user, str) else "",
+            rewritten_query=rewritten,
+            has_turn_attachments=has_turn_attachments,
         )
         update: AgentGraphState = {
             "contextualization": result,
-            "effective_user_text": rewritten,
+            "effective_user_text": effective_user_text,
             "routing_intent": routing_intent,
         }
         if recall is not None:

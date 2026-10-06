@@ -45,15 +45,14 @@ def ensure_psycopg_compatible_loop() -> None:
     loop_factory. Warnings are suppressed so ``filterwarnings=error`` in
     tests does not fail process import on Windows.
     """
-    if sys.platform != "win32":
-        return
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            policy = asyncio.WindowsSelectorEventLoopPolicy()
-            asyncio.set_event_loop_policy(policy)
-    except Exception as exc:
-        logger.debug("Could not set WindowsSelectorEventLoopPolicy", error=str(exc))
+    if sys.platform == "win32":
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                policy = asyncio.WindowsSelectorEventLoopPolicy()
+                asyncio.set_event_loop_policy(policy)
+        except Exception as exc:
+            logger.debug("Could not set WindowsSelectorEventLoopPolicy", error=str(exc))
 
 
 def _memory_saver() -> MemorySaver:

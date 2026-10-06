@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Float, cast, delete, func, or_, select
+from sqlalchemy import ColumnElement, Float, cast, delete, func, or_, select
 from sqlalchemy.orm import aliased
 
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -31,6 +31,8 @@ from palatium_ai.infrastructure.database.models.knowledge_chunk import Knowledge
 from palatium_ai.infrastructure.database.rls import set_rls_user_scope
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from palatium_ai.domain.ports.embeddings import EmbeddingPort
@@ -56,7 +58,7 @@ class PostgresKnowledgePort:
     ) -> None:
         self._session_factory = session_factory
         self._embeddings = embeddings
-        self._hybrid_fusion = hybrid_fusion
+        self._hybrid_fusion: KnowledgeHybridFusion = hybrid_fusion
         self._rrf_k = rrf_k
 
     async def ingest_document(self, command: IngestDocumentCommand) -> IngestDocumentResult:
@@ -276,20 +278,20 @@ class PostgresKnowledgePort:
 
     @staticmethod
     def _scope_filters(
-        doc: object,
+        doc: type[KnowledgeDocumentORM],
         *,
         thread_id: str | None,
         project_id: str | None,
         source_document_id: str | None = None,
-    ) -> list[object]:
-        filters: list[object] = []
+    ) -> list[ColumnElement[Any]]:
+        filters: list[ColumnElement[Any]] = []
         if thread_id:
-            filters.append(doc.thread_id == thread_id)  # type: ignore[attr-defined]
+            filters.append(doc.thread_id == thread_id)
         if source_document_id and source_document_id.strip():
-            filters.append(doc.source_document_id == source_document_id.strip())  # type: ignore[attr-defined]
+            filters.append(doc.source_document_id == source_document_id.strip())
         elif project_id and project_id.strip():
             prefix = project_source_document_prefix(project_id)
-            filters.append(doc.source_document_id.startswith(prefix))  # type: ignore[attr-defined]
+            filters.append(doc.source_document_id.startswith(prefix))
         return filters
 
     async def _search_token_overlap(

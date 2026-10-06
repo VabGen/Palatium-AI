@@ -97,16 +97,29 @@ export type AttachmentDraft = {
   mode?: 'attach' | 'index';
   /** Server pipeline reason when ``status === 'failed'`` (for quarantine restore UX). */
   rejectionReason?: string | null;
+  /** Server attachment status (quarantined vs rejected) for restore eligibility. */
+  serverStatus?: AttachmentResponse['status'];
   /** HITL restore card already requested for this chip. */
   restoreRequested?: boolean;
   /** Server G06 flag — extracted text looked like PII. */
   containsPii?: boolean;
 };
 
-/** Injection quarantine only — manager HITL can re-admit with masked text (W5 G12). */
+/** Injection refuse only — manager HITL can re-admit with masked text (W5 G12). */
 export function canRequestQuarantineRestore(attachment: AttachmentResponse): boolean {
   return (
-    attachment.status === 'quarantined' && attachment.rejection_reason === 'injection_detected'
+    (attachment.status === 'quarantined' || attachment.status === 'rejected') &&
+    attachment.rejection_reason === 'injection_detected'
+  );
+}
+
+/** Chip-side mirror of ``canRequestQuarantineRestore`` after upload. */
+export function canRequestChipQuarantineRestore(chip: AttachmentDraft): boolean {
+  return (
+    Boolean(chip.serverId) &&
+    !chip.restoreRequested &&
+    chip.rejectionReason === 'injection_detected' &&
+    (chip.serverStatus === 'quarantined' || chip.serverStatus === 'rejected')
   );
 }
 

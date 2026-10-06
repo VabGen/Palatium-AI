@@ -69,7 +69,8 @@ export const ru = {
   'composer.pasteConverted': 'Длинный текст преобразован во вложение',
   'composer.showInFieldTooLong':
     'Текст длиннее лимита чата ({limit} символов) — оставьте вложением или сократите.',
-  'composer.pasteSlotFull': 'Нет свободного слота для вложения — удалите файл или отправьте сообщение',
+  'composer.pasteSlotFull':
+    'Нет свободного слота для вложения — удалите файл или отправьте сообщение',
 
   // --- Уведомления ---
   'toast.tooManyFiles': 'Не более {count} файлов на сообщение',
@@ -229,8 +230,7 @@ export const en: Record<MessageKey, string> = {
   'composer.showInField': 'Show in text field',
   'composer.asDocument': 'as attachment',
   'composer.pastedDefaultPrompt': 'Analyze the attached text.',
-  'composer.pasteTooLarge':
-    'Paste is too large for an attachment ({size}). Attach a file instead.',
+  'composer.pasteTooLarge': 'Paste is too large for an attachment ({size}). Attach a file instead.',
   'composer.pasteConverted': 'Long paste converted to an attachment',
   'composer.showInFieldTooLong':
     'Text exceeds the chat limit ({limit} characters) — keep it as an attachment or shorten it.',

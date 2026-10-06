@@ -162,7 +162,7 @@ async def _async_main(argv: list[str] | None = None) -> int:
     dry_run = not (args.execute or settings.retention.execute)
     classes: tuple[RetentionClass, ...] | None = None
     if args.retention_class:
-        classes = tuple(args.retention_class)  # type: ignore[arg-type]
+        classes = tuple(args.retention_class)
 
     needs_db = classes is None or any(name in _DB_CLASSES for name in (classes or ()))
     result: RetentionRunResult

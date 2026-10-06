@@ -696,12 +696,13 @@ export async function requestAttachmentIndex(
 
 export async function requestAttachmentQuarantineRestore(
   attachmentId: string,
+  body: { thread_id: string },
   userId?: string | null,
   orgId?: string | null
 ): Promise<HITLCardView> {
   const res = await fetchWithAuth(
     `/attachments/${encodeURIComponent(attachmentId)}/restore-request`,
-    { method: 'POST' },
+    { method: 'POST', body: JSON.stringify(body) },
     userId,
     orgId
   );

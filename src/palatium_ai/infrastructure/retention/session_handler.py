@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select
 
-from palatium_ai.domain.policies.retention import RetentionPolicy, RetentionWindows
+from palatium_ai.domain.policies.retention import RetentionClass, RetentionPolicy, RetentionWindows
 from palatium_ai.domain.ports.retention import RetentionClassReport
 from palatium_ai.infrastructure.database.models.dialog_turn import DialogTurnORM
 from palatium_ai.infrastructure.database.models.session import SessionORM
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 class SessionTranscriptRetentionHandler:
     """session_transcript: delete turns then sessions past inactivity window."""
 
-    retention_class = "session_transcript"
+    retention_class: RetentionClass = "session_transcript"
 
     def __init__(
         self,

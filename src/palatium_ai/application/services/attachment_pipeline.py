@@ -34,7 +34,7 @@ from palatium_ai.domain.attachments.types import AttachmentRejectionReason, Atta
 from palatium_ai.domain.memory.pii import mask_pii_in_text
 from palatium_ai.domain.policies.types import UntrustedContentAction
 from palatium_ai.domain.policies.untrusted_content import (
-    DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
+    FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
     UntrustedContentPolicy,
     UntrustedContentResult,
     UntrustedContentThresholds,
@@ -84,14 +84,14 @@ class AttachmentPipeline:
         blob_store: BlobStorePort,
         malware_scanner: MalwareScannerPort,
         document_parser: DocumentParserPort,
-        thresholds: UntrustedContentThresholds = DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
+        thresholds: UntrustedContentThresholds = FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
         pii_policy: AttachmentPiiPolicyMode = "tag",
     ) -> None:
         self._blob_store = blob_store
         self._scanner = malware_scanner
         self._parser = document_parser
         self._thresholds = thresholds
-        self._pii_policy = pii_policy
+        self._pii_policy: AttachmentPiiPolicyMode = pii_policy
 
     def supports_media_type(self, mime_type: str) -> bool:
         """Whether the deployment has a parser for this media type (020).
@@ -209,7 +209,13 @@ class AttachmentPipeline:
             )
 
         report = scan_prompt_injection(parsed.flow_text)
-        prepared = UntrustedContentPolicy.prepare(parsed.flow_text, report, thresholds=self._thresholds)
+        # Fence-first admission: complete scans never refuse; manager restore keeps
+        # the same path (force_mask_injection is a no-op when already masking).
+        prepared = UntrustedContentPolicy.prepare_fenced_attachment(
+            parsed.flow_text,
+            report,
+            thresholds=self._thresholds,
+        )
         if force_mask_injection and prepared.action in _REFUSING_ACTIONS:
             prepared = UntrustedContentResult(
                 action="mask",

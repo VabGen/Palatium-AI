@@ -71,12 +71,27 @@ class HitlInteractionPolicy:
         selected_strategy: ExecutionStrategy | str | None = None,
         task_kind: str | None = None,
         requires_user_choice: bool = False,
+        has_turn_attachments: bool = False,
     ) -> HitlCardPlan:
         """Decide choice card options and whether to mint quality review."""
         if document is None:
             return HitlCardPlan(
                 mint_quality_review=False,
                 reason="no_document",
+            )
+
+        # Upload-grounded turn without an Intent choice axis: do not promote
+        # list/steps/actions into exclusive menus (Formatter may echo a prior
+        # topic as bullets → fake HITL about the wrong file, 055).
+        if has_turn_attachments and not requires_user_choice:
+            return HitlCardPlan(
+                choice_actions=(),
+                mint_quality_review=requires_review,
+                reason="attachment_grounds_ask",
+                menu_shaped=cls._is_menu_shaped(document),
+                promoted_from="none",
+                force_structural=False,
+                required_choice=False,
             )
 
         menu_shaped = cls._is_menu_shaped(document)

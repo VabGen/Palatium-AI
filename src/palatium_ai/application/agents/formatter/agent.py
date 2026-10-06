@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
@@ -102,7 +102,7 @@ class FormatterAgent(BaseAgent):
                 error_message=FORMATTER_OUTPUT_INVALID,
             )
 
-        status = "partial" if task_input.requires_review else "success"
+        status: Literal["success", "partial"] = "partial" if task_input.requires_review else "success"
         return AgentOutput(
             task_id=input.task_id,
             status=status,

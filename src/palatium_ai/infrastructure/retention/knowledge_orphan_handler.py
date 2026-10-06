@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
-from palatium_ai.domain.policies.retention import RetentionPolicy, RetentionWindows
+from palatium_ai.domain.policies.retention import RetentionClass, RetentionPolicy, RetentionWindows
 from palatium_ai.domain.ports.retention import RetentionClassReport
 
 if TYPE_CHECKING:
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class KnowledgeOrphanRetentionHandler:
     """knowledge_orphan: documents with no matching attachment past grace window."""
 
-    retention_class = "knowledge_orphan"
+    retention_class: RetentionClass = "knowledge_orphan"
 
     def __init__(
         self,

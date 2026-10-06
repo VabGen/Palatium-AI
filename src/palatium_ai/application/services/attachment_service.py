@@ -60,7 +60,7 @@ from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
 from palatium_ai.domain.memory.tool_output import wrap_untrusted_tool_output
 from palatium_ai.domain.policies.types import UntrustedContentAction
 from palatium_ai.domain.policies.untrusted_content import (
-    DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
+    FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
     UntrustedContentPolicy,
     UntrustedContentThresholds,
 )
@@ -95,6 +95,9 @@ _ANALYZE_TOOL = "attachment_analyze"
 _RESTORE_PENDING_PREFIX = "attachment_restore:pending:"
 _ANALYZE_PENDING_PREFIX = "attachment_analyze:pending:"
 _QUARANTINE_RESTORE_REASONS = frozenset({"injection_detected"})
+# Rejected critical injection is still manager-overridable via force_mask (020 HITL):
+# legal OCR false positives must not be a dead end when the fence will contain the body.
+_INJECTION_RESTORE_STATUSES = frozenset({"quarantined", "rejected"})
 _TABULAR_ANALYZE_MIMES = frozenset(
     {
         "text/csv",
@@ -186,7 +189,7 @@ class AttachmentService:
         analysis: AttachmentAnalysisPort | None = None,
         connector: AttachmentConnectorPort | None = None,
         limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS,
-        thresholds: UntrustedContentThresholds = DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
+        thresholds: UntrustedContentThresholds = FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
     ) -> None:
         self._repository = repository
         self._blob_store = blob_store
@@ -734,7 +737,10 @@ class AttachmentService:
             msg = "attachment quarantine restore requires a configured HITL service"
             raise RuntimeError(msg)
         attachment = await self._require(attachment_id, user_id=user_id)
-        if attachment.status != "quarantined" or attachment.rejection_reason not in _QUARANTINE_RESTORE_REASONS:
+        if (
+            attachment.status not in _INJECTION_RESTORE_STATUSES
+            or attachment.rejection_reason not in _QUARANTINE_RESTORE_REASONS
+        ):
             raise AttachmentRestoreNotAllowedError(
                 attachment.id,
                 status=attachment.status,
@@ -1018,7 +1024,10 @@ class AttachmentService:
             msg = f"pending attachment restore missing for task_id={task_id}"
             raise ValueError(msg)
         attachment = await self._require(payload.attachment_id, user_id=payload.user_id)
-        if attachment.status != "quarantined" or attachment.rejection_reason not in _QUARANTINE_RESTORE_REASONS:
+        if (
+            attachment.status not in _INJECTION_RESTORE_STATUSES
+            or attachment.rejection_reason not in _QUARANTINE_RESTORE_REASONS
+        ):
             raise AttachmentRestoreNotAllowedError(
                 attachment.id,
                 status=attachment.status,
@@ -1039,7 +1048,11 @@ class AttachmentService:
         if attachment.derived_text_key:
             content = await self._read_content(attachment)
             report = scan_prompt_injection(content.safe_text)
-            prepared = UntrustedContentPolicy.prepare(content.safe_text, report, thresholds=self._thresholds)
+            prepared = UntrustedContentPolicy.prepare_fenced_attachment(
+                content.safe_text,
+                report,
+                thresholds=self._thresholds,
+            )
             masked_text = (
                 prepared.text
                 if prepared.action == "mask" and prepared.text
@@ -1168,7 +1181,11 @@ class AttachmentService:
         if not content.is_prompt_eligible:
             raise AttachmentNotUsableError(attachment.id, state=content.scan.action)
         report = scan_prompt_injection(content.safe_text)
-        prepared = UntrustedContentPolicy.prepare(content.safe_text, report, thresholds=self._thresholds)
+        prepared = UntrustedContentPolicy.prepare_fenced_attachment(
+            content.safe_text,
+            report,
+            thresholds=self._thresholds,
+        )
         if not prepared.usable:
             raise AttachmentNotUsableError(attachment.id, state=f"rescan_{prepared.action}")
         return _ReviewedBody(text=prepared.text, action=prepared.action, truncated=content.truncated)

@@ -42,6 +42,7 @@ import {
   MAX_ATTACHMENTS_PER_TURN,
   MAX_ATTACHMENT_LABEL,
   attachmentRefusalReason,
+  canRequestChipQuarantineRestore,
   createPastedTextFile,
   formatAttachmentSize,
   isTabularAttachmentFilename,
@@ -237,10 +238,7 @@ export function ChatShell() {
   }, [input, attachments, busy, uploading, overLimit]);
 
   const enqueueFiles = useCallback(
-    (
-      files: File[],
-      meta: { sourceText?: string; origin?: 'paste' | 'file' } = {}
-    ) => {
+    (files: File[], meta: { sourceText?: string; origin?: 'paste' | 'file' } = {}) => {
       if (files.length === 0) return;
       const slots = MAX_ATTACHMENTS_PER_TURN - attachments.length;
       if (slots <= 0) {
@@ -282,16 +280,17 @@ export function ChatShell() {
                 projectId: projectId.trim() || undefined,
               },
               phase => {
-              if (phase === 'scanning') {
-                setAttachments(prev =>
-                  prev.map(chip =>
-                    chip.localId === localId
-                      ? { ...chip, status: 'scanning', error: t('attach.scanning') }
-                      : chip
-                  )
-                );
+                if (phase === 'scanning') {
+                  setAttachments(prev =>
+                    prev.map(chip =>
+                      chip.localId === localId
+                        ? { ...chip, status: 'scanning', error: t('attach.scanning') }
+                        : chip
+                    )
+                  );
+                }
               }
-            });
+            );
             // A refused file still exists as a row: it is shown with its reason
             // instead of vanishing, so the user learns *why* it never reached a turn.
             const failure = refusalLabel(stored);
@@ -306,6 +305,7 @@ export function ChatShell() {
                       pageCount: stored.page_count,
                       mode: stored.mode,
                       rejectionReason: stored.rejection_reason,
+                      serverStatus: stored.status,
                       containsPii: Boolean(stored.contains_pii),
                     }
                   : chip
@@ -397,9 +397,7 @@ export function ChatShell() {
       const text = chip?.sourceText;
       if (!chip || text === undefined) return;
       if (text.length > INTENT_TEXT_LIMIT) {
-        toast.error(
-          t('composer.showInFieldTooLong', { limit: formatNumber(INTENT_TEXT_LIMIT) })
-        );
+        toast.error(t('composer.showInFieldTooLong', { limit: formatNumber(INTENT_TEXT_LIMIT) }));
         return;
       }
       setInput(text);
@@ -700,13 +698,7 @@ export function ChatShell() {
       );
 
       try {
-        await sendFeedback(
-          messageId,
-          newActive ? type : 'clear',
-          userId,
-          orgId,
-          threadId
-        );
+        await sendFeedback(messageId, newActive ? type : 'clear', userId, orgId, threadId);
         setMessages(prev =>
           prev.map(msg => {
             if (msg.id !== messageId || msg.role !== 'assistant') return msg;
@@ -998,7 +990,9 @@ export function ChatShell() {
                 >
                   <span className="attachment-connector-label">{source.label}</span>
                   <span className="attachment-connector-state">
-                    {source.available ? t('attach.connectorReady') : t('attach.connectorUnavailable')}
+                    {source.available
+                      ? t('attach.connectorReady')
+                      : t('attach.connectorUnavailable')}
                   </span>
                 </li>
               ))}
@@ -1032,42 +1026,38 @@ export function ChatShell() {
                 {chip.status === 'failed' && chip.error && (
                   <span className="attachment-reason">{chip.error}</span>
                 )}
-                {chip.status === 'failed' &&
-                  chip.serverId &&
-                  chip.rejectionReason === 'injection_detected' &&
-                  !chip.restoreRequested && (
-                    <button
-                      type="button"
-                      className="attachment-show"
-                      onClick={() => {
-                        const id = chip.serverId;
-                        if (!id) return;
-                        void (async () => {
-                          try {
-                            const card = await requestAttachmentQuarantineRestore(
-                              id,
-                              userId,
-                              orgId
-                            );
-                            setAttachments(prev =>
-                              prev.map(c =>
-                                c.localId === chip.localId
-                                  ? { ...c, restoreRequested: true }
-                                  : c
-                              )
-                            );
-                            handleMemoryCardCreated(card, t('attach.restoreRequested'));
-                          } catch (err) {
-                            const message =
-                              err instanceof Error ? err.message : t('toast.uploadFailed');
-                            toast.error(message.slice(0, 160));
-                          }
-                        })();
-                      }}
-                    >
-                      {t('attach.requestRestore')}
-                    </button>
-                  )}
+                {chip.status === 'failed' && canRequestChipQuarantineRestore(chip) && (
+                  <button
+                    type="button"
+                    className="attachment-show"
+                    onClick={() => {
+                      const id = chip.serverId;
+                      if (!id) return;
+                      void (async () => {
+                        try {
+                          const card = await requestAttachmentQuarantineRestore(
+                            id,
+                            { thread_id: threadId },
+                            userId,
+                            orgId
+                          );
+                          setAttachments(prev =>
+                            prev.map(c =>
+                              c.localId === chip.localId ? { ...c, restoreRequested: true } : c
+                            )
+                          );
+                          handleMemoryCardCreated(card, t('attach.restoreRequested'));
+                        } catch (err) {
+                          const message =
+                            err instanceof Error ? err.message : t('toast.uploadFailed');
+                          toast.error(message.slice(0, 160));
+                        }
+                      })();
+                    }}
+                  >
+                    {t('attach.requestRestore')}
+                  </button>
+                )}
                 {chip.status === 'ready' && chip.serverId && (
                   <button
                     type="button"
@@ -1151,17 +1141,20 @@ export function ChatShell() {
                       {t('attach.analyze')}
                     </button>
                   )}
-                {chip.origin === 'paste' && chip.sourceText !== undefined && chip.status !== 'uploading' && chip.status !== 'scanning' && (
-                  <button
-                    type="button"
-                    className="attachment-show"
-                    onClick={() => showAttachmentInField(chip.localId)}
-                    aria-label={t('composer.showInField')}
-                    title={t('composer.showInField')}
-                  >
-                    {t('composer.showInField')}
-                  </button>
-                )}
+                {chip.origin === 'paste' &&
+                  chip.sourceText !== undefined &&
+                  chip.status !== 'uploading' &&
+                  chip.status !== 'scanning' && (
+                    <button
+                      type="button"
+                      className="attachment-show"
+                      onClick={() => showAttachmentInField(chip.localId)}
+                      aria-label={t('composer.showInField')}
+                      title={t('composer.showInField')}
+                    >
+                      {t('composer.showInField')}
+                    </button>
+                  )}
                 <button
                   type="button"
                   className="attachment-remove"

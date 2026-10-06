@@ -479,6 +479,36 @@ def test_restore_request_returns_hitl_card(monkeypatch: pytest.MonkeyPatch) -> N
     ]
 
 
+def test_restore_request_touches_session_on_fresh_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: restore mint without a prior chat left GET /hitl 404 Session not found."""
+    app = FastAPI()
+    app.include_router(attachments.router, prefix="/attachments")
+    service = _FakeAttachmentService()
+    session_service = AsyncMock()
+    resources = SimpleNamespace(session_service=session_service, attachment_service=service)
+    monkeypatch.setattr(attachments, "get_app_resources", lambda _app: resources)
+    monkeypatch.setattr(
+        attachments,
+        "get_principal",
+        lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=frozenset({"user"})),
+    )
+    monkeypatch.setattr(attachments, "load_session_for_principal", AsyncMock())
+
+    response = TestClient(app).post(
+        f"/attachments/{_ATTACHMENT_ID}/restore-request",
+        json={"thread_id": "thread-fresh-restore"},
+    )
+
+    assert response.status_code == 200
+    session_service.touch_session.assert_awaited_once()
+    assert session_service.touch_session.await_args.kwargs["thread_id"] == "thread-fresh-restore"
+    assert session_service.touch_session.await_args.kwargs["user_id"] == "user-1"
+    assert (
+        session_service.touch_session.await_args.kwargs["context_patch"]["last_operation"]
+        == "attachment_restore_requested"
+    )
+
+
 def test_restore_request_rejects_malware_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:
     error = AttachmentRestoreNotAllowedError(
         _ATTACHMENT_ID,

@@ -257,6 +257,21 @@ def test_plan_promotes_menu_reports_promoted_from_list() -> None:
     assert plan.required_choice is True
 
 
+def test_plan_skips_menu_promote_when_turn_has_attachments() -> None:
+    """Upload-grounded summarize must not mint prior-topic exclusive menus (055)."""
+    doc = _menu_doc(items=["Снижение объёмов", "Рост затрат", "Спрос", "Климат"])
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=False,
+        requires_user_choice=False,
+        has_turn_attachments=True,
+    )
+    assert plan.reason == "attachment_grounds_ask"
+    assert plan.choice_actions == ()
+    assert plan.required_choice is False
+    assert plan.force_structural is False
+
+
 def test_no_document_is_not_a_human_review_wait() -> None:
     """Empty draft must not mint quality review (client used to hang on a spinner)."""
     plan = HitlInteractionPolicy.plan(None, requires_review=True)

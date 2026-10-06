@@ -244,8 +244,6 @@ filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources",
     "ignore:^.*litellm.*:DeprecationWarning",
     "ignore::DeprecationWarning:neo4j.*",
-    # Python 3.14 → 3.16: asyncio event-loop policies. pytest-asyncio≥1 avoids
-    # most of these; keep ignores for residual third-party / Windows policy pin.
     "ignore:.*asyncio\\.(get|set)_event_loop_policy.*:DeprecationWarning",
     "ignore:.*asyncio\\.(AbstractEventLoopPolicy|WindowsSelectorEventLoopPolicy|DefaultEventLoopPolicy).*:DeprecationWarning",
 ]

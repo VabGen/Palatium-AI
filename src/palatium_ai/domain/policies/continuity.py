@@ -99,6 +99,26 @@ class ContinuityPolicy:
         return stripped[:_PRIOR_CAP]
 
     @staticmethod
+    def resolve_effective_user_text(
+        *,
+        raw_user_text: str,
+        rewritten_query: str,
+        has_turn_attachments: bool,
+    ) -> str:
+        """Pick the ask text workers/HITL see for this turn.
+
+        When fenced uploads are present, keep the raw user ask. Contextualizer is
+        attachment-blind and will anaphora-bind prior assistant topics into
+        ``rewritten_query`` («дай сводку» → prior file summary), which then
+        frames Researcher and option synthesizer away from the new document (055).
+        """
+        raw = raw_user_text.strip()
+        if has_turn_attachments and raw:
+            return raw
+        rewritten = rewritten_query.strip()
+        return rewritten or raw
+
+    @staticmethod
     def prior_assistant_content(
         contextualizer: ContextualizerOutput | None,
         dialog: DialogTurnWindow | None,
@@ -316,9 +336,9 @@ class ContinuityPolicy:
         """Сводит continuity + Intent в один EffectiveRoutingIntent.
 
         ``has_turn_attachments``: this turn carries fenced upload text. Then
-        ``continuation_kind=format`` must NOT bind workers to prior assistant
-        content (that path skips research and rewrites the *previous* file OCR
-        when the user attached a new document — 055).
+        workers must NOT bind prior assistant content, false ``discrete_choice``
+        is cleared for every continuation kind, and callers should pin
+        ``effective_user_text`` via ``resolve_effective_user_text`` (055).
         """
         snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
         assistant_prior = cls.prior_assistant_content(contextualizer, dialog)
@@ -338,23 +358,24 @@ class ContinuityPolicy:
 
         # New upload on this turn owns file-oriented asks; format/answer-of-prior
         # would summarize the previous document and may skip the researcher (055).
-        # Contextualizer/Intent discrete_choice on a grounded upload ("дай текст из
-        # файла") is false clarify — the fenced OCR already supplies the referent.
+        # Contextualizer/Intent discrete_choice on a grounded upload ("дай сводку",
+        # "дай текст из файла") is false clarify for *any* continuation_kind — the
+        # fenced OCR already supplies the referent. Clearing choice only for
+        # clarify left answer/format/new_topic uploads minting HITL menus about the
+        # prior dialog topic (cross-file bleed via option synthesizer).
         # Drop assistant_prior entirely: otherwise fallthrough still injects the
-        # previous file's answer into Researcher/Formatter and the model cites the
-        # new fence while echoing the old body (cross-file bleed).
+        # previous file's answer into Researcher/Formatter.
         if has_turn_attachments:
-            if snap.kind == "format":
+            if snap.kind in {"format", "clarify"}:
                 snap.kind = "answer"
             snap.refers_to_prior = False
             assistant_prior = None
-            if snap.kind == "clarify":
-                snap.kind = "answer"
-                snap.requires_user_choice = False
-                snap.underspec = "none"
-                if snap.raw_task == "clarification_needed":
-                    snap.raw_task = "knowledge_request"
-                recovered_false_clarify = True
+            snap.requires_user_choice = False
+            snap.underspec = "none"
+            snap.caps = tuple(c for c in snap.caps if c != "user_choice")
+            if snap.raw_task == "clarification_needed":
+                snap.raw_task = "knowledge_request"
+            recovered_false_clarify = True
 
         formatted = cls._try_resolve_format(snap=snap, assistant_prior=assistant_prior, dialog=dialog)
         if formatted is not None:

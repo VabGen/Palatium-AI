@@ -11,6 +11,7 @@ from palatium_ai.application.agents.formatter.config import MIN_PIPELINE_CONFIDE
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.llm.response_parser import parse_llm_response
+from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 
@@ -43,14 +44,18 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     elif confidence < MIN_PIPELINE_CONFIDENCE:
         confidence = MIN_PIPELINE_CONFIDENCE
 
+    locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
+    attachment_refs = citation_refs_from_untrusted_context(task_input.context_packet.untrusted_context)
+    has_attachments = bool((task_input.context_packet.untrusted_context or "").strip())
+
     interaction = document.meta.interaction
     if (
         task_input.requires_user_choice or task_input.underspecification_kind == "discrete_choice"
     ) and interaction == "none":
         interaction = "choice"
-
-    locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
-    attachment_refs = citation_refs_from_untrusted_context(task_input.context_packet.untrusted_context)
+    elif has_attachments and not task_input.requires_user_choice and interaction == "choice":
+        # Upload grounds the ask — drop LLM exclusive-menu tags about prior topics (055).
+        interaction = "none"
     # Prefer LLM refs when present; always union attachment file/page citations (W2 G03).
     # Bare UUIDs are not user-facing citations — drop them (LLM often echoes fence ids).
     merged_refs = sanitize_source_refs((*document.meta.source_refs, *attachment_refs))
@@ -81,10 +86,10 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
     locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
     has_attachments = bool((task_input.context_packet.untrusted_context or "").strip())
     dialog_block = "(no prior turns)"
-    if task_input.dialog_window is not None and task_input.dialog_window.turns:
+    window: DialogTurnWindow | None = task_input.dialog_window
+    if window is not None and window.turns:
         # File-grounded turns: prior assistant answers about other uploads must not
         # compete with the current fence (cross-file bleed). Keep user turns only.
-        window = task_input.dialog_window
         if has_attachments:
             user_turns = tuple(turn for turn in window.turns if turn.role == "user")
             window = window.model_copy(update={"turns": user_turns}) if user_turns else None

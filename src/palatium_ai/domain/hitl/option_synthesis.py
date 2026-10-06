@@ -33,9 +33,16 @@ class DiscreteChoiceSynthesisPolicy:
         requires_user_choice: bool,
         underspecification_kind: UnderspecificationKind | str | None,
         plan: HitlCardPlan,
+        has_turn_attachments: bool = False,
     ) -> bool:
-        """Return whether exclusive options must be synthesized for HITL mint."""
+        """Return whether exclusive options must be synthesized for HITL mint.
+
+        Fenced uploads already ground summarize/extract asks — synthesizing a
+        menu from a prior-topic rewrite would mint cards about the wrong file (055).
+        """
         _ = cls
+        if has_turn_attachments:
+            return False
         if underspecification_kind == "open_text":
             return False
         if not requires_user_choice and underspecification_kind != "discrete_choice":

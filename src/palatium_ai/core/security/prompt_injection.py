@@ -130,9 +130,11 @@ _RULE_SPECS: tuple[_Rule, ...] = (
     _Rule(
         "instruction_override_ru_verb",
         "high",
+        # Third group is mandatory: «отмените предыдущие условия/приложения»
+        # is ordinary contract amendment language, not an assistant override (055).
         r"\b(?:не\s+выполняй|отмени|забудь|проигнорируй)\w*\s+"
         r"(?:предыдущ\w*|прежн\w*|полученн\w*|все\s+)\s*"
-        r"(?:инструкц\w*|указани\w*|правил\w*|команд\w*)?",
+        r"(?:инструкц\w*|указани\w*|правил\w*|команд\w*)",
         elastic=True,
     ),
     _Rule(
@@ -182,13 +184,21 @@ _RULE_SPECS: tuple[_Rule, ...] = (
     _Rule(
         "credential_exfiltration_ru",
         "critical",
-        # Object side must stay credential-shaped. ``секрет\w*`` falsely matched
-        # classification stamps (секретно/секретный) and office roles (секретарь)
-        # that dominate scanned corporate PDFs — noun forms of «секрет» only.
+        # Credential nouns (password/token/API key/account data) match on their
+        # own. Bare «секрет» is overloaded in contracts («секрет производства»).
+        # Destination must be URL/host/chat/email — NOT dates (01.01.2024),
+        # article refs (ст.5), or OCR noise that ``\S+\.\S+`` used to match (055).
         r"\b(?:отправ\w*|переда\w*|перешл\w*|загруз\w*|выгруз\w*|пошли)\b"
-        r"[^.\n]{0,60}\b(?:парол\w*|токен\w*|api[_\s-]?ключ\w*|"
-        r"секрет(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b|"
-        r"приватн\w*\s+ключ\w*|учётн\w*\s+данн\w*|учетн\w*\s+данн\w*)",
+        r"[^.\n]{0,60}\b(?:"
+        r"парол\w*|токен\w*|api[_\s-]?ключ\w*|"
+        r"приватн\w*\s+ключ\w*|учётн\w*\s+данн\w*|учетн\w*\s+данн\w*|"
+        r"секрет(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b(?=[^.\n]{0,40}"
+        r"(?:\b(?:на|в)\s+(?:https?://|www\.)\S*|"
+        r"\bна\s+адрес\b|"
+        r"\bна\s+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+        r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+\b|"
+        r"\bв\s+(?:чат\b|телеграм\w*|telegram\b|email\b|e-mail\b|почт\w*|мессенджер\w*)))"
+        r")",
         elastic=True,
     ),
     _Rule(

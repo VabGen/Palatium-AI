@@ -36,6 +36,7 @@ class InteractionAssembler:
         selected_strategy: ExecutionStrategy | str | None = None,
         task_kind: str | None = None,
         requires_user_choice: bool = False,
+        has_turn_attachments: bool = False,
     ) -> AssembledInteraction:
         """Plan cards and strip exclusive menus when choice will be minted."""
         _ = cls
@@ -45,6 +46,7 @@ class InteractionAssembler:
             selected_strategy=selected_strategy,
             task_kind=task_kind,
             requires_user_choice=requires_user_choice,
+            has_turn_attachments=has_turn_attachments,
         )
         if plan.reason == "formatter_output_invalid":
             return AssembledInteraction(
@@ -56,7 +58,7 @@ class InteractionAssembler:
         if document is None:
             return AssembledInteraction(document=None, plan=plan)
 
-        if plan.reason == "interaction_downgraded_informational":
+        if plan.reason in {"interaction_downgraded_informational", "attachment_grounds_ask"}:
             # Clear the soft choice/confirm tag so the UI does not expect cards.
             clean = document.model_copy(
                 update={

@@ -83,6 +83,24 @@ def test_needs_synthesis_when_choice_required_without_options() -> None:
     )
 
 
+def test_needs_synthesis_false_when_turn_has_attachments() -> None:
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        title="Уточнение",
+        blocks=(ParagraphBlock(type="paragraph", text="Сводка?"),),
+        actions=(),
+        meta=DocumentMeta(confidence=0.9, requires_review=False, source_refs=(), interaction="none"),
+    )
+    plan = HitlInteractionPolicy.plan(doc, requires_review=False, requires_user_choice=True)
+    assert not DiscreteChoiceSynthesisPolicy.needs_synthesis(
+        requires_user_choice=True,
+        underspecification_kind="discrete_choice",
+        plan=plan,
+        has_turn_attachments=True,
+    )
+
+
 def test_merge_synthesized_actions_sets_choice_interaction() -> None:
     actions = (
         ActionSpec(action_id="choice_1", label="Путешествия", kind="custom", style="primary"),

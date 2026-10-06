@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from redis.asyncio import Redis
-    from sqlalchemy.ext.asyncio import AsyncEngine
+    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
     from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.intent_service import IntentService
@@ -158,7 +158,7 @@ async def load_mcp_servers_from_json_file(file_path: str) -> dict[str, str]:
         return {}
 
 
-def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPort:
+def _build_memory_port(settings: Settings, session_factory: async_sessionmaker[AsyncSession]) -> MemoryPort:
     """Select MemoryPort backend (postgres | mem0 | graphiti) + optional rerank."""
     backend = settings.memory.backend
     if backend == "mem0":
@@ -195,7 +195,7 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
             session_factory,
             embeddings=embedding_client,
             retention_windows=retention_windows_from_settings(settings),
-        )  # type: ignore[arg-type]  # embeddings опционален намеренно (017)
+        )
         logger.info(
             "MemoryPort: Postgres memory.entries",
             vector_search=embedding_client is not None,
@@ -215,7 +215,7 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
     return port
 
 
-def _build_knowledge_port(settings: Settings, session_factory: object) -> KnowledgePort:
+def _build_knowledge_port(settings: Settings, session_factory: async_sessionmaker[AsyncSession]) -> KnowledgePort:
     """KnowledgePort for platform.ingest_document (postgres or in-memory fallback)."""
     embedding_client = None
     try:
@@ -223,7 +223,7 @@ def _build_knowledge_port(settings: Settings, session_factory: object) -> Knowle
     except _EMBEDDING_WIRING_ERRORS as exc:
         logger.warning("Knowledge embeddings disabled", error=str(exc))
     port: KnowledgePort = PostgresKnowledgePort(
-        session_factory,  # type: ignore[arg-type]
+        session_factory,
         embeddings=embedding_client,  # embeddings опционален намеренно (017)
         hybrid_fusion=settings.knowledge.hybrid_fusion,
         rrf_k=settings.knowledge.rrf_k,

@@ -113,9 +113,11 @@ def _words_and_mean_confidence(payload: dict[str, list[object]]) -> tuple[str, f
         word = str(raw_text).strip()
         if not word:
             continue
+        if not isinstance(raw_conf, (int, float, str)):
+            continue
         try:
             conf = float(raw_conf)
-        except TypeError, ValueError:
+        except ValueError:
             continue
         if conf < 0.0:
             continue

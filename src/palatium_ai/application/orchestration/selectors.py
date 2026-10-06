@@ -106,10 +106,18 @@ def ensure_routing_intent(state: AgentGraphState) -> EffectiveRoutingIntent:
 
 
 def resolved_prior_assistant_content(state: AgentGraphState) -> str | None:
-    """Prior text from ContinuityPolicy / dialog (assistant or salient user intents)."""
+    """Prior text from ContinuityPolicy; dialog fallback only when intent is absent.
+
+    When ``routing_intent`` is present, ``prior_context`` is authoritative — including
+    ``None`` after ContinuityPolicy clears prior on a new upload. Falling back to the
+    last assistant turn would re-inject the previous file's answer next to the new
+    fence (cross-file bleed, 055). Turn fences in ``untrusted_context`` own evidence
+    for the same reason.
+    """
+    if (state.get("untrusted_context") or "").strip():
+        return None
     intent = routing_intent(state)
-    prior: str | None
-    if intent is not None and intent.prior_context:
+    if intent is not None:
         prior = intent.prior_context
     else:
         ctx = state.get("contextualization")
@@ -159,8 +167,11 @@ def resolved_thread_id(state: AgentGraphState) -> str:
 
 
 def classification_result(state: AgentGraphState) -> IntentTaskResult:
-    """Возвращает обязательный classification result."""
-    return state["classification"]
+    """Fail-closed read of classification (set before downstream nodes)."""
+    classification = state.get("classification")
+    if classification is None:
+        raise ValueError("AgentGraphState.classification is required")
+    return classification
 
 
 def routing_result(state: AgentGraphState) -> SupervisorTaskResult | None:
@@ -220,14 +231,19 @@ def resolved_route_plan(state: AgentGraphState) -> str:
 
 
 def resolved_worker_summary(state: AgentGraphState) -> str | None:
-    """Worker summary или prior context для format/answer без researcher."""
+    """Worker summary or ContinuityPolicy-trusted prior; never resurrect dialog prior.
+
+    When ``trust_prior_for_workers`` is false (e.g. new upload fences), returning
+    ``resolved_prior_assistant_content`` used to reload the last assistant body from
+    dialog and feed Formatter/Critic the previous file's answer.
+    """
     execution = state.get("execution")
     if execution is not None and execution.output is not None:
         return _clip_worker_text(state, execution.output.summary)
     intent = ensure_routing_intent(state)
     if intent.trust_prior_for_workers:
         return _clip_worker_text(state, intent.prior_context)
-    return resolved_prior_assistant_content(state)
+    return None
 
 
 def resolved_worker_confidence(state: AgentGraphState) -> float | None:

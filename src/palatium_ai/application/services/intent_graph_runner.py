@@ -432,6 +432,7 @@ class IntentGraphRunner:
         )
         prior_context = getattr(routing_intent, "prior_context", None) if routing_intent is not None else None
         effective_user_text = str(final_state.get("effective_user_text") or text)
+        has_turn_attachments = bool((final_state.get("untrusted_context") or "").strip())
 
         if isinstance(formatted, FormatterTaskResult):
             formatted = await self._attach_hitl_cards(
@@ -446,6 +447,7 @@ class IntentGraphRunner:
                 prior_context=prior_context if isinstance(prior_context, str) else None,
                 user_id=user_id,
                 org_id=org_id,
+                has_turn_attachments=has_turn_attachments,
             )
             if self._dialog_turn_store is not None:
                 await self._dialog_turn_store.append_turn(

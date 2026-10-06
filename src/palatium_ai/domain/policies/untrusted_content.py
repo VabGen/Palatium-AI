@@ -28,6 +28,12 @@ _DEFAULT_MASK_RANK = 2
 _DEFAULT_QUARANTINE_RANK = 3
 _DEFAULT_REJECT_RANK = 4
 
+# Attachments always re-enter prompts inside ``wrap_untrusted_tool_output`` (020).
+# Regex severities are signals for redaction only: complete scans never refuse the
+# upload (legal/OCR false positives). Incomplete (truncated) scans still quarantine.
+_FENCED_ATTACHMENT_QUARANTINE_RANK = 4
+_FENCED_ATTACHMENT_REJECT_RANK = 4
+
 _FENCE_BLOCK = re.compile(
     r"<<<UNTRUSTED_TOOL_OUTPUT\s+source=[^\s>]+>>>\n.*?\n<<<END_UNTRUSTED_TOOL_OUTPUT>>>",
     re.DOTALL,
@@ -55,6 +61,12 @@ class UntrustedContentThresholds(BaseModel):
 
 
 DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS = UntrustedContentThresholds()
+
+FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS = UntrustedContentThresholds(
+    mask_at_rank=_DEFAULT_MASK_RANK,
+    quarantine_at_rank=_FENCED_ATTACHMENT_QUARANTINE_RANK,
+    reject_at_rank=_FENCED_ATTACHMENT_REJECT_RANK,
+)
 
 
 class UntrustedContentResult(BaseModel):
@@ -130,6 +142,36 @@ class UntrustedContentPolicy:
             worst_severity=report.worst_severity,
             matched_rules=_distinct_rules(report),
         )
+
+    @staticmethod
+    def prepare_fenced_attachment(
+        text: str,
+        report: PromptInjectionReport,
+        *,
+        thresholds: UntrustedContentThresholds = FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
+    ) -> UntrustedContentResult:
+        """Admit attachment text under mandatory fencing (max-relax injection gate).
+
+        Complete scans: any severity → ``mask`` (or ``allow`` when clean). The fence
+        is the containment boundary; regex hits only redact spans. Truncated scans
+        still quarantine (incomplete redaction would be fail-open, 020).
+        """
+        if report.truncated:
+            return UntrustedContentResult(
+                action="quarantine",
+                text="",
+                worst_severity=report.worst_severity,
+                matched_rules=_distinct_rules(report),
+            )
+        prepared = UntrustedContentPolicy.prepare(text, report, thresholds=thresholds)
+        if prepared.action in {"quarantine", "reject"}:
+            return UntrustedContentResult(
+                action="mask",
+                text=redact_findings(text, report.findings),
+                worst_severity=prepared.worst_severity,
+                matched_rules=prepared.matched_rules,
+            )
+        return prepared
 
 
 def _distinct_rules(report: PromptInjectionReport) -> tuple[str, ...]:

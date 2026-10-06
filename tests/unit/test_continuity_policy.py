@@ -182,6 +182,61 @@ def test_format_with_turn_attachments_does_not_bind_prior_file() -> None:
     # New fence owns evidence — prior assistant body about another file must not
     # reach Researcher/Formatter (cross-file bleed regression).
     assert effective.prior_context is None
+    assert effective.requires_user_choice is False
+    assert effective.underspecification_kind == "none"
+
+
+def test_answer_upload_clears_discrete_choice_about_prior_topic() -> None:
+    """Screenshot class: PDF + «дай короткую сводку» must not mint Ivan-tea HITL menus.
+
+    Contextualizer rewrites the ask against prior dialog; Intent marks discrete_choice.
+    Continuity must ground on the fence for answer/format/new_topic — not only clarify.
+    """
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="Сводка причин роста цен на иван-чай",
+        continuation_kind="answer",
+        confidence=0.95,
+        refers_to_prior=True,
+        prior_assistant_excerpt="иван-чай … 2500–5000",
+        reasoning="anaphora to prior summary",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=("user_choice",),
+        confidence=0.9,
+        reasoning="summary of what?",
+        requires_user_choice=True,
+        underspecification_kind="discrete_choice",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=dialog,
+        raw_intent=raw,
+        has_turn_attachments=True,
+    )
+    assert effective.task_kind == "knowledge_request"
+    assert effective.requires_user_choice is False
+    assert effective.underspecification_kind == "none"
+    assert "user_choice" not in effective.candidate_capabilities
+    assert effective.prior_context is None
+    assert effective.trust_prior_for_workers is False
+
+
+def test_resolve_effective_user_text_keeps_raw_ask_on_upload() -> None:
+    pinned = ContinuityPolicy.resolve_effective_user_text(
+        raw_user_text="дай короткую сводку",
+        rewritten_query="Сводка причин роста цен на иван-чай",
+        has_turn_attachments=True,
+    )
+    assert pinned == "дай короткую сводку"
+    follow = ContinuityPolicy.resolve_effective_user_text(
+        raw_user_text="дай короткую сводку",
+        rewritten_query="Сводка причин роста цен на иван-чай",
+        has_turn_attachments=False,
+    )
+    assert follow == "Сводка причин роста цен на иван-чай"
 
 
 def test_attachment_grounds_false_clarify_on_knowledge_request() -> None:

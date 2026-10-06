@@ -272,6 +272,36 @@ async def _read_body_capped(request: Request, *, max_bytes: int) -> bytes:
     return bytes(body)
 
 
+async def _bind_thread_for_hitl(
+    *,
+    request: Request,
+    thread_id: str,
+    last_operation: str,
+) -> None:
+    """Owner-check the thread and ensure a session row exists before minting HITL.
+
+    Attachments are often the first action on a client-minted thread (no chat yet).
+    ``load_session_for_principal(..., allow_missing=True)`` alone leaves no row, so
+    later ``GET /hitl/{card_id}`` (``allow_missing=False``) returns 404 Session not
+    found after a successful restore/index toast (055).
+    """
+    principal = get_principal(request)
+    session_service = get_app_resources(request.app).session_service
+    await load_session_for_principal(
+        request=request,
+        principal=principal,
+        session_service=session_service,
+        thread_id=thread_id,
+        allow_missing=True,
+    )
+    await session_service.touch_session(
+        thread_id=thread_id,
+        user_id=principal.subject,
+        context_patch={"last_operation": last_operation},
+        status="active",
+    )
+
+
 @router.post("/init", response_model=InitUploadResponse, status_code=status.HTTP_201_CREATED)
 async def init_upload(body: InitUploadRequest, request: Request) -> InitUploadResponse:
     """Validate intake and issue a presigned PUT URL for the raw bytes."""
@@ -614,14 +644,10 @@ async def request_index(
     principal = get_principal(request)
     service = _attachment_service(request)
 
-    # Mirrors init/list: a not-yet-created session must not block indexing an
-    # attachment the caller already owns; an existing thread is still owner-checked.
-    await load_session_for_principal(
+    await _bind_thread_for_hitl(
         request=request,
-        principal=principal,
-        session_service=get_app_resources(request.app).session_service,
         thread_id=body.thread_id,
-        allow_missing=True,
+        last_operation="attachment_index_requested",
     )
 
     try:
@@ -650,12 +676,10 @@ async def request_quarantine_restore(
     principal = get_principal(request)
     service = _attachment_service(request)
 
-    await load_session_for_principal(
+    await _bind_thread_for_hitl(
         request=request,
-        principal=principal,
-        session_service=get_app_resources(request.app).session_service,
         thread_id=body.thread_id,
-        allow_missing=True,
+        last_operation="attachment_restore_requested",
     )
 
     try:
@@ -683,12 +707,10 @@ async def request_attachment_analysis(
     principal = get_principal(request)
     service = _attachment_service(request)
 
-    await load_session_for_principal(
+    await _bind_thread_for_hitl(
         request=request,
-        principal=principal,
-        session_service=get_app_resources(request.app).session_service,
         thread_id=body.thread_id,
-        allow_missing=True,
+        last_operation="attachment_analyze_requested",
     )
 
     try:

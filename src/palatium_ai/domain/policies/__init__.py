@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from .scratchpad import SessionScratchpadPolicy
     from .untrusted_content import (
         DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
+        FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
         UntrustedContentPolicy,
         UntrustedContentResult,
         UntrustedContentThresholds,
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
+    "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS",
     "LAST_RESORT_PLATFORM_TOOLS",
     "LOW_RISK_ROUTE_STRATEGIES",
     "AckReplyPolicy",
@@ -121,6 +123,10 @@ _LAZY: dict[str, tuple[str, str]] = {
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS": (
         ".untrusted_content",
         "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
+    ),
+    "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS": (
+        ".untrusted_content",
+        "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS",
     ),
     "UntrustedContentPolicy": (".untrusted_content", "UntrustedContentPolicy"),
     "UntrustedContentResult": (".untrusted_content", "UntrustedContentResult"),
