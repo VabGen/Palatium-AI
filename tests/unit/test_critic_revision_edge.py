@@ -12,6 +12,7 @@ from palatium_ai.application.orchestration.nodes import (
 from palatium_ai.core.types.graph_nodes import (
     NODE_ANALYST,
     NODE_CODER,
+    NODE_CRITIC,
     NODE_FORMATTER,
     NODE_QUALITY_REVISION,
     NODE_RESEARCHER,
@@ -35,9 +36,10 @@ def _critic(*, requires_review: bool) -> CriticTaskResult:
     )
 
 
-def _snapshot(strategy: str) -> MagicMock:
+def _snapshot(strategy: str, *, task_kind: str = "knowledge_request") -> MagicMock:
     snap = MagicMock()
     snap.selected_strategy = strategy
+    snap.task_kind = task_kind
     return snap
 
 
@@ -58,6 +60,26 @@ def test_route_after_context_dispatches_coder_analyst() -> None:
         side_effect=lambda _s: _snapshot("reason_only"),
     ):
         assert route_after_context(state) == NODE_RESEARCHER  # type: ignore[arg-type]
+
+
+def test_route_after_context_clarify_and_true_format_skip_critic() -> None:
+    """Clarify and response_formatting skip Critic; social format_only does not."""
+    state: dict = {"requires_clarification": False}
+    with patch(
+        "palatium_ai.application.orchestration.nodes.OrchestrationSnapshot.from_state",
+        side_effect=lambda _s: _snapshot("clarify", task_kind="clarification_needed"),
+    ):
+        assert route_after_context(state) == NODE_FORMATTER  # type: ignore[arg-type]
+    with patch(
+        "palatium_ai.application.orchestration.nodes.OrchestrationSnapshot.from_state",
+        side_effect=lambda _s: _snapshot("format_only", task_kind="response_formatting"),
+    ):
+        assert route_after_context(state) == NODE_FORMATTER  # type: ignore[arg-type]
+    with patch(
+        "palatium_ai.application.orchestration.nodes.OrchestrationSnapshot.from_state",
+        side_effect=lambda _s: _snapshot("format_only", task_kind="social_conversation"),
+    ):
+        assert route_after_context(state) == NODE_CRITIC  # type: ignore[arg-type]
 
 
 def test_route_after_critic_schedules_revision_under_budget() -> None:

@@ -12,13 +12,14 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Float, cast, func, or_, select
+from sqlalchemy import Float, cast, delete, func, or_, select
 from sqlalchemy.orm import aliased
 
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.security.secret_scanner import scan_text
 from palatium_ai.core.types.embeddings import assert_vector_dim
-from palatium_ai.domain.knowledge.scoring import merge_hybrid_knowledge_hits
+from palatium_ai.domain.knowledge.project_scope import project_source_document_prefix
+from palatium_ai.domain.knowledge.scoring import KnowledgeHybridFusion, merge_hybrid_knowledge_hits
 from palatium_ai.domain.knowledge.types import (
     IngestDocumentCommand,
     IngestDocumentResult,
@@ -50,9 +51,13 @@ class PostgresKnowledgePort:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         embeddings: EmbeddingPort | None = None,
+        hybrid_fusion: KnowledgeHybridFusion = "weighted",
+        rrf_k: int = 60,
     ) -> None:
         self._session_factory = session_factory
         self._embeddings = embeddings
+        self._hybrid_fusion = hybrid_fusion
+        self._rrf_k = rrf_k
 
     async def ingest_document(self, command: IngestDocumentCommand) -> IngestDocumentResult:
         if not command.chunks:
@@ -75,6 +80,14 @@ class PostgresKnowledgePort:
         document_id = uuid4()
         async with self._session_factory() as session:
             await set_rls_user_scope(session, command.user_id)
+            # Idempotent replace by (user_id, source_document_id) — port contract.
+            if command.document_id:
+                await session.execute(
+                    delete(KnowledgeDocumentORM).where(
+                        KnowledgeDocumentORM.user_id == command.user_id,
+                        KnowledgeDocumentORM.source_document_id == command.document_id,
+                    )
+                )
             session.add(
                 KnowledgeDocumentORM(
                     id=document_id,
@@ -128,6 +141,8 @@ class PostgresKnowledgePort:
             fts_hits = await self._search_fts(
                 user_id=query.user_id,
                 thread_id=query.thread_id,
+                project_id=query.project_id,
+                source_document_id=query.source_document_id,
                 query=cleaned,
                 limit=safe_limit,
             )
@@ -136,15 +151,25 @@ class PostgresKnowledgePort:
                 vector_hits = await self._search_vector(
                     user_id=query.user_id,
                     thread_id=query.thread_id,
+                    project_id=query.project_id,
+                    source_document_id=query.source_document_id,
                     query=cleaned,
                     limit=safe_limit,
                 )
             if fts_hits or vector_hits:
-                raw_hits = merge_hybrid_knowledge_hits(fts_hits, vector_hits, limit=safe_limit)
+                raw_hits = merge_hybrid_knowledge_hits(
+                    fts_hits,
+                    vector_hits,
+                    limit=safe_limit,
+                    fusion=self._hybrid_fusion,
+                    rrf_k=self._rrf_k,
+                )
             else:
                 raw_hits = await self._search_token_overlap(
                     user_id=query.user_id,
                     thread_id=query.thread_id,
+                    project_id=query.project_id,
+                    source_document_id=query.source_document_id,
                     query=cleaned,
                     limit=safe_limit,
                 )
@@ -160,6 +185,8 @@ class PostgresKnowledgePort:
         *,
         user_id: str,
         thread_id: str | None,
+        project_id: str | None,
+        source_document_id: str | None,
         query: str,
         limit: int,
     ) -> list[tuple[str, float, dict[str, object]]]:
@@ -168,8 +195,14 @@ class PostgresKnowledgePort:
         ts_query = func.plainto_tsquery("simple", query)
         rank = cast(func.ts_rank_cd(ts_vector, ts_query), Float)
         filters = [KnowledgeChunkORM.user_id == user_id, ts_vector.op("@@")(ts_query)]
-        if thread_id:
-            filters.append(doc.thread_id == thread_id)
+        filters.extend(
+            self._scope_filters(
+                doc,
+                thread_id=thread_id,
+                project_id=project_id,
+                source_document_id=source_document_id,
+            )
+        )
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
             result = await session.execute(
@@ -194,6 +227,8 @@ class PostgresKnowledgePort:
         *,
         user_id: str,
         thread_id: str | None,
+        project_id: str | None,
+        source_document_id: str | None,
         query: str,
         limit: int,
     ) -> list[tuple[str, float, dict[str, object]]]:
@@ -212,8 +247,14 @@ class PostgresKnowledgePort:
             KnowledgeChunkORM.user_id == user_id,
             KnowledgeChunkORM.embedding.is_not(None),
         ]
-        if thread_id:
-            filters.append(doc.thread_id == thread_id)
+        filters.extend(
+            self._scope_filters(
+                doc,
+                thread_id=thread_id,
+                project_id=project_id,
+                source_document_id=source_document_id,
+            )
+        )
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
             result = await session.execute(
@@ -233,19 +274,45 @@ class PostgresKnowledgePort:
             for chunk, document, score in rows
         ]
 
+    @staticmethod
+    def _scope_filters(
+        doc: object,
+        *,
+        thread_id: str | None,
+        project_id: str | None,
+        source_document_id: str | None = None,
+    ) -> list[object]:
+        filters: list[object] = []
+        if thread_id:
+            filters.append(doc.thread_id == thread_id)  # type: ignore[attr-defined]
+        if source_document_id and source_document_id.strip():
+            filters.append(doc.source_document_id == source_document_id.strip())  # type: ignore[attr-defined]
+        elif project_id and project_id.strip():
+            prefix = project_source_document_prefix(project_id)
+            filters.append(doc.source_document_id.startswith(prefix))  # type: ignore[attr-defined]
+        return filters
+
     async def _search_token_overlap(
         self,
         *,
         user_id: str,
         thread_id: str | None,
+        project_id: str | None,
+        source_document_id: str | None,
         query: str,
         limit: int,
     ) -> list[dict[str, object]]:
         tokens = {token for token in re.findall(r"[a-zA-Zа-яА-Я0-9_]{2,}", query.lower())}
         doc = aliased(KnowledgeDocumentORM)
         filters = [KnowledgeChunkORM.user_id == user_id]
-        if thread_id:
-            filters.append(doc.thread_id == thread_id)
+        filters.extend(
+            self._scope_filters(
+                doc,
+                thread_id=thread_id,
+                project_id=project_id,
+                source_document_id=source_document_id,
+            )
+        )
         if tokens:
             filters.append(or_(*[KnowledgeChunkORM.search_text.ilike(f"%{token}%") for token in list(tokens)[:8]]))
         async with self._session_factory() as session:

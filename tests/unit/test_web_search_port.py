@@ -7,7 +7,6 @@ import json
 import httpx
 import pytest
 
-from palatium_ai.core.config.settings import Settings
 from palatium_ai.core.resilience.circuit import ConsecutiveFailureCircuit
 from palatium_ai.domain.web.types import WebSearchQuery
 from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
@@ -144,8 +143,32 @@ async def test_http_web_search_circuit_opens_after_failures() -> None:
 
 
 def test_build_web_search_port_defaults_to_stub() -> None:
-    port = build_web_search_port(Settings())
+    from unittest.mock import MagicMock
+
+    settings = MagicMock()
+    settings.web.backend = "stub"
+    port = build_web_search_port(settings)
     assert isinstance(port, StubWebSearchPort)
+
+
+def test_build_web_search_port_http_misconfig_fail_closed() -> None:
+    from unittest.mock import MagicMock
+
+    from pydantic import SecretStr
+
+    from palatium_ai.infrastructure.web.factory import WebSearchConfigurationError
+
+    settings = MagicMock()
+    settings.web.backend = "http"
+    settings.web.provider = "brave"
+    settings.web.api_key = SecretStr("")
+    settings.web.timeout_seconds = 15.0
+    settings.web.retry_attempts = 1
+    settings.web.retry_delay_seconds = 0.01
+    settings.web.circuit_failures_to_open = 3
+    settings.web.circuit_open_seconds = 30.0
+    with pytest.raises(WebSearchConfigurationError):
+        build_web_search_port(settings)
 
 
 @pytest.mark.asyncio()

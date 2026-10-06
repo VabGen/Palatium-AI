@@ -18,9 +18,18 @@
   Docker-сервисы (Postgres/Redis/Neo4j/LiteLLM) НЕ трогаются —
   для них используйте: docker compose --env-file env/.env down
 
+  ⚠ Dev-порты пересекаются с опубликованными портами контейнеров: пока MCP-стабы
+  подняты как контейнеры, на 8080/8081 слушает Docker Desktop
+  (com.docker.backend.exe). Поэтому «на порту что-то есть» НЕ значит «это наше»:
+  скрипт останавливает только процессы, запущенные из этого репозитория
+  (python -m palatium_ai.main / uvicorn mcp_servers...), а чужой слушатель
+  пропускает с пометкой. Убийство docker-прокси уносит с собой ВСЕ опубликованные
+  порты (postgres/redis/litellm/neo4j) и требует перезапуска Docker Desktop.
+  Осознанно убить чужое — только явным -AllowForeign.
+
   Использует scripts/.dev/processes.json для имён сервисов.
   Слушатели портов пересканируются — вручную запущенные процессы
-  тоже будут остановлены.
+  (наши, из этого репо) тоже будут остановлены.
 
   uvicorn --reload spawns child workers; скрипт останавливает дерево
   процессов и повторяет до освобождения порта.
@@ -30,11 +39,18 @@
 
 [CmdletBinding()]
 param(
-    [switch]$Force
+    [switch]$Force,
+    # Escape hatch: stop whatever holds a dev port, even a foreign process. Off by
+    # default because the usual foreign owner here is Docker's port publisher (020).
+    [switch]$AllowForeign
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# Ownership rule for the dev ports. Shared with dev-up.ps1 so the two scripts cannot
+# drift apart on what counts as "our" process — see the file header.
+. (Join-Path $PSScriptRoot "lib/dev-common.ps1")
 
 $DevDir    = Join-Path $PSScriptRoot ".dev"
 $StateFile = Join-Path $DevDir "processes.json"
@@ -88,7 +104,9 @@ function Stop-PortService {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][int]$Port,
-        [switch]$Force
+        [Parameter(Mandatory = $true)][hashtable]$Table,
+        [switch]$Force,
+        [switch]$AllowForeign
     )
 
     $maxAttempts = 8
@@ -102,6 +120,15 @@ function Stop-PortService {
             } else {
                 Write-Host "[ok]   $Name — stopped" -ForegroundColor Green
             }
+            return $true
+        }
+
+        # Ownership gate before anything is stopped: a shared port is not proof of
+        # ownership, and a mis-kill here is not recoverable by re-running dev-up.
+        if (-not $AllowForeign -and -not (Test-OurDevProcess -ProcessId $listener.pid -Table $Table)) {
+            $owner = Get-ProcessOwnerName -ProcessId ([int]$listener.pid) -Table $Table
+            Write-Host "[skip] $Name — port $Port is held by pid $($listener.pid) ($owner), not a repo process" -ForegroundColor Yellow
+            Write-Host "       left running on purpose; stop it manually, or re-run with -AllowForeign" -ForegroundColor DarkGray
             return $true
         }
 
@@ -158,19 +185,33 @@ if (-not $anyListening) {
 }
 
 $failed = $false
+$skippedForeign = @()
+# One snapshot for all six ports: the ownership walk inspects ancestors, which must not
+# shift under it between checks.
+$processTable = Get-ProcessTable
 foreach ($entry in $DevPorts) {
     $name = if ($knownNames.ContainsKey($entry.Port)) {
         $knownNames[$entry.Port]
     } else {
         $entry.Name
     }
-    $ok = Stop-PortService -Name $name -Port $entry.Port -Force:$Force
+    $listener = Get-PortListener -Port $entry.Port
+    if ($listener -and -not $AllowForeign -and -not (Test-OurDevProcess -ProcessId $listener.pid -Table $processTable)) {
+        $skippedForeign += "$name (:$($entry.Port), pid $($listener.pid))"
+    }
+    $ok = Stop-PortService -Name $name -Port $entry.Port -Table $processTable -Force:$Force -AllowForeign:$AllowForeign
     if (-not $ok) { $failed = $true }
 }
 
 if (Test-Path $StateFile) { Remove-Item -Path $StateFile -Force }
 
 Write-Host ""
+if ($skippedForeign.Count -gt 0) {
+    Write-Host "Оставлены чужие процессы на dev-портах: $($skippedForeign -join ', ')" -ForegroundColor Yellow
+    Write-Host "Это не наши сервисы (обычно порт-прокси Docker). Остановить их можно вручную" -ForegroundColor DarkGray
+    Write-Host "или повторным запуском с -AllowForeign — но это уронит и Docker-стек." -ForegroundColor DarkGray
+    Write-Host ""
+}
 if ($failed) {
     Write-Host "Некоторые сервисы могут ещё работать. Попробуйте -Force." -ForegroundColor Yellow
     exit 1

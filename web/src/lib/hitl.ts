@@ -70,15 +70,24 @@ export function fieldsFromFormatterResult(result: FormatterTaskResult): Assistan
   const hasHitl = hitlCards.length > 0;
   const document = result.output;
   const emptyFailure = document === null && !hasHitl;
+  const rawError = result.error?.trim() || undefined;
+  const humanError = humanizeFormatterError(rawError);
   return {
     document,
     hitlCards,
     _requiresReview: requiresReview,
     // Never a contentless "moderator" wait: HITL is cards on a draft, else it's a failure.
     _pendingReview: false,
-    error: emptyFailure
-      ? result.error?.trim() || t('msg.emptyResponse')
-      : (result.error ?? undefined),
+    error: emptyFailure ? humanError || t('msg.emptyResponse') : humanError,
     status: emptyFailure ? 'failure' : result.status,
   };
+}
+
+/** Map known machine error codes to locale-safe copy; leave unknown text intact. */
+function humanizeFormatterError(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  if (raw === 'formatter_output_invalid') {
+    return t('msg.formatterOutputInvalid');
+  }
+  return raw;
 }

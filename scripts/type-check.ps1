@@ -36,8 +36,19 @@ if (-not $McpOnly) {
 
 if (-not $MainOnly) {
     Write-Host ""
-    Write-Host "[2/2] mypy: mcp_servers" -ForegroundColor Cyan
-    poetry run mypy --config-file mcp_servers/mypy.ini mcp_servers
+    Write-Host "[2/2] mypy: mcp_servers stubs (excl. edms-ai-assistant / JavaEdms)" -ForegroundColor Cyan
+    # Explicit stub paths only — walking mcp_servers/ pulls legacy DocsGPT duplicates (017/090).
+    poetry run mypy --config-file mcp_servers/mypy.ini `
+        mcp_servers/__init__.py `
+        mcp_servers/mcp_stub_auth.py `
+        mcp_servers/mcp_stub_hardening.py `
+        mcp_servers/mcp_stub_runtime.py `
+        mcp_servers/mcp_stub_tools.py `
+        mcp_servers/analytics `
+        mcp_servers/gateway `
+        mcp_servers/platform `
+        mcp_servers/edms/__init__.py `
+        mcp_servers/edms/edms_mcp_server.py
     if ($LASTEXITCODE -ne 0) { $failed = 1 }
 }
 

@@ -394,6 +394,72 @@ textarea {
   flex-shrink: 0;
 }
 
+.attachment-project {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.attachment-project-label {
+  font-weight: 500;
+}
+
+.attachment-project input {
+  border: 1px solid var(--stroke);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+}
+
+.attachment-project input:disabled {
+  opacity: 0.6;
+}
+
+.attachment-connectors {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.attachment-connectors-label {
+  font-weight: 500;
+}
+
+.attachment-connectors-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment-connector {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: var(--bg);
+}
+
+.attachment-connector.is-unavailable {
+  opacity: 0.72;
+}
+
+.attachment-connector-state {
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  text-transform: lowercase;
+}
+
 .memory-actions {
   display: flex;
   flex-direction: column;
@@ -636,9 +702,54 @@ textarea {
   color: var(--text);
 }
 
+.attachment-chip.is-scanning {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--stroke));
+  color: var(--text-muted);
+}
+
 .attachment-chip.is-failed {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--stroke));
   color: color-mix(in srgb, var(--danger) 75%, var(--text));
+}
+
+.attachment-chip.is-paste {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--stroke));
+}
+
+.source-ref-chips {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.source-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--stroke);
+  background: var(--bg-soft);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-badge {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  text-transform: lowercase;
+}
+
+.attachment-badge.is-pii {
+  color: color-mix(in srgb, var(--danger) 70%, var(--text));
 }
 
 .attachment-name {
@@ -655,6 +766,28 @@ textarea {
 
 .attachment-reason {
   opacity: 0.85;
+}
+
+.attachment-show {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 2px 4px;
+  font-size: 0.65rem;
+  cursor: pointer;
+  border-radius: 999px;
+  white-space: nowrap;
+  opacity: 0.85;
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .attachment-show:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
 }
 
 .attachment-remove {

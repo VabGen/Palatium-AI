@@ -43,3 +43,12 @@ def test_estimate_cost_unknown_model_is_zero() -> None:
         completion_tokens=50,
     )
     assert cost == 0.0
+
+
+def test_estimate_cost_skips_gateway_tier_alias() -> None:
+    cost = estimate_completion_cost_usd(
+        model="tier-small",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+    assert cost == 0.0

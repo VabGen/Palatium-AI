@@ -70,6 +70,15 @@ def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
         classification_confidence = float(input_context["classification_confidence"])
     except KeyError, ValueError:
         classification_confidence = 0.0
+    worker_confidence_raw = input_context.get("worker_confidence", "")
+    worker_confidence: float | None
+    if worker_confidence_raw.strip() == "":
+        worker_confidence = None
+    else:
+        try:
+            worker_confidence = float(worker_confidence_raw)
+        except ValueError:
+            worker_confidence = None
 
     return CriticInput(
         task_id=input_context.get("_task_id", packet.task_id),
@@ -80,4 +89,5 @@ def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
         selected_strategy=strategy,
         continuation_kind=continuation,
         user_input_chars=user_input_chars,
+        worker_confidence=worker_confidence,
     )

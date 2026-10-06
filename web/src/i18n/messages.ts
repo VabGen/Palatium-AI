@@ -38,6 +38,8 @@ export const ru = {
   // --- Сообщения ---
   'msg.agentsWorking': 'Агенты работают',
   'msg.emptyResponse': 'Пустой ответ',
+  'msg.formatterOutputInvalid':
+    'Не удалось оформить ответ как выбор. Попробуйте переформулировать запрос или уточнить варианты.',
   'msg.devGap': 'DEV: документ похож на эксклюзивное меню, но HITL-карточки не созданы.',
 
   // --- Действия над ответом ---
@@ -59,6 +61,15 @@ export const ru = {
   'composer.overLimitTitle': 'Слишком длинное сообщение ({used} / {limit})',
   'composer.removeAttachment': 'Убрать {name}',
   'composer.attachedFiles': 'Прикреплённые файлы',
+  'composer.showInField': 'Показать в поле ввода',
+  'composer.asDocument': 'как вложение',
+  'composer.pastedDefaultPrompt': 'Проанализируй приложенный текст.',
+  'composer.pasteTooLarge':
+    'Вставка слишком большая для вложения ({size}). Приложите файл вручную.',
+  'composer.pasteConverted': 'Длинный текст преобразован во вложение',
+  'composer.showInFieldTooLong':
+    'Текст длиннее лимита чата ({limit} символов) — оставьте вложением или сократите.',
+  'composer.pasteSlotFull': 'Нет свободного слота для вложения — удалите файл или отправьте сообщение',
 
   // --- Уведомления ---
   'toast.tooManyFiles': 'Не более {count} файлов на сообщение',
@@ -83,6 +94,24 @@ export const ru = {
   'attach.scanFailed': 'заблокировано: антивирус недоступен',
   'attach.injection': 'заблокировано: файл содержит инструкции, адресованные ассистенту',
   'attach.parseFailed': 'не удалось прочитать содержимое',
+  'attach.activeContent': 'заблокировано: макросы или встроенные объекты Office',
+  'attach.imageTooLarge': 'заблокировано: изображение слишком большое для обработки',
+  'attach.mimeMismatch': 'содержимое не совпадает с заявленным типом файла',
+  'attach.scanning': 'проверка файла…',
+  'attach.download': 'Скачать',
+  'attach.requestRestore': 'Запросить проверку',
+  'attach.restoreRequested': 'Запрос на восстановление отправлен менеджеру',
+  'attach.analyze': 'Анализ таблицы',
+  'attach.analyzeRequested': 'Запрос на анализ таблицы отправлен',
+  'attach.index': 'В базу знаний',
+  'attach.indexRequested': 'Индексация отправлена на подтверждение',
+  'attach.projectId': 'Проект (база знаний)',
+  'attach.projectIdHint': 'Если указан — файл индексируется в project KB',
+  'attach.containsPii': 'PII',
+  'attach.connectors': 'Внешние источники',
+  'attach.connectorReady': 'доступен',
+  'attach.connectorUnavailable': 'недоступен',
+  'attach.sources': 'Источники',
   'attach.refused': 'файл отклонён',
 
   // --- HITL-карточки (`components/HitlCards.tsx`, `lib/hitl.ts`) ---
@@ -177,6 +206,8 @@ export const en: Record<MessageKey, string> = {
 
   'msg.agentsWorking': 'Agents working',
   'msg.emptyResponse': 'Empty response',
+  'msg.formatterOutputInvalid':
+    'Could not present this answer as a choice. Try rephrasing or listing the options you need.',
   'msg.devGap': 'DEV: document looks like an exclusive menu but no HITL cards were minted.',
 
   'action.like': 'Like this response',
@@ -195,6 +226,15 @@ export const en: Record<MessageKey, string> = {
   'composer.overLimitTitle': 'Message is too long ({used} / {limit})',
   'composer.removeAttachment': 'Remove {name}',
   'composer.attachedFiles': 'Attached files',
+  'composer.showInField': 'Show in text field',
+  'composer.asDocument': 'as attachment',
+  'composer.pastedDefaultPrompt': 'Analyze the attached text.',
+  'composer.pasteTooLarge':
+    'Paste is too large for an attachment ({size}). Attach a file instead.',
+  'composer.pasteConverted': 'Long paste converted to an attachment',
+  'composer.showInFieldTooLong':
+    'Text exceeds the chat limit ({limit} characters) — keep it as an attachment or shorten it.',
+  'composer.pasteSlotFull': 'No attachment slot left — remove a file or send the message',
 
   'toast.tooManyFiles': 'No more than {count} files per message',
   'toast.pdfFailed': 'PDF export failed',
@@ -217,6 +257,24 @@ export const en: Record<MessageKey, string> = {
   'attach.scanFailed': 'blocked: antivirus unavailable',
   'attach.injection': 'blocked: the file contains instructions aimed at the assistant',
   'attach.parseFailed': 'contents could not be read',
+  'attach.activeContent': 'blocked: Office macros or embedded objects',
+  'attach.imageTooLarge': 'blocked: image is too large to process',
+  'attach.mimeMismatch': 'contents do not match the declared file type',
+  'attach.scanning': 'scanning file…',
+  'attach.download': 'Download',
+  'attach.requestRestore': 'Request review',
+  'attach.restoreRequested': 'Restore request sent to a manager',
+  'attach.analyze': 'Analyze table',
+  'attach.analyzeRequested': 'Table analysis request sent',
+  'attach.index': 'Add to knowledge',
+  'attach.indexRequested': 'Indexing sent for approval',
+  'attach.projectId': 'Project (knowledge base)',
+  'attach.projectIdHint': 'When set, the file is indexed into that project KB',
+  'attach.containsPii': 'PII',
+  'attach.connectors': 'External sources',
+  'attach.connectorReady': 'ready',
+  'attach.connectorUnavailable': 'unavailable',
+  'attach.sources': 'Sources',
   'attach.refused': 'file was refused',
 
   'hitl.kicker.choice': 'Choose one',

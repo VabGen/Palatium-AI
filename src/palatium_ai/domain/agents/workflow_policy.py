@@ -9,10 +9,11 @@ if TYPE_CHECKING:
 
 
 class WorkflowExecutionPolicy:
-    """Until Planner emits N steps + graph can loop workers, multi_step is one pass.
+    """Fail-safe if Intent still emits ``multi_step_workflow`` (reserved in prompt).
 
-    Keeps Intent's ``multi_step_workflow`` label for metrics, but routing/plan use an
-    executable kind so we never claim a multi-step plan the platform cannot run.
+    Intent must not select multi_step until the graph can loop N worker steps.
+    This policy keeps routing honest: collapse to a single executable kind and
+    never claim a multi-step plan the platform cannot run.
     """
 
     @classmethod
@@ -26,10 +27,10 @@ class WorkflowExecutionPolicy:
         if task_kind == "multi_step_workflow":
             return "tool_execution" if requires_mcp else "knowledge_request"
         if task_kind == "social_conversation" and requires_mcp:
-            # Phatic handling (formatter route + ``ack_only``) is only valid while the
-            # turn needs no external tool: an MCP-needing ask is a tool request, and
-            # routing it to the Formatter would answer without ever calling the tool.
-            # Intent still labels it ``social_conversation`` for metrics (055).
+            # Phatic Formatter path is only valid while the turn needs no external tool:
+            # an MCP-needing ask is a tool request, and routing it to the Formatter would
+            # answer without ever calling the tool. Intent may still label it
+            # ``social_conversation`` for metrics (055).
             return "tool_execution"
         return task_kind
 

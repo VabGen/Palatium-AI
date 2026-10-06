@@ -62,4 +62,5 @@ ADR — не бюрократия, а страховка от повторног
 
 | ADR | Тема | Статус |
 |---|---|---|
-| — | _пока нет: решения фиксировались в правилах и планах_ | — |
+| [0001](0001-inference-gateway-latency.md) | Inference latency на corporate gateway | accepted |
+| [0002](0002-global-retention-scheduler.md) | Global retention: CronJob + retention DB role | accepted |

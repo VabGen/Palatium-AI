@@ -6,11 +6,17 @@ INTENT_CLASSIFIER_SYSTEM_PROMPT = """You are a platform-level task classifier fo
 Do NOT classify into narrow business scenarios. Classify the *ask itself* into exactly one task kind:
 - capability_discovery: user asks what systems/tools/servers can do
 - knowledge_request: answer/explain/research using available context and tools if needed
-- multi_step_workflow: requires orchestration across several steps/agents/tools
+- multi_step_workflow: RESERVED — do NOT select. The graph cannot decompose N steps yet;
+  use knowledge_request (no MCP) or tool_execution (needs MCP/tool). A safety net may
+  still collapse a mistaken multi_step label, but never emit it intentionally.
 - tool_execution: direct execution against a tool or MCP server
 - response_formatting: primarily transform/format already produced data
-- social_conversation: no actionable ask — phatic/social turn only
-  (no tools/MCP, no facts/research, no formatting of prior content)
+- social_conversation: phatic only — greetings, thanks, farewell, or empty
+  acknowledgment with no ask. NEVER classify as social_conversation when the user
+  asks a question, requests information, complains about a prior answer, or asks
+  about dialog context / memory / session state / why the assistant answered as it
+  did. Those are knowledge_request (or capability_discovery when asking what
+  tools/systems can do). requires_mcp must stay false for social_conversation.
 - clarification_needed: insufficient information for an *actionable* request
   OR the primary ask is to present exclusive alternatives for the user to pick
   before the next step (topic/type/option menus). Prefer this over knowledge_request
@@ -21,7 +27,8 @@ force a task_kind. Classify from the rewritten text:
 - continuation_kind=format + has_prior_dialog → lean response_formatting
 - continuation_kind=answer + has_prior_dialog → do NOT emit clarification_needed only because
   facts seem missing from the text (prior dialog may hold them). Still classify the ask:
-  research/explain → knowledge_request; social/phatic → social_conversation; etc.
+  research/explain/meta-dialog questions → knowledge_request; greetings/thanks only →
+  social_conversation; etc.
 - continuation_kind=clarify → clarification_needed is appropriate
 - continuation_kind=new_topic or hints absent → classify from text alone
 

@@ -22,10 +22,22 @@ ScriptFamily = Literal["cyrillic", "latin", "han", "arabic", "hebrew", "other", 
 
 _CODE_FENCE = re.compile(r"```[\s\S]*?```")
 _URL = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+# Machine envelopes are Latin-heavy protocol, not user prose (HITL resume, tool fences).
+_PROTOCOL_FENCE = re.compile(
+    r"<<<HITL_CHOICE_RESUME[^>]*>>>|"
+    r"<<<UNTRUSTED_HITL_LABEL[\s\S]*?<<<END_UNTRUSTED_HITL_LABEL>>>|"
+    r"<<<UNTRUSTED_TOOL_OUTPUT[^>]*>>>[\s\S]*?<<<END_UNTRUSTED_TOOL_OUTPUT>>>",
+    re.IGNORECASE,
+)
+_HITL_RESUME_MARKER = "HITL_CHOICE_RESUME"
 _LOCALE_RE = re.compile(r"^[a-z]{2,3}(-[A-Z]{2})?$")
 
 _WEAK_LETTER_MIN = 8
 _DOMINANT_RATIO = 0.55
+
+# Short unanimous Latin ("ok", "hi") stays weak so sticky prior wins.
+# Short Cyrillic/Han/Arabic/Hebrew is a real language signal («Привет»).
+_STRONG_WHEN_SHORT: frozenset[ScriptFamily] = frozenset({"cyrillic", "han", "arabic", "hebrew"})
 
 _SCRIPT_DEFAULT: dict[ScriptFamily, str] = {
     "cyrillic": "ru-RU",
@@ -137,9 +149,10 @@ class ReplyLocalePolicy:
 
     @classmethod
     def strip_non_prose(cls, text: str) -> str:
-        """Drop code fences and URLs before script detection."""
+        """Drop code fences, protocol envelopes, and URLs before script detection."""
         _ = cls
         cleaned = _CODE_FENCE.sub(" ", text)
+        cleaned = _PROTOCOL_FENCE.sub(" ", cleaned)
         return _URL.sub(" ", cleaned)
 
     @classmethod
@@ -160,9 +173,14 @@ class ReplyLocalePolicy:
                 counts[family] += 1
 
         total = sum(counts.values())
-        if total < _WEAK_LETTER_MIN:
+        if total == 0:
             return "weak"
         family, n = max(counts.items(), key=lambda item: item[1])
+        if total < _WEAK_LETTER_MIN:
+            # Unanimous distinctive script: pin even on short greetings (055).
+            if family in _STRONG_WHEN_SHORT and n == total:
+                return family
+            return "weak"
         if n / total < _DOMINANT_RATIO:
             return "weak"
         if family == "other":
@@ -201,10 +219,16 @@ class ReplyLocalePolicy:
 
         Priority: strong user prose / hint → sticky prior (same script) →
         script default → ui → und.
+
+        HITL choice resume envelopes are protocol carriers (often English
+        markers + option labels) — never flip sticky locale from them.
         """
         prior = cls.normalize(prior_locale)
         ui = cls.normalize(ui_locale)
         hint = cls.normalize(hint_locale)
+        if _HITL_RESUME_MARKER in user_text:
+            return prior or ui or "und"
+
         prose = cls.strip_non_prose(user_text)
         family = cls.script_family(prose)
 

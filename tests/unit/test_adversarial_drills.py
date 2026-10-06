@@ -439,7 +439,8 @@ def test_drill_graph_run_config_sets_recursion_limit() -> None:
 
     config = build_graph_run_config(thread_id="t1", task_id="task-1")
     assert config["recursion_limit"] == GRAPH_RECURSION_LIMIT
-    assert config["configurable"]["thread_id"] == "t1"
+    assert config["configurable"]["thread_id"] == "t1:task-1"
+    assert "checkpoint_ns" not in config["configurable"]
 
 
 def test_drill_agents_roster_requires_admin() -> None:

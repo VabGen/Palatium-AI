@@ -14,12 +14,14 @@ from typing import TYPE_CHECKING
 
 from palatium_ai.application.services.attachment_service import AttachmentService
 from palatium_ai.application.services.document_export_service import DocumentExportService
+from palatium_ai.application.services.feedback_service import FeedbackService
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.kill_switch import KillSwitchService
 from palatium_ai.application.services.memory_extract_hitl_service import MemoryExtractHitlService
 from palatium_ai.application.services.memory_forget_service import MemoryForgetService
 from palatium_ai.application.services.memory_save_service import MemorySaveService
+from palatium_ai.application.services.retention import retention_windows_from_settings
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.application.services.session_timeline_service import SessionTimelineService
 from palatium_ai.application.wiring import (
@@ -30,12 +32,14 @@ from palatium_ai.application.wiring import (
     build_intent_service,
     warm_mcp_capability_cache,
 )
+from palatium_ai.core.config.settings import Settings
 from palatium_ai.core.logging import logger, setup_logging
 from palatium_ai.core.observability import setup_observability
 from palatium_ai.infrastructure.cache.redis import create_redis_client, ensure_redis_connection
 from palatium_ai.infrastructure.database.init_db import (
     ensure_database_and_schema,
 )
+from palatium_ai.infrastructure.database.message_feedback_repository import PostgresMessageFeedbackRepository
 from palatium_ai.infrastructure.database.repositories import (
     McpToolCallRepository,
     SessionRepository,
@@ -79,7 +83,6 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.intent_service import IntentService
     from palatium_ai.application.services.memory_extract import MemoryExtractService
-    from palatium_ai.core.config.settings import Settings
     from palatium_ai.domain.graph.port import GraphPort
     from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.knowledge.port import KnowledgePort
@@ -90,7 +93,7 @@ if TYPE_CHECKING:
 _HITL_SWEEP_INTERVAL_SECONDS = 60
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class AppResources:
     """Ресурсы, инициализируемые при старте приложения."""
 
@@ -123,6 +126,7 @@ class AppResources:
     web_search_port: WebSearchPort | None = None
     attachment_ports: AttachmentPorts | None = None
     attachment_service: AttachmentService | None = None
+    feedback_service: FeedbackService | None = None
 
     # Legacy aliases (prefer memory_extract*).
     @property
@@ -187,7 +191,11 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
             embedding_client = create_embedding_client_for_schema(settings, "memory")
         except _EMBEDDING_WIRING_ERRORS as exc:
             logger.warning("Memory embeddings disabled", error=str(exc))
-        port = PostgresMemoryPort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]  # embeddings опционален намеренно (017)
+        port = PostgresMemoryPort(
+            session_factory,
+            embeddings=embedding_client,
+            retention_windows=retention_windows_from_settings(settings),
+        )  # type: ignore[arg-type]  # embeddings опционален намеренно (017)
         logger.info(
             "MemoryPort: Postgres memory.entries",
             vector_search=embedding_client is not None,
@@ -214,7 +222,27 @@ def _build_knowledge_port(settings: Settings, session_factory: object) -> Knowle
         embedding_client = create_embedding_client_for_schema(settings, "knowledge")
     except _EMBEDDING_WIRING_ERRORS as exc:
         logger.warning("Knowledge embeddings disabled", error=str(exc))
-    return PostgresKnowledgePort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]  # embeddings опционален намеренно (017)
+    port: KnowledgePort = PostgresKnowledgePort(
+        session_factory,  # type: ignore[arg-type]
+        embeddings=embedding_client,  # embeddings опционален намеренно (017)
+        hybrid_fusion=settings.knowledge.hybrid_fusion,
+        rrf_k=settings.knowledge.rrf_k,
+    )
+    if settings.knowledge.embedding_rerank and embedding_client is not None:
+        from palatium_ai.infrastructure.knowledge.embedding_rerank import EmbeddingRerankKnowledgePort
+
+        port = EmbeddingRerankKnowledgePort(
+            port,
+            embedding_client,
+            overfetch=settings.knowledge.embedding_rerank_overfetch,
+        )
+        logger.info(
+            "KnowledgePort: embedding rerank enabled",
+            overfetch=settings.knowledge.embedding_rerank_overfetch,
+        )
+    elif settings.knowledge.embedding_rerank:
+        logger.warning("KNOWLEDGE_EMBEDDING_RERANK ignored: no knowledge embedding client")
+    return port
 
 
 def _wire_platform_handler(
@@ -226,6 +254,7 @@ def _wire_platform_handler(
     graph_port: GraphPort,
     web_search_port: WebSearchPort,
 ) -> None:
+    """Wire the platform handler."""
     # Track B: platform is always-on Host-local capability (no MCP_SERVERS URL required).
     mcp_registry.register_local_handler(
         "platform",
@@ -238,6 +267,36 @@ def _wire_platform_handler(
         ),
     )
     logger.info("Platform MCP: local knowledge+memory+graph+web handler registered")
+
+
+def _resolve_mcp_source(
+    settings: Settings,
+) -> tuple[ConsulMCPSource | None, Callable[[], Awaitable[dict[str, str]]] | None]:
+    """Pick Consul / file / static MCP discovery; returns (watch_source, fetcher)."""
+    if settings.mcp.consul_url:
+        source = ConsulMCPSource(settings.mcp)
+        logger.info("MCP source: Consul", url=settings.mcp.consul_url)
+        return source, source.fetch
+    if settings.mcp.servers_file:
+        path = settings.mcp.servers_file
+
+        async def fetcher_from_file() -> dict[str, str]:
+            return await load_mcp_servers_from_json_file(path)
+
+        logger.info("MCP source: file", path=path)
+        return None, fetcher_from_file
+    logger.info("MCP source: static (env)")
+    return None, None
+
+
+def _hitl_signing_secret(settings: Settings) -> str:
+    """HMAC secret for HITL cards; derived local key only when JWT secret is unset (dev)."""
+    hitl_signing = settings.security.optional_hitl_hmac_secret()
+    if hitl_signing is not None:
+        return hitl_signing
+    # Dev without JWT: still bind HITL actions; never empty.
+    logger.warning("HITL signing secret falling back to derived local key")
+    return f"dev-hitl-{settings.app.name}-local-only"
 
 
 async def startup(settings: Settings) -> AppResources:
@@ -257,23 +316,7 @@ async def startup(settings: Settings) -> AppResources:
     await redis_client.ping()
     logger.info("Database and Redis connections established")
 
-    source: ConsulMCPSource | None = None
-    fetcher: Callable[[], Awaitable[dict[str, str]]] | None = None
-
-    if settings.mcp.consul_url:
-        source = ConsulMCPSource(settings.mcp)
-        fetcher = source.fetch
-        logger.info("MCP source: Consul", url=settings.mcp.consul_url)
-    elif settings.mcp.servers_file:
-
-        async def fetcher_from_file() -> dict[str, str]:
-            return await load_mcp_servers_from_json_file(settings.mcp.servers_file or "")
-
-        fetcher = fetcher_from_file
-        logger.info("MCP source: file", path=settings.mcp.servers_file)
-    else:
-        logger.info("MCP source: static (env)")
-
+    source, fetcher = _resolve_mcp_source(settings)
     mcp_registry = MCPRegistry(settings=settings, source_fetcher=fetcher)
     await mcp_registry.initialize()
     logger.info("MCP registry initialized", servers_count=len(mcp_registry.list_servers()))
@@ -289,11 +332,7 @@ async def startup(settings: Settings) -> AppResources:
     session_repository = SessionRepository(session_factory)
     mcp_tool_call_repository = McpToolCallRepository(session_factory)
     session_service = SessionService(session_repository)
-    hitl_signing = settings.security.optional_hitl_hmac_secret()
-    if hitl_signing is None:
-        # Dev without JWT: still bind HITL actions; never empty.
-        hitl_signing = f"dev-hitl-{settings.app.name}-local-only"
-        logger.warning("HITL signing secret falling back to derived local key")
+    hitl_signing = _hitl_signing_secret(settings)
     hitl_service = build_hitl_service(
         redis_client=redis_client,
         signing_secret=hitl_signing,
@@ -305,6 +344,7 @@ async def startup(settings: Settings) -> AppResources:
     kill_switch = KillSwitchService(redis_client=redis_client)
     dialog_turn_store = PostgresDialogTurnStore(session_factory)
     memory_port = _build_memory_port(settings, session_factory)
+    feedback_service = FeedbackService(PostgresMessageFeedbackRepository(session_factory))
     checkpointer_handle = await create_checkpointer(settings)
     graph_ports = build_graph_ports(settings)
     attachment_ports = await build_attachment_ports(settings, session_factory)
@@ -333,6 +373,8 @@ async def startup(settings: Settings) -> AppResources:
         graph_write=graph_ports.write,
         attachment_service=attachment_service,
     )
+    if attachment_service is not None and document_ingest_service is not None:
+        attachment_service.bind_document_ingest(document_ingest_service)
     hitl_service.bind_deny_resume(intent_service)
     graph_port = graph_ports.query
     web_search_port = build_web_search_port(settings)
@@ -433,6 +475,7 @@ async def startup(settings: Settings) -> AppResources:
         web_search_port=web_search_port,
         attachment_ports=attachment_ports,
         attachment_service=attachment_service,
+        feedback_service=feedback_service,
     )
 
 

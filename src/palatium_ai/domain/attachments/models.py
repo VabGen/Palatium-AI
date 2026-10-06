@@ -39,6 +39,9 @@ class Attachment(BaseModel):
     derived_text_key: str | None = Field(default=None, max_length=512)
     rejection_reason: AttachmentRejectionReason | None = None
     error: str | None = Field(default=None, max_length=500)
+    project_id: str | None = Field(default=None, max_length=64)
+    #: Extracted-text PII classification (G06); mirrored from derived content on complete.
+    contains_pii: bool = False
     created_at: datetime
     expires_at: datetime | None = None
 

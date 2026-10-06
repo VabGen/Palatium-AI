@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 # (module, class_name) pairs that may appear in AgentGraphState channels.
 # Keep in sync when adding new domain models to graph state.
 CHECKPOINT_MSGPACK_ALLOWLIST: tuple[tuple[str, str], ...] = (
+    # Postgres AsyncPostgresSaver / asyncpg may revive UUID as this class.
+    ("asyncpg.pgproto.pgproto", "UUID"),
+    ("uuid", "UUID"),
     # Memory / dialog
     ("palatium_ai.domain.memory.turns", "DialogTurn"),
     ("palatium_ai.domain.memory.turns", "DialogTurnWindow"),

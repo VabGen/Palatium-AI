@@ -30,9 +30,11 @@ class WebSearchTransport(Protocol):
 
     async def fetch_hits(self, *, query: str, max_results: int) -> list[dict[str, object]]:
         """Return raw hit dicts with title/url/snippet/score keys."""
+        ...
 
     async def aclose(self) -> None:
         """Close HTTP client resources."""
+        ...
 
 
 def _is_transient_web_http_error(exc: BaseException) -> bool:

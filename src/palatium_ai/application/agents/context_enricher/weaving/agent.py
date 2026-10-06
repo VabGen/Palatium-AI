@@ -59,6 +59,7 @@ class ContextWeaverAgent(BaseAgent):
             "route_plan",
             "requires_mcp",
             "candidate_capabilities_json",
+            "has_attachment_context",
         ]
 
     def get_available_tools(self) -> list[str]:

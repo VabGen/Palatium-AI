@@ -4,9 +4,13 @@
 
 from __future__ import annotations
 
+import json
+
+from collections.abc import AsyncIterator
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from palatium_ai.application.services.cost_budget import CostBudgetExceededError
@@ -100,3 +104,46 @@ async def process_intent(body: ClassifyIntentRequest, request: Request) -> Forma
         AttachmentError,
     ) as exc:
         raise _map_runtime_error(exc) from exc
+
+
+@router.post("/process/stream")
+async def process_intent_stream(body: ClassifyIntentRequest, request: Request) -> StreamingResponse:
+    """SSE stream: hop progress events, then a final ``result`` with FormatterTaskResult."""
+    principal = get_principal(request)
+    resources = get_app_resources(request.app)
+
+    async def event_gen() -> AsyncIterator[str]:
+        try:
+            async for event in resources.intent_service.process_stream(
+                text=body.text,
+                thread_id=body.thread_id,
+                user_id=principal.subject,
+                org_id=principal.org_id,
+                is_admin=principal_is_admin(request, principal),
+                attachment_ids=list(body.attachment_ids),
+            ):
+                name = str(event.get("event", "message"))
+                payload = {k: v for k, v in event.items() if k != "event"}
+                yield f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except (
+            KillSwitchEngagedError,
+            CostBudgetExceededError,
+            SessionOwnershipError,
+            AttachmentError,
+        ) as exc:
+            mapped = _map_runtime_error(exc)
+            err_payload = json.dumps(
+                {"detail": mapped.detail, "status_code": mapped.status_code},
+                ensure_ascii=False,
+            )
+            yield f"event: error\ndata: {err_payload}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

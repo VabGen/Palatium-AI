@@ -26,6 +26,11 @@ _TEST_ENV_DEFAULTS = {
     "POSTGRES_SCHEMA": "palatium_ai",
     "LITELLM_MASTER_KEY": "sk-test",
     "PALATIUM_GATEWAY_URL": "http://localhost:4000",
+    # .env.example defaults to openai without keys; unit tests must not require cloud creds.
+    "LLM_DEFAULT_PROVIDER": "gateway",
+    "EMBEDDING_DEFAULT_PROVIDER": "ollama",
+    "MEMORY_EMBEDDING_PROVIDER": "ollama",
+    "KNOWLEDGE_EMBEDDING_PROVIDER": "ollama",
 }
 
 _env_example = Path(__file__).resolve().parent.parent / "env" / ".env.example"
@@ -41,7 +46,7 @@ if _env_example.exists():
             os.environ.setdefault(_key, _value)
 
 for _key, _value in _TEST_ENV_DEFAULTS.items():
-    os.environ.setdefault(_key, _value)
+    os.environ[_key] = _value
 # ────────────────────────────────────────────────────────────────────────────
 
 from collections.abc import AsyncIterator
@@ -108,7 +113,9 @@ def make_document_ingest_stack(
 
     resolved_knowledge = knowledge_port or InMemoryKnowledgePort()
     handler = PlatformToolHandler(knowledge_port=resolved_knowledge)  # type: ignore[arg-type]
-    harness = Harness(llm=FakeLLMPort("{}"))
+    harness = Harness(
+        llm=FakeLLMPort('{"prefixes": ["Intro section about onboarding.", "Security section about passwords."]}')
+    )
     hitl = HitlService(InMemoryHitlCardStore(), signing_secret="unit-test-hitl-hmac-key-32bytes!!")
     ingest = DocumentIngestService(
         harness=harness,
@@ -631,15 +638,15 @@ async def run_context_weaver(task_input: object, mcp_registry: object | None = N
 
 
 def make_dual_agent_stack(
-    contextualizer_response: str,
     intent_response: str,
+    contextualizer_response: str,
 ) -> tuple[object, object, object, SequentialFakeLLMPort]:
-    """Shared harness for contextualizer → intent graph order in integration tests."""
+    """Shared harness for Intent → Contextualizer graph order (P0.1)."""
     from palatium_ai.application.agents.context_enricher import CONTEXTUALIZER_CONFIG, ContextualizerAgent
     from palatium_ai.application.agents.harness import Harness
     from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
 
-    llm = SequentialFakeLLMPort([contextualizer_response, intent_response])
+    llm = SequentialFakeLLMPort([intent_response, contextualizer_response])
     harness = Harness(llm=llm)
     return (
         harness,

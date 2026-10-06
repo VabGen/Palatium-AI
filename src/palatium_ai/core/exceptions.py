@@ -36,3 +36,21 @@ class AuditWriteDegradedError(RuntimeError):
     Бизнес-флоу ОБЯЗАН ловить это исключение и продолжать работу —
     деградация аудита не должна превращаться в пользовательскую ошибку.
     """
+
+
+class DatabaseUnavailableError(PalatiumError):
+    """Postgres stayed unreachable after the retry budget — availability, not a bug.
+
+    Postgres answers "the database system is in recovery mode" (SQLSTATE 57P03) while
+    it restarts, and drops pings/sockets while it drains. Those are expected
+    operational failures (035), never an ASGI 500: the DB layer retries them briefly
+    and, if the outage outlives the budget, raises this typed error so the API can
+    answer ``503`` + ``Retry-After`` and the client knows the request never ran.
+    """
+
+    def __init__(self, *, operation: str, retry_after_seconds: int) -> None:
+        self.operation = operation
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(
+            f"Database unavailable during {operation} after exhausting retries (retry in ~{retry_after_seconds}s)",
+        )

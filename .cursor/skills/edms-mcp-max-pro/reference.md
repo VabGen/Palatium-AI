@@ -34,7 +34,10 @@ W0 inventory: 2026-09-04 (см. отчёт в чате / roadmap).
 | Gateway | `mcp_servers/gateway/` |
 | Host HITL/ACL | Researcher + `call_mcp_tool` |
 | Platform local discovery | `registry.py` + `bootstrap.py` (Track B) |
-| Справка СЭД | `mcp_servers/edms/JavaEdms/**` READ ONLY |
+| Справка СЭД (SoT) | `mcp_servers/edms/JavaEdms/**` READ ONLY (090) |
+| Junior chat↔СЭД (подглядка) | `mcp_servers/edms/edms-ai-assistant/**` — не эталон; 092 |
+| Старый stub (подглядка) | `mcp_servers/edms/edms_mcp_server.py` — не наращивать; 092 |
+| Целевой EDMS MCP | новая структура пакета под `mcp_servers/edms/` (092) |
 
 ## Анти-паттерны из junior/чат-кода
 

@@ -43,6 +43,17 @@ class SearchKnowledgeQuery(BaseModel):
     user_id: str = Field(min_length=1, max_length=128)
     query: str = Field(min_length=1, max_length=500)
     thread_id: str | None = Field(default=None, max_length=128)
+    project_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="When set, only chunks whose source_document_id starts with project:<id>:",
+    )
+    source_document_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="When set, only chunks whose source_document_id equals this value "
+        "(attachment UUID or project:<id>:<hex>).",
+    )
     limit: int = Field(default=8, ge=1, le=32)
 
 

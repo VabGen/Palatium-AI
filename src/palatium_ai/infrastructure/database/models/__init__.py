@@ -8,6 +8,7 @@ from .knowledge_chunk import KnowledgeChunkORM, KnowledgeDocumentORM
 from .mcp_tool_call import McpToolCallORM
 from .memory_entry import MemoryEntryORM
 from .memory_item import MemoryItemORM
+from .message_feedback import MessageFeedbackORM
 from .session import SessionORM
 
 __all__ = [
@@ -18,5 +19,6 @@ __all__ = [
     "McpToolCallORM",
     "MemoryEntryORM",
     "MemoryItemORM",
+    "MessageFeedbackORM",
     "SessionORM",
 ]

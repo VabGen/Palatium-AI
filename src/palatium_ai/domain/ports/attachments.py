@@ -46,22 +46,48 @@ class AttachmentRepositoryPort(Protocol):
         """List attachments bound to one thread, newest first."""
         ...
 
-    async def count_for_thread(self, thread_id: str, *, user_id: str) -> int:
-        """Count attachments in a thread to enforce the per-turn intake limit."""
+    async def create_under_upload_quota(
+        self,
+        attachment: Attachment,
+        *,
+        limit: int,
+        pending_cutoff: datetime,
+    ) -> Attachment | None:
+        """Insert the row only while the thread's in-flight uploads stay under ``limit``.
+
+        Returns the stored aggregate, or ``None`` when the quota is already exhausted;
+        the caller turns ``None`` into a typed refusal.
+
+        The count and the insert must happen in **one** transaction guarded by a
+        per-thread lock. A separate count read followed by ``create`` is a TOCTOU
+        race under READ COMMITTED: two concurrent ``init`` calls both observe
+        ``limit - 1`` and both insert, so a five-file cap admits six rows (020).
+
+        ``pending_cutoff`` is what "in-flight" means: only ``pending`` rows created
+        after it occupy a slot. Uploads whose presigned ticket already expired can
+        never complete, so they must release their slot immediately rather than
+        block the thread for the row's whole retention TTL (080).
+        """
         ...
 
     async def delete(self, attachment_id: UUID, *, user_id: str) -> None:
         """Remove an attachment row owned by ``user_id``."""
         ...
 
-    async def list_expired(
+    async def list_reclaimable(
         self,
         cutoff: datetime,
         *,
+        pending_before: datetime,
         user_id: str,
         limit: int,
     ) -> list[Attachment]:
-        """Oldest-first rows owned by ``user_id`` whose TTL elapsed before ``cutoff``.
+        """Oldest-first rows owned by ``user_id`` that retention may reclaim.
+
+        A row qualifies when **either** its TTL elapsed before ``cutoff`` **or** it
+        is a ``pending`` upload created before ``pending_before`` and therefore can
+        never receive its bytes — an abandoned intake would otherwise sit in the
+        table for the full retention TTL, invisible to the sweep.
 
         Deliberately user-scoped: ``attachments`` is under ``FORCE ROW LEVEL
         SECURITY``, so a cross-tenant maintenance query cannot be expressed with

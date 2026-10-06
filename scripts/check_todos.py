@@ -86,7 +86,9 @@ _SCAN_ROOTS: tuple[str, ...] = (
 _SCAN_FILES: tuple[str, ...] = (
     "Dockerfile",
     "Makefile",
+    "pyproject.toml",
 )
+
 _EXTENSIONS: frozenset[str] = frozenset(
     {
         ".py",

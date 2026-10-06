@@ -1,8 +1,10 @@
 import {
   INTENT_ATTACHMENT_LIMIT,
   completeAttachmentUpload,
+  finalizeAttachmentChunks,
   initAttachmentUpload,
   putAttachmentBytes,
+  putAttachmentChunk,
   uploadAttachmentViaApi,
 } from '../api/client';
 import type { AttachmentResponse } from '../api/client';
@@ -20,16 +22,33 @@ import { formatNumber, t } from '../i18n';
 const MEDIA_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
   'application/pdf': ['.pdf'],
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
   'image/jpeg': ['.jpg', '.jpeg'],
   'image/png': ['.png'],
   'image/webp': ['.webp'],
   'text/csv': ['.csv'],
+  'text/html': ['.html', '.htm'],
   'text/markdown': ['.md'],
   'text/plain': ['.txt', '.log'],
 };
 
 /** Mirrors the `ATTACHMENTS_*` defaults; the server enforces the real numbers. */
 export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Part size for resumable API uploads (`ATTACHMENTS_MAX_CHUNK_BYTES`, default 8 MiB).
+ * Files larger than this go through ``/chunks/{i}`` + finalize instead of a single
+ * ``PUT /content`` — reverse proxies and in-memory stores handle parts more reliably.
+ */
+export const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Paste longer than this becomes a ``text/plain`` attachment chip (mode=attach),
+ * not intent ``text``. Aligns with ChatGPT-class auto-convert; the hard chat
+ * cap remains ``INTENT_TEXT_LIMIT`` (32_000) in ``api/client.ts``.
+ */
+export const AUTO_ATTACH_CHARS = 10_000;
 
 /**
  * Attachment count per turn.
@@ -50,7 +69,15 @@ export type UploadTarget = {
   threadId: string;
   userId: string;
   orgId: string;
+  /** When set, upload uses ``mode=index`` and scopes knowledge to this project (G09). */
+  projectId?: string;
 };
+
+/** Tabular files eligible for local ADA HITL analysis (G15). */
+export function isTabularAttachmentFilename(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return lower.endsWith('.csv') || lower.endsWith('.xlsx') || lower.endsWith('.txt');
+}
 
 export type AttachmentDraft = {
   /** Stable client-side key; survives the swap to the server id (no React key churn). */
@@ -59,9 +86,61 @@ export type AttachmentDraft = {
   serverId?: string;
   filename: string;
   sizeBytes: number;
-  status: 'uploading' | 'ready' | 'failed';
+  /** ``scanning`` = bytes landed, AV/parse in flight; send stays blocked. */
+  status: 'uploading' | 'scanning' | 'ready' | 'failed';
   error?: string;
+  /** Present when the chip came from a long paste — enables «show in field». */
+  sourceText?: string;
+  origin?: 'paste' | 'file';
+  pageCount?: number | null;
+  /** Server intake mode — ``index`` enables project KB HITL. */
+  mode?: 'attach' | 'index';
+  /** Server pipeline reason when ``status === 'failed'`` (for quarantine restore UX). */
+  rejectionReason?: string | null;
+  /** HITL restore card already requested for this chip. */
+  restoreRequested?: boolean;
+  /** Server G06 flag — extracted text looked like PII. */
+  containsPii?: boolean;
 };
+
+/** Injection quarantine only — manager HITL can re-admit with masked text (W5 G12). */
+export function canRequestQuarantineRestore(attachment: AttachmentResponse): boolean {
+  return (
+    attachment.status === 'quarantined' && attachment.rejection_reason === 'injection_detected'
+  );
+}
+
+/** Whether clipboard/composer text must leave the intent field and become a file. */
+export function shouldAutoAttachText(text: string): boolean {
+  return text.length > AUTO_ATTACH_CHARS;
+}
+
+/** UTF-8 byte length of ``text`` (attachment size gate uses bytes, not chars). */
+export function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).byteLength;
+}
+
+/** Local date stamp for pasted-text filenames (YYYY-MM-DD, calendar local). */
+export function pastedTextDateStamp(now: Date = new Date()): string {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function pastedTextFilename(now: Date = new Date()): string {
+  return `pasted-text_${pastedTextDateStamp(now)}.txt`;
+}
+
+/**
+ * Build a ``text/plain`` File for the existing upload path.
+ * Returns ``null`` when empty or over the attachment byte cap (caller toasts).
+ */
+export function createPastedTextFile(text: string, now: Date = new Date()): File | null {
+  if (text.length === 0) return null;
+  if (utf8ByteLength(text) > MAX_ATTACHMENT_BYTES) return null;
+  return new File([text], pastedTextFilename(now), { type: 'text/plain' });
+}
 
 export function formatAttachmentSize(sizeBytes: number): string {
   if (sizeBytes < 1024) return `${formatNumber(sizeBytes)} B`;
@@ -118,6 +197,12 @@ export function refusalLabel(attachment: AttachmentResponse): string | null {
       return t('attach.typeNotAccepted');
     case 'extension_mismatch':
       return t('attach.extensionMismatch');
+    case 'mime_mismatch':
+      return t('attach.mimeMismatch');
+    case 'active_content':
+      return t('attach.activeContent');
+    case 'image_too_large':
+      return t('attach.imageTooLarge');
     case 'filename_invalid':
       return t('attach.filenameInvalid');
     case 'turn_limit_exceeded':
@@ -137,6 +222,56 @@ export function refusalLabel(attachment: AttachmentResponse): string | null {
   }
 }
 
+export type ChunkRange = {
+  index: number;
+  start: number;
+  end: number;
+};
+
+/** Byte ranges ``[start, end)`` for a resumable upload; empty when ``sizeBytes <= 0``. */
+export function planChunkRanges(
+  sizeBytes: number,
+  chunkBytes: number = UPLOAD_CHUNK_BYTES
+): ChunkRange[] {
+  if (sizeBytes <= 0 || chunkBytes <= 0) return [];
+  const ranges: ChunkRange[] = [];
+  for (let start = 0, index = 0; start < sizeBytes; start += chunkBytes, index += 1) {
+    ranges.push({ index, start, end: Math.min(start + chunkBytes, sizeBytes) });
+  }
+  return ranges;
+}
+
+/** True when the API path should stage parts instead of a single ``PUT /content``. */
+export function shouldUseChunkedUpload(
+  sizeBytes: number,
+  chunkBytes: number = UPLOAD_CHUNK_BYTES
+): boolean {
+  return sizeBytes > chunkBytes;
+}
+
+/**
+ * Deliver bytes through the API: one ``PUT /content`` for small files, or
+ * ``POST /chunks/{i}`` + finalize when larger than ``UPLOAD_CHUNK_BYTES`` (W4 G08).
+ */
+async function deliverBytesViaApi(
+  attachmentId: string,
+  file: File,
+  mimeType: string,
+  target: UploadTarget
+): Promise<void> {
+  if (!shouldUseChunkedUpload(file.size)) {
+    await uploadAttachmentViaApi(attachmentId, file, mimeType, target.userId, target.orgId);
+    return;
+  }
+
+  const ranges = planChunkRanges(file.size);
+  for (const range of ranges) {
+    const part = file.slice(range.start, range.end);
+    await putAttachmentChunk(attachmentId, range.index, part, target.userId, target.orgId);
+  }
+  await finalizeAttachmentChunks(attachmentId, ranges.length, target.userId, target.orgId);
+}
+
 /**
  * init → PUT → complete, returning the row in its final pipeline state.
  *
@@ -144,21 +279,31 @@ export function refusalLabel(attachment: AttachmentResponse): string | null {
  * a presigned object-store target, while `memory://` marks a store with no HTTP
  * surface of its own (local dev), so the bytes go through the API instead. Both
  * paths end in the same `complete` call, which is what actually scans the file.
+ *
+ * On the API path, files larger than ``UPLOAD_CHUNK_BYTES`` use resumable chunks
+ * (``/chunks/{i}`` + finalize) so reverse proxies never see a single 50 MB body.
+ *
+ * ``onPhase`` lets the UI flip the chip to ``scanning`` before the long complete
+ * round-trip (W1 G04) without inventing a second upload path.
  */
 export async function uploadAttachment(
   file: File,
-  target: UploadTarget
+  target: UploadTarget,
+  onPhase?: (phase: 'uploading' | 'scanning') => void
 ): Promise<AttachmentResponse> {
   const mimeType = resolveMimeType(file);
   if (mimeType === null) throw new Error(t('attach.unsupportedType'));
 
+  onPhase?.('uploading');
+  const projectId = (target.projectId || '').trim() || undefined;
   const ticket = await initAttachmentUpload(
     {
       thread_id: target.threadId,
       filename: file.name,
       mime_type: mimeType,
       size_bytes: file.size,
-      mode: 'attach',
+      mode: projectId ? 'index' : 'attach',
+      project_id: projectId,
     },
     target.userId,
     target.orgId
@@ -171,17 +316,12 @@ export async function uploadAttachment(
       // The store is not reachable from this browser (off-network S3, wrong public
       // endpoint) or the presign expired. Re-send through the API: same row, same
       // cap, same scan/parse pipeline — a transport fallback, not a relaxed path.
-      await uploadAttachmentViaApi(
-        ticket.attachment_id,
-        file,
-        mimeType,
-        target.userId,
-        target.orgId
-      );
+      await deliverBytesViaApi(ticket.attachment_id, file, mimeType, target);
     }
   } else {
-    await uploadAttachmentViaApi(ticket.attachment_id, file, mimeType, target.userId, target.orgId);
+    await deliverBytesViaApi(ticket.attachment_id, file, mimeType, target);
   }
 
+  onPhase?.('scanning');
   return completeAttachmentUpload(ticket.attachment_id, target.userId, target.orgId);
 }

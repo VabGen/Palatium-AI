@@ -35,6 +35,8 @@ _OFF_GRAPH_TOOL_PREFIXES: tuple[str, ...] = (
     "mem-forget-",
     "mem-consolidate-",
     "att-index-",
+    "att-restore-",
+    "att-analyze-",
 )
 
 
@@ -183,7 +185,7 @@ class HitlRespondFacade:
             return self._memory_forget
         if task_id.startswith("mem-consolidate-"):
             return self._memory_consolidate
-        if task_id.startswith("att-index-"):
+        if task_id.startswith(("att-index-", "att-restore-", "att-analyze-")):
             return self._attachment_index
         return None
 

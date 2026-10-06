@@ -55,3 +55,15 @@ class ObservabilityConfig(BaseConfig):
         le=3600.0,
         validation_alias="CIRCUIT_OPEN_SECONDS",
     )
+    response_cache_enabled: bool = Field(
+        default=True,
+        validation_alias="RESPONSE_CACHE_ENABLED",
+        description="L1 exact-match FormatterTaskResult cache (P0.2).",
+    )
+    response_cache_ttl_seconds: int = Field(
+        default=3_600,
+        ge=0,
+        le=86_400,
+        validation_alias="RESPONSE_CACHE_TTL_SECONDS",
+        description="TTL for L1 response cache entries (0 disables writes).",
+    )

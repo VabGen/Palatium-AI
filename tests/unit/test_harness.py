@@ -11,6 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from palatium_ai.application.agents.harness import Harness
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
@@ -35,6 +36,18 @@ class _DomainAgent(BaseAgent):
             confidence=0.95,
             output=_Out(),
         )
+
+
+class _CapturingAgent(_DomainAgent):
+    """Records the context the agent actually saw after harness sanitisation."""
+
+    def __init__(self, harness: Harness, config: AgentConfig) -> None:
+        super().__init__(harness, config)
+        self.seen: AgentInput | None = None
+
+    async def run(self, input: AgentInput) -> AgentOutput:
+        self.seen = input
+        return await super().run(input)
 
 
 _CONFIG = AgentConfig(
@@ -63,9 +76,10 @@ async def test_harness_execute_with_guardrails_success() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_harness_execute_with_guardrails_blocks_secrets() -> None:
+async def test_harness_execute_with_guardrails_redacts_instruction_secret() -> None:
+    """A credential in the instruction is masked, not hard-failed (thread stays usable)."""
     harness = Harness()
-    agent = _DomainAgent(harness, _CONFIG)
+    agent = _CapturingAgent(harness, _CONFIG)
     output = await harness.execute_with_guardrails(
         agent,
         AgentInput(
@@ -74,5 +88,29 @@ async def test_harness_execute_with_guardrails_blocks_secrets() -> None:
             instruction="key sk-abcdefghijklmnopqrstuvwxyz123456",
         ),
     )
-    assert output.status == "failure"
-    assert output.error_message is not None
+    assert output.status == "success"
+    assert agent.seen is not None
+    assert "sk-abcdefghijklmnopqrstuvwxyz123456" not in agent.seen.instruction
+    assert "[REDACTED]" in agent.seen.instruction
+    assert agent_metrics.secret_redaction_count("intent_classifier", "instruction") >= 1
+
+
+@pytest.mark.asyncio()
+async def test_harness_execute_with_guardrails_redacts_context_secret() -> None:
+    """Secrets already persisted in dialog history are masked on read, never brick the turn."""
+    harness = Harness()
+    agent = _CapturingAgent(harness, _CONFIG)
+    poisoned = '{"role": "user", "content": "password=hunter2"}'
+    output = await harness.execute_with_guardrails(
+        agent,
+        AgentInput(
+            task_id=uuid4(),
+            trace_id="trace-3",
+            instruction="продолжай",
+            context={"dialog_window_json": poisoned},
+        ),
+    )
+    assert output.status == "success"
+    assert agent.seen is not None
+    assert "hunter2" not in agent.seen.context["dialog_window_json"]
+    assert agent_metrics.secret_redaction_count("intent_classifier", "assembled_context.dialog_window_json") >= 1

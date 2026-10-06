@@ -5,7 +5,7 @@
 # >>     Select-Object -ExpandProperty FullName
 # ---------------------------------------------------------------------------
 # $env:PATH = [Environment]::GetEnvironmentVariable("PATH","User") + ";" +
-# >>             [Environment]::GetEnvironmentVariable("PATH","Machine")
+# >>          [Environment]::GetEnvironmentVariable("PATH","Machine")
 # ---------------------------------------------------------------------------
 # gum --version
 # ===========================================================================
@@ -34,9 +34,6 @@ function Invoke-Compose {
     docker compose --env-file $envFile --profile docker-mcp --profile docker-api @Rest
 }
 
-# Optional profiles are added on top of the base pair: `api` lives behind
-# docker-api and `clamav`/`minio` behind their own profiles, so a bare
-# `up -d clamav` would not keep the API in the same project (see docker-compose.override.yml).
 function Invoke-ComposeExtra {
     param([string] $Profile, [Parameter(ValueFromRemainingArguments = $true)] [string[]] $Rest)
     docker compose --env-file $envFile --profile docker-mcp --profile docker-api --profile $Profile @Rest
@@ -46,6 +43,33 @@ function Invoke-ComposeAttachments {
     param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Rest)
     docker compose --env-file $envFile --profile docker-mcp --profile docker-api `
         --profile attachments --profile attachments-s3 @Rest
+}
+
+function Invoke-ComposeObservability {
+    param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Rest)
+    docker compose --env-file $envFile --profile docker-mcp --profile docker-api `
+        --profile attachments --profile attachments-s3 --profile observability @Rest
+}
+
+# Full-launch flags come from the probe so this menu and the Makefile cannot drift (010).
+# The probe also decides whether `attachments-s3` can be added at all, from the store
+# image's availability — a plain list of profiles here would silently skew from `make up`.
+function Get-FullComposeArgs {
+    $flags = ((python scripts/attachments_probe.py --compose-args) -join " ") -split "\s+" |
+        Where-Object { $_ }
+    return @($flags)
+}
+
+function Write-AttachmentsMode {
+    param([switch] $Full)
+    $modeArgs = @("--mode", "--env-file", $envFile)
+    if ($Full) { $modeArgs += "--full" }
+    Write-Host ""
+    Write-Host "  Attachments mode ($envFile):" -ForegroundColor $C_ACC
+    python scripts/attachments_probe.py @modeArgs | ForEach-Object {
+        $color = if ($_ -like "warn:*") { $C_ERR } elseif ($_ -like "idle:*") { $C_MUTE } else { $C_TEXT }
+        Write-Host ("    {0}" -f $_) -ForegroundColor $color
+    }
 }
 
 # ── Palette ────────────────────────────────────────────────────────────────
@@ -65,9 +89,6 @@ function Invoke-WithSpinner {
     )
     $frames = @("|","/","-","\")
     $i = 0
-    # Arguments must be passed explicitly: Start-Job runs in a fresh process, so the
-    # scriptblock cannot read $envFile/$root from this session (it would silently
-    # expand to $null and the command would run against the wrong compose file).
     $job = Start-Job -ScriptBlock $Action -ArgumentList $ArgumentList
     while ($job.State -eq "Running") {
         Write-Host ("`r  {0} {1}   " -f $frames[$i % $frames.Length], $Title) `
@@ -84,10 +105,12 @@ function Invoke-WithSpinner {
 # ── Menu ───────────────────────────────────────────────────────────────────
 $menu = @(
     @{ Type = "group"; Text = "STACK" }
-    @{ Type = "item";  Text = "Start stack";            Hint = "up -d --build"; Key = "start" }
-    @{ Type = "item";  Text = "Restart";                Hint = "up -d";         Key = "restart" }
-    @{ Type = "item";  Text = "Stop stack";             Hint = "down";          Key = "stop" }
-    @{ Type = "item";  Text = "Full reset (volumes)";   Hint = "down -v";       Key = "reset" }
+    @{ Type = "item";  Text = "Start stack";            Hint = "up (no observability)";   Key = "start" }
+    @{ Type = "item";  Text = "Start full stack";       Hint = "up + observability";      Key = "start-full" }
+    @{ Type = "item";  Text = "Rebuild api + MCP";      Hint = "build+up api,mcp";        Key = "rebuild-app" }
+    @{ Type = "item";  Text = "Restart";                Hint = "up -d";                   Key = "restart" }
+    @{ Type = "item";  Text = "Stop stack";             Hint = "down";                    Key = "stop" }
+    @{ Type = "item";  Text = "Full reset (volumes)";   Hint = "down -v";                 Key = "reset" }
     @{ Type = "group"; Text = "LOGS" }
     @{ Type = "item";  Text = "Logs  all";              Hint = "-f";            Key = "logs" }
     @{ Type = "item";  Text = "Logs  litellm";          Hint = "litellm";       Key = "logs-litellm" }
@@ -107,6 +130,11 @@ $menu = @(
     @{ Type = "item";  Text = "Probe attachments";      Hint = "api+clamd+s3";           Key = "attach-probe" }
     @{ Type = "item";  Text = "Logs  clamav";           Hint = "-f";                     Key = "attach-logs-av" }
     @{ Type = "item";  Text = "Logs  minio";            Hint = "-f";                     Key = "attach-logs-s3" }
+    @{ Type = "group"; Text = "OBSERVABILITY  (Langfuse v3 + ClickHouse)" }
+    @{ Type = "item";  Text = "Start observability";    Hint = "profile observability";   Key = "obs-up" }
+    @{ Type = "item";  Text = "Stop observability";     Hint = "stop langfuse+clickhouse"; Key = "obs-down" }
+    @{ Type = "item";  Text = "Logs  langfuse";         Hint = "-f";                      Key = "obs-logs" }
+    @{ Type = "item";  Text = "Open Langfuse UI";       Hint = ":3000";                   Key = "obs-ui" }
     @{ Type = "group"; Text = "UTILITIES" }
     @{ Type = "item";  Text = "Shell  api";             Hint = "sh";            Key = "shell" }
     @{ Type = "item";  Text = "Open Swagger UI";        Hint = ":8000/docs";    Key = "swagger" }
@@ -122,7 +150,7 @@ function Write-MenuFrame {
 
     $w = [Math]::Max(60, [Console]::WindowWidth - 1)
 
-    # Header (2 строки)
+    # Header
     Write-Host "  " -NoNewline
     Write-Host "▎ " -NoNewline -ForegroundColor $C_ACC
     Write-Host "PALATIUM-AI" -NoNewline -ForegroundColor $C_HEAD
@@ -213,12 +241,35 @@ try {
 
         switch ($choice) {
             "start"        {
-                # The profiles are mandatory: without them compose starts only the base
-                # infrastructure and `api` (behind docker-api) never comes up at all.
-                Invoke-WithSpinner -Title "Starting stack..." -ArgumentList @($root, $envFile) -Action {
-                    param($rootDir, $envFileArg)
+                $composeArgs = Get-FullComposeArgs
+                $withS3 = $composeArgs -contains "attachments-s3"
+                $title = if ($withS3) { "Starting stack (api+mcp+av+s3)..." } else { "Starting stack (api+mcp+av)..." }
+                Invoke-WithSpinner -Title $title -ArgumentList @($root, $envFile, $composeArgs) -Action {
+                    param($rootDir, $envFileArg, $composeFlagArgs)
                     Set-Location $rootDir
-                    docker compose --env-file $envFileArg --profile docker-mcp --profile docker-api up -d --build
+                    docker compose --env-file $envFileArg @composeFlagArgs up -d --build
+                }
+                Write-AttachmentsMode -Full
+            }
+            "start-full"   {
+                $composeArgs = @("--profile", "observability") + (Get-FullComposeArgs)
+                Invoke-WithSpinner -Title "Starting full stack (+observability)..." -ArgumentList @($root, $envFile, $composeArgs) -Action {
+                    param($rootDir, $envFileArg, $composeFlagArgs)
+                    Set-Location $rootDir
+                    docker compose --env-file $envFileArg @composeFlagArgs up -d --build
+                }
+                Write-AttachmentsMode -Full
+                Write-Host ""
+                Write-Host "  note: observability peak (clickhouse 2048 + langfuse 768 + worker 512 MiB)" -ForegroundColor $C_MUTE
+                Write-Host "  does not fit the default Docker VM (~7.7 GiB). Raise 'memory=12GB' in" -ForegroundColor $C_MUTE
+                Write-Host "  %USERPROFILE%\.wslconfig and restart Docker Desktop, or the OOM killer fires." -ForegroundColor $C_MUTE
+            }
+            "rebuild-app"  {
+                Invoke-Compose build api mcp-edms mcp-analytics
+                if ($LASTEXITCODE -eq 0) {
+                    Invoke-Compose up -d --no-deps api mcp-edms mcp-analytics
+                } else {
+                    Write-Host "  build failed — nothing restarted" -ForegroundColor $C_ERR
                 }
             }
             "restart"      { Invoke-Compose up -d }
@@ -233,16 +284,12 @@ try {
             "logs-api"     { Invoke-Compose logs -f api }
             "ps"           { Invoke-Compose ps }
             "health" {
-                foreach ($ep in @(
-                    @{ Name = "API";     Url = "http://localhost:8000/health" },
-                    @{ Name = "LiteLLM"; Url = "http://localhost:4000/health/liveliness" }
-                )) {
-                    curl.exe -sf $ep.Url | Out-Null
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host ("  {0,-10}  OK"   -f $ep.Name) -ForegroundColor $C_OK
-                    } else {
-                        Write-Host ("  {0,-10}  FAIL" -f $ep.Name) -ForegroundColor $C_ERR
-                    }
+                # Single source of truth: `make verify` runs the same helper, so the two
+                # entry points cannot drift on which endpoints count as "up" (010).
+                python scripts/make_helpers.py verify
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host ""
+                    Write-Host "  Some endpoints are down — check 'Service status' / 'Logs all'." -ForegroundColor $C_ERR
                 }
             }
             "validate" {
@@ -268,14 +315,12 @@ try {
             "list-dbs"     { Invoke-Compose exec postgres psql -U postgres -c "\l" }
             "attach-up"    { Invoke-ComposeExtra "attachments" up -d clamav }
             "attach-s3-up" {
-                # Preflight first: MinIO publishes no anonymously pullable image, so a raw
-                # `up` fails with a registry error that reads like a broken compose file.
                 python scripts/attachments_probe.py --preflight-image --skip-s3 --skip-clamav --skip-api
                 if ($LASTEXITCODE -eq 0) {
                     Invoke-ComposeExtra "attachments-s3" up -d minio
                 } else {
                     Write-Host ""
-                    Write-Host "  S3 image is not pullable — fix ATTACHMENTS_MINIO_IMAGE (runbook §16.9)." `
+                    Write-Host "  S3 image is not pullable — check the minio image pin in docker-compose.yml (runbook §16.9)." `
                         -ForegroundColor $C_ERR
                     Write-Host "  Local dev needs no object store: ATTACHMENTS_BLOB_BACKEND=filesystem." `
                         -ForegroundColor $C_MUTE
@@ -285,6 +330,10 @@ try {
             "attach-probe" { python scripts/attachments_probe.py }
             "attach-logs-av" { Invoke-ComposeExtra "attachments" logs -f clamav }
             "attach-logs-s3" { Invoke-ComposeExtra "attachments-s3" logs -f minio }
+            "obs-up"       { Invoke-ComposeObservability up -d minio silo-init clickhouse langfuse-web langfuse-worker }
+            "obs-down"     { Invoke-ComposeObservability stop langfuse-web langfuse-worker clickhouse }
+            "obs-logs"     { Invoke-ComposeObservability logs -f langfuse-web langfuse-worker }
+            "obs-ui"       { Start-Process "http://localhost:3000" }
             "shell"        { Invoke-Compose exec api sh }
             "swagger"      { Start-Process "http://localhost:8000/docs" }
             "litellm-ui"   { Start-Process "http://localhost:4000/ui" }

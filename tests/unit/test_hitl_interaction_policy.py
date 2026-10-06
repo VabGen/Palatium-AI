@@ -111,7 +111,8 @@ def test_document_with_choice_framing_drops_menu_list() -> None:
     assert any(block.type in {"heading", "paragraph"} for block in framed.blocks)
 
 
-def test_choice_interaction_without_mintable_actions_is_invalid() -> None:
+def test_choice_interaction_without_mintable_actions_downgrades_informational() -> None:
+    """Soft interaction=choice without exclusive options → deliver as informational."""
     doc = ContentDocument(
         schema_version=1,
         locale="en-US",
@@ -126,9 +127,53 @@ def test_choice_interaction_without_mintable_actions_is_invalid() -> None:
         ),
     )
     plan = HitlInteractionPolicy.plan(doc, requires_review=True)
-    assert plan.reason == "formatter_output_invalid"
+    assert plan.reason == "interaction_downgraded_informational"
+    assert plan.required_choice is False
     assert plan.choice_actions == ()
-    assert plan.mint_quality_review is False
+    assert plan.mint_quality_review is True
+
+
+def test_compare_report_with_rhetorical_choice_downgrades() -> None:
+    """Compare/diff report tagged choice without actions must not fail-closed."""
+    from palatium_ai.domain.content import TableBlock
+
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        title="Сравнение версий",
+        blocks=(
+            ParagraphBlock(type="paragraph", text="Разделы совпадают."),
+            TableBlock(
+                type="table",
+                columns=("Поле", "Версия A", "Версия B"),
+                rows=(("Разработчик", "Семёнов .Н.", "Семёнов М.Н."),),
+            ),
+            CalloutBlock(
+                type="callout",
+                tone="warning",
+                title="Единственное отличие",
+                body="Уточните, какая версия корректна.",
+                icon="warning",
+            ),
+        ),
+        actions=(),
+        meta=DocumentMeta(
+            confidence=0.95,
+            requires_review=False,
+            source_refs=(),
+            interaction="choice",
+        ),
+    )
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=False,
+        task_kind="knowledge_request",
+        selected_strategy="retrieve",
+        requires_user_choice=False,
+    )
+    assert plan.reason == "interaction_downgraded_informational"
+    assert plan.required_choice is False
+    assert plan.choice_actions == ()
 
 
 def test_clarification_menu_too_small_fails_closed() -> None:

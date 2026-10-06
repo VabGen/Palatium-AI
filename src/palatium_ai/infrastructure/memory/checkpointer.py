@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+import warnings
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -36,11 +37,21 @@ class CheckpointerHandle:
 
 
 def ensure_psycopg_compatible_loop() -> None:
-    """Psycopg async requires SelectorEventLoop on Windows (not Proactor)."""
+    """Psycopg async requires SelectorEventLoop on Windows (not Proactor).
+
+    Python 3.14 deprecates event-loop policies (removal in 3.16). Prefer
+    ``asyncio.run(..., loop_factory=asyncio.SelectorEventLoop)`` at call
+    sites; keep this policy pin only until uvicorn/bootstrap pass a
+    loop_factory. Warnings are suppressed so ``filterwarnings=error`` in
+    tests does not fail process import on Windows.
+    """
     if sys.platform != "win32":
         return
     try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            policy = asyncio.WindowsSelectorEventLoopPolicy()
+            asyncio.set_event_loop_policy(policy)
     except Exception as exc:
         logger.debug("Could not set WindowsSelectorEventLoopPolicy", error=str(exc))
 

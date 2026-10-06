@@ -21,6 +21,7 @@ from palatium_ai.application.agents.critic.parsing import (
 )
 from palatium_ai.application.agents.critic.prompts import CRITIC_SYSTEM_PROMPT
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
@@ -28,6 +29,7 @@ from palatium_ai.domain.agents.critic import CriticOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.models import ChatMessage
 from palatium_ai.domain.policies import CriticPolicy
+from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -51,6 +53,7 @@ class CriticAgent(BaseAgent):
             "selected_strategy",
             "continuation_kind",
             "user_input_chars",
+            "worker_confidence",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -60,6 +63,27 @@ class CriticAgent(BaseAgent):
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")
         task_input = decode_critic_input({**input.context, "_task_id": str(input.task_id)})
+
+        hop = get_hop_collector()
+        if hop is not None:
+            budget_gate = HopBudgetPolicy.should_skip_critic_llm(
+                hop_total_ms=hop.total_ms(),
+                budget_ms=hop.budget_ms,
+            )
+            if budget_gate.degrade:
+                agent_metrics.record_node_execution(self._config.role, f"passthrough:{budget_gate.reason}")
+                output = CriticOutput(
+                    accuracy_score=PASSTHROUGH_ACCURACY,
+                    safety_score=PASSTHROUGH_SAFETY,
+                    requires_review=False,
+                    summary=f"HopBudgetPolicy soft-degrade ({budget_gate.reason}).",
+                )
+                return AgentOutput(
+                    task_id=input.task_id,
+                    status="success",
+                    confidence=confidence_from_scores(output),
+                    output=output,
+                )
 
         gate = CriticPolicy.decide(
             selected_strategy=task_input.selected_strategy,
@@ -71,6 +95,8 @@ class CriticAgent(BaseAgent):
             requires_tool_call=task_input.context_packet.execution_plan.requires_tool_call,
             worker_summary=task_input.worker_summary,
             user_input_chars=task_input.user_input_chars,
+            worker_confidence=task_input.worker_confidence,
+            has_attachment_context=bool((task_input.context_packet.untrusted_context or "").strip()),
         )
         if not gate.invoke_llm:
             agent_metrics.record_node_execution(self._config.role, f"passthrough:{gate.reason}")

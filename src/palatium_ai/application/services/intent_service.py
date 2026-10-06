@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal
-from uuid import UUID
+from collections.abc import AsyncIterator, Sequence
+from time import perf_counter
+from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import UUID, uuid4
 
 from palatium_ai.application.services.cost_budget import CostBudgetService
 from palatium_ai.application.services.intent_graph_runner import IntentGraphRunner
@@ -16,15 +17,19 @@ from palatium_ai.application.services.intent_hitl_flow import (
     max_quality_revisions,
 )
 from palatium_ai.application.services.intent_turn_helpers import (
+    PENDING_ATTACHMENT_IDS_KEY,
     assistant_turn_content as _assistant_turn_content,
     assistant_turn_payload as _assistant_turn_payload,
     derive_session_title as _derive_session_title,
     extract_interrupt as _extract_interrupt,
+    parse_pending_attachment_ids,
+    serialize_pending_attachment_ids,
     snapshot_awaits_resume as _snapshot_awaits_resume,
     tenant_budget_key as _tenant_budget_key,
     write_audit as _write_audit,
 )
 from palatium_ai.application.services.kill_switch import KillSwitchService
+from palatium_ai.application.services.response_cache_service import ResponseCacheService
 from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -32,6 +37,7 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
 from palatium_ai.domain.hitl.cards import HITLCardView
+from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
 _DEFAULT_DIALOG_WINDOW = 12
@@ -83,6 +89,7 @@ class IntentService:
         mcp_tool_output_max_chars: int = 3000,
         turn_hop_budget_ms: int = 15_000,
         attachment_service: AttachmentService | None = None,
+        response_cache: ResponseCacheService | None = None,
     ) -> None:
         self._session_service = session_service
         self._hitl_service = hitl_service
@@ -93,6 +100,7 @@ class IntentService:
         self._consolidation = consolidation
         self._option_synthesizer = option_synthesizer
         self._attachment_service = attachment_service
+        self._response_cache = response_cache or ResponseCacheService(None, enabled=False)
 
         self._graph_runner = IntentGraphRunner(
             graph,
@@ -156,6 +164,45 @@ class IntentService:
         )
         return context.fenced_text
 
+    @staticmethod
+    def _serialize_pending_attachment_ids(attachment_ids: Sequence[UUID]) -> str:
+        return serialize_pending_attachment_ids(list(attachment_ids))
+
+    @staticmethod
+    def _parse_pending_attachment_ids(raw: object) -> list[UUID]:
+        return parse_pending_attachment_ids(raw)
+
+    async def _pending_attachment_ids(self, *, thread_id: str) -> list[UUID]:
+        session = await self._session_service.get_session(thread_id=thread_id)
+        if session is None or not isinstance(session.context, dict):
+            return []
+        return self._parse_pending_attachment_ids(session.context.get(PENDING_ATTACHMENT_IDS_KEY))
+
+    async def _resolve_turn_attachment_ids(
+        self,
+        attachment_ids: Sequence[UUID] | None,
+        *,
+        thread_id: str,
+        restore_pending: bool = False,
+    ) -> list[UUID] | None:
+        """Explicit upload ids win; otherwise restore sticky session attachments.
+
+        Composer chips clear after send (UI), but follow-ups like «дай сводку»
+        still refer to the last ready uploads — restore ``pending_attachment_ids``
+        from the session when ``restore_pending`` is True (process / HITL resume).
+        """
+        if attachment_ids:
+            return list(attachment_ids)
+        if not restore_pending:
+            return None
+        pending = await self._pending_attachment_ids(thread_id=thread_id)
+        return pending or None
+
+    def _attachment_context_patch(self, attachment_ids: Sequence[UUID] | None) -> dict[str, object]:
+        if not attachment_ids:
+            return {}
+        return {PENDING_ATTACHMENT_IDS_KEY: self._serialize_pending_attachment_ids(attachment_ids)}
+
     @traceable(name="intent_service.classify")
     async def classify(
         self,
@@ -169,7 +216,7 @@ class IntentService:
         attachment_ids: Sequence[UUID] | None = None,
     ) -> IntentTaskResult:
         """Возвращает platform-level классификацию задачи."""
-        resolved_task_id = task_id or thread_id
+        resolved_task_id = task_id or str(uuid4())
         await self._session_service.assert_thread_access(
             thread_id=thread_id,
             user_id=user_id,
@@ -346,7 +393,8 @@ class IntentService:
         attachment_ids: Sequence[UUID] | None = None,
     ) -> FormatterTaskResult:
         """Возвращает финальный отформатированный ответ платформы."""
-        resolved_task_id = task_id or thread_id
+        started = perf_counter()
+        resolved_task_id = task_id or str(uuid4())
         logger.info(
             "agent.turn.start",
             thread_id=thread_id,
@@ -363,6 +411,11 @@ class IntentService:
         await self._kill_switch.assert_clear(conversation_id=thread_id)
         tenant_key = _tenant_budget_key(user_id=user_id, org_id=org_id, thread_id=thread_id)
         await self._cost_budget.assert_daily_allows_turn(tenant_key=tenant_key)
+        resolved_attachments = await self._resolve_turn_attachment_ids(
+            attachment_ids,
+            thread_id=thread_id,
+            restore_pending=True,
+        )
         await self._session_service.touch_session(
             thread_id=thread_id,
             user_id=user_id,
@@ -372,6 +425,7 @@ class IntentService:
                 "last_task_id": resolved_task_id,
                 "last_user_text": session_user_text_preview(text),
                 "org_id": org_id or "",
+                **self._attachment_context_patch(resolved_attachments),
             },
         )
         if self._dialog_turn_store is not None:
@@ -390,30 +444,212 @@ class IntentService:
             org_id=org_id,
             tenant_key=tenant_key,
             untrusted_context=await self._turn_untrusted_context(
-                attachment_ids,
+                resolved_attachments,
                 thread_id=thread_id,
                 user_id=user_id,
             ),
         )
         interrupted = _extract_interrupt(final_state)
         if interrupted is not None:
-            return await self._hitl_flow.finalize_tool_interrupt(
+            formatted = await self._hitl_flow.finalize_tool_interrupt(
                 interrupt_payload=interrupted,
                 thread_id=thread_id,
                 task_id=resolved_task_id,
                 user_id=user_id,
                 org_id=org_id,
             )
+        else:
+            formatted = await self._graph_runner.finalize_formatted_state(
+                final_state,
+                text=text,
+                thread_id=thread_id,
+                task_id=resolved_task_id,
+                user_id=user_id,
+                org_id=org_id,
+                operation="process",
+            )
+        await self._after_process_metrics_and_cache(
+            final_state=final_state if interrupted is None else None,
+            formatted=formatted,
+            text=text,
+            tenant_key=tenant_key,
+            started=started,
+            skip_cache=bool(resolved_attachments),
+        )
+        return formatted
 
-        return await self._graph_runner.finalize_formatted_state(
-            final_state,
+    async def _resolve_response_locale(self, *, thread_id: str, user_text: str) -> str:
+        session = await self._session_service.get_session(thread_id=thread_id)
+        prior_locale: str | None = None
+        ui_locale: str | None = None
+        if session is not None and isinstance(session.context, dict):
+            prior_raw = session.context.get("response_locale")
+            ui_raw = session.context.get("ui_locale")
+            prior_locale = prior_raw if isinstance(prior_raw, str) else None
+            ui_locale = ui_raw if isinstance(ui_raw, str) else None
+        return ReplyLocalePolicy.resolve(
+            user_text=user_text,
+            prior_locale=prior_locale,
+            ui_locale=ui_locale,
+        )
+
+    async def _after_process_metrics_and_cache(
+        self,
+        *,
+        final_state: AgentGraphState | None,
+        formatted: FormatterTaskResult,
+        text: str,
+        tenant_key: str,
+        started: float,
+        skip_cache: bool,
+    ) -> None:
+        from palatium_ai.application.orchestration import selectors as orch_selectors
+
+        task_kind = "unknown"
+        strategy = "unknown"
+        locale = "und"
+        if final_state is not None:
+            routing = final_state.get("routing_intent")
+            if routing is not None:
+                task_kind = str(getattr(routing, "task_kind", "") or "unknown")
+            strategy = str(orch_selectors.selected_strategy(final_state))
+            locale = str(final_state.get("response_locale") or "und")
+        elif formatted.output is not None:
+            locale = formatted.output.locale or "und"
+        agent_metrics.record_turn_duration(
+            task_kind=task_kind,
+            strategy=strategy,
+            duration_seconds=perf_counter() - started,
+        )
+        if skip_cache or final_state is None:
+            return
+        await self._response_cache.put_if_cacheable(
+            tenant_key=tenant_key,
+            user_text=text,
+            locale=locale,
+            strategy=strategy,
+            result=formatted,
+        )
+
+    @traceable(name="intent_service.process_stream")
+    async def process_stream(
+        self,
+        text: str,
+        thread_id: str,
+        task_id: str | None = None,
+        user_id: str | None = None,
+        org_id: str | None = None,
+        *,
+        is_admin: bool = False,
+        attachment_ids: Sequence[UUID] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """SSE-oriented process: yield hop events, then a final FormatterTaskResult payload."""
+        started = perf_counter()
+        resolved_task_id = task_id or str(uuid4())
+        logger.info(
+            "agent.turn.start",
+            thread_id=thread_id,
+            task_id=resolved_task_id,
+            user_id=user_id or "",
+            text_chars=len(text),
+            stream=True,
+        )
+        await self._session_service.assert_thread_access(
+            thread_id=thread_id,
+            user_id=user_id,
+            is_admin=is_admin,
+            allow_missing=True,
+        )
+        await self._kill_switch.assert_clear(conversation_id=thread_id)
+        tenant_key = _tenant_budget_key(user_id=user_id, org_id=org_id, thread_id=thread_id)
+        await self._cost_budget.assert_daily_allows_turn(tenant_key=tenant_key)
+        resolved_attachments = await self._resolve_turn_attachment_ids(
+            attachment_ids,
+            thread_id=thread_id,
+            restore_pending=True,
+        )
+        await self._session_service.touch_session(
+            thread_id=thread_id,
+            user_id=user_id,
+            title=_derive_session_title(text),
+            context_patch={
+                "last_operation": "process_stream",
+                "last_task_id": resolved_task_id,
+                "last_user_text": session_user_text_preview(text),
+                "org_id": org_id or "",
+                **self._attachment_context_patch(resolved_attachments),
+            },
+        )
+        if self._dialog_turn_store is not None:
+            await self._dialog_turn_store.append_turn(
+                thread_id=thread_id,
+                role="user",
+                content=text,
+                task_id=resolved_task_id,
+            )
+
+        untrusted = await self._turn_untrusted_context(
+            resolved_attachments,
+            thread_id=thread_id,
+            user_id=user_id,
+        )
+        final_state: AgentGraphState | None = None
+        async for event in self._graph_runner.stream_graph(
             text=text,
             thread_id=thread_id,
             task_id=resolved_task_id,
             user_id=user_id,
             org_id=org_id,
-            operation="process",
+            tenant_key=tenant_key,
+            untrusted_context=untrusted,
+        ):
+            if event.get("event") == "final_state":
+                final_state = cast("AgentGraphState", event["state"])
+                continue
+            yield event
+
+        if final_state is None:
+            yield {
+                "event": "error",
+                "message": "Graph stream ended without final state",
+                "task_id": resolved_task_id,
+                "thread_id": thread_id,
+            }
+            return
+
+        interrupted = _extract_interrupt(final_state)
+        if interrupted is not None:
+            formatted = await self._hitl_flow.finalize_tool_interrupt(
+                interrupt_payload=interrupted,
+                thread_id=thread_id,
+                task_id=resolved_task_id,
+                user_id=user_id,
+                org_id=org_id,
+            )
+        else:
+            formatted = await self._graph_runner.finalize_formatted_state(
+                final_state,
+                text=text,
+                thread_id=thread_id,
+                task_id=resolved_task_id,
+                user_id=user_id,
+                org_id=org_id,
+                operation="process_stream",
+            )
+        await self._after_process_metrics_and_cache(
+            final_state=final_state if interrupted is None else None,
+            formatted=formatted,
+            text=text,
+            tenant_key=tenant_key,
+            started=started,
+            skip_cache=bool(resolved_attachments),
         )
+        yield {
+            "event": "result",
+            "task_id": resolved_task_id,
+            "thread_id": thread_id,
+            "result": formatted.model_dump(mode="json"),
+        }
 
     @traceable(name="intent_service.process_hitl_choice")
     async def process_hitl_choice(

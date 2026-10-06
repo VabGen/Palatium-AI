@@ -13,6 +13,7 @@ NODE_SUPERVISOR: Final[Literal["supervisor"]] = "supervisor"
 NODE_RESEARCHER: Final[Literal["researcher"]] = "researcher"
 NODE_CODER: Final[Literal["coder"]] = "coder"
 NODE_ANALYST: Final[Literal["analyst"]] = "analyst"
+NODE_PARALLEL_WORKERS: Final[Literal["parallel_workers"]] = "parallel_workers"
 NODE_CRITIC: Final[Literal["critic"]] = "critic"
 NODE_QUALITY_REVISION: Final[Literal["quality_revision"]] = "quality_revision"
 NODE_FORMATTER: Final[Literal["formatter"]] = "formatter"
@@ -27,6 +28,7 @@ type GraphNodeId = Literal[
     "researcher",
     "coder",
     "analyst",
+    "parallel_workers",
     "critic",
     "quality_revision",
     "formatter",
@@ -48,6 +50,7 @@ GRAPH_NODE_IDS: Final[tuple[GraphNodeId, ...]] = (
     NODE_RESEARCHER,
     NODE_CODER,
     NODE_ANALYST,
+    NODE_PARALLEL_WORKERS,
     NODE_CRITIC,
     NODE_QUALITY_REVISION,
     NODE_FORMATTER,
@@ -63,6 +66,7 @@ __all__ = [
     "NODE_CRITIC",
     "NODE_FORMATTER",
     "NODE_INTENT_CLASSIFIER",
+    "NODE_PARALLEL_WORKERS",
     "NODE_QUALITY_REVISION",
     "NODE_RESEARCHER",
     "NODE_SUPERVISOR",

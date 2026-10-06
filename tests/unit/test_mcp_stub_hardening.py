@@ -24,6 +24,10 @@ from mcp_servers.mcp_stub_hardening import (
 )
 
 _MCP_ROOT = Path(__file__).resolve().parents[2] / "mcp_servers"
+# Read-only reference trees inside `mcp_servers/`: someone else's code, shipped as-is and
+# never edited or re-styled by us (017, 090, 092). They are also not guaranteed to be
+# UTF-8, so a source scan must skip them rather than blow up on a legacy file.
+_REFERENCE_TREES = frozenset({"JavaEdms", "edms-ai-assistant"})
 _MAX_BODY_BYTES = 1024
 _ENV_NAMES = ("MCP_MAX_BODY_BYTES", "MCP_RATE_LIMIT", "MCP_RATE_LIMIT_WINDOW_SECONDS")
 
@@ -181,7 +185,7 @@ def test_stub_modules_use_package_qualified_sibling_imports() -> None:
     """
     offenders: list[str] = []
     for path in sorted(_MCP_ROOT.rglob("*.py")):
-        if "JavaEdms" in path.parts:  # rule 090: read-only reference, not our code
+        if _REFERENCE_TREES.intersection(path.parts):  # чужой код — не наш стиль импортов
             continue
         for line in path.read_text(encoding="utf-8").splitlines():
             bare = line.strip()

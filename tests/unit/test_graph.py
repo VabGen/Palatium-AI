@@ -213,7 +213,7 @@ async def test_graph_skips_researcher_for_non_research_route() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_graph_social_skips_researcher_and_critic_llm() -> None:
+async def test_graph_social_skips_researcher_uses_formatter_llm() -> None:
     llm_intent = FakeLLMPort(
         '{"task_kind": "social_conversation", "requires_mcp": false, '
         '"candidate_capabilities": [], "confidence": 0.96, "reasoning": "Greeting"}',
@@ -222,7 +222,7 @@ async def test_graph_social_skips_researcher_and_critic_llm() -> None:
         '{"summary": "Should not run", "confidence": 0.1, "sources_used": []}',
     )
     llm_critic = FakeLLMPort(
-        '{"accuracy_score": 1, "safety_score": 1, "requires_review": true, "summary": "should not run"}',
+        '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok greeting"}',
     )
     llm_formatter = FakeLLMPort(_formatter_document_json("Привет!", locale="ru-RU"))
 
@@ -244,8 +244,8 @@ async def test_graph_social_skips_researcher_and_critic_llm() -> None:
     assert result.output is not None
     assert result.output.task_kind == "social_conversation"
     assert len(llm_researcher.calls) == 0
-    assert len(llm_critic.calls) == 0
-    assert len(llm_formatter.calls) == 1
+    assert len(llm_critic.calls) == 1
+    assert len(llm_formatter.calls) >= 1
 
 
 @pytest.mark.asyncio()

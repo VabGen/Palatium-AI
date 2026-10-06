@@ -2,7 +2,8 @@
 
 """Knowledge infrastructure adapters."""
 
+from palatium_ai.infrastructure.knowledge.embedding_rerank import EmbeddingRerankKnowledgePort
 from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
 from palatium_ai.infrastructure.knowledge.postgres_knowledge_port import PostgresKnowledgePort
 
-__all__ = ["InMemoryKnowledgePort", "PostgresKnowledgePort"]
+__all__ = ["EmbeddingRerankKnowledgePort", "InMemoryKnowledgePort", "PostgresKnowledgePort"]

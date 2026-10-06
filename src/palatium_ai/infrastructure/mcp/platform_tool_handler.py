@@ -159,6 +159,10 @@ class PlatformToolHandler:
 
         thread_id_raw = arguments.get("thread_id", "")
         thread_id = thread_id_raw.strip() if isinstance(thread_id_raw, str) and thread_id_raw.strip() else None
+        project_raw = arguments.get("project_id", "")
+        project_id = project_raw.strip() if isinstance(project_raw, str) and project_raw.strip() else None
+        document_raw = arguments.get("document_id", "")
+        source_document_id = document_raw.strip() if isinstance(document_raw, str) and document_raw.strip() else None
         limit_raw = arguments.get("limit", "8")
         try:
             limit = max(1, min(int(str(limit_raw).strip()), 32))
@@ -170,6 +174,8 @@ class PlatformToolHandler:
                 user_id=user_id.strip(),
                 query=query.strip(),
                 thread_id=thread_id,
+                project_id=project_id,
+                source_document_id=source_document_id,
                 limit=limit,
             )
         )

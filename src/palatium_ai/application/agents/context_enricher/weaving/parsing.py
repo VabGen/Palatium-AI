@@ -20,4 +20,5 @@ def decode_context_weaver_input(input_context: dict[str, str], *, instruction: s
         route_plan=input_context["route_plan"],
         requires_mcp=input_context.get("requires_mcp", "false").lower() == "true",
         candidate_capabilities=capabilities,
+        has_attachment_context=input_context.get("has_attachment_context", "false").lower() == "true",
     )

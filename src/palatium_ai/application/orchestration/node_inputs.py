@@ -32,7 +32,10 @@ def build_supervisor_input(snapshot: OrchestrationSnapshot) -> SupervisorInput:
     )
 
 
-def build_context_weaver_input(snapshot: OrchestrationSnapshot) -> ContextWeaverInput:
+def build_context_weaver_input(
+    snapshot: OrchestrationSnapshot,
+    state: AgentGraphState,
+) -> ContextWeaverInput:
     """Собирает вход для ContextWeaver."""
     return ContextWeaverInput(
         task_id=snapshot.task_id,
@@ -42,6 +45,7 @@ def build_context_weaver_input(snapshot: OrchestrationSnapshot) -> ContextWeaver
         route_plan=snapshot.route_plan,
         requires_mcp=snapshot.requires_mcp,
         candidate_capabilities=snapshot.candidate_capabilities,
+        has_attachment_context=bool((state.get("untrusted_context") or "").strip()),
     )
 
 
@@ -114,6 +118,7 @@ def build_critic_input(
         selected_strategy=snapshot.selected_strategy,
         continuation_kind=selectors.resolved_continuation_kind(state),
         user_input_chars=len(selectors.resolved_user_text(state)),
+        worker_confidence=selectors.resolved_worker_confidence(state),
     )
 
 

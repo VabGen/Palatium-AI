@@ -37,7 +37,7 @@ class TextIngestorInput(BaseModel):
     mime_type: str | None = Field(default=None, max_length=128)
     locale: str | None = Field(default=None, max_length=16)
     max_chunk_chars: int = Field(default=1500, gt=0, le=8000)
-    enrich_context_prefix: bool = False
+    enrich_context_prefix: bool = True
     document_title: str | None = Field(default=None, max_length=256)
 
 

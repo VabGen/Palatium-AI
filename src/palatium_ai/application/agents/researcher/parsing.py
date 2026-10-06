@@ -103,3 +103,25 @@ def summarize_mcp_content(
     raw = redact_text(raw)
     fenced = wrap_untrusted_tool_output(raw, source=f"mcp:{server_name}.{tool_name}")
     return compress_worker_context(fenced, max_chars=max_chars, label="mcp")
+
+
+# Soft saturation for MCP evidence length → confidence (030.4 deterministic grader).
+_MCP_CONFIDENCE_EMPTY = 0.15
+_MCP_CONFIDENCE_FLOOR = 0.40
+_MCP_CONFIDENCE_CEILING = 0.85
+_MCP_CONFIDENCE_CHARS_FULL = 500
+
+
+def score_mcp_tool_confidence(*, is_error: bool, summary_chars: int) -> float:
+    """Deterministic confidence from MCP outcome signals (no hardcoded 0.65/0.2).
+
+    Error → 0.0. Empty usable text → low partial. Longer evidence saturates toward
+    ``_MCP_CONFIDENCE_CEILING`` so thin results stay below a typical 0.7 threshold.
+    """
+    if is_error:
+        return 0.0
+    usable = max(0, summary_chars)
+    if usable <= 0:
+        return _MCP_CONFIDENCE_EMPTY
+    ratio = min(1.0, usable / float(_MCP_CONFIDENCE_CHARS_FULL))
+    return round(_MCP_CONFIDENCE_FLOOR + (_MCP_CONFIDENCE_CEILING - _MCP_CONFIDENCE_FLOOR) * ratio, 3)

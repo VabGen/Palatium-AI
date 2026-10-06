@@ -30,7 +30,7 @@ docker compose --profile docker-mcp --profile docker-api up -d --build
 
 | Сервис | Порт | Назначение |
 |--------|------|------------|
-| `postgres` | 5432 | DialogTurn / memory / knowledge (образ `pgvector/pgvector:pg16`) + БД `langfuse` |
+| `postgres` | 5432 | DialogTurn / memory / knowledge (образ `pgvector/pgvector:pg18`) + БД `langfuse` |
 | `redis` | 6379 | HITL / cache / LiteLLM cache |
 | `neo4j` | 7474 / 7687 | Graphiti (Browser + Bolt) |
 | **`litellm`** | **4000** | **LLM Gateway — маршрутизатор `tier-*` → провайдеры** |

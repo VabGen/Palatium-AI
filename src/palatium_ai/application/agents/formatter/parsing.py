@@ -32,6 +32,11 @@ def parse_formatter_document(raw_content: str) -> ContentDocument:
 
 def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) -> ContentDocument:
     """Синхронизирует meta/locale с пайплайном (locale pin — source of truth)."""
+    from palatium_ai.domain.attachments.citations import (
+        citation_refs_from_untrusted_context,
+        sanitize_source_refs,
+    )
+
     confidence = clamp_confidence(document.meta.confidence)
     if task_input.requires_review:
         confidence = min(confidence, REVIEW_CONFIDENCE_CAP)
@@ -45,6 +50,10 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
         interaction = "choice"
 
     locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
+    attachment_refs = citation_refs_from_untrusted_context(task_input.context_packet.untrusted_context)
+    # Prefer LLM refs when present; always union attachment file/page citations (W2 G03).
+    # Bare UUIDs are not user-facing citations — drop them (LLM often echoes fence ids).
+    merged_refs = sanitize_source_refs((*document.meta.source_refs, *attachment_refs))
 
     return document.model_copy(
         update={
@@ -54,6 +63,7 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
                     "requires_review": task_input.requires_review,
                     "confidence": confidence,
                     "interaction": interaction,
+                    "source_refs": merged_refs,
                 }
             ),
         }
@@ -69,12 +79,20 @@ def clamp_confidence(value: float) -> float:
 
 def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object]:
     locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
+    has_attachments = bool((task_input.context_packet.untrusted_context or "").strip())
     dialog_block = "(no prior turns)"
     if task_input.dialog_window is not None and task_input.dialog_window.turns:
-        dialog_block = task_input.dialog_window.as_prompt_block(
-            max_chars=8000,
-            per_turn_max_chars=1200,
-        )
+        # File-grounded turns: prior assistant answers about other uploads must not
+        # compete with the current fence (cross-file bleed). Keep user turns only.
+        window = task_input.dialog_window
+        if has_attachments:
+            user_turns = tuple(turn for turn in window.turns if turn.role == "user")
+            window = window.model_copy(update={"turns": user_turns}) if user_turns else None
+        if window is not None and window.turns:
+            dialog_block = window.as_prompt_block(
+                max_chars=8000,
+                per_turn_max_chars=1200,
+            )
 
     memory_block = ""
     if task_input.memory_hints:

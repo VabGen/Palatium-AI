@@ -3,7 +3,8 @@
 """When MCP network discovery / tool execution is allowed on the hot path.
 
 Pure domain policy — no HTTP, no phrase lists. Gates expensive tools/list and tool calls
-so social/format/clarify paths and retrieve_then_reason never spin on dead MCP stubs.
+so social/format/clarify paths never spin on dead MCP stubs. Knowledge
+``retrieve_then_reason`` binds ``platform.search_knowledge`` via requires_tool_call.
 """
 
 from __future__ import annotations

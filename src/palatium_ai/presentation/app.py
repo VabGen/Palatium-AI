@@ -4,18 +4,27 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
+import structlog
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from palatium_ai.application.bootstrap import shutdown, startup
 from palatium_ai.core.config import get_settings
+from palatium_ai.core.exceptions import AuditChainIntegrityError, AuditWriteDegradedError, DatabaseUnavailableError
+from palatium_ai.core.logging.context import trace_id_var
+from palatium_ai.core.observability import get_audit_logger
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.presentation.api.routers import (
     admin,
     agents,
@@ -44,6 +53,8 @@ if TYPE_CHECKING:
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _UI_DIST = _REPO_ROOT / "web" / "dist"
 
+logger = structlog.get_logger(__name__)
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Создаёт и конфигурирует экземпляр FastAPI."""
@@ -67,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.settings = resolved_settings
     application.state.security_config = resolved_settings.security
     application.state.token_service = token_service
+    register_error_handlers(application)
 
     # Middleware order: last added runs first on the request path.
     application.add_middleware(
@@ -113,6 +125,150 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_websocket_routes(application)
 
     return application
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Error handlers
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def register_error_handlers(application: FastAPI) -> None:
+    """Map typed boundary errors onto external status codes (035)."""
+    application.add_exception_handler(DatabaseUnavailableError, database_unavailable_handler)
+    application.add_exception_handler(RequestValidationError, validation_error_handler)
+
+
+async def database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer ``503`` + ``Retry-After`` when the DB layer exhausted its retry budget (035).
+
+    The request never executed, so a retry is safe; the internal cause (driver class,
+    DSN, SQL) stays in the log and metric and never reaches the response body.
+    """
+    unavailable = cast("DatabaseUnavailableError", exc)
+    retry_after = max(1, unavailable.retry_after_seconds)
+    agent_metrics.record_error("database", "unavailable")
+    logger.warning(
+        "db.unavailable",
+        path=request.url.path,
+        method=request.method,
+        operation=unavailable.operation,
+        retry_after_seconds=retry_after,
+    )
+    await _audit_db_unavailable(request, unavailable)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database temporarily unavailable, please retry shortly"},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+async def _audit_db_unavailable(request: Request, exc: DatabaseUnavailableError) -> None:
+    """Audit the fail-closed boundary (035) — best effort, never masking the 503."""
+    try:
+        await get_audit_logger().append_async(
+            timestamp=datetime.now(UTC).isoformat(),
+            conversation_id=f"http:{request.method}:{request.url.path}",
+            event="db_unavailable",
+            metadata={
+                "operation": exc.operation,
+                "retry_after_seconds": str(exc.retry_after_seconds),
+                "http_status": "503",
+                "trace_id": trace_id_var.get() or "unknown",
+            },
+        )
+    except (AuditWriteDegradedError, AuditChainIntegrityError, OSError) as audit_exc:
+        logger.warning(
+            "db.unavailable.audit_skipped",
+            path=request.url.path,
+            error_type=type(audit_exc).__name__,
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Validation handler (422 → human-readable)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _humanize_pydantic_error(err: Mapping[str, Any]) -> dict[str, object]:
+    """Преобразует одну Pydantic-ошибку в короткое сообщение для клиента.
+
+    Формат ответа (разбирает `web/src/api/client.ts::humanizePydanticError`):
+        {"field": "...", "code": "...", "message": "..."}
+    """
+    loc_raw = err.get("loc")
+    loc: tuple[Any, ...] | list[Any] = loc_raw if isinstance(loc_raw, (list, tuple)) else ()
+    field = str(loc[-1]) if loc else "body"
+    etype = str(err.get("type", "unknown"))
+    ctx_raw = err.get("ctx")
+    ctx: Mapping[str, Any] = ctx_raw if isinstance(ctx_raw, Mapping) else {}
+
+    if etype == "string_too_long":
+        limit = ctx.get("max_length", "?")
+        return {
+            "field": field,
+            "code": "too_long",
+            "message": f"«{field}»: максимум {limit} символов",
+        }
+    if etype == "string_too_short":
+        min_length = ctx.get("min_length", 1)
+        suffix = "" if min_length == 1 else "а"
+        return {
+            "field": field,
+            "code": "too_short",
+            "message": f"«{field}»: минимум {min_length} символ{suffix}",
+        }
+    if etype == "too_long":
+        limit = ctx.get("max_length", "?")
+        return {
+            "field": field,
+            "code": "too_many_items",
+            "message": f"«{field}»: максимум {limit} элементов",
+        }
+    if etype == "uuid_parsing":
+        return {
+            "field": field,
+            "code": "invalid_uuid",
+            "message": f"«{field}»: некорректный UUID",
+        }
+    if etype == "missing":
+        return {
+            "field": field,
+            "code": "required",
+            "message": f"«{field}»: обязательное поле",
+        }
+
+    return {
+        "field": field,
+        "code": etype,
+        "message": str(err.get("msg") or etype),
+    }
+
+
+def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Human-readable 422 for all clients (web, mobile, integrations).
+
+    FastAPI's default response embeds a raw Pydantic dump — useless in a UI. We
+    convert it into ``{"detail": [{"field", "code", "message"}]}``, which the
+    frontend renders verbatim. The shape is a stable contract for API consumers.
+
+    Sync on purpose: no awaits inside; ``async def`` would trip ``RUF029``.
+    Starlette accepts sync handlers for both ``HTTPException`` and
+    ``RequestValidationError``.
+    """
+    validation_exc = cast("RequestValidationError", exc)
+    issues = [_humanize_pydantic_error(err) for err in validation_exc.errors()]
+    logger.info(
+        "request.validation_failed",
+        path=request.url.path,
+        method=request.method,
+        issues_count=len(issues),
+    )
+    return JSONResponse(status_code=422, content={"detail": issues})
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Environment hardening
+# ────────────────────────────────────────────────────────────────────────────
 
 
 def _assert_environment_hardening(settings: Settings) -> None:
@@ -163,6 +319,11 @@ def _is_loopback_origin(origin: str) -> bool:
     """True when a CORS origin resolves to a loopback/any-local host (020)."""
     host = (urlsplit(origin).hostname or "").strip().lower()
     return host in _LOOPBACK_HOSTS or host.endswith(".localhost")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Chat UI mount
+# ────────────────────────────────────────────────────────────────────────────
 
 
 def _mount_chat_ui(application: FastAPI) -> None:

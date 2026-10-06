@@ -77,9 +77,15 @@ def test_unknown_status_is_rejected() -> None:
 
 
 def test_is_expired_tracks_ttl() -> None:
+    """``is_expired`` reads the wall clock, so the fixtures must be relative to ``now``.
+
+    Pinning them to the module's hardcoded ``_NOW`` makes the assertion a time-bomb:
+    it stays green only until real time passes ``_NOW + 1 day``.
+    """
+    now = datetime.now(UTC)
     assert not _attachment().is_expired
-    assert _attachment(expires_at=_NOW - timedelta(seconds=1)).is_expired
-    assert not _attachment(expires_at=_NOW + timedelta(days=1)).is_expired
+    assert _attachment(expires_at=now - timedelta(seconds=1)).is_expired
+    assert not _attachment(expires_at=now + timedelta(days=1)).is_expired
 
 
 def test_aggregate_is_frozen() -> None:

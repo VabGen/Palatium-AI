@@ -27,6 +27,8 @@ AttachmentRejectionReason = Literal[
     "size_exceeded",
     "mime_not_allowed",
     "extension_mismatch",
+    #: Declared MIME disagreed with magic-byte sniff of the uploaded bytes (020).
+    "mime_mismatch",
     "filename_invalid",
     "turn_limit_exceeded",
     "not_uploaded",
@@ -37,6 +39,12 @@ AttachmentRejectionReason = Literal[
     "injection_detected",
     # The parser refused the bytes or could not extract text (corrupt/hostile).
     "parse_failed",
+    #: OOXML macros (vbaProject) or OLE embeddings in word/embeddings/*.bin (020).
+    "active_content",
+    #: Raster decode would exceed pixel or dimension budget (G13).
+    "image_too_large",
+    #: Extracted text matched PII detectors under ``ATTACHMENTS_PII_POLICY=reject`` (G06).
+    "pii_detected",
     "expired",
 ]
 

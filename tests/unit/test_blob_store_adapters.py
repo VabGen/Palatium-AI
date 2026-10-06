@@ -231,7 +231,7 @@ async def test_filesystem_presigned_urls_are_placeholders_not_http(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    ("value", "fallback", "expected"),
+    "value,fallback,expected",
     (
         (None, False, None),
         ("", False, None),
@@ -322,3 +322,59 @@ async def test_minio_public_endpoint_scheme_decides_tls_for_the_browser() -> Non
 
     assert urlparse(put).scheme == "https"
     assert urlparse(put).netloc == "s3.corp.example"
+
+
+class _FakeS3Error(Exception):
+    """Stand-in for ``minio.error.S3Error``, whose contract is a ``code`` attribute."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _fake_minio_client_raising_on_make_bucket(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    """Install a client that always reports "no bucket", then fails the create."""
+    if not _minio_installed():
+        pytest.skip("minio not installed — install with `poetry install --with attachments`")
+
+    import minio
+
+    class _FakeClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def bucket_exists(self, _bucket: str) -> bool:
+            # False on purpose: this is the check-then-act window the race lives in.
+            return False
+
+        def make_bucket(self, _bucket: str) -> None:
+            raise error
+
+    monkeypatch.setattr(minio, "Minio", _FakeClient)
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("code", ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"))
+async def test_minio_ensure_bucket_tolerates_the_startup_create_race(
+    monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    """Regression: concurrent API workers both create the bucket at startup.
+
+    Observed against a live store: the loser received ``BucketAlreadyOwnedByYou``, the
+    exception escaped ``ensure_bucket()``, and the process exited with "Application
+    startup failed" — a crash-loop for a race whose outcome is exactly what we wanted.
+    """
+    _fake_minio_client_raising_on_make_bucket(monkeypatch, _FakeS3Error(code))
+    adapter = MinIOAdapter(endpoint="localhost:9000", access_key="k", secret_key="s", bucket="b")
+
+    assert await adapter.ensure_bucket() is True
+
+
+@pytest.mark.asyncio()
+async def test_minio_ensure_bucket_still_fails_closed_on_other_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the benign race is tolerated: permissions/network errors must still surface."""
+    _fake_minio_client_raising_on_make_bucket(monkeypatch, _FakeS3Error("AccessDenied"))
+    adapter = MinIOAdapter(endpoint="localhost:9000", access_key="k", secret_key="s", bucket="b")
+
+    with pytest.raises(_FakeS3Error, match="AccessDenied"):
+        await adapter.ensure_bucket()

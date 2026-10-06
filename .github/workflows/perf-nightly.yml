@@ -1,0 +1,43 @@
+# Hot-path complexity regression (rules 080 / 075).
+#
+# These tests count executed bytecode instructions to pin the *scaling* of the hot paths
+# (dedupe, hybrid merge, token accounting). They are deterministic and cheap, but they are
+# about a different question than the pull-request suite, so they live here: a red nightly
+# means "somebody made a hot path super-linear", which is not something that should block an
+# unrelated PR. `make perf` runs the same selection locally.
+#
+# Actions are pinned by commit SHA with a version comment (rule 025); `scripts/ci_security.py`
+# fails the build if that drifts.
+name: perf-nightly
+
+on:
+  schedule:
+    - cron: "30 3 * * *" # daily, after the eval nightly (02:00) and the audit chain (03:17)
+  workflow_dispatch:
+
+concurrency:
+  group: perf-nightly
+  cancel-in-progress: true
+
+jobs:
+  hot-paths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      # Instruction counts are exact, so a failure here is a real change in algorithmic
+      # shape — not runner noise. `-m slow` is the opposite selection to PR CI, which runs
+      # `-m "not live and not llm_live and not slow"` (scripts/ci_quality.py).
+      - name: Hot-path scaling guard
+        run: poetry run pytest tests/perf -q -m slow --no-cov

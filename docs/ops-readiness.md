@@ -130,7 +130,28 @@ poetry run python scripts/run_agent_evals_nightly.py
 | `web_fallback` circuit/retry | `HttpWebSearchPort`, `WEB_FALLBACK_*`, `test_web_search_port.py` |
 | Graph query backends | `GRAPH_QUERY_BACKEND`, `test_neo4j_graph_port.py` |
 
-## 6. Platform MCP / memory knobs
+## 6. Global retention
+
+Полный гайд: [`global-retention.md`](global-retention.md). ADR 0002.
+
+- [ ] `poetry run alembic upgrade head` включает `d4e5f6a7b8c9` + `e5f6a7b8c9d0`
+- [ ] В env задан блок `RETENTION_*` (§10b); `RETENTION_EXECUTE=false` в prod
+- [ ] Dry-run зелёный: `poetry run python -m palatium_ai.jobs.retention`
+- [ ] Расписание CronJob / compose one-shot согласовано (W6 манифест — backlog);
+      `concurrencyPolicy: Forbid`; сначала dry-run в логах, потом узкий `--execute`
+- [ ] Attachment blob backend job'а совпадает с API (тот же MinIO bucket)
+- [ ] Per-owner `POST /api/attachments/sweep` оставлен как defense, не как SoT
+- [ ] MCP archive/purge scripts (§15 handbook) по-прежнему на своём cron до W5 wire
+
+| Knob | Staging/Prod expectation |
+|------|--------------------------|
+| `RETENTION_EXECUTE` | `false` (только явный `--execute` в job spec после review) |
+| `RETENTION_SESSION_DAYS` / `RETENTION_CHECKPOINT_DAYS` | обычно `30` |
+| `RETENTION_MEMORY_*` / `RETENTION_ATTACHMENT_PII_DAYS` | PII ≤ ordinary TTL |
+| `RETENTION_BATCH_SIZE` | bounded (default `200`) |
+| `ATTACHMENTS_*_TTL*` | согласованы с матрицей classes |
+
+## 7. Platform MCP / memory knobs
 
 | Knob | Default | Notes |
 |------|---------|--------|
@@ -146,7 +167,7 @@ poetry run python scripts/run_agent_evals_nightly.py
 | `WEB_FALLBACK_BACKEND` | `stub` | `http` + `WEB_FALLBACK_PROVIDER` (`ddg`/`brave`) |
 | `WEB_FALLBACK_RETRY_*` / `WEB_FALLBACK_CIRCUIT_*` | 3 / 30s | fail-closed empty hits + note |
 
-## 7. GitHub Actions — agent evals nightly
+## 8. GitHub Actions — agent evals nightly
 
 Repository secrets for `workflow_dispatch` mode `live_smoke` / `live_full`:
 

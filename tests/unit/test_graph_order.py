@@ -1,4 +1,4 @@
-"""Graph order: Contextualizer precedes Intent so continuation hints are live."""
+"""Graph order: Intent precedes Contextualizer so task_kind gates rewrite LLM (P0.1)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from palatium_ai.application.agents.harness import Harness
 from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
 from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
-from palatium_ai.core.types.graph_nodes import NODE_CONTEXT_ENRICHER_CONTINUATION
+from palatium_ai.core.types.graph_nodes import NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_INTENT_CLASSIFIER
 from tests.conftest import (
     FakeLLMPort,
     make_analyst_agent,
@@ -20,7 +20,7 @@ from tests.conftest import (
 )
 
 
-def test_graph_edges_contextualizer_before_intent() -> None:
+def test_graph_edges_intent_before_contextualizer() -> None:
     harness = Harness(llm=FakeLLMPort("{}"))
     graph = build_agent_graph(
         GraphAgents(
@@ -36,10 +36,9 @@ def test_graph_edges_contextualizer_before_intent() -> None:
         ),
         harness=harness,
     )
-    # LangGraph compiled graph exposes topology via get_graph().
     topo = graph.get_graph()
     edges = {(e.source, e.target) for e in topo.edges}
-    assert ("__start__", NODE_CONTEXT_ENRICHER_CONTINUATION) in edges
-    assert (NODE_CONTEXT_ENRICHER_CONTINUATION, "intent_classifier") in edges
-    assert ("intent_classifier", "supervisor") in edges
-    assert ("intent_classifier", NODE_CONTEXT_ENRICHER_CONTINUATION) not in edges
+    assert ("__start__", NODE_INTENT_CLASSIFIER) in edges
+    assert (NODE_INTENT_CLASSIFIER, NODE_CONTEXT_ENRICHER_CONTINUATION) in edges
+    assert (NODE_CONTEXT_ENRICHER_CONTINUATION, "supervisor") in edges
+    assert (NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_INTENT_CLASSIFIER) not in edges

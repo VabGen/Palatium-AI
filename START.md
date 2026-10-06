@@ -560,7 +560,7 @@ function palatium-help {
     Write-Host "  palatium-up-gw           # + gateway :8090/8091"
     Write-Host "  palatium-up-mcp          # только MCP stubs"
     Write-Host "  palatium-up-full         # gateway + platform"
-    Write-Host "  palatium-down [-Force]"
+    Write-Host "  palatium-down [-Force] [-AllowForeign]"
     Write-Host "  palatium-restart / palatium-restart-gw"
     Write-Host "  palatium-status / palatium-menu"
     Write-Host ""
@@ -782,6 +782,66 @@ docker compose down
 docker compose down -v
 ```
 
+### Кого останавливает `dev-down.ps1` — и почему `-Force` не «убить всё»
+
+Dev-порты (8000 / 8080 / 8081 / 8082 / 8090 / 8091) **пересекаются с опубликованными
+портами контейнеров**: пока MCP-стабы подняты в Docker, на 8080/8081 слушает Docker
+Desktop (`com.docker.backend.exe`), а не наш процесс. Поэтому «на порту что-то есть» ≠
+«это наше»: скрипт останавливает только процессы, запущенные из этого репозитория
+(`python -m palatium_ai.main`, `uvicorn mcp_servers...`), а чужой слушатель пропускает —
+это **штатное поведение**, а не ошибка:
+
+```
+[skip] mcp-edms — port 8080 is held by pid 6348 (com.docker.backend.exe), not a repo process
+       left running on purpose; stop it manually, or re-run with -AllowForeign
+```
+
+| Команда | Поведение |
+|---|---|
+| `.\scripts\dev-down.ps1` | остановить **наши** процессы: мягко, далее жёстко по попыткам |
+| `.\scripts\dev-down.ps1 -Force` | то же, но жёстко с первой попытки. **Чужое не убивает** |
+| `.\scripts\dev-down.ps1 -AllowForeign` | добить что угодно на dev-портах, включая docker-прокси |
+
+> **Docker-прокси держит *все* опубликованные порты** (postgres, redis, litellm, neo4j).
+> Его остановка уносит Docker-стек и требует перезапуска Docker Desktop — поэтому по
+> умолчанию чужой процесс не трогается, а осознанное исключение требует явного
+> `-AllowForeign`. Порты, занятые Docker, освобождайте средствами Docker:
+> `docker compose rm -f <service>` / `docker compose down` (см. §10, конфликт 8080/8081).
+
+То же правило действует и в `dev-up.ps1`: если порт занят **нашим** мёртвым процессом —
+`[kill]` и запуск нового; если **чужим** — скрипт останавливается с указанием владельца,
+ничего не убивая. Следствие: `palatium-restart` (= `palatium-down -Force` + `palatium-up`)
+на порту, занятом Docker, больше не «продавит» конфликт молча — он упадёт с сообщением
+`is not a palatium-ai process`. Это защита от сноса Docker-стека, а не поломка: выберите
+один режим (§5 / §6) и освободите порты средствами Docker.
+
+### Preflight LiteLLM: почему без gateway старт отменяется
+
+`dev-up.ps1` **отказывается** запускать API, если LiteLLM (:4000) не отвечает. Это не
+придирка: без gateway ни один турн не проходит, но падает он **замаскированно** — LLM-вызовы
+выгорают по `max_retries` с backoff (~26 с на агента), турн умирает на уровне агента, и в UI
+это показывается как ошибка формата (`formatter_output_invalid`) вместо «провайдер недоступен».
+Раньше здесь достаточно было нажать `y`, и поломка всплывала позже в непонятном виде.
+
+```
+[fail] LiteLLM не отвечает (port 4000) — API стартовать не будет.
+...
+  .\scripts\dev-up.ps1 -AllowNoGateway   # API без LLM: турны будут падать
+  .\scripts\dev-up.ps1 -SkipApi          # только MCP stubs, gateway не нужен
+```
+
+| Ситуация | Поведение |
+|---|---|
+| LiteLLM недоступен, API нужен | `[fail]` + выход; ничего не запускается |
+| LiteLLM недоступен, `-SkipApi` | `[warn]`, стартуют только MCP stubs |
+| LiteLLM недоступен, `-AllowNoGateway` | `[warn]`, API стартует (турны будут падать) |
+| Postgres/Redis недоступны | `[warn]` + интерактивный `y/N`, как раньше |
+
+> Проверка стека — это **проверка портов**, а не Docker: `[ok] Docker stack ... доступен`
+> означает лишь, что на 5432/6379/4000 кто-то слушает. Нативный PostgreSQL/Redis из Windows
+> (`postgresql-16`, `Redis` в службах) закрывает 5432/6379 сам по себе, поэтому «стек доступен»
+> ничего не говорит о контейнерах; надёжный индикатор реального простоя — именно :4000.
+
 ---
 
 ## 8. Архитектура
@@ -919,6 +979,10 @@ docker compose rm -f mcp-edms mcp-analytics mcp-gateway-edms mcp-gateway-analyti
 docker compose up -d postgres redis neo4j litellm
 .\scripts\dev-up.ps1
 ```
+
+> `dev-down.ps1` снимает только host-процессы. Если 8080/8081 держат контейнеры, он
+> напишет `[skip] ... not a repo process` — это нормально, Docker-сторону убирает
+> следующая команда (`docker compose rm -f`). Подробно — §7.
 
 ### ❌ `docker compose exec` требует `--env-file`
 
@@ -1101,11 +1165,13 @@ exclude = ["tests/", "build/", "dist/", ".venv/"]
 |---|---|
 | Инфра в Docker | `docker compose up -d postgres redis neo4j litellm` |
 | Host-стек | `.\scripts\dev-up.ps1` |
+| **Без LLM (принять деградацию)** | `.\scripts\dev-up.ps1 -AllowNoGateway` |
 | Только MCP stubs | `.\scripts\dev-up.ps1 -SkipApi` |
 | С platform stub | `.\scripts\dev-up.ps1 -WithPlatformStub` |
 | **С gateway** | `.\scripts\dev-up.ps1 -WithGateway` |
 | Docker-профиль | `docker compose --profile docker-mcp --profile docker-api up -d --build` |
-| Остановить host | `.\scripts\dev-down.ps1` (или `-Force`) |
+| Остановить host | `.\scripts\dev-down.ps1` (`-Force` — жёстче; **чужое не трогает**) |
+| Добить чужие процессы на dev-портах | `.\scripts\dev-down.ps1 -AllowForeign` — **уронит Docker-стек** |
 | Остановить Docker | `docker compose down` |
 | Полный reset | `docker compose down -v` |
 
@@ -1114,7 +1180,7 @@ exclude = ["tests/", "build/", "dist/", ".venv/"]
 ```powershell
 palatium-cd / palatium-scripts
 palatium-up / palatium-up-gw / palatium-up-mcp / palatium-up-full
-palatium-down [-Force]
+palatium-down [-Force] [-AllowForeign]
 palatium-restart / palatium-restart-gw
 palatium-status / palatium-menu
 palatium-build api

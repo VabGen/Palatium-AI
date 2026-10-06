@@ -35,9 +35,10 @@ def test_format_without_source_invokes_llm() -> None:
     assert decision.reason == "format_without_source"
 
 
-def test_ack_only_high_confidence_passthrough() -> None:
+def test_social_format_only_invokes_llm() -> None:
+    """Social uses format_only but must not inherit format_passthrough (2026)."""
     decision = CriticPolicy.decide(
-        selected_strategy="ack_only",
+        selected_strategy="format_only",
         task_kind="social_conversation",
         continuation_kind="new_topic",
         classification_confidence=0.95,
@@ -46,8 +47,8 @@ def test_ack_only_high_confidence_passthrough() -> None:
         requires_tool_call=False,
         worker_summary=None,
     )
-    assert decision.invoke_llm is False
-    assert "passthrough" in decision.reason
+    assert decision.invoke_llm is True
+    assert decision.reason == "default_quality_gate"
 
 
 def test_clarify_high_confidence_passthrough() -> None:
@@ -63,6 +64,7 @@ def test_clarify_high_confidence_passthrough() -> None:
         user_input_chars=40,
     )
     assert decision.invoke_llm is False
+    assert decision.reason == "clarify_passthrough"
 
 
 def test_clarify_with_substantive_user_input_invokes_llm() -> None:
@@ -83,7 +85,7 @@ def test_clarify_with_substantive_user_input_invokes_llm() -> None:
 
 def test_answer_continuation_invokes_llm() -> None:
     decision = CriticPolicy.decide(
-        selected_strategy="ack_only",
+        selected_strategy="format_only",
         task_kind="social_conversation",
         continuation_kind="answer",
         classification_confidence=0.99,
@@ -97,10 +99,10 @@ def test_answer_continuation_invokes_llm() -> None:
     assert decision.reason == "answer_continuity_gate"
 
 
-def test_low_confidence_ack_invokes_llm() -> None:
+def test_low_confidence_clarify_invokes_llm() -> None:
     decision = CriticPolicy.decide(
-        selected_strategy="ack_only",
-        task_kind="social_conversation",
+        selected_strategy="clarify",
+        task_kind="clarification_needed",
         continuation_kind="new_topic",
         classification_confidence=0.4,
         confidence_threshold=0.7,
@@ -114,7 +116,7 @@ def test_low_confidence_ack_invokes_llm() -> None:
 
 def test_mcp_or_tool_fail_closed() -> None:
     decision = CriticPolicy.decide(
-        selected_strategy="ack_only",
+        selected_strategy="format_only",
         task_kind="social_conversation",
         continuation_kind="new_topic",
         classification_confidence=0.99,
@@ -162,20 +164,37 @@ def test_research_path_invokes_llm() -> None:
     assert decision.reason == "default_quality_gate"
 
 
-def test_ack_only_does_not_escalate_on_injection_shaped_user_text() -> None:
-    """Low-risk ack strategy stays passthrough; user phrasing is not a Critic risk signal."""
+def test_high_worker_confidence_passthrough() -> None:
     decision = CriticPolicy.decide(
-        selected_strategy="ack_only",
-        task_kind="social_conversation",
+        selected_strategy="reason_only",
+        task_kind="knowledge_request",
         continuation_kind="new_topic",
         classification_confidence=0.95,
         confidence_threshold=0.7,
         requires_mcp=False,
         requires_tool_call=False,
-        worker_summary=None,
-        user_input_chars=80,
+        worker_summary="Draft answer",
+        worker_confidence=0.92,
     )
     assert decision.invoke_llm is False
+    assert decision.reason == "high_worker_confidence_passthrough"
+
+
+def test_attachment_context_forces_llm_even_on_high_confidence() -> None:
+    decision = CriticPolicy.decide(
+        selected_strategy="reason_only",
+        task_kind="knowledge_request",
+        continuation_kind="new_topic",
+        classification_confidence=0.95,
+        confidence_threshold=0.7,
+        requires_mcp=False,
+        requires_tool_call=False,
+        worker_summary="Draft answer",
+        worker_confidence=0.92,
+        has_attachment_context=True,
+    )
+    assert decision.invoke_llm is True
+    assert decision.reason == "attachment_grounding_gate"
 
 
 def test_tool_strategy_always_invokes_critic_llm() -> None:

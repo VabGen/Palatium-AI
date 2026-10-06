@@ -20,16 +20,19 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from palatium_ai.application.services.attachment_service import AttachmentSweepResult, AttachmentUploadTicket
+from palatium_ai.core.config.security import SecurityConfig
 from palatium_ai.domain.agents.intent import IntentClassifierOutput, IntentTaskResult
 from palatium_ai.domain.attachments.errors import (
     AttachmentIntakeRejectedError,
     AttachmentModeMismatchError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
+    AttachmentRestoreNotAllowedError,
     AttachmentUploadTooLargeError,
 )
 from palatium_ai.domain.attachments.models import Attachment
 from palatium_ai.domain.hitl.cards import HITLCardView, default_tool_approval_options
+from palatium_ai.domain.sessions.models import SessionRecord
 from palatium_ai.presentation.api.routers import attachments, intents
 from palatium_ai.presentation.security.principal import AuthPrincipal
 
@@ -84,6 +87,10 @@ class _FakeAttachmentService:
         self.list_calls: list[dict[str, object]] = []
         self.get_calls: list[dict[str, object]] = []
         self.index_calls: list[dict[str, object]] = []
+        self.restore_calls: list[dict[str, object]] = []
+        self.compliance_calls: list[dict[str, object]] = []
+        self.connector_list_calls: list[dict[str, object]] = []
+        self.connector_import_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
         self.sweep_calls: list[str] = []
         self.sweep_result = AttachmentSweepResult()
@@ -129,21 +136,78 @@ class _FakeAttachmentService:
         self._raise_if_needed()
         return _card()
 
+    async def request_quarantine_restore(self, **kwargs: object) -> HITLCardView:
+        self.restore_calls.append(kwargs)
+        self._raise_if_needed()
+        return _card().model_copy(update={"task_id": "att-restore-xyz"})
+
+    async def compliance_export_for_thread(self, **kwargs: object) -> tuple[object, ...]:
+        self.compliance_calls.append(kwargs)
+        self._raise_if_needed()
+        from palatium_ai.application.services.attachment_service import AttachmentComplianceRecord
+
+        row = _attachment()
+        return (
+            AttachmentComplianceRecord(
+                id=row.id,
+                filename=row.filename,
+                mime_type=row.mime_type,
+                status=row.status,
+                rejection_reason=row.rejection_reason,
+                created_at=row.created_at,
+                expires_at=row.expires_at,
+                page_count=row.page_count,
+                size_bytes=row.size_bytes,
+                contains_pii=row.contains_pii,
+            ),
+        )
+
+    async def list_connector_sources(self, **kwargs: object) -> tuple[object, ...]:
+        self.connector_list_calls.append(kwargs)
+        self._raise_if_needed()
+        from palatium_ai.domain.ports.attachment_connector import AttachmentConnectorSource
+
+        return (
+            AttachmentConnectorSource(
+                id="edms",
+                kind="edms",
+                label="EDMS (Канцлер NEXT)",
+                available=False,
+                reason="EDMS MCP import not wired yet (092)",
+            ),
+        )
+
+    async def request_connector_import(self, **kwargs: object) -> None:
+        self.connector_import_calls.append(kwargs)
+        self._raise_if_needed()
+        from palatium_ai.domain.attachments.errors import AttachmentConnectorUnavailableError
+
+        raise AttachmentConnectorUnavailableError(
+            connector_id=str(kwargs.get("connector_id", "edms")),
+            reason="EDMS MCP import not wired yet (092)",
+        )
+
     async def delete(self, **kwargs: object) -> None:
         self.delete_calls.append(kwargs)
         self._raise_if_needed()
 
 
-def _app(monkeypatch: pytest.MonkeyPatch, service: object) -> TestClient:
+def _app(
+    monkeypatch: pytest.MonkeyPatch,
+    service: object,
+    *,
+    roles: frozenset[str] = frozenset({"user"}),
+) -> TestClient:
     """Mount the router with a stubbed resources object and an authenticated caller."""
     app = FastAPI()
     app.include_router(attachments.router, prefix="/attachments")
+    app.state.security_config = SecurityConfig(manager_roles="manager,admin", admin_roles="admin")
     resources = SimpleNamespace(session_service=AsyncMock(), attachment_service=service)
     monkeypatch.setattr(attachments, "get_app_resources", lambda _app: resources)
     monkeypatch.setattr(
         attachments,
         "get_principal",
-        lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=frozenset({"user"})),
+        lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=roles),
     )
     monkeypatch.setattr(attachments, "load_session_for_principal", AsyncMock())
     return TestClient(app)
@@ -184,6 +248,8 @@ def test_init_upload_returns_presigned_target(monkeypatch: pytest.MonkeyPatch) -
             "size_bytes": 1024,
             "mode": "attach",
             "thread_id": "thread-1",
+            "expires_in_seconds": None,
+            "project_id": None,
         }
     ]
 
@@ -221,6 +287,41 @@ def test_init_upload_maps_intake_rejection_to_400(monkeypatch: pytest.MonkeyPatc
 
     assert response.status_code == 400
     assert "mime_not_allowed" in response.json()["detail"]
+
+
+def test_init_upload_allows_a_fresh_thread_without_a_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: attaching before the first message answered 404 "Session not found".
+
+    The client mints the thread id locally and the session is only created by the
+    first turn, so ``init`` must treat a missing session as "may be created" (like
+    ``IntentService.classify``) while an existing thread is still owner-checked.
+    """
+    app = FastAPI()
+    app.include_router(attachments.router, prefix="/attachments")
+    service = _FakeAttachmentService()
+    resources = SimpleNamespace(session_service=AsyncMock(), attachment_service=service)
+    loader = AsyncMock()
+    monkeypatch.setattr(attachments, "get_app_resources", lambda _app: resources)
+    monkeypatch.setattr(
+        attachments,
+        "get_principal",
+        lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=frozenset({"user"})),
+    )
+    monkeypatch.setattr(attachments, "load_session_for_principal", loader)
+
+    response = TestClient(app).post(
+        "/attachments/init",
+        json={
+            "thread_id": "thread-fresh",
+            "filename": "contract.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 1024,
+        },
+    )
+
+    assert response.status_code == 201
+    assert loader.await_args is not None
+    assert loader.await_args.kwargs["allow_missing"] is True
 
 
 def test_disabled_attachments_answer_503(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -356,6 +457,118 @@ def test_attachment_response_never_exposes_blob_keys(monkeypatch: pytest.MonkeyP
 
     assert "blob_key" not in payload
     assert "derived_text_key" not in payload
+
+
+def test_restore_request_returns_hitl_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        f"/attachments/{_ATTACHMENT_ID}/restore-request",
+        json={"thread_id": "thread-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["task_id"].startswith("att-restore-")
+    assert service.restore_calls == [
+        {
+            "attachment_id": _ATTACHMENT_ID,
+            "user_id": "user-1",
+            "thread_id": "thread-1",
+            "org_id": "org-1",
+        }
+    ]
+
+
+def test_restore_request_rejects_malware_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:
+    error = AttachmentRestoreNotAllowedError(
+        _ATTACHMENT_ID,
+        status="quarantined",
+        rejection_reason="malware_detected",
+    )
+    client, _ = _client(monkeypatch, error=error)
+
+    response = client.post(
+        f"/attachments/{_ATTACHMENT_ID}/restore-request",
+        json={"thread_id": "thread-1"},
+    )
+
+    assert response.status_code == 409
+
+
+def test_compliance_export_requires_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _FakeAttachmentService()
+    client = _app(monkeypatch, service, roles=frozenset({"user"}))
+
+    response = client.get("/attachments/compliance-export", params={"thread_id": "thread-1"})
+
+    assert response.status_code == 403
+    assert service.compliance_calls == []
+
+
+def test_compliance_export_returns_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _FakeAttachmentService()
+    session = SessionRecord(
+        id=uuid4(),
+        thread_id="thread-1",
+        user_id="owner-1",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    session_service = AsyncMock()
+    session_service.get_session = AsyncMock(return_value=session)
+    client = _app(monkeypatch, service, roles=frozenset({"manager"}))
+    # `_app` stubs resources; replace session_service after mount so ownership resolves.
+    monkeypatch.setattr(
+        attachments,
+        "get_app_resources",
+        lambda _app: SimpleNamespace(session_service=session_service, attachment_service=service),
+    )
+
+    response = client.get("/attachments/compliance-export", params={"thread_id": "thread-1"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["thread_id"] == "thread-1"
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["filename"] == "contract.pdf"
+    assert "safe_text" not in item
+    assert "blob_key" not in item
+    assert service.compliance_calls == [{"thread_id": "thread-1", "owner_user_id": "owner-1"}]
+
+
+def test_list_connectors_returns_edms_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, service = _client(monkeypatch)
+
+    response = client.get("/attachments/connectors")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["id"] == "edms"
+    assert payload["items"][0]["available"] is False
+    assert service.connector_list_calls == [{"user_id": "user-1", "org_id": "org-1"}]
+
+
+def test_connector_import_returns_501(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        "/attachments/connectors/edms/import",
+        json={"thread_id": "thread-1", "remote_ref": "doc:42"},
+    )
+
+    assert response.status_code == 501
+    assert service.connector_import_calls == [
+        {
+            "connector_id": "edms",
+            "remote_ref": "doc:42",
+            "user_id": "user-1",
+            "org_id": "org-1",
+            "thread_id": "thread-1",
+            "project_id": None,
+        }
+    ]
 
 
 def test_request_index_returns_hitl_card(monkeypatch: pytest.MonkeyPatch) -> None:

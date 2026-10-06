@@ -10,6 +10,8 @@ the scanner is a signal, not the only defence (020, OWASP LLM01).
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field, model_validator
 
 from palatium_ai.core.security.prompt_injection import (
@@ -25,6 +27,13 @@ from .types import UntrustedContentAction
 _DEFAULT_MASK_RANK = 2
 _DEFAULT_QUARANTINE_RANK = 3
 _DEFAULT_REJECT_RANK = 4
+
+_FENCE_BLOCK = re.compile(
+    r"<<<UNTRUSTED_TOOL_OUTPUT\s+source=[^\s>]+>>>\n.*?\n<<<END_UNTRUSTED_TOOL_OUTPUT>>>",
+    re.DOTALL,
+)
+_FENCE_OPEN = re.compile(r"^(<<<UNTRUSTED_TOOL_OUTPUT\s+source=[^\s>]+>>>)\n", re.DOTALL)
+_FENCE_CLOSE = "<<<END_UNTRUSTED_TOOL_OUTPUT>>>"
 
 
 class UntrustedContentThresholds(BaseModel):
@@ -135,17 +144,100 @@ def _distinct_rules(report: PromptInjectionReport) -> tuple[str, ...]:
 def budget_untrusted_text(text: str, *, max_chars: int) -> str:
     """Fit already-fenced untrusted text into a turn budget.
 
-    Truncation keeps both ends and states the cut explicitly. Silently cutting
-    the tail is unsafe here: an attacker could pad a payload so the real
-    directive lands past the cut, and a reader would never know text was lost.
+    Multi-attachment turns are budgeted **per fence**: head+tail on the joined
+    blob used to drop the second file's header while keeping dialog history noise,
+    so the model saw one document and asked for a "second" upload (055).
+    Truncation always stays explicit — never a silent cut (020).
     """
     if max_chars < 64:
         raise ValueError("max_chars must be >= 64")
     if len(text) <= max_chars:
         return text
+    blocks = _FENCE_BLOCK.findall(text)
+    if len(blocks) >= 2:
+        return _budget_multi_fences(blocks, max_chars=max_chars)
+    return _budget_head_tail(text, max_chars=max_chars)
+
+
+def _budget_multi_fences(blocks: list[str], *, max_chars: int) -> str:
+    """Fair-share char budget across complete fences; omit trailing fences if needed."""
+    sep = "\n\n"
+    n = len(blocks)
+    overhead = len(sep) * (n - 1)
+    usable = max_chars - overhead
+    if usable < 96:
+        return _budget_head_tail(sep.join(blocks), max_chars=max_chars)
+
+    per = max(96, usable // n)
+    trimmed: list[str] = []
+    used = 0
+    for index, block in enumerate(blocks):
+        piece = _shrink_fence_block(block, max_chars=per)
+        extra = len(sep) if trimmed else 0
+        if used + extra + len(piece) > max_chars and trimmed:
+            omitted = n - index
+            marker = f"\n… [{omitted} attachment fence(s) omitted — turn budget] …\n"
+            if used + len(marker) <= max_chars:
+                return sep.join(trimmed) + marker
+            return sep.join(trimmed)
+        if trimmed:
+            used += len(sep)
+        trimmed.append(piece)
+        used += len(piece)
+    joined = sep.join(trimmed)
+    if len(joined) <= max_chars:
+        return joined
+    return _budget_head_tail(joined, max_chars=max_chars)
+
+
+def _shrink_fence_block(block: str, *, max_chars: int) -> str:
+    """Keep fence open/close; truncate body with an explicit marker."""
+    if len(block) <= max_chars:
+        return block
+    open_match = _FENCE_OPEN.match(block)
+    if open_match is None or not block.endswith(_FENCE_CLOSE):
+        return _budget_head_tail(block, max_chars=max_chars)
+    header = open_match.group(1)
+    body = block[open_match.end() : -len(_FENCE_CLOSE)].strip("\n")
+    marker = "\n… [attachment body truncated] …\n"
+    fixed = len(header) + 1 + len(marker) + 1 + len(_FENCE_CLOSE)
+    if max_chars <= fixed + 24:
+        return _budget_head_tail(block, max_chars=max_chars)
+    keep = (max_chars - fixed) // 2
+    if len(body) > keep * 2:
+        head = _cut_at_boundary(body, keep, from_end=False)
+        tail = _cut_at_boundary(body, keep, from_end=True)
+        new_body = f"{head}{marker}{tail}"
+    else:
+        new_body = _cut_at_boundary(body, max_chars - fixed, from_end=False)
+    return f"{header}\n{new_body}\n{_FENCE_CLOSE}"
+
+
+def _budget_head_tail(text: str, *, max_chars: int) -> str:
     omitted = len(text) - max_chars
     marker = f"\n… [attachment context truncated {omitted} chars] …\n"
     if max_chars <= len(marker) + 24:
-        return text[:max_chars]
+        return _cut_at_boundary(text, max_chars, from_end=False)
     keep = (max_chars - len(marker)) // 2
-    return f"{text[:keep]}{marker}{text[-keep:]}"
+    head = _cut_at_boundary(text, keep, from_end=False)
+    tail = _cut_at_boundary(text, keep, from_end=True)
+    return f"{head}{marker}{tail}"
+
+
+def _cut_at_boundary(text: str, max_chars: int, *, from_end: bool) -> str:
+    """Trim at whitespace when possible so mid-word cuts are rare."""
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    if from_end:
+        piece = text[-max_chars:]
+        space = piece.find(" ")
+        if 0 <= space < max_chars // 2:
+            return piece[space + 1 :]
+        return piece
+    piece = text[:max_chars]
+    space = piece.rfind(" ")
+    if space > max_chars // 2:
+        return piece[:space].rstrip()
+    return piece.rstrip()

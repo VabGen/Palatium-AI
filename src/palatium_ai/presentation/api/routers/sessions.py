@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, JsonValue
 
+from palatium_ai.core.types.pagination import PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX
 from palatium_ai.domain.sessions.context_privacy import (
     filter_client_context_patch,
     public_session_context,
@@ -111,7 +112,7 @@ class SessionTimelineResponse(BaseModel):
 @router.get("/", response_model=SessionListResponse)
 async def list_sessions(
     request: Request,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=PAGE_LIMIT_DEFAULT, ge=1, le=PAGE_LIMIT_MAX),
     offset: int = Query(default=0, ge=0),
 ) -> SessionListResponse:
     """List sessions owned by the caller. Admin may list all tenants."""
@@ -178,7 +179,7 @@ async def get_session(thread_id: str, request: Request) -> SessionResponse:
 async def list_dialog_turns(
     thread_id: str,
     request: Request,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=PAGE_LIMIT_DEFAULT, ge=1, le=PAGE_LIMIT_MAX),
 ) -> DialogTurnListResponse:
     """Возвращает последние реплики диалога (transcript)."""
     principal = get_principal(request)
@@ -219,7 +220,7 @@ async def list_dialog_turns(
 async def list_mcp_tool_calls(
     thread_id: str,
     request: Request,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=PAGE_LIMIT_DEFAULT, ge=1, le=PAGE_LIMIT_MAX),
     offset: int = Query(default=0, ge=0),
     event: str | None = Query(default=None),
     is_error: bool | None = Query(default=None),
@@ -279,7 +280,7 @@ async def list_mcp_tool_calls(
 async def get_session_timeline(
     thread_id: str,
     request: Request,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=PAGE_LIMIT_DEFAULT, ge=1, le=PAGE_LIMIT_MAX),
     offset: int = Query(default=0, ge=0),
     event: str | None = Query(default=None),
     is_error: bool | None = Query(default=None),

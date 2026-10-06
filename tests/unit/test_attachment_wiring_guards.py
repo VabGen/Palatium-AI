@@ -81,14 +81,18 @@ def test_minio_bucket_must_not_be_blank() -> None:
         _config(blob_backend="minio", minio_access_key="k", minio_secret_key="s", minio_bucket="  ")
 
 
-def test_minio_public_endpoint_is_optional_and_empty_means_absent() -> None:
+def test_minio_public_endpoint_is_optional_and_empty_means_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unset/blank must stay ``None`` so the adapter presigns against the connection host."""
+    # conftest seeds os.environ from env/.env.example, so "unset" must be forced here —
+    # otherwise the test asserts on the ambient default instead of the absent case.
+    monkeypatch.delenv("ATTACHMENTS_MINIO_PUBLIC_ENDPOINT", raising=False)
     assert _config().minio_public_endpoint is None
     assert _config(minio_public_endpoint="").minio_public_endpoint is None
 
 
 def test_minio_public_endpoint_survives_into_the_adapter() -> None:
     """A dropped value would send the browser an in-cluster hostname that it cannot resolve."""
+    pytest.importorskip("minio")
     store = build_blob_store(
         _settings(
             blob_backend="minio",
@@ -103,7 +107,9 @@ def test_minio_public_endpoint_survives_into_the_adapter() -> None:
     assert store.public_endpoint == "127.0.0.1:9001"
 
 
-def test_blob_factory_leaves_the_presign_host_alone_when_unset() -> None:
+def test_blob_factory_leaves_the_presign_host_alone_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("minio")
+    monkeypatch.delenv("ATTACHMENTS_MINIO_PUBLIC_ENDPOINT", raising=False)
     store = build_blob_store(
         _settings(
             blob_backend="minio",
@@ -228,6 +234,40 @@ def test_document_parser_supports_plain_text_without_optional_extras() -> None:
     assert parser.supports("text/plain")
     assert parser.supports("text/markdown")
     assert parser.supports("text/csv")
+
+
+def test_image_ocr_defaults_to_auto() -> None:
+    """Default auto enables progressive OCR when Tesseract and/or Vision are present."""
+    config = _config()
+    assert config.image_ocr_backend == "auto"
+    assert config.image_ocr_model is None
+    assert config.ocr_min_chars == 12
+    assert config.image_ocr_max_bytes == 8 * 1024 * 1024
+
+
+def test_image_ocr_backend_requires_a_model() -> None:
+    """A gateway OCR backend without a model would silently reject every image."""
+    with pytest.raises(ValueError, match="ATTACHMENTS_IMAGE_OCR_MODEL"):
+        _config(image_ocr_backend="gateway")
+
+
+def test_image_ocr_auto_allows_missing_model() -> None:
+    """auto without a Vision alias is valid (Tesseract-only progressive)."""
+    config = _config(image_ocr_backend="auto", image_ocr_model="")
+    assert config.image_ocr_backend == "auto"
+    assert config.image_ocr_model is None
+
+
+def test_image_ocr_blank_model_is_normalised_to_absent() -> None:
+    """An unanswered env placeholder is *absent*, not a stray empty string."""
+    config = _config(image_ocr_backend="disabled", image_ocr_model="")
+    assert config.image_ocr_model is None
+
+
+def test_image_ocr_blank_model_still_trips_the_gateway_guard() -> None:
+    """Enabling OCR with a placeholder left unanswered must fail at startup, not per upload."""
+    with pytest.raises(ValueError, match="ATTACHMENTS_IMAGE_OCR_MODEL"):
+        _config(image_ocr_backend="gateway", image_ocr_model="")
 
 
 @pytest.mark.asyncio()

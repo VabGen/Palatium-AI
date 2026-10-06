@@ -55,6 +55,8 @@ def _orm(**overrides: object) -> AttachmentORM:
         "derived_text_key": None,
         "rejection_reason": None,
         "error": None,
+        "project_id": None,
+        "contains_pii": False,
         "created_at": _CREATED_AT,
         "expires_at": None,
     }
@@ -215,13 +217,99 @@ async def test_list_for_thread_binds_rls_scope_and_scopes_by_user(rls_calls: lis
     assert "user_id" in statement
 
 
-async def test_count_for_thread_binds_rls_scope(rls_calls: list[tuple[object, str]]) -> None:
-    factory = _SessionFactory(_Result(scalar=3))
+async def test_create_under_upload_quota_binds_rls_scope_and_inserts_when_under_the_limit(
+    rls_calls: list[tuple[object, str]],
+) -> None:
+    factory = _SessionFactory(_Result(scalar=1))
     repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
 
-    assert await repository.count_for_thread("thread-1", user_id=_USER) == 3
+    created = await repository.create_under_upload_quota(
+        _attachment(),
+        limit=5,
+        pending_cutoff=_CREATED_AT,
+    )
+
+    assert created is not None
+    assert created.status == "pending"
     assert rls_calls == [(factory.session, _USER)]
-    assert "user_id" in str(factory.session.execute.await_args.args[0])
+    factory.session.add.assert_called_once()
+    factory.session.commit.assert_awaited_once()
+
+
+async def test_create_under_upload_quota_refuses_at_the_limit_without_writing(
+    rls_calls: list[tuple[object, str]],
+) -> None:
+    """The refusal must cost nothing: no row, no commit, no half-open ticket."""
+    factory = _SessionFactory(_Result(scalar=5))
+    repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
+
+    created = await repository.create_under_upload_quota(
+        _attachment(),
+        limit=5,
+        pending_cutoff=_CREATED_AT,
+    )
+
+    assert created is None
+    assert rls_calls == [(factory.session, _USER)]
+    factory.session.add.assert_not_called()
+    factory.session.commit.assert_not_awaited()
+
+
+async def test_create_under_upload_quota_locks_the_thread_before_counting(
+    rls_calls: list[tuple[object, str]],
+) -> None:
+    """Regression: a bare count-then-insert lets two intakes both pass the check.
+
+    Both transactions read ``limit - 1`` under READ COMMITTED and both insert, so a
+    five-file cap admits six rows. The advisory lock must be taken *first*, and it
+    must be transaction-scoped so it cannot be leaked by a failed intake (020).
+    """
+    factory = _SessionFactory(_Result(scalar=0))
+    repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
+
+    await repository.create_under_upload_quota(_attachment(), limit=5, pending_cutoff=_CREATED_AT)
+
+    statements = [str(call.args[0]) for call in factory.session.execute.await_args_list]
+    assert "pg_advisory_xact_lock" in statements[0]
+    assert "count" in statements[1]
+
+
+async def test_create_under_upload_quota_counts_only_fresh_pending_rows(
+    rls_calls: list[tuple[object, str]],
+) -> None:
+    """In-flight means pending *and* recently created; settled rows free their slot.
+
+    Counting every row the thread ever created locked a thread for the whole
+    attachment TTL after five attempts — admitted, rejected and abandoned ones
+    alike — so a later message was refused as if it carried too many files.
+    """
+    factory = _SessionFactory(_Result(scalar=0))
+    repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
+
+    await repository.create_under_upload_quota(_attachment(), limit=5, pending_cutoff=_CREATED_AT)
+
+    count_statement = str(factory.session.execute.await_args_list[1].args[0])
+    assert "status" in count_statement
+    assert "created_at" in count_statement
+    assert "thread_id" in count_statement
+    assert "user_id" in count_statement
+
+
+async def test_create_under_upload_quota_without_a_thread_skips_the_gate(
+    rls_calls: list[tuple[object, str]],
+) -> None:
+    """No thread means no quota to enforce — and no lock to take (parity with 070)."""
+    factory = _SessionFactory(_Result(scalar=99))
+    repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
+
+    created = await repository.create_under_upload_quota(
+        _attachment(thread_id=None),
+        limit=5,
+        pending_cutoff=_CREATED_AT,
+    )
+
+    assert created is not None
+    factory.session.add.assert_called_once()
 
 
 async def test_delete_binds_rls_scope_and_scopes_by_user(rls_calls: list[tuple[object, str]]) -> None:
@@ -245,25 +333,44 @@ async def test_every_operation_binds_the_rls_scope(rls_calls: list[tuple[object,
     await repository.get(uuid4(), user_id=_USER)
     await repository.get_many([UUID(int=3)], user_id=_USER)
     await repository.list_for_thread("thread-1", user_id=_USER)
-    await repository.count_for_thread("thread-1", user_id=_USER)
+    await repository.create_under_upload_quota(_attachment(), limit=5, pending_cutoff=_CREATED_AT)
     await repository.delete(uuid4(), user_id=_USER)
-    await repository.list_expired(_CREATED_AT, user_id=_USER, limit=10)
+    await repository.list_reclaimable(
+        _CREATED_AT,
+        pending_before=_CREATED_AT,
+        user_id=_USER,
+        limit=10,
+    )
 
     assert [uid for _session, uid in rls_calls] == [_USER] * 8
 
 
-async def test_list_expired_is_user_scoped_and_ttl_bounded(rls_calls: list[tuple[object, str]]) -> None:
-    """Retention cannot be cross-tenant with the app role, so the predicate is explicit."""
+async def test_list_reclaimable_is_user_scoped_and_covers_both_rules(
+    rls_calls: list[tuple[object, str]],
+) -> None:
+    """Retention cannot be cross-tenant with the app role, so the predicate is explicit.
+
+    Two rules feed one pass: an elapsed TTL, and an intake whose presigned ticket
+    expired before the bytes arrived — the latter would otherwise sit in the table
+    for the row's whole retention window with nobody to reclaim it (080).
+    """
     factory = _SessionFactory(_Result(many=[_orm(expires_at=_CREATED_AT)]))
     repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
 
-    found = await repository.list_expired(_CREATED_AT, user_id=_USER, limit=25)
+    found = await repository.list_reclaimable(
+        _CREATED_AT,
+        pending_before=_CREATED_AT,
+        user_id=_USER,
+        limit=25,
+    )
 
     assert len(found) == 1
     assert rls_calls == [(factory.session, _USER)]
     statement = str(factory.session.execute.await_args.args[0])
     assert "user_id" in statement
     assert "expires_at" in statement
+    assert "status" in statement
+    assert "created_at" in statement
     assert "LIMIT" in statement.upper()
 
 

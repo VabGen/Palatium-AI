@@ -284,9 +284,10 @@ async function fetchWithAuth(
 
 export async function sendFeedback(
   messageId: string,
-  feedbackType: 'like' | 'dislike',
+  feedbackType: 'like' | 'dislike' | 'clear',
   userId?: string | null,
-  orgId?: string | null
+  orgId?: string | null,
+  threadId?: string | null
 ): Promise<void> {
   const res = await fetchWithAuth(
     '/feedback',
@@ -295,6 +296,8 @@ export async function sendFeedback(
       body: JSON.stringify({
         message_id: messageId,
         feedback: feedbackType,
+        ...(threadId ? { thread_id: threadId } : {}),
+        ...(orgId ? { org_id: orgId } : {}),
       }),
     },
     userId,
@@ -342,6 +345,111 @@ export async function processIntent(
   return res.json();
 }
 
+export type ProcessStreamHopHandler = (node: string) => void;
+
+/**
+ * SSE process path (P1.6): hop events then final FormatterTaskResult.
+ * Falls back to non-streaming ``processIntent`` if the stream endpoint is unavailable.
+ */
+export async function processIntentStream(
+  text: string,
+  threadId: string,
+  userId?: string | null,
+  orgId?: string | null,
+  attachmentIds: readonly string[] = [],
+  onHop?: ProcessStreamHopHandler
+): Promise<FormatterTaskResult> {
+  if (text.length === 0) {
+    throw new Error(t('error.emptyMessage'));
+  }
+  if (text.length > MAX_INTENT_TEXT) {
+    throw new Error(t('error.messageTooLong', { used: text.length, limit: MAX_INTENT_TEXT }));
+  }
+  if (attachmentIds.length > MAX_ATTACHMENTS) {
+    throw new Error(t('error.tooManyAttachments', { count: MAX_ATTACHMENTS }));
+  }
+
+  const res = await fetchWithAuth(
+    '/intents/process/stream',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        text,
+        thread_id: threadId,
+        ...(attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
+      }),
+    },
+    userId,
+    orgId,
+    0
+  );
+  if (res.status === 404 || res.status === 405) {
+    return processIntent(text, threadId, userId, orgId, attachmentIds);
+  }
+  if (!res.ok) throw await apiFailure(res);
+  if (!res.body) {
+    return processIntent(text, threadId, userId, orgId, attachmentIds);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: FormatterTaskResult | null = null;
+  let streamError: string | null = null;
+
+  const flushBlock = (block: string) => {
+    const lines = block.split('\n');
+    let eventName = 'message';
+    const dataLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith('event:')) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+    if (dataLines.length === 0) return;
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(dataLines.join('\n')) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    if (eventName === 'hop' && typeof payload.node === 'string') {
+      onHop?.(payload.node);
+      return;
+    }
+    if (eventName === 'result' && payload.result && typeof payload.result === 'object') {
+      result = payload.result as FormatterTaskResult;
+      return;
+    }
+    if (eventName === 'error') {
+      streamError =
+        typeof payload.detail === 'string'
+          ? payload.detail
+          : typeof payload.message === 'string'
+            ? payload.message
+            : t('error.requestFailed');
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+    for (const block of parts) {
+      if (block.trim()) flushBlock(block);
+    }
+  }
+  if (buffer.trim()) flushBlock(buffer);
+
+  if (streamError) throw new Error(streamError);
+  if (!result) throw new Error(t('error.requestFailed'));
+  return result;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Attachments
 // ────────────────────────────────────────────────────────────────────────────
@@ -377,6 +485,8 @@ export type AttachmentResponse = {
   error: string | null;
   created_at: string;
   expires_at: string | null;
+  project_id?: string | null;
+  contains_pii?: boolean;
 };
 
 export type AttachmentInitRequest = {
@@ -385,6 +495,8 @@ export type AttachmentInitRequest = {
   mime_type: string;
   size_bytes: number;
   mode?: AttachmentMode;
+  expires_in_seconds?: number;
+  project_id?: string;
 };
 
 export type AttachmentInitResponse = {
@@ -470,6 +582,47 @@ export async function uploadAttachmentViaApi(
   return res.json();
 }
 
+/** Stage one resumable part (``POST …/chunks/{index}``); assemble with finalize. */
+export async function putAttachmentChunk(
+  attachmentId: string,
+  chunkIndex: number,
+  body: Blob,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<AttachmentResponse> {
+  const res = await fetchWithAuth(
+    `/attachments/${encodeURIComponent(attachmentId)}/chunks/${chunkIndex}`,
+    {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'application/octet-stream' },
+    },
+    userId,
+    orgId,
+    2,
+    { rawBody: true }
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+/** Concatenate staged parts into the attachment blob (then call ``/complete``). */
+export async function finalizeAttachmentChunks(
+  attachmentId: string,
+  chunkCount: number,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<AttachmentResponse> {
+  const res = await fetchWithAuth(
+    `/attachments/${encodeURIComponent(attachmentId)}/chunks/finalize`,
+    { method: 'POST', body: JSON.stringify({ chunk_count: chunkCount }) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
 export async function completeAttachmentUpload(
   attachmentId: string,
   userId?: string | null,
@@ -483,6 +636,126 @@ export async function completeAttachmentUpload(
   );
   if (!res.ok) throw await apiFailure(res);
   return res.json();
+}
+
+export async function fetchAttachment(
+  attachmentId: string,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<AttachmentResponse> {
+  const res = await fetchWithAuth(
+    `/attachments/${encodeURIComponent(attachmentId)}`,
+    { method: 'GET' },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+export type AttachmentDownloadResponse = {
+  attachment_id: string;
+  download_url: string;
+  filename: string;
+  mime_type: string;
+  expires_at: string;
+  size_bytes: number;
+};
+
+export async function issueAttachmentDownload(
+  attachmentId: string,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<AttachmentDownloadResponse> {
+  const res = await fetchWithAuth(
+    `/attachments/${encodeURIComponent(attachmentId)}/download`,
+    { method: 'GET' },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+/** Manager HITL path to re-admit injection-quarantined files with masked text (W5). */
+export async function requestAttachmentIndex(
+  attachmentId: string,
+  body: { thread_id: string; document_title?: string },
+  userId?: string | null,
+  orgId?: string | null
+): Promise<HITLCardView> {
+  const res = await fetchWithAuth(
+    `/attachments/${encodeURIComponent(attachmentId)}/index`,
+    { method: 'POST', body: JSON.stringify(body) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+export async function requestAttachmentQuarantineRestore(
+  attachmentId: string,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<HITLCardView> {
+  const res = await fetchWithAuth(
+    `/attachments/${encodeURIComponent(attachmentId)}/restore-request`,
+    { method: 'POST' },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+export async function requestAttachmentAnalysis(
+  attachmentId: string,
+  body: { thread_id: string; instruction: string },
+  userId?: string | null,
+  orgId?: string | null
+): Promise<HITLCardView> {
+  const res = await fetchWithAuth(
+    `/attachments/${encodeURIComponent(attachmentId)}/analyze-request`,
+    { method: 'POST', body: JSON.stringify(body) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+export type AttachmentConnectorSource = {
+  id: string;
+  kind: string;
+  label: string;
+  available: boolean;
+  reason: string;
+};
+
+export async function listAttachmentConnectors(
+  userId?: string | null,
+  orgId?: string | null
+): Promise<AttachmentConnectorSource[]> {
+  const res = await fetchWithAuth('/attachments/connectors', { method: 'GET' }, userId, orgId);
+  if (!res.ok) throw await apiFailure(res);
+  const payload = (await res.json()) as { items?: AttachmentConnectorSource[] };
+  return payload.items ?? [];
+}
+
+export async function requestAttachmentConnectorImport(
+  connectorId: string,
+  body: { thread_id: string; remote_ref: string; project_id?: string },
+  userId?: string | null,
+  orgId?: string | null
+): Promise<void> {
+  const res = await fetchWithAuth(
+    `/attachments/connectors/${encodeURIComponent(connectorId)}/import`,
+    { method: 'POST', body: JSON.stringify(body) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
 }
 
 export async function deleteAttachment(

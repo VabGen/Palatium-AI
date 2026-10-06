@@ -16,6 +16,23 @@ def test_cyrillic_user_text_resolves_ru() -> None:
     assert locale == "ru-RU"
 
 
+def test_short_cyrillic_greeting_resolves_ru() -> None:
+    """Regression: «Привет» (6 letters) must not fall through to und→English ack."""
+    assert ReplyLocalePolicy.script_family("Привет") == "cyrillic"
+    assert ReplyLocalePolicy.resolve(user_text="Привет") == "ru-RU"
+    assert ReplyLocalePolicy.resolve(user_text="привет", prior_locale="en-US") == "ru-RU"
+
+
+def test_hitl_resume_envelope_keeps_sticky_prior() -> None:
+    """Regression: HITL machine envelopes are Latin-heavy and must not flip ru→en."""
+    envelope = (
+        "<<<HITL_CHOICE_RESUME kind=clarify action_id=choice_1 option_kind=custom>>>\n"
+        "<<<UNTRUSTED_HITL_LABEL\nExtract full text\n<<<END_UNTRUSTED_HITL_LABEL>>>"
+    )
+    locale = ReplyLocalePolicy.resolve(user_text=envelope, prior_locale="ru-RU")
+    assert locale == "ru-RU"
+
+
 def test_sticky_prior_keeps_locale_on_weak_ack() -> None:
     locale = ReplyLocalePolicy.resolve(
         user_text="ok",

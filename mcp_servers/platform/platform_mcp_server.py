@@ -58,8 +58,17 @@ def search_knowledge(
     query: str,
     thread_id: str = "",
     limit: str = "8",
+    project_id: str = "",
+    document_id: str = "",
 ) -> dict[str, object]:
-    return _refuse_execution(user_id=user_id, query=query, thread_id=thread_id, limit=limit)
+    return _refuse_execution(
+        user_id=user_id,
+        query=query,
+        thread_id=thread_id,
+        limit=limit,
+        project_id=project_id,
+        document_id=document_id,
+    )
 
 
 def search_memory(

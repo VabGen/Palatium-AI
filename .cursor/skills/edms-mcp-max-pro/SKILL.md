@@ -18,6 +18,11 @@ MCP EDMS решение (FastMCP 2026), не порт легаси-чата.
 Волны: [waves.md](waves.md). Канон MCP: Phase 1–6 уже в репо (transport, JWT,
 schema SoT, Host control plane, gateway scaffold).
 
+**Reference-деревья:** JavaEdms = SoT СЭД (090). `edms-ai-assistant/` и текущий
+`edms_mcp_server.py` = только подглядка (junior / старый stub). **Целевая
+интеграция — с нуля, по шагам, в новой структуре** под `mcp_servers/edms/`.
+Полная инструкция → правило **092**. Не копипастить: verify JavaEdms → rewrite.
+
 ## Режим
 
 | Режим | Когда | Поведение |

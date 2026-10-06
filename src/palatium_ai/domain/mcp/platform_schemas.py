@@ -67,6 +67,16 @@ class PlatformSearchKnowledgeInput(BaseModel):
         max_length=2,
         description="Max hits to return (1-32), encoded as string for MCP schema.",
     )
+    project_id: str = Field(
+        default="",
+        max_length=64,
+        description="Optional project KB scope; filters source_document_id prefix project:<id>:",
+    )
+    document_id: str = Field(
+        default="",
+        max_length=128,
+        description="Optional exact source_document_id filter (attachment UUID or project:<id>:<hex>).",
+    )
 
 
 PLATFORM_SEARCH_KNOWLEDGE_SCHEMA = pinned_input_schema(PlatformSearchKnowledgeInput)

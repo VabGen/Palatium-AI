@@ -20,10 +20,11 @@ from palatium_ai.infrastructure.memory.checkpoint_serde import (
 )
 
 
-def test_graph_run_config_splits_thread_and_task() -> None:
+def test_graph_run_config_composites_thread_and_task() -> None:
+    """Turn isolation must not use checkpoint_ns — LangGraph reserves it for subgraphs."""
     config = build_graph_run_config(thread_id="conv-1", task_id="task-9")
-    assert config["configurable"]["thread_id"] == "conv-1"
-    assert config["configurable"]["checkpoint_ns"] == "task-9"
+    assert config["configurable"]["thread_id"] == "conv-1:task-9"
+    assert "checkpoint_ns" not in config["configurable"]
     assert config["recursion_limit"] == 32
 
 

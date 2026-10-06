@@ -1,9 +1,12 @@
 # src/palatium_ai/application/orchestration/graph.py
 
-"""LangGraph StateGraph — Context enricher → Intent → Supervisor → Weaver → Worker → Critic → Formatter.
+"""LangGraph StateGraph — Intent → Context enricher → Supervisor → Weaver → Worker → Critic → Formatter.
 
 Agent-agnostic by construction (3.2 / OCP): the node roster arrives as `GraphAgents`
 (`agent_registry.py`), this module only compiles nodes and declares the topology.
+
+P0.1 latency: Intent classifies raw text first so Contextualizer receives task_kind and
+can skip LLM on social/capability; low-risk strategies skip Critic (see route_after_context).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from palatium_ai.core.types.graph_nodes import (
     NODE_CRITIC,
     NODE_FORMATTER,
     NODE_INTENT_CLASSIFIER,
+    NODE_PARALLEL_WORKERS,
     NODE_QUALITY_REVISION,
     NODE_RESEARCHER,
     NODE_SUPERVISOR,
@@ -78,14 +82,15 @@ def _wire_agent_edges(graph: Any) -> None:
     cannot be satisfied for a ``TypedDict`` state. The node ids themselves stay typed;
     only the graph handle is dynamic.
     """
-    graph.add_edge(START, NODE_CONTEXT_ENRICHER_CONTINUATION)
-    graph.add_edge(NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_INTENT_CLASSIFIER)
-    graph.add_edge(NODE_INTENT_CLASSIFIER, NODE_SUPERVISOR)
+    graph.add_edge(START, NODE_INTENT_CLASSIFIER)
+    graph.add_edge(NODE_INTENT_CLASSIFIER, NODE_CONTEXT_ENRICHER_CONTINUATION)
+    graph.add_edge(NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_SUPERVISOR)
     graph.add_edge(NODE_SUPERVISOR, NODE_CONTEXT_ENRICHER_WEAVING)
     graph.add_conditional_edges(NODE_CONTEXT_ENRICHER_WEAVING, nodes.route_after_context)
     graph.add_edge(NODE_RESEARCHER, NODE_CRITIC)
     graph.add_edge(NODE_CODER, NODE_CRITIC)
     graph.add_edge(NODE_ANALYST, NODE_CRITIC)
+    graph.add_edge(NODE_PARALLEL_WORKERS, NODE_CRITIC)
     graph.add_conditional_edges(NODE_CRITIC, nodes.route_after_critic)
     graph.add_conditional_edges(NODE_QUALITY_REVISION, nodes.route_after_quality_revision)
     graph.add_edge(NODE_FORMATTER, END)

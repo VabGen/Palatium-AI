@@ -26,6 +26,8 @@ SERVER_CONTROL_CONTEXT_KEYS: frozenset[str] = frozenset(
         "candidate_capabilities",
         "org_id",
         "response_locale",
+        # Comma-separated UUIDs of ready attachments for this thread (HITL resume).
+        "pending_attachment_ids",
     }
 )
 

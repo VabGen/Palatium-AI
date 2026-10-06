@@ -71,7 +71,9 @@ model_list:
       access_groups: ["default"]
 
 router_settings:
-  routing_strategy: simple-shuffle
+  # P2.12: pick the lowest-latency deployment when a model_name has replicas.
+  # With one deployment per tier this is a no-op until ops add api_base replicas.
+  routing_strategy: latency-based-routing
   num_retries: 2
   timeout: 120
   fallbacks:
@@ -89,6 +91,10 @@ litellm_settings:
     port: 6379
     similarity_threshold: 0.95
     ttl: 3600
+  # P0.3: app marks leading system messages with Anthropic-style
+  # ``cache_control: {type: ephemeral}`` (see litellm_adapter._to_litellm_messages).
+  # Providers that ignore the field still succeed thanks to drop_params; Qwen/gateway
+  # prefix cache activates when the corporate endpoint supports it.
 
 
 ## 1. Валидация compose + интерполяции

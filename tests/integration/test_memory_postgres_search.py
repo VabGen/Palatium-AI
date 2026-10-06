@@ -8,6 +8,7 @@ import pytest
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from palatium_ai.infrastructure.knowledge.postgres_knowledge_port import PostgresKnowledgePort
 from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
 
@@ -18,7 +19,10 @@ async def test_postgres_search_memory_after_save(requires_database: str) -> None
     engine = create_async_engine(requires_database)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     memory_port = PostgresMemoryPort(session_factory)
-    handler = PlatformToolHandler(memory_port=memory_port)
+    handler = PlatformToolHandler(
+        knowledge_port=PostgresKnowledgePort(session_factory, embeddings=None),
+        memory_port=memory_port,
+    )
 
     save = await handler.call_tool(
         "save_memory",

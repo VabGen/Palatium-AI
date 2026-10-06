@@ -24,13 +24,23 @@
 
   Поведение при занятых портах:
     • если процесс живой и отвечает на health → [skip]
-    • если процесс мёртвый → [kill] и запуск нового
+    • если это НАШ процесс (из этого репо) и он мёртв → [kill] и запуск нового
+    • если порт держит чужой процесс (обычно порт-прокси Docker на 8080/8081) →
+      ошибка с указанием владельца; чужое не убивается (см. lib/dev-common.ps1)
 
 .PARAMETER SkipApi
   Запустить только MCP stubs (без palatium-ai на :8000).
 
 .PARAMETER SkipDockerCheck
   Не проверять, что Docker-стек (Postgres/Redis/LiteLLM) поднят.
+
+.PARAMETER AllowNoGateway
+  Продолжить запуск API, даже если LiteLLM недоступен. По умолчанию старт
+  отменяется: без gateway любой турн падает, а в UI это маскируется под ошибку
+  формата (напр. `formatter_output_invalid`) — см. Assert-DockerStackUp.
+  Проверка срабатывает только когда LLM реально идёт через gateway: при
+  LLM_DEFAULT_PROVIDER="qwen" (прямой корпоративный endpoint) LiteLLM не нужен,
+  и флаг не требуется.
 
 .PARAMETER WithPlatformStub
   Дополнительно поднять platform stub на :8082.
@@ -55,6 +65,9 @@
 param(
     [switch]$SkipApi,
     [switch]$SkipDockerCheck,
+    # Explicit opt-out from the LiteLLM preflight. Off by default: a turn without the
+    # gateway fails in a way that looks like a formatter bug (see Assert-DockerStackUp).
+    [switch]$AllowNoGateway,
     [switch]$WithPlatformStub,
     [switch]$WithGateway,
     [string]$EnvFile = "env/.env"
@@ -73,6 +86,10 @@ $StateFile = Join-Path $DevDir "processes.json"
 $EnvPath   = Join-Path $RepoRoot $EnvFile
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+# Ownership rule for the dev ports. Shared with dev-down.ps1 so the two scripts cannot
+# drift apart on what counts as "our" process — see the file header.
+. (Join-Path $PSScriptRoot "lib/dev-common.ps1")
 
 # =============================================================================
 # Хелперы
@@ -147,6 +164,40 @@ function Get-DotEnvStr {
     return $Default
 }
 
+function Test-GatewayRequiredByConfig {
+    <#
+      Whether the configured LLM chain actually goes through LiteLLM.
+
+      LiteLLM is a dependency only while some provider in use IS "gateway". With
+      LLM_DEFAULT_PROVIDER=qwen the app talks straight to the corporate OpenAI-compatible
+      endpoint (QWEN_BASE_URL) and never calls :4000, so its absence must not block the
+      startup — a preflight has to match the configured contract, not a fixed port list
+      (030.8, 055). Empty per-tier providers inherit the default, mirroring
+      LLMConfig.resolve_tier_binding.
+    #>
+    param([Parameter(Mandatory = $true)][hashtable]$DotEnv)
+
+    $defaultProvider = Get-DotEnvStr -Map $DotEnv -Key "LLM_DEFAULT_PROVIDER" -Default ""
+    $tierKeys = @(
+        "LLM_TIER_NANO_PROVIDER",
+        "LLM_TIER_SMALL_PROVIDER",
+        "LLM_TIER_MID_PROVIDER",
+        "LLM_TIER_FRONTIER_PROVIDER",
+        "LLM_TIER_DEEP_REASONING_PROVIDER"
+    )
+
+    $providers = @($defaultProvider)
+    foreach ($key in $tierKeys) {
+        $value = Get-DotEnvStr -Map $DotEnv -Key $key -Default ""
+        $providers += $(if ($value) { $value } else { $defaultProvider })
+    }
+
+    foreach ($provider in $providers) {
+        if ($provider.Trim().ToLower() -eq "gateway") { return $true }
+    }
+    return $false
+}
+
 function Assert-EnvFileExists {
     if (-not (Test-Path $EnvPath)) {
         throw "ENV_FILE not found: $EnvPath. Copy from env/.env.example and fill in secrets."
@@ -154,7 +205,13 @@ function Assert-EnvFileExists {
 }
 
 function Assert-DockerStackUp {
-    param([Parameter(Mandatory = $true)][hashtable]$DotEnv)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$DotEnv,
+        # API стартует в этом запуске И его цепочка провайдеров идёт через LiteLLM.
+        [switch]$GatewayRequired,
+        # Явный отказ от gateway: продолжать, зная, что турны будут падать.
+        [switch]$AllowNoGateway
+    )
 
     if (-not (Test-CommandAvailable "docker")) {
         throw "docker not found in PATH. Install Docker Desktop."
@@ -164,28 +221,57 @@ function Assert-DockerStackUp {
     $rdPort  = Get-DotEnvInt -Map $DotEnv -Key "REDIS_PUBLISH_PORT"    -Default 6379
     $llmPort = Get-DotEnvInt -Map $DotEnv -Key "LITELLM_PUBLISH_PORT"  -Default 4000
 
-    $required = @(
-        @{ Name = "postgres"; Port = $pgPort },
-        @{ Name = "redis";    Port = $rdPort },
-        @{ Name = "litellm";  Port = $llmPort }
-    )
+    $gatewayUp = Test-PortListening -Port $llmPort
+    $missingDeps = @()
+    if (-not (Test-PortListening -Port $pgPort)) { $missingDeps += "postgres (port $pgPort)" }
+    if (-not (Test-PortListening -Port $rdPort)) { $missingDeps += "redis (port $rdPort)" }
 
-    $missing = @()
-    foreach ($svc in $required) {
-        if (-not (Test-PortListening -Port $svc.Port)) {
-            $missing += "$($svc.Name) (port $($svc.Port))"
-        }
+    # LiteLLM is a hard dependency of every agent turn, and its absence is masked:
+    # the LLM calls burn max_retries with backoff (~26s per agent), the turn dies at
+    # the agent level, and the UI ends up showing an agent-level code (e.g.
+    # `formatter_output_invalid`) as if the formatter were at fault. So fail fast with
+    # an explicit opt-out, instead of a "press y" prompt that is far too easy to clear
+    # without understanding the consequence (030.8, 055).
+    if ($GatewayRequired -and -not $gatewayUp -and -not $AllowNoGateway) {
+        Write-Host "[fail] LiteLLM не отвечает (port $llmPort) — API стартовать не будет." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Без gateway ни один турн не пройдёт: LLM-вызовы не доходят до модели," -ForegroundColor Yellow
+        Write-Host "а пользователь увидит ошибку формата вместо реальной причины." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Вариант 1 — поднять LiteLLM в Docker:" -ForegroundColor Yellow
+        Write-Host "  docker compose --env-file $EnvFile up -d postgres redis litellm" -ForegroundColor DarkYellow
+        Write-Host ""
+        Write-Host "Вариант 2 — ходить в корпоративный endpoint напрямую, без LiteLLM:" -ForegroundColor Yellow
+        Write-Host "  в $EnvFile задайте LLM_DEFAULT_PROVIDER=`"qwen`" и LLM_TIER_*_PROVIDER=`"qwen`"," -ForegroundColor DarkYellow
+        Write-Host "  а LLM_TIER_*_MODEL=`"generative-model`" (реальное имя, не алиас tier-*)." -ForegroundColor DarkYellow
+        Write-Host ""
+        Write-Host "Либо примите деградацию явно:" -ForegroundColor Yellow
+        Write-Host "  .\scripts\dev-up.ps1 -AllowNoGateway   # API без LLM: турны будут падать" -ForegroundColor DarkYellow
+        Write-Host "  .\scripts\dev-up.ps1 -SkipApi          # только MCP stubs, LLM не нужен" -ForegroundColor DarkYellow
+        Write-Host ""
+        throw "LiteLLM недоступен (port $llmPort); старт отменён."
     }
 
-    if ($missing.Count -gt 0) {
-        Write-Host "[warn] Docker-сервисы не отвечают: $($missing -join ', ')" -ForegroundColor Yellow
+    if ($GatewayRequired -and -not $gatewayUp) {
+        Write-Host "[warn] LiteLLM не отвечает (port $llmPort) — турны будут падать на LLM-вызовах." -ForegroundColor Yellow
+    } elseif (-not $GatewayRequired -and -not $gatewayUp) {
+        # Not a dependency in the configured mode: say so instead of a scary warning.
+        Write-Host "[info] LiteLLM (:$llmPort) не слушает — и не нужен: LLM идёт мимо gateway." -ForegroundColor DarkGray
+    }
+
+    if ($missingDeps.Count -gt 0) {
+        Write-Host "[warn] Docker-сервисы не отвечают: $($missingDeps -join ', ')" -ForegroundColor Yellow
         Write-Host "       Поднимите их:" -ForegroundColor Yellow
         Write-Host "         docker compose --env-file $EnvFile up -d postgres redis litellm" -ForegroundColor DarkYellow
         Write-Host ""
-        $answer = Read-Host "Продолжить без Docker-стека? (y/N)"
+        $answer = Read-Host "Продолжить без этих сервисов? (y/N)"
         if ($answer -ne "y") { exit 1 }
-    } else {
+    }
+
+    if ($gatewayUp -and $missingDeps.Count -eq 0) {
         Write-Host "[ok]   Docker stack (postgres:$pgPort, redis:$rdPort, litellm:$llmPort) доступен" -ForegroundColor Green
+    } elseif ($missingDeps.Count -eq 0) {
+        Write-Host "[ok]   postgres:$pgPort, redis:$rdPort доступны" -ForegroundColor Green
     }
 
     return [pscustomobject]@{
@@ -226,6 +312,17 @@ function Start-DevService {
                 url      = "http://127.0.0.1:$Port"
                 external = $true
             }
+        }
+
+        # Not healthy — but "not ours" and "dead" are two different things. The usual
+        # foreign holder of a dev port is Docker's port publisher (com.docker.backend.exe
+        # on 8080/8081 while the stubs run as containers); killing it takes down every
+        # published port with it. Fail closed and tell the operator what holds the port.
+        if (-not (Test-OurDevProcess -ProcessId $existing.pid)) {
+            $owner = Get-ProcessOwnerName -ProcessId ([int]$existing.pid) -Table (Get-ProcessTable)
+            throw ("$Name — port $Port is held by pid $($existing.pid) ($owner), which is not a " +
+                "palatium-ai process. It is left alone on purpose. Stop it manually, or run " +
+                ".\scripts\dev-down.ps1 -AllowForeign if you are sure.")
         }
 
         Write-Host "[kill] $Name — port $Port held by dead pid $($existing.pid), killing..." -ForegroundColor Yellow
@@ -309,7 +406,12 @@ $dockerPorts = [pscustomobject]@{
 if (-not $SkipDockerCheck) {
     Write-Host ""
     Write-Host "Проверка Docker-стека..." -ForegroundColor Cyan
-    $dockerPorts = Assert-DockerStackUp -DotEnv $DotEnv
+    # LiteLLM обязателен, только если его нет в цепочке провайдеров и мы поднимаем API.
+    $gatewayRequired = (-not $SkipApi) -and (Test-GatewayRequiredByConfig -DotEnv $DotEnv)
+    if (-not $gatewayRequired -and -not $SkipApi) {
+        Write-Host "       LLM_DEFAULT_PROVIDER не 'gateway' — LiteLLM не требуется." -ForegroundColor DarkGray
+    }
+    $dockerPorts = Assert-DockerStackUp -DotEnv $DotEnv -GatewayRequired:$gatewayRequired -AllowNoGateway:$AllowNoGateway
 }
 
 # MCP токены

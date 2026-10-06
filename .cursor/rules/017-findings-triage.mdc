@@ -32,6 +32,7 @@ alwaysApply: false
 | Поверхность | Режим |
 |---|---|
 | `mcp_servers/edms/JavaEdms/**` | Read-only reference (090). Правки запрещены, CI/pre-commit исключают путь |
+| `mcp_servers/edms/edms-ai-assistant/**` | Junior working-integration чат↔СЭД: подглядка сценариев для MCP (092), **не** эталон качества/логики СЭД. Не править; ruff exclude + skip source-сканов (`test_mcp_stub_hardening`) |
 | `__pycache__`, `*.pyc` | Не индексировать, не редактировать (099) |
 | `alembic/versions/**` | Сгенерированные миграции: правит alembic, не рука (per-file-ignores) |
 | `.cursor/skills/**` (установленные CLI) | Внешние скиллы — не наш предмет правки |

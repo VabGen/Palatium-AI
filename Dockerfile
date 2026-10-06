@@ -121,7 +121,8 @@ COPY alembic ./alembic
 # degraded image). Pinned by tests/unit/test_dockerfile_build_contract.py.
 RUN --mount=type=cache,target=/tmp/poetry_cache \
     if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
-        poetry install --with attachments; \
+        poetry install --with attachments \
+        && /app/.venv/bin/python -c "import PIL, pytesseract, fitz"; \
     else \
         poetry install --only main; \
     fi \
@@ -147,6 +148,7 @@ ARG VCS_REF
 ARG BUILD_DATE
 ARG UVICORN_WORKERS
 ARG PYTHON_VERSION
+ARG WITH_ATTACHMENTS=0
 
 LABEL org.opencontainers.image.title="palatium-ai" \
       org.opencontainers.image.description="ZeroTrust multi-agent AI platform API" \
@@ -169,7 +171,16 @@ RUN groupadd --system --gid 999 app \
     && useradd --system --uid 999 --gid app \
         --home-dir /app --shell /usr/sbin/nologin app \
     && mkdir -p /app/logs /app/tmp \
-    && chown -R app:app /app
+    && chown -R app:app /app \
+    && if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
+         apt-get update \
+         && apt-get install -y --no-install-recommends \
+              tesseract-ocr \
+              tesseract-ocr-eng \
+              tesseract-ocr-rus \
+         && rm -rf /var/lib/apt/lists/* \
+         && apt-get clean; \
+       fi
 
 WORKDIR /app
 

@@ -311,8 +311,15 @@ class ContinuityPolicy:
         contextualizer: ContextualizerOutput | None,
         dialog: DialogTurnWindow | None,
         raw_intent: IntentClassifierOutput | None,
+        has_turn_attachments: bool = False,
     ) -> EffectiveRoutingIntent:
-        """Сводит continuity + Intent в один EffectiveRoutingIntent."""
+        """Сводит continuity + Intent в один EffectiveRoutingIntent.
+
+        ``has_turn_attachments``: this turn carries fenced upload text. Then
+        ``continuation_kind=format`` must NOT bind workers to prior assistant
+        content (that path skips research and rewrites the *previous* file OCR
+        when the user attached a new document — 055).
+        """
         snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
         assistant_prior = cls.prior_assistant_content(contextualizer, dialog)
         if snap.choice_slot_filled:
@@ -328,6 +335,26 @@ class ContinuityPolicy:
             snap.kind = "answer"
             snap.refers_to_prior = True
             recovered_false_clarify = True
+
+        # New upload on this turn owns file-oriented asks; format/answer-of-prior
+        # would summarize the previous document and may skip the researcher (055).
+        # Contextualizer/Intent discrete_choice on a grounded upload ("дай текст из
+        # файла") is false clarify — the fenced OCR already supplies the referent.
+        # Drop assistant_prior entirely: otherwise fallthrough still injects the
+        # previous file's answer into Researcher/Formatter and the model cites the
+        # new fence while echoing the old body (cross-file bleed).
+        if has_turn_attachments:
+            if snap.kind == "format":
+                snap.kind = "answer"
+            snap.refers_to_prior = False
+            assistant_prior = None
+            if snap.kind == "clarify":
+                snap.kind = "answer"
+                snap.requires_user_choice = False
+                snap.underspec = "none"
+                if snap.raw_task == "clarification_needed":
+                    snap.raw_task = "knowledge_request"
+                recovered_false_clarify = True
 
         formatted = cls._try_resolve_format(snap=snap, assistant_prior=assistant_prior, dialog=dialog)
         if formatted is not None:
@@ -427,6 +454,8 @@ class ContinuityPolicy:
     ) -> EffectiveRoutingIntent | None:
         # Answer continuity: enrich with prior; correct only history-blind false clarify.
         # Do NOT remapa social / capability / tool / workflow → knowledge_request.
+        # (False social on real asks is Intent's job — Continuity cannot tell «как дела»
+        # from «какой контекст» without phrase lists, 055.)
         # Do NOT remapa exclusive-choice menus into knowledge_request (unless slot filled).
         has_resolvable_prior = assistant_prior is not None or cls.prior_user_content(dialog, min_chars=1) is not None
         if not (snap.kind == "answer" and snap.refers_to_prior and has_resolvable_prior):

@@ -15,9 +15,23 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from palatium_ai.core.logging import logger
-from palatium_ai.core.security.prompt_injection import PromptInjectionReport, scan_prompt_injection
+from palatium_ai.core.observability.metrics import agent_metrics
+from palatium_ai.core.security.prompt_injection import (
+    PromptInjectionReport,
+    redact_findings,
+    scan_prompt_injection,
+)
+from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text
+from palatium_ai.domain.attachments.active_content import ooxml_contains_active_content
 from palatium_ai.domain.attachments.content import AttachmentContent, AttachmentScanSummary
+from palatium_ai.domain.attachments.pii_policy import (
+    AttachmentPiiPolicyMode,
+    apply_attachment_pii_policy,
+)
+from palatium_ai.domain.attachments.policies import AttachmentIntakePolicy
+from palatium_ai.domain.attachments.sniff import sniff_media_type
 from palatium_ai.domain.attachments.types import AttachmentRejectionReason, AttachmentStatus
+from palatium_ai.domain.memory.pii import mask_pii_in_text
 from palatium_ai.domain.policies.types import UntrustedContentAction
 from palatium_ai.domain.policies.untrusted_content import (
     DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
@@ -34,6 +48,13 @@ if TYPE_CHECKING:
     from palatium_ai.domain.ports.scanner import MalwareScannerPort, ScanVerdict
 
 _REFUSING_ACTIONS = frozenset({"quarantine", "reject"})
+_OOXML_MIME_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +66,8 @@ class AttachmentPipelineOutcome:
     rejection_reason: AttachmentRejectionReason | None = None
     error: str | None = None
     content: AttachmentContent | None = None
+    #: Magic-byte MIME when sniff succeeded; may replace a lying client declaration.
+    detected_mime_type: str | None = None
 
     @property
     def admitted(self) -> bool:
@@ -62,37 +85,152 @@ class AttachmentPipeline:
         malware_scanner: MalwareScannerPort,
         document_parser: DocumentParserPort,
         thresholds: UntrustedContentThresholds = DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
+        pii_policy: AttachmentPiiPolicyMode = "tag",
     ) -> None:
         self._blob_store = blob_store
         self._scanner = malware_scanner
         self._parser = document_parser
         self._thresholds = thresholds
+        self._pii_policy = pii_policy
 
-    async def run(self, attachment: Attachment, *, limits: AttachmentLimits) -> AttachmentPipelineOutcome:
-        """Execute every gate for ``attachment`` and return the persistable outcome."""
+    def supports_media_type(self, mime_type: str) -> bool:
+        """Whether the deployment has a parser for this media type (020).
+
+        Intake consults this so the domain registry and the wired parsers cannot
+        drift: a media type that is "known" but unparsable is refused before any
+        blob or row exists, instead of after a wasted upload + scan round-trip.
+        """
+        return self._parser.supports(mime_type)
+
+    async def run(
+        self,
+        attachment: Attachment,
+        *,
+        limits: AttachmentLimits,
+        force_mask_injection: bool = False,
+    ) -> AttachmentPipelineOutcome:
+        """Execute every gate for ``attachment`` and return the persistable outcome.
+
+        ``force_mask_injection`` is reserved for manager-approved quarantine restore:
+        injection signals that would quarantine/reject are downgraded to ``mask`` only.
+        """
         stored = await self._read_stored(attachment, limits=limits)
         if isinstance(stored, AttachmentPipelineOutcome):
             return stored
         data, size_bytes = stored
 
+        sniffed = sniff_media_type(data)
+        mime_decision = AttachmentIntakePolicy.content_matches_declared(
+            declared_mime=attachment.mime_type,
+            detected_mime=sniffed,
+            filename=attachment.filename,
+        )
+        if mime_decision.refused:
+            logger.warning(
+                "attachment refused by mime sniff",
+                attachment_id=str(attachment.id),
+                declared=attachment.mime_type,
+                detected=sniffed or "",
+                rejection_reason=mime_decision.reason,
+            )
+            return AttachmentPipelineOutcome(
+                status="rejected",
+                rejection_reason=mime_decision.reason or "mime_mismatch",
+                stored_size_bytes=size_bytes,
+                error="uploaded content does not match the declared media type",
+                detected_mime_type=sniffed if sniffed and sniffed != "text/*" else None,
+            )
+        # Concrete binary sniff wins; text/* keeps the declared subtype (csv/md/plain).
+        effective_mime = sniffed if sniffed and sniffed != "text/*" else attachment.mime_type
+
         verdict = await self._scanner.scan(data, filename=attachment.filename)
         if not verdict.admitted:
             return _scan_refusal(verdict, size_bytes=size_bytes)
 
-        parsed = await self._parse(data, attachment)
+        active = _active_content_refusal(
+            attachment=attachment,
+            data=data,
+            effective_mime=effective_mime,
+            size_bytes=size_bytes,
+        )
+        if active is not None:
+            return active
+
+        parsed = await self._parse(data, attachment, mime_type=effective_mime)
         if isinstance(parsed, AttachmentPipelineOutcome):
             return parsed
 
+        return self._admit_extracted(
+            attachment=attachment,
+            parsed=parsed,
+            effective_mime=effective_mime,
+            size_bytes=size_bytes,
+            force_mask_injection=force_mask_injection,
+        )
+
+    def _admit_extracted(
+        self,
+        *,
+        attachment: Attachment,
+        parsed: ParsedDocument,
+        effective_mime: str,
+        size_bytes: int,
+        force_mask_injection: bool,
+    ) -> AttachmentPipelineOutcome:
+        """Run PII / secret / injection gates on already-parsed text."""
+        pii = apply_attachment_pii_policy(parsed.flow_text, mode=self._pii_policy)
+        if pii.refuse:
+            logger.warning(
+                "attachment refused: pii policy reject",
+                attachment_id=str(attachment.id),
+                rejection_reason="pii_detected",
+            )
+            return AttachmentPipelineOutcome(
+                status="rejected",
+                rejection_reason="pii_detected",
+                stored_size_bytes=size_bytes,
+                error="extracted content matched PII detectors under reject policy",
+                detected_mime_type=effective_mime if effective_mime != attachment.mime_type else None,
+            )
+
+        try:
+            scan_text(parsed.flow_text, field="attachment.extracted")
+        except SecretScanError:
+            logger.warning(
+                "attachment refused: secret pattern in extracted text",
+                attachment_id=str(attachment.id),
+            )
+            return AttachmentPipelineOutcome(
+                status="rejected",
+                rejection_reason="parse_failed",
+                stored_size_bytes=size_bytes,
+                error="extracted content contains a blocked credential pattern",
+                detected_mime_type=effective_mime if effective_mime != attachment.mime_type else None,
+            )
+
         report = scan_prompt_injection(parsed.flow_text)
         prepared = UntrustedContentPolicy.prepare(parsed.flow_text, report, thresholds=self._thresholds)
+        if force_mask_injection and prepared.action in _REFUSING_ACTIONS:
+            prepared = UntrustedContentResult(
+                action="mask",
+                text=redact_findings(parsed.flow_text, report.findings),
+                worst_severity=prepared.worst_severity,
+                matched_rules=prepared.matched_rules,
+            )
         if prepared.action in _REFUSING_ACTIONS:
             return _injection_refusal(prepared, parsed=parsed, report=report, size_bytes=size_bytes)
+        detected_for_row = effective_mime if effective_mime != attachment.mime_type else None
+        safe_text = _prompt_body(prepared.action, parsed, prepared)
+        if pii.mode == "mask":
+            safe_text = mask_pii_in_text(safe_text)
         return _content_outcome(
             parsed=parsed,
             report=report,
             prepared=prepared,
-            safe_text=_prompt_body(prepared.action, parsed, prepared),
+            safe_text=safe_text,
             size_bytes=size_bytes,
+            detected_mime_type=detected_for_row,
+            contains_pii=pii.contains_pii,
         )
 
     async def _read_stored(
@@ -131,30 +269,83 @@ class AttachmentPipeline:
         data = await self._blob_store.read_bytes(attachment.blob_key)
         return data, stat.size_bytes
 
-    async def _parse(self, data: bytes, attachment: Attachment) -> ParsedDocument | AttachmentPipelineOutcome:
+    async def _parse(
+        self,
+        data: bytes,
+        attachment: Attachment,
+        *,
+        mime_type: str,
+    ) -> ParsedDocument | AttachmentPipelineOutcome:
         """Parse untrusted bytes; a parser refusal is a typed rejection, not a crash."""
-        if not self._parser.supports(attachment.mime_type):
+        if not self._parser.supports(mime_type):
             return AttachmentPipelineOutcome(
                 status="rejected",
                 rejection_reason="mime_not_allowed",
                 stored_size_bytes=len(data),
-                error=f"no parser registered for {attachment.mime_type}",
+                error=f"no parser registered for {mime_type}",
+                detected_mime_type=mime_type,
             )
         try:
-            return await self._parser.parse(data, mime_type=attachment.mime_type, filename=attachment.filename)
+            parsed = await self._parser.parse(data, mime_type=mime_type, filename=attachment.filename)
         except DocumentParseError as exc:
             logger.warning(
                 "attachment parse refused",
                 attachment_id=str(attachment.id),
-                mime_type=attachment.mime_type,
+                mime_type=mime_type,
                 error=str(exc),
             )
+            reason = exc.rejection_reason or "parse_failed"
             return AttachmentPipelineOutcome(
                 status="rejected",
-                rejection_reason="parse_failed",
+                rejection_reason=reason,
                 stored_size_bytes=len(data),
                 error="document could not be parsed",
+                detected_mime_type=mime_type,
             )
+        agent_metrics.record_attachment_parse(
+            extraction_source=parsed.extraction_source,
+            media_kind=_media_kind(mime_type),
+        )
+        return parsed
+
+
+def _media_kind(mime_type: str) -> str:
+    """Closed media_kind vocabulary for Prometheus cardinality (040)."""
+    normalized = mime_type.strip().lower()
+    if normalized.startswith("image/"):
+        return "image"
+    if normalized == "application/pdf":
+        return "pdf"
+    if normalized.startswith("text/"):
+        return "text"
+    if "wordprocessingml" in normalized or "spreadsheetml" in normalized or "presentationml" in normalized:
+        return "office"
+    return "other"
+
+
+def _active_content_refusal(
+    *,
+    attachment: Attachment,
+    data: bytes,
+    effective_mime: str,
+    size_bytes: int,
+) -> AttachmentPipelineOutcome | None:
+    """Refuse OOXML packages that carry macros or OLE embeddings (020)."""
+    if effective_mime not in _OOXML_MIME_TYPES or not ooxml_contains_active_content(data):
+        return None
+    logger.warning(
+        "attachment refused: ooxml active content",
+        attachment_id=str(attachment.id),
+        rejection_reason="active_content",
+        mime_type=effective_mime,
+    )
+    return AttachmentPipelineOutcome(
+        status="rejected",
+        rejection_reason="active_content",
+        stored_size_bytes=size_bytes,
+        error="document package contains macros or embedded OLE objects",
+        detected_mime_type=effective_mime if effective_mime != attachment.mime_type else None,
+    )
 
 
 def _scan_refusal(verdict: ScanVerdict, *, size_bytes: int) -> AttachmentPipelineOutcome:
@@ -226,6 +417,8 @@ def _content_outcome(
     prepared: UntrustedContentResult,
     safe_text: str,
     size_bytes: int,
+    detected_mime_type: str | None = None,
+    contains_pii: bool = False,
 ) -> AttachmentPipelineOutcome:
     """Build the usable outcome with the scan summary attached for audit."""
     summary = AttachmentScanSummary(
@@ -240,8 +433,14 @@ def _content_outcome(
         safe_text=safe_text,
         page_count=parsed.page_count,
         truncated=parsed.truncated,
+        contains_pii=contains_pii,
     )
-    return AttachmentPipelineOutcome(status="ready", stored_size_bytes=size_bytes, content=content)
+    return AttachmentPipelineOutcome(
+        status="ready",
+        stored_size_bytes=size_bytes,
+        content=content,
+        detected_mime_type=detected_mime_type,
+    )
 
 
 __all__ = ["AttachmentPipeline", "AttachmentPipelineOutcome"]

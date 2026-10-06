@@ -863,6 +863,22 @@ docker compose exec litellm env | Select-String "TIER_MID"
 docker logs palatium-ai-api-1 --since 2m | Select-String "AuthenticationError|agent.turn.start"
 ```
 
+### 5.2. Gateway latency checklist (вне репо, P2.13–14)
+
+Источник решения: ADR `docs/adr/0001-inference-gateway-latency.md`.
+В `deploy/litellm/config.yaml` уже `routing_strategy: latency-based-routing`
+(P2.12) — эффект появляется, когда у одного alias **несколько** deployment.
+
+| # | Действие на corporate gateway | Зачем |
+|---|---|---|
+| 1 | SGLang RadixAttention **или** vLLM continuous batching на mid/frontier | ↓ prefill / ↑ GPU util |
+| 2 | Speculative decoding: draft = nano, target = mid/frontier | ↓ decode latency |
+| 3 | ≥2 реплики с одним `model_name` (tier-mid и т.п.) в LiteLLM `model_list` | latency-based-routing выбирает быстрее |
+| 4 | Экспорт gateway TTFT / queue depth (опционально) | метрики §5 аудита latency |
+
+OCR vision timeout (P2.16): `ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS` default **30**;
+чат (`/intents/process`) не ждёт OCR — только attachment ids со статусом ready.
+
 ---
 
 ## 6. Проверка БД
@@ -1084,7 +1100,7 @@ function palatium-diag {
 
 ```
 [x] pyproject.toml: packages = [{ include = "palatium_ai", from = "src" }]
-[x] pyproject.toml: [tool.mypy] mypy_path = ["src"], exclude содержит mcp_servers/
+[x] pyproject.toml: [tool.mypy] strict = true, mypy_path = ["src"], exclude содержит mcp_servers/
 [x] docker-compose.yml: для всех mcp-* стоит dockerfile: mcp_servers/Dockerfile
 [x] docker-compose.yml: MCP_MODULE = mcp_servers.X.Y_mcp_server
 [x] .dockerignore: НЕ содержит mcp_servers/
@@ -1093,7 +1109,9 @@ function palatium-diag {
 [x] core/config/llm/gateway.py: существует, класс GatewayLLMConfig
 [x] src/__init__.py: удалён (не нужен, вызывает конфликт mypy)
 [ ] poetry check → All set!
-[ ] poetry run mypy . → чисто (или известные проблемы)
+[ ] poetry run mypy --strict src/palatium_ai → чисто (гейт scripts/ci_quality.py)
+[ ] poetry run pytest tests -m "not live and not llm_live and not slow" → зелено
+[ ] poetry run pytest tests/perf -m slow → нагрузочный гейт сложности (080)
 [ ] docker compose --env-file env/.env config --quiet → молчит
 ```
 
@@ -1101,7 +1119,8 @@ function palatium-diag {
 
 ```powershell
 poetry check
-poetry run mypy .
+poetry run mypy --strict src/palatium_ai
+poetry run pytest tests -m "not live and not llm_live and not slow"
 docker compose --env-file env/.env config --quiet
 Select-String -Path docker-compose.yml -Pattern "dockerfile: mcp_servers/Dockerfile"
 Select-String -Path docker-compose.yml -Pattern "MCP_MODULE"
@@ -1261,10 +1280,20 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `ATTACHMENTS_INDEX_RETENTION_DAYS` | `365` | TTL для `mode=index` |
 | `ATTACHMENTS_MAX_PARSED_CHARS` / `_PAGES` | `2000000` / `500` | границы парсинга |
 | `ATTACHMENTS_SWEEP_BATCH_SIZE` | `200` | строк за один retention-проход |
-| `ATTACHMENTS_IMAGE_OCR_BACKEND` | `disabled` | `disabled` \| `gateway`; `disabled` не подключает парсер картинок, и приём отклоняет `image/*` сразу (§16.3) |
-| `ATTACHMENTS_IMAGE_OCR_MODEL` | — | алиас vision-модели **в gateway** (напр. `tier-vision`, обязан быть в `model_list`); обязателен при `gateway` — иначе ошибка на старте (020) |
+| `ATTACHMENTS_IMAGE_OCR_BACKEND` | `auto` | `disabled` \| `auto` \| `gateway` \| `tesseract`; `disabled` не подключает парсер картинок (§16.3) |
+| `ATTACHMENTS_IMAGE_OCR_MODEL` | — | алиас vision-модели **в gateway** (напр. `tier-vision`); обязателен при `gateway`, опционален при `auto` |
 | `ATTACHMENTS_IMAGE_OCR_MAX_BYTES` | `8388608` (8 MiB) | предел **исходных** байт, уходящих в модель (лимит приёма — 50 MiB) |
-| `ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS` | `120` | таймаут вызова vision-модели |
+| `ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS` | `30` | таймаут вызова vision-модели (P2.16) |
+| `ATTACHMENTS_OCR_MIN_CHARS` | `12` | quality gate: эскалация на Vision, если OCR дал меньше символов |
+| `ATTACHMENTS_OCR_MIN_PRINTABLE_RATIO` | `0.55` | quality gate: эскалация при низкой доле printable-символов |
+| `ATTACHMENTS_OCR_MIN_CONFIDENCE` | `55` | quality gate: эскалация при mean word confidence Tesseract ниже порога (латинский мусор с рукописной кириллицы) |
+| `ATTACHMENTS_PDF_MIN_AVG_CHARS_PER_PAGE` | `200` | ниже порога PDF считается сканом → OCR-путь |
+| `ATTACHMENTS_TESSERACT_CMD` | — | абсолютный путь к `tesseract`, если не в `PATH` |
+| `ATTACHMENTS_PDF_VISION_MAX_PAGES` | `20` | потолок страниц PDF для vision (G14) |
+| `ATTACHMENTS_PDF_FIGURE_ENRICHMENT` | `true` | VLM-дополнение страниц с фигурами при живом text layer |
+| `ATTACHMENTS_PDF_FIGURE_MAX_PAGES` | `8` | soft-cap vision-вызовов на фигуры |
+| `ATTACHMENTS_ANALYSIS_BACKEND` | `disabled` | `disabled` \| `local` (G15 ADA: dataframe summary CSV/XLSX под HITL) |
+| `ATTACHMENTS_PII_POLICY` | `tag` | G06: `tag` (только флаг) \| `mask` (редакция в `safe_text`) \| `reject` (`pii_detected`) |
 
 > Хранилище: `minio` — любой S3-совместимый endpoint. Собственные реестры MinIO
 > **не отдают образы анонимно** — проверено 2026-09: Docker Hub `minio/minio` → denied,
@@ -1299,8 +1328,10 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 
 ### 16.3. Что принимается (закрытый реестр, 070)
 
-`application/pdf` `.pdf` · `…wordprocessingml.document` `.docx` · `image/jpeg` `.jpg/.jpeg` ·
-`image/png` `.png` · `image/webp` `.webp` · `text/csv` `.csv` · `text/markdown` `.md` ·
+`application/pdf` `.pdf` · `…wordprocessingml.document` `.docx` ·
+`…spreadsheetml.sheet` `.xlsx` · `…presentationml.presentation` `.pptx` ·
+`image/jpeg` `.jpg/.jpeg` · `image/png` `.png` · `image/webp` `.webp` ·
+`text/csv` `.csv` · `text/html` `.html/.htm` · `text/markdown` `.md` ·
 `text/plain` `.txt/.log`.
 
 Расширение обязано совпадать с заявленным MIME. Перечень — доменная константа
@@ -1311,11 +1342,58 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 
 **Способность, а не разрешение (055).** Intake-политика проверяет не только
 закрытый реестр, но и то, что для MIME реально подключён парсер. Картинки
-(`image/jpeg`, `image/png`, `image/webp`) не имеют текстового слоя, поэтому без
-`ATTACHMENTS_IMAGE_OCR_BACKEND=gateway` они **отвергаются на `init`**
-(`reason="mime_not_allowed"`), а не принимаются и падают позже на парсинге.
-Это осознанный fail-fast: пользователь видит отказ сразу, а не «файл загружен,
-но ничего не прочитано».
+(`image/jpeg`, `image/png`, `image/webp`) не имеют текстового слоя. При
+`ATTACHMENTS_IMAGE_OCR_BACKEND=disabled` (или `auto`/`tesseract` без установленных
+extras и без Vision-модели) они **отвергаются на `init`**
+(`reason="mime_not_allowed"`). Default `auto`: Tesseract (если есть) → при сбое /
+низком качестве — Vision encoder (`ATTACHMENTS_IMAGE_OCR_MODEL`).
+
+**Детерминированный parse routing (не LLM).** После AV пайплайн выбирает стратегию
+по MIME + плотности текстового слоя PDF (`ATTACHMENTS_PDF_MIN_AVG_CHARS_PER_PAGE`,
+default 200), без классификатора:
+
+| Вход | Стратегия |
+|---|---|
+| `text/*`, `docx`, `xlsx`, `pptx`, `html` | text layer |
+| PDF с достаточным слоем | text layer (`pypdf`); опционально figure enrichment (VLM) |
+| PDF-скан / пустой слой | **Tesseract OCR → Vision** (quality gate) → `parse_failed` |
+| `image/*` | **Tesseract → Vision** (`auto`); `gateway` = Vision first |
+
+Provenance пишется в `ParsedDocument.extraction_source` и в метрику
+`palatium_attachment_parse_total{extraction_source, media_kind}`.
+
+**Tesseract runtime.** Python-пакеты `pytesseract`/`Pillow`/`pymupdf` входят в
+Poetry-группу `attachments`. Сам бинарник ставится в образ при
+`WITH_ATTACHMENTS=1` (`tesseract-ocr` + `eng`/`rus` tessdata). Локально без Docker:
+системный Tesseract в `PATH`, либо `ATTACHMENTS_TESSERACT_CMD` на абсолютный путь.
+
+**Длинная вставка в чат.** Клиент (`AUTO_ATTACH_CHARS=10_000`) при paste длиннее
+порога не кладёт текст в `intent.text`: создаёт `text/plain` chip
+(`pasted-text_YYYY-MM-DD.txt`, `mode=attach`) и грузит через обычный
+`/api/attachments` поток. В ход уходит короткий комментарий + `attachment_ids`;
+индексация в knowledge — отдельно через HITL (`POST …/index`), не автоматически.
+
+**PII на извлечённом тексте (G06).** `ATTACHMENTS_PII_POLICY`:
+`tag` (default) — только `contains_pii` на derived content;
+`mask` — плейсхолдеры `[EMAIL]`/`[PHONE]`/`[ID]` в `safe_text`;
+`reject` — отказ `pii_detected` до admission. Детекторы — те же structured
+паттерны, что у memory PII (060), без phrase-списков.
+
+**Коннекторы (G10).** `GET /api/attachments/connectors` отдаёт каталог
+(EDMS-first). Импорт из СЭД пока fail-closed (`POST …/connectors/{id}/import` →
+501, `available=false`) до cutover MCP EDMS (092); Drive/SharePoint не
+рекламируются как доступные. UI показывает stub-каталог над чипами.
+
+**PII-флаг на строке.** После `complete` в metadata пишется `contains_pii`
+(миграция `c2d3e4f5a6b7`); клиент показывает бейдж на chip при `ready`.
+
+**Knowledge hybrid fusion.** `search_knowledge` сливает FTS + dense через
+`KNOWLEDGE_HYBRID_FUSION`: `weighted` (default, 0.35/0.65) или `rrf`
+(`KNOWLEDGE_RRF_K`, default 60). Опционально
+`KNOWLEDGE_EMBEDDING_RERANK=true` — over-fetch и cosine-rerank поверх merge
+(тот же knowledge embedding client; `KNOWLEDGE_EMBEDDING_RERANK_OVERFETCH`,
+default 3). Cross-encoder (`sentence-transformers`) в Host не подключён —
+остаётся в EDMS-legacy KB.
 
 ### 16.4. Поток загрузки
 
@@ -1357,11 +1435,24 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
    вызовов: подпись — локальное вычисление, поэтому он может указывать на имя, resolv'ящееся
    только у пользователя. В логе старта видно `presign_endpoint` — именно он попадает в URL.
 
-3. `POST /api/attachments/{id}/complete` — пайплайн:
-   `stat` объекта (размер и наличие берутся из хранилища, а не из заявленных клиентом) →
-   AV-scan → парсинг → prompt-injection gate (`UntrustedContentPolicy`) → fencing.
+3. Байты в объект (альтернатива шагу 2 для больших файлов): `POST …/{id}/chunks/{index}`
+   (части ≤ `ATTACHMENTS_MAX_CHUNK_BYTES`, default 8 MiB) → `POST …/{id}/chunks/finalize` с
+   `chunk_count` (склейка в blob), затем шаг 4. Веб-клиент (`web/src/lib/attachments.ts`)
+   на API-транспорте (`memory://` / fallback с недоступного presign) автоматически
+   переключается на chunks, когда `size > UPLOAD_CHUNK_BYTES`; одиночный
+   `PUT /content` остаётся для файлов ≤ 8 MiB. Presigned PUT в MinIO по-прежнему
+   одним запросом.
+4. `POST /api/attachments/{id}/complete` — пайплайн:
+   `stat` объекта → magic-byte MIME sniff (несовпадение с заявленным → `mime_mismatch`) →
+   AV-scan → (DOCX) проверка active content → парсинг с лимитами декодирования изображений →
+   secret scan на извлечённом тексте → prompt-injection gate (`UntrustedContentPolicy`) →
+   persist derived text → fencing на чтение в ход.
+   Статус строки на время пайплайна — `scanning` (UI может показывать фазу до ответа).
    Audit: `attachment_completed`.
-4. Файл либо участвует в ходе диалога (§16.5), либо его индексация запрашивается через HITL.
+5. Файл либо участвует в ходе диалога (§16.5), либо его индексация запрашивается через HITL.
+   Для ``mode=index`` клиент сначала доводит вложение до ``ready``, затем вызывает
+   ``POST /api/attachments/{id}/index`` — в knowledge base ничего не пишется до approve
+   карточки (отдельно от ``attach``, где текст идёт только в ход).
 
 Отказы пайплайна:
 
@@ -1370,6 +1461,10 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `not_uploaded` | rejected | presigned PUT не состоялся, объекта нет |
 | `size_invalid` / `size_exceeded` | rejected | объект пуст / превышает `ATTACHMENTS_MAX_SIZE_BYTES` |
 | `mime_not_allowed` | rejected | MIME вне реестра или парсер не зарегистрирован |
+| `mime_mismatch` | rejected | magic-byte sniff не совпал с заявленным MIME |
+| `active_content` | rejected | макросы / OLE embeddings в OOXML (DOCX/PPTX/XLSX) |
+| `image_too_large` | rejected | декодирование изображения превысило лимит пикселей |
+| `pii_detected` | rejected | извлечённый текст попал под `ATTACHMENTS_PII_POLICY=reject` |
 | `parse_failed` | rejected | парсер не смог извлечь текст |
 | `malware_detected` | quarantined | сработала сигнатура clamd |
 | `scan_failed` | quarantined | clamd недоступен/не ответил — **не** вирус (§3.18) |
@@ -1381,13 +1476,20 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 
 | Метод и путь | Код | Назначение |
 |---|---|---|
-| `POST /api/attachments/init` | 201 | intake + presigned PUT |
+| `POST /api/attachments/init` | 201 | intake + presigned PUT; опционально `expires_in_seconds` (clamp по mode TTL) |
 | `PUT /api/attachments/{id}/content` | 200 | байты через API (когда у хранилища нет HTTP-фасада или оно недоступно из браузера); 413 при превышении лимита |
+| `POST /api/attachments/{id}/chunks/{index}` | 200 | resumable: одна часть blob |
+| `POST /api/attachments/{id}/chunks/finalize` | 200 | склейка частей (`chunk_count`), затем нужен `/complete` |
 | `POST /api/attachments/{id}/complete` | 200 | scan→parse→fence→persist |
 | `GET /api/attachments?thread_id=…` | 200 | вложения треда (перед чтением — ленивый retention) |
 | `GET /api/attachments/{id}` | 200 | одно вложение |
+| `GET /api/attachments/{id}/download` | 200 | presigned GET оригинала (audit `attachment_download_issued`) |
 | `POST /api/attachments/{id}/index` | 200 | одноразовая HITL-карточка; **ничего не пишет** |
+| `POST /api/attachments/{id}/restore-request` | 200 | HITL на восстановление из карантина (`injection_detected`); approve → masked `ready` |
+| `GET /api/attachments/compliance-export?thread_id=…` | 200 | JSON-сводка вложений треда (роль manager) |
 | `POST /api/attachments/sweep` | 200 | retention-проход по строкам вызывающего |
+| `GET /api/attachments/connectors` | 200 | каталог внешних источников (G10; EDMS stub) |
+| `POST /api/attachments/connectors/{id}/import` | 501 | fail-closed до MCP EDMS import (092) |
 | `DELETE /api/attachments/{id}` | 204 | строка + оба объекта |
 
 Ошибки: 404 `AttachmentNotFoundError`; 409 `AttachmentModeMismatchError` /
@@ -1406,6 +1508,11 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 запись в базу знаний (`platform.ingest_document`) происходит только после approve через
 `/api/hitl` (`execute_after_approval`). Audit: `attachment_index_requested` → `attachment_indexed`.
 
+**HITL-восстановление из карантина (injection).** `POST /{id}/restore-request` — только для
+`status=quarantined` + `rejection_reason=injection_detected`. Approve менеджером перезапускает
+пайплайн с `force_mask_injection` или маскирует уже сохранённый derived text. Audit:
+`attachment_restore_requested` → `attachment_restore_approved`.
+
 ### 16.6. Retention (TTL) и sweeper
 
 - Момент истечения: `expires_at` = now + `ATTACHMENTS_ATTACH_TTL_SECONDS` для `mode=attach`,
@@ -1414,12 +1521,16 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 - Ленивая рекламация: `GET /api/attachments?thread_id=…` сначала делает retention-проход для
   владельца, поэтому просроченное не показывается (и не ломает чтение при сбое — ошибка
   считается метрикой, не исключением).
-- Явный проход: `POST /api/attachments/sweep` — **всегда per-owner**. Глобального крона нет
-  by design: `FORCE ROW LEVEL SECURITY` не даёт app-роли увидеть чужие строки. Для расписания
-  вызывайте sweep в контексте каждого владельца, а не «одной командой по всей таблице».
-- Один проход ограничен `ATTACHMENTS_SWEEP_BATCH_SIZE` (bounded: один залипший объект не
-  должен превращать запрос в бесконечный цикл удалений).
-- Удаляется: оригинал `attachments/<id>`, производный `attachments/<id>.text.json`, строка БД.
+- Явный per-owner проход: `POST /api/attachments/sweep` — **defense in depth** под
+  `FORCE ROW LEVEL SECURITY` (app-роль не видит чужие строки).
+- **SoT для глобальной очистки:** CronJob / CLI
+  `poetry run python -m palatium_ai.jobs.retention --class attachment_attach|attachment_index|attachment_pii`
+  через SECURITY DEFINER (`palatium_ai.retention_*`, миграция `e5f6a7b8c9d0`) + cascade
+  `knowledge.retention_delete_by_attachment` и orphan-класс `knowledge_orphan` (§17).
+- Один проход ограничен `ATTACHMENTS_SWEEP_BATCH_SIZE` / `RETENTION_BATCH_SIZE` (bounded: один
+  залипший объект не должен превращать запрос в бесконечный цикл удалений).
+- Удаляется: оригинал `attachments/<id>`, производный `attachments/<id>.text.json`, chunk parts,
+  строка БД; для index — связанные `knowledge.documents` (+ chunks CASCADE).
   Если удаление объекта падает — строка **не** удаляется и попадёт в следующий проход (`failed`),
   остальные строки прохода продолжают обрабатываться.
 - Отбор детерминирован: все строки прохода сравниваются с одним tz-aware UTC `now`
@@ -1438,10 +1549,15 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `attachment_expired` | TTL-purge |
 | `attachment_index_requested` | создана HITL-карточка |
 | `attachment_indexed` | запись в базу знаний после approve |
+| `attachment_download_issued` | выдан presigned GET оригинала |
+| `attachment_restore_requested` | создана HITL-карточка восстановления |
+| `attachment_restore_approved` | карантин снят, текст замаскирован, `ready` |
 
 Метрики: `palatium_agent_errors_total{agent_type="attachments", error_type=…}`, где
 `error_type` ∈ `intake_<reason>` · `pipeline_<reason>` · `retention_sweep_failed` ·
-`retention_sweep_read_path_failed`.
+`retention_sweep_read_path_failed`; плюс
+`palatium_attachment_parse_total{extraction_source, media_kind}` на успешный parse
+(`extraction_source` ∈ `text_layer|vision|ocr|none`, `media_kind` ∈ `image|pdf|text|office|other`).
 
 ```powershell
 # Распределение статусов и причин отказов
@@ -1555,10 +1671,17 @@ Invoke-RestMethod -Method Post "$base/intents/process" -Headers $h -ContentType 
 Веб-интерфейс: `npm run dev` в `web/` (Vite на `:5173`, `/api` проксируется на `:8000`).
 В композере есть скрепка и drag&drop; чипы показывают путь `uploading → ready`, а отказ —
 с причиной (`blocked: malware detected`, `blocked: antivirus unavailable`,
-`file type is not accepted`, …). Файл, прошедший пайплайн, остаётся привязанным к треду и
-уезжает в `attachment_ids` каждого хода, пока пользователь не снимет чип: `mode=attach`
-живёт `ATTACHMENTS_ATTACH_TTL_SECONDS` и переживает тред, иначе follow-up вопросы по файлу
-ломались бы на живом диалоге (§16.6).
+`file type is not accepted`, …).
+
+**Контракт композера (2026, как ChatGPT / Claude / Gemini):** чип в композере —
+только staging до send. После успешного хода ready-чипы снимаются; файл остаётся
+на пузыре user-сообщения. Follow-up без повторной загрузки опирается на историю
+диалога (ответ/OCR уже в prior), а не на «вечный» чип над полем ввода. Новый файл
+на следующем ходе — единственный в `attachment_ids` этого хода. Неудачные чипы
+остаются, чтобы видеть причину и повторить. `mode=attach` на сервере живёт
+`ATTACHMENTS_ATTACH_TTL_SECONDS` (§16.6); ContinuityPolicy при непустом
+`untrusted_context` не биндит workers на prior format (иначе «сводка по файлу»
+переписывает OCR предыдущего вложения).
 
 ### 16.9. Локальное S3-хранилище (профиль `attachments-s3`)
 
@@ -1674,6 +1797,40 @@ python scripts/attachments_probe.py --preflight-image   # только пров�
 
 ---
 
+## 17. Global retention (CronJob / CLI)
+
+**Полный гайд (env, классы, расписание, диагностика):**
+[`global-retention.md`](global-retention.md).
+
+План: [`.cursor/plans/global-retention.md`](../.cursor/plans/global-retention.md).
+ADR: [`adr/0002-global-retention-scheduler.md`](adr/0002-global-retention-scheduler.md).
+
+Кратко:
+
+- Entrypoint: `poetry run python -m palatium_ai.jobs.retention`
+- Default — **dry-run**. Destructive: `--execute` или `RETENTION_EXECUTE=true`.
+- Окна: `RETENTION_*` в `env/.env.example` §10b (и `env/.env`); SoT —
+  `RetentionConfig` / `RetentionWindows` / `RetentionPolicy`.
+- Миграции: `d4e5f6a7b8c9` (memory RPCs) · `e5f6a7b8c9d0` (attachments/knowledge/checkpoint grants).
+- Реализованные DB-classes: `session_transcript`, `memory_*`, `checkpointer`,
+  `attachment_*`, `knowledge_orphan`. Остальное — policy snapshot / W4–W6.
+- Attachments: global cron = SoT; lazy/`POST /sweep` (§16.6) — defense.
+
+```powershell
+# After: poetry run alembic upgrade head
+poetry run python -m palatium_ai.jobs.retention --list-classes
+poetry run python -m palatium_ai.jobs.retention --class report_only
+poetry run python -m palatium_ai.jobs.retention --class memory_medium --class session_transcript
+poetry run python -m palatium_ai.jobs.retention --class checkpointer --class attachment_attach
+# destructive (staging only after dry-run review):
+# poetry run python -m palatium_ai.jobs.retention --execute --class session_transcript
+# poetry run python -m palatium_ai.jobs.retention --execute --class memory_pii
+# poetry run python -m palatium_ai.jobs.retention --execute --class attachment_index
+# poetry run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
+```
+
+---
+
 ## См. также
 
 - [`../START.md`](../START.md) — старт: setup, `$PROFILE`, три режима
@@ -1681,3 +1838,5 @@ python scripts/attachments_probe.py --preflight-image   # только пров�
 - [`handbook.md`](handbook.md) — полный путь от clone до ops
 - [`ops-readiness.md`](ops-readiness.md) — чеклист staging/prod
 - [`secrets.md`](secrets.md) — секреты / Vault / CI
+- [`global-retention.md`](global-retention.md) — настройки и использование global retention
+- [`.cursor/plans/global-retention.md`](../.cursor/plans/global-retention.md) — волны W0–W6 retention

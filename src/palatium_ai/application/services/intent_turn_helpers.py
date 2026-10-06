@@ -5,10 +5,34 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.core.observability.audit import get_audit_logger
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
+
+PENDING_ATTACHMENT_IDS_KEY = "pending_attachment_ids"
+
+
+def serialize_pending_attachment_ids(attachment_ids: list[UUID] | tuple[UUID, ...]) -> str:
+    """Encode UUIDs for session.context (server control plane)."""
+    return ",".join(str(item) for item in attachment_ids)
+
+
+def parse_pending_attachment_ids(raw: object) -> list[UUID]:
+    """Decode comma-separated UUIDs from session.context; skip invalid tokens."""
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    parsed: list[UUID] = []
+    for part in raw.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        try:
+            parsed.append(UUID(token))
+        except ValueError:
+            continue
+    return parsed
 
 
 async def write_audit(*, conversation_id: str, event: str, metadata: dict[str, str]) -> None:

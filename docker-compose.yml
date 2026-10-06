@@ -1,42 +1,55 @@
 # =============================================================================
-# Full local stack: Postgres + Redis + Neo4j + MCP + LiteLLM Gateway + API
+# Full local stack: Postgres + Valkey + Neo4j + MCP + LiteLLM + API
+# (+ attachments: ClamAV/Silo, + observability: Langfuse v3/ClickHouse)
 # =============================================================================
-# From repo root — полный Docker-стек (docker-compose.override.yml держит
-# MCP/API за профилями, чтобы не конфликтовать с host-профилем Poetry):
-#   docker compose --env-file env/.env --profile docker-mcp --profile docker-api up --build
+# Profile model (docker-compose.override.yml keeps MCP/API out of the default set so
+# they never fight the host-Poetry profile for 8000/8080/8081):
 #
-# Только инфраструктура (host-профиль Poetry, см. START.md §4):
-#   docker compose --env-file env/.env up -d postgres redis neo4j litellm
+#   Data plane — no profile, always on:
+#     docker compose --env-file env/.env up -d
+#       postgres, valkey, neo4j, litellm
+#     neo4j is part of the plane, not an optional extra: env/.env sets
+#     GRAPH_QUERY_BACKEND=neo4j, and profile-gating it would make the app silently
+#     fall back to the in-memory graph stub (060) — a degraded graph that looks fine.
 #
-# With Graphiti SDK in the API image (optional):
-#   docker compose --env-file env/.env build --build-arg WITH_GRAPHITI=1 api
+#   Everything except observability — profiles + both attachment overlays:
+#     make up   (menu: STACK -> "Start stack")
+#     The attachment profiles + overlays are part of the *default* launch: env/.env sets
+#     ATTACHMENTS_BLOB_BACKEND=minio, and application/wiring.py probes the bucket at boot
+#     (`ensure_bucket`), so an API started without the store crash-loops instead of
+#     degrading. Observability is excluded because it does not fit the default Docker VM.
 #
-# With attachment-pipeline deps in the API image (minio/pypdf/python-docx, optional):
-#   docker compose --env-file env/.env build --build-arg WITH_ATTACHMENTS=1 api
+#   Everything, including tracing:
+#     make up-full   (menu: STACK -> "Start full stack")
+#     Requires a bigger Docker VM — see the memory note on `up-full` in the Makefile.
 #
-# Optional attachments profile (AV engine for ATTACHMENTS_SCANNER_BACKEND=clamav):
-#   docker compose --env-file env/.env --profile attachments up -d clamav
+#   Individual feature profiles:
+#     --profile attachments      ClamAV       (ATTACHMENTS_SCANNER_BACKEND=clamav)
+#     --profile attachments-s3   Silo         (ATTACHMENTS_BLOB_BACKEND=minio)
+#     --profile observability    Langfuse v3 + ClickHouse (LANGCHAIN_TRACING_V2=true)
+#     --profile mcp-gateway      MCP gateway proxies
+#     --profile docker-mcp / docker-api   MCP servers + API inside Docker
 #
-# Optional S3 store (profile: attachments-s3; the image is not anonymously pullable,
-# so set ATTACHMENTS_MINIO_IMAGE and prefer `make attach-s3-up`):
-#   docker compose --env-file env/.env --profile attachments-s3 up -d minio
+#   Rebuild only the app tier (infra keeps running):
+#     make rebuild-app   (menu: STACK -> "Rebuild api + MCP")
 #
-# Optional observability (Langfuse):
-#   docker compose --env-file env/.env --profile observability up -d langfuse
+#   Attachments overlays carry the env the API needs for the profiles above, so the
+#   containers and the API's backend selection can never disagree (runbook §16.8/§16.9).
 #
-# Optional MCP gateways:
-#   docker compose --env-file env/.env --profile mcp-gateway up -d
+# Runtime images are pinned by immutable version tag + digest (050) so a `pull` cannot
+# silently change the running stack. To bump one: change both the tag and the digest.
 #
 # Health:
 #   API         http://localhost:8000/health
 #   LiteLLM     http://localhost:4000/health/liveliness
 #   LiteLLM UI  http://localhost:4000/ui
 #   Neo4j       http://localhost:7474
-#   Langfuse    http://localhost:3000   (with --profile observability)
+#   Langfuse    http://localhost:3000        (--profile observability)
+#   Silo console http://localhost:9001       (--profile attachments-s3)
 #   MCP EDMS    http://localhost:8080/docs
 #   MCP Analytics http://localhost:8081/docs
 #
-# После смены модели:
+# After changing a model mapping:
 #   docker compose --env-file env/.env up -d --force-recreate litellm
 # =============================================================================
 
@@ -46,18 +59,50 @@ services:
   # ============================================================
   # Data stores
   # ============================================================
+  # Memory ceilings below are deliberately ~1.5x the observed steady state. Without
+  # them a runaway container is reaped by the *VM-wide* OOM killer, which picks the
+  # largest RSS (in practice clamd or postgres) and cascades into exactly the
+  # Postgres crash-recovery storm this stack hit on a 16 GB host. With a cgroup
+  # limit the misbehaving service dies alone and `restart:` brings it back.
+  #
+  # The ceilings are a *budget*, not independent round numbers: the default full
+  # stack (postgres 1024 + redis 192 + neo4j 1408 + litellm 1280 + clamav 1792 +
+  # minio 448 + mcp-edms 256 + mcp-analytics 256 + api 1152 = 7808m) has to stay
+  # inside the Docker VM (7.7 GiB here) with every container peaking at once. Raising
+  # one means lowering another or giving Docker Desktop more RAM; the opt-in
+  # `observability` profile (langfuse) is outside this budget entirely.
   postgres:
     # pgvector required by alembic memory/knowledge migrations (060).
-    image: pgvector/pgvector:pg16
+    # Tag + digest so a `pull` cannot swap the DB engine under a running stack (050).
+    # The digest is the multi-arch *index* digest (same form as the pg16 pin it replaces),
+    # resolved with `docker buildx imagetools inspect pgvector/pgvector:pg18`. A major
+    # bump is a decision, not a tag edit: PG18 relocated PGDATA, so the volume target in
+    # `volumes:` below had to move with it — the two lines are one contract (test-guarded).
+    image: pgvector/pgvector:pg18@sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
     restart: unless-stopped
+    mem_limit: 1024m
+    # Docker's default /dev/shm is 64 MiB. Postgres ships
+    # `dynamic_shared_memory_type=posix`, so parallel workers (max_parallel_workers=8)
+    # and `parallel_hash_join` allocate their shared segments there, and exceeding it
+    # fails the *query* with "could not resize shared memory segment ... No space left
+    # on device" — a failure that only appears under concurrent/analytic load and never
+    # in a quiet dev stack. 256m covers the planner's segment target with room to spare
+    # and is accounted for inside this container's mem_limit, not extra VM budget.
+    shm_size: 256m
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
     ports:
       - "${POSTGRES_PUBLISH_PORT:-5432}:5432"
+    # PG18 relocated PGDATA: the image sets `PGDATA=/var/lib/postgresql/18/docker` and
+    # declares its VOLUME as the *parent*, `/var/lib/postgresql`. The pre-18 path
+    # (`/var/lib/postgresql/data`) is no longer the data directory, and mounting there
+    # fails silently rather than loudly — the server initialises into an anonymous volume,
+    # the named volume stays empty, and `down -v` leaves the real data behind. Mount the
+    # declared parent instead: the cluster then lives at `<volume>/18/docker`.
     volumes:
-      - palatium_pgdata:/var/lib/postgresql/data
+      - palatium_pgdata:/var/lib/postgresql
       - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
@@ -70,42 +115,91 @@ services:
       retries: 10
       start_period: 10s
 
+  # Valkey, not Redis: the last BSD-licensed Redis OSS release was 7.2.4 — every newer
+  # redis: tag ships RSALv2/SSPL, which is a licence problem for a redistributed stack.
+  # Valkey is the Linux Foundation fork (BSD-3), wire- and command-compatible, so the
+  # service keeps its `redis` name: REDIS_* settings, the redis-py client and every doc
+  # reference stay valid (one rename would touch config, docs and tests for no runtime gain).
+  #
+  # maxmemory-policy=noeviction is load-bearing, not tuning: KillSwitchService stores
+  # `palatium:kill_switch:engaged` in this instance and treats a *missing* key as
+  # "disengaged" (kill_switch.py is_engaged → False). Under an LRU policy the emergency
+  # stop could be evicted and silently release itself. noeviction makes a full instance
+  # fail writes loudly instead of dropping the switch (020: fail closed).
   redis:
-    image: redis:7-alpine
+    image: valkey/valkey:8.1.10-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
     restart: unless-stopped
+    # Observed ~5 MiB (session checkpoints + AOF buffers); the ceiling only has to
+    # catch a leak, and the freed 64 MiB buys headroom for silo below.
+    mem_limit: 192m
+    environment:
+      # Empty means "no auth" (the entrypoint below omits --requirepass entirely rather
+      # than relying on the server treating an empty password as disabled). Keep it set
+      # outside local/test (020).
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     command:
-      - redis-server
-      - --appendonly
-      - "yes"
+      - sh
+      - -c
+      - |
+        set -e
+        ARGS="--appendonly yes --appendfsync everysec \
+        --maxmemory 128mb --maxmemory-policy noeviction"
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec valkey-server $$ARGS --requirepass "$$REDIS_PASSWORD"
+        fi
+        exec valkey-server $$ARGS
     ports:
-      - "${REDIS_PUBLISH_PORT:-6379}:6379"
+      # Loopback only: unauthenticated-by-default datastore, nothing outside the host
+      # has any business reaching it (020).
+      - "127.0.0.1:${REDIS_PUBLISH_PORT:-6379}:6379"
     volumes:
       - palatium_redis:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test:
+        [
+          "CMD-SHELL",
+          'valkey-cli ${REDIS_PASSWORD:+-a "$$REDIS_PASSWORD"} ping | grep -q PONG',
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 5s
 
   neo4j:
-    image: neo4j:5-community
+    # CalVer image (Neo4j moved off SemVer in 2025.01). Pinned to the 2026.07 LTS-shaped
+    # community line with an explicit base-image suffix instead of the floating
+    # `2026-community` alias, which repoints at every monthly patch (050).
+    image: neo4j:2026.07.1-community-trixie@sha256:956faa5d14b6beaa629b80c718bfd389ec12064f97e276ed9a58b0c53b25a323
     restart: unless-stopped
+    # 512m heap + reclaimable page cache. The number is part of the budget below:
+    # the running stack must fit the Docker VM (7.7 GiB) *with all ceilings at once*,
+    # so it is sized against the observed ~1 GiB RSS rather than taken as a round figure.
+    mem_limit: 1408m
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/palatium-neo4j}
       NEO4J_server_memory_heap_initial__size: 512m
       NEO4J_server_memory_heap_max__size: 512m
+      # Modest page cache: the graph is small, and an oversized cache would push this
+      # container past the budget while buying nothing under a few hundred MB of store.
+      NEO4J_server_memory_pagecache_size: 512m
       NEO4J_PLUGINS: '["apoc"]'
     ports:
-      - "${NEO4J_HTTP_PORT:-7474}:7474"
-      - "${NEO4J_BOLT_PORT:-7687}:7687"
+      # Loopback only: the API and the gateway reach Neo4j over the compose network by
+      # service name, so publishing to every interface would only widen the perimeter
+      # for an unauthenticated-by-default Bolt port (020).
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7687}:7687"
     volumes:
       - palatium_neo4j:/data
     healthcheck:
+      # Split NEO4J_AUTH at the "/" separator instead of repeating the password here.
+      # The previous probe hardcoded `-p palatium-neo4j`, so changing NEO4J_AUTH — the
+      # documented way to set the credential — left the container permanently
+      # "unhealthy" while it was serving traffic fine (010: one source of truth).
       test:
         [
           "CMD-SHELL",
-          "cypher-shell -a bolt://127.0.0.1:7687 -u neo4j -p palatium-neo4j 'RETURN 1;' || exit 1",
+          'cypher-shell -a bolt://127.0.0.1:7687 -u "$${NEO4J_AUTH%%/*}" -p "$${NEO4J_AUTH#*/}" "RETURN 1;"',
         ]
       interval: 10s
       timeout: 10s
@@ -116,8 +210,15 @@ services:
   # LiteLLM Gateway — маршрутизатор tier-* → реальные провайдеры
   # ============================================================
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    # `main-latest` is a moving target: a rebuild of this stack could silently swap the
+    # gateway version under the API. Pin the stable channel by digest (050) and bump
+    # deliberately.
+    image: ghcr.io/berriai/litellm:main-stable@sha256:bd089afdcd35b894b14a93f9743cdc8b591f82da1a38dd43a010a7b0c9de5fd7
     restart: unless-stopped
+    # Prisma (Rust query engine) is the memory hog here: each worker forks its own
+    # engine, and that fork storm is what exhausted the VM and got postgres killed.
+    # One worker is enough for this deployment; add replicas only with more host RAM.
+    mem_limit: 1280m
     ports:
       - "${LITELLM_PUBLISH_PORT:-4000}:4000"
     volumes:
@@ -128,7 +229,7 @@ services:
       - "--port"
       - "4000"
       - "--num_workers"
-      - "2"
+      - "1"
     env_file:
       - ./env/.env
     environment:
@@ -193,7 +294,12 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      # A cold container runs `prisma migrate deploy` (currently 188 migrations) plus
+      # the Prisma engine bootstrap before port 4000 opens — measured ~2 min after a
+      # recreate. At 30s the API's `condition: service_healthy` dependency aborted a
+      # plain `up` with "container litellm is unhealthy", so the grace period has to
+      # cover the migration run, not just the HTTP server.
+      start_period: 180s
     security_opt:
       - no-new-privileges:true
 
@@ -210,6 +316,7 @@ services:
         MCP_PORT: "8080"
     image: palatium-mcp-edms:local
     restart: unless-stopped
+    mem_limit: 256m
     environment:
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
       MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-min-32-chars!!}
@@ -246,6 +353,7 @@ services:
         MCP_PORT: "8081"
     image: palatium-mcp-analytics:local
     restart: unless-stopped
+    mem_limit: 256m
     environment:
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-dev-mcp-local-token}
       MCP_JWT_SECRET: ${MCP_JWT_SECRET:-dev-mcp-jwt-secret-min-32-chars!!}
@@ -286,6 +394,7 @@ services:
         MCP_PORT: "8090"
     image: palatium-mcp-gateway-edms:local
     restart: unless-stopped
+    mem_limit: 256m
     environment:
       MCP_GATEWAY_SERVER: edms
       MCP_UPSTREAM_URL: http://mcp-edms:8080
@@ -329,6 +438,7 @@ services:
         MCP_PORT: "8091"
     image: palatium-mcp-gateway-analytics:local
     restart: unless-stopped
+    mem_limit: 256m
     environment:
       MCP_GATEWAY_SERVER: analytics
       MCP_UPSTREAM_URL: http://mcp-analytics:8081
@@ -362,25 +472,145 @@ services:
       start_period: 15s
 
   # ============================================================
-  # Optional observability (profile: observability)
-  # docker compose --env-file env/.env up -d postgres
-  # docker compose --env-file env/.env exec postgres psql -U postgres -c "CREATE DATABASE langfuse;"
-  # docker compose exec postgres psql -U postgres -c "\l" | Select-String "litellm"
+  # Optional observability — Langfuse v3 (profile: observability)
+  #   docker compose --env-file env/.env --profile observability up -d
+  #
+  # v3 is not a drop-in v2: traces moved out of Postgres into ClickHouse, ingestion
+  # became asynchronous (a separate worker drains the queue from Object Storage via
+  # Valkey), and blob payloads live in S3. So "upgrade Langfuse" means adding
+  # clickhouse + langfuse-worker + a bucket, not only bumping the tag.
+  #
+  # HARDWARE NOTE: upstream asks for 4 vCPU / 16 GiB for this trio, with ClickHouse
+  # alone sized at 2 CPU / 8 GiB. The ceilings below are deliberately *below* that so
+  # the profile can co-exist with the data plane inside a Docker VM that defaults to
+  # half the host RAM. Treat it as a verification-grade setup, not a load-tested one:
+  # raise the VM (see docs/docker.md) and the ceilings together before trusting numbers.
+  #
+  # Keys are auto-provisioned on first boot from LANGFUSE_INIT_*, so env/.env's
+  # LANGFUSE_PUBLIC_KEY/SECRET_KEY are live without clicking through the UI (the app
+  # sends nothing to Langfuse until they match — a silent "tracing is on but empty").
   # ============================================================
-  langfuse:
+  clickhouse:
     profiles: [ "observability" ]
-    image: langfuse/langfuse:2
+    image: clickhouse/clickhouse-server:25.12-alpine@sha256:7d93fb39bb2bfc8509bd621241db974e41041ac0ae626a5b06e172431fc709f7
     restart: unless-stopped
-    ports:
-      - "${LANGFUSE_PUBLISH_PORT:-3000}:3000"
+    mem_limit: 2048m
     environment:
+      # User/database are structural — part of this service's internal contract, not
+      # operator knobs. Written as literals on purpose: every additional $VAR in this
+      # file becomes a "canon key" that all nine env templates must declare
+      # (tests/unit/test_env_template_parity.py). Only the credential is env-driven, per 020.
+      CLICKHOUSE_USER: "langfuse"
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in env/.env}
+      CLICKHOUSE_DB: "langfuse"
+      # Lets the image grant the user access_management, which Langfuse's own migrations
+      # need in order to create their tables under CLICKHOUSE_DB.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - palatium_clickhouse:/var/lib/clickhouse
+      - palatium_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  langfuse-web:
+    profiles: [ "observability" ]
+    image: langfuse/langfuse:3@sha256:a343f64e035eb01aeea358703a0428945d909d01e19452509a5a830862dda878
+    restart: unless-stopped
+    mem_limit: 768m
+    ports:
+      - "127.0.0.1:${LANGFUSE_PUBLISH_PORT:-3000}:3000"
+    # Anchor on first use so web and worker can never drift: upstream requires the two
+    # to agree on every storage/auth setting, and a half-updated pair fails at ingest.
+    environment: &langfuse-env
+      # --- Postgres: transactional data (users, projects, prompts, API keys) ---
       DATABASE_URL: ${LANGFUSE_DB_URL:-postgresql://postgres:1234@postgres:5432/langfuse}
+      # --- ClickHouse: trace/observation/scores OLAP store (new in v3) ---
+      # Host/port/user/db are literals: they describe how these two containers find each
+      # other, and each extra $VAR would have to be declared in all nine env templates.
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_MIGRATION_URL: "clickhouse://clickhouse:9000"
+      CLICKHOUSE_USER: "langfuse"
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in env/.env}
+      CLICKHOUSE_DB: "langfuse"
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      # --- Valkey: ingestion queue + cache (v3 no longer queues in Postgres) ---
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_PASSWORD:-}
+      # --- Auth + at-rest encryption (ENCRYPTION_KEY must be 64 hex chars) ---
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-in-production-min-32-chars}
       SALT: ${LANGFUSE_SALT:-change-me-in-production-min-32-chars}
       NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?set LANGFUSE_ENCRYPTION_KEY (64 hex chars) in env/.env}
+      # --- S3 (silo): every ingested event is persisted here before ClickHouse ---
+      # Bucket name is a literal so it matches what silo-init creates; credentials and
+      # region reuse the store's existing keys — one source of truth for the store (010).
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "langfuse"
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: ${ATTACHMENTS_MINIO_REGION:-us-east-1}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: "langfuse"
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: ${ATTACHMENTS_MINIO_REGION:-us-east-1}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      TELEMETRY_ENABLED: "false"
+      # --- First-boot provisioning: org/project + the API keys env/.env hands the app ---
+      # Labels are literals. The two key lines are the important part: they seed Langfuse
+      # with *exactly* the credentials the application sends, so tracing works on first
+      # boot instead of requiring a manual UI round-trip that silently breaks it.
+      LANGFUSE_INIT_ORG_ID: "palatium"
+      LANGFUSE_INIT_ORG_NAME: "Palatium AI"
+      LANGFUSE_INIT_PROJECT_ID: "palatium-ai"
+      LANGFUSE_INIT_PROJECT_NAME: "palatium-ai"
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_INIT_USER_EMAIL: "admin@palatium.local"
+      LANGFUSE_INIT_USER_NAME: "admin"
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-palatium-langfuse-admin}
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  langfuse-worker:
+    profiles: [ "observability" ]
+    image: langfuse/langfuse-worker:3@sha256:8a28c946bb5401eef488153fa294db5a79bd99dd5c90db8e4d39559374c9ebd3
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      <<: *langfuse-env
+    depends_on:
+      # The worker drains what the web container queued, so it must not start before the
+      # queue's dependencies exist — otherwise it crash-loops on the first poll.
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
 
   # ============================================================
   # Optional attachments profile (profile: attachments)
@@ -394,11 +624,20 @@ services:
   # ============================================================
   clamav:
     profiles: [ "attachments" ]
-    image: clamav/clamav:1.5.4-debian
+    image: clamav/clamav:1.5.4-debian@sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578
     restart: unless-stopped
+    # ~1 GiB at rest: clamd keeps the whole signature database in memory, so this
+    # ceiling must stay above the database size, not just above the process.
+    mem_limit: 1792m
+    # The upstream entrypoint starts clamd detached and leaves `tail` as PID 1, so a
+    # reaped daemon would leave the container "Up" with every scan hanging until the
+    # app timeout. Wrapping /init makes that failure fatal, and `restart:` recovers
+    # the daemon instead of it failing silently (script documents the mechanism).
+    entrypoint: [ "/bin/bash", "/usr/local/bin/clamd-watchdog.sh" ]
     ports:
       - "127.0.0.1:${ATTACHMENTS_CLAMAV_PORT:-3310}:3310"
     volumes:
+      - ./deploy/clamav/clamd-watchdog.sh:/usr/local/bin/clamd-watchdog.sh:ro
       - palatium_clamav_db:/var/lib/clamav
     healthcheck:
       # A TCP probe, not a scan: the signature database can take minutes to load on
@@ -412,55 +651,97 @@ services:
       - no-new-privileges:true
 
   # ============================================================
-  # Optional S3-compatible store (profile: attachments-s3)
-  #   docker compose --env-file env/.env --profile attachments-s3 up -d minio
+  # Optional S3-compatible store (profiles: attachments-s3, observability)
+  #   docker compose --env-file env/.env --profile attachments-s3 up -d
   #
-  # A separate profile on purpose, and NOT a typo: MinIO's container images are no
-  # longer anonymously pullable anywhere (verified 2026-09: Docker Hub `minio/minio`
-  # 404, `quay.io/minio/minio` 401, `ghcr.io/minio/minio` 403, `bitnami/minio`
-  # emptied). Folding this into `--profile attachments` would therefore break the
-  # AV-only flow that works today — one unavailable image must not take down an
-  # unrelated feature.
+  # Runs the Pigsty **Silo** fork of MinIO. Upstream MinIO archived the community
+  # edition (read-only repo) and deleted its Docker Hub repositories `minio/minio` and
+  # `minio/mc` on 2026-09-11. The previous default (`bitnamilegacy/minio`) kept working
+  # only because it is itself a frozen mirror of that same dead lineage — it can never
+  # receive a security fix, which is exactly what 050 forbids for a runtime dependency.
   #
-  # Point ATTACHMENTS_MINIO_IMAGE at whatever your registry serves (an internal
-  # mirror, or quay.io after being granted access), then:
-  #   make attach-s3-up     # preflights the image and explains a pull failure
-  # Local dev needs no object store at all: ATTACHMENTS_BLOB_BACKEND=filesystem is
-  # durable across restarts and workers (docs/runbook.md §16.4, §16.9).
+  # Silo is the same server technology (AGPLv3, actively published) and keeps MinIO's
+  # contract verbatim — verified against the pinned digest below, not assumed:
+  #   · MINIO_ROOT_USER / MINIO_ROOT_PASSWORD honoured unchanged
+  #   · `server /data --console-address :9001` argv accepted by its entrypoint
+  #   · /minio/health/live returns 200
+  #   · `mc` is bundled in the image (used by silo-init below)
   #
-  # No manual bucket setup: the API calls ensure_bucket() during startup and creates
-  # the bucket when missing (application/wiring.py) — a misconfigured store fails the
-  # boot instead of the first upload (020).
+  # The service deliberately keeps the name `minio`: ATTACHMENTS_MINIO_* is the app's
+  # config surface and `minio:9000` is the compose DNS name baked into the API
+  # environment, so a rename would churn config, docs and tests for zero runtime gain.
+  #
+  # It carries the `observability` profile as well, because Langfuse v3 persists every
+  # ingested event to S3 *before* ClickHouse: running v3 without the store is not a
+  # degraded mode, it is a broken one.
+  #
+  # Local dev needs no object store at all (ATTACHMENTS_BLOB_BACKEND=filesystem), and a
+  # real deployment points ATTACHMENTS_MINIO_* at external S3 and never runs this.
+  #
+  # No manual bucket setup for the API: ensure_bucket() runs at startup and fails the
+  # boot if the store is unreachable (020). Langfuse has no such call — silo-init does it.
   #
   # The console has no auth of its own beyond the root credentials, and those are
   # cluster-wide, so both ports stay on loopback (020).
   # ============================================================
   minio:
-    profiles: [ "attachments-s3" ]
-    image: ${ATTACHMENTS_MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z}
+    profiles: [ "attachments-s3", "observability" ]
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+    # ~200 MiB for the Go runtime even while idle, so this is the one ceiling that is
+    # not a round multiple of its steady state.
+    mem_limit: 448m
+    # Unlike the Bitnami image (whose entrypoint passed argv through verbatim), Silo's
+    # entrypoint is MinIO-style and prepends the server binary to a known subcommand —
+    # so the documented argv is what actually configures the ports here.
+    command: [ "server", "/data", "--console-address", ":9001" ]
     environment:
       # MinIO's own names, fed from the app's single source of truth (010). The
-      # `:-` fallbacks keep `docker compose config` usable without S3 credentials;
-      # `make attach-s3-up` refuses a weak/absent secret before anything starts (020).
+      # `:-` fallbacks keep `docker compose config` usable without S3 credentials.
       MINIO_ROOT_USER: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
       MINIO_ROOT_PASSWORD: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
     ports:
       - "127.0.0.1:${ATTACHMENTS_MINIO_API_PORT:-9000}:9000"
       - "127.0.0.1:${ATTACHMENTS_MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
+      # /data is the path the image declares as its volume, so the named volume inherits
+      # the server user's ownership and the first write succeeds.
       - palatium_minio_data:/data
     healthcheck:
-      # `mc` ships in the image and the `local` alias is preconfigured, so this needs
-      # no shell — the image is ubi-micro based and has none, which also means
-      # `docker compose exec minio sh -c ...` cannot work; use a `minio/mc` image or
-      # the app's own sweep/probe endpoints instead.
-      test: [ "CMD", "mc", "ready", "local" ]
+      # The liveness endpoint the server documents and the exact path
+      # attachments_probe.py checks — one definition of "the store is live" (010).
+      # `curl` is present in the image (verified), so no extra tooling is needed.
+      test: [ "CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live" ]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+  # One-shot bucket bootstrap for the store above.
+  # The API creates its own bucket at startup, but Langfuse does not: without this, v3
+  # ingestion fails on the missing `langfuse` bucket and tracing stays silently empty
+  # while every health endpoint still reports green. Reuses the store image because `mc`
+  # ships inside it — so no dependency on the deleted `minio/mc` registry.
+  silo-init:
+    profiles: [ "attachments-s3", "observability" ]
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46
+    restart: "no"
+    entrypoint: [ "/bin/sh", "-c" ]
+    command:
+      - >
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing "local/$$ATTACHMENTS_MINIO_BUCKET" &&
+        mc mb --ignore-existing "local/langfuse" &&
+        mc ls local
+    environment:
+      MINIO_ROOT_USER: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
+      MINIO_ROOT_PASSWORD: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
+      ATTACHMENTS_MINIO_BUCKET: ${ATTACHMENTS_MINIO_BUCKET:-palatium-attachments}
+    depends_on:
+      minio:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
 
@@ -479,6 +760,9 @@ services:
         WITH_ATTACHMENTS: ${WITH_ATTACHMENTS:-0}
     image: palatium-ai:local
     restart: unless-stopped
+    # UVICORN_WORKERS (default 2) each load the full app (graph, embedder client,
+    # pydantic models); ~800 MiB at rest total, and a big attachment turn spikes it.
+    mem_limit: 1152m
     ports:
       - "${API_PUBLISH_PORT:-8000}:8000"
     depends_on:
@@ -509,8 +793,22 @@ services:
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
-      # Compose DNS overrides — never localhost from env/.env (Poetry host profile)
+      # Compose DNS override — never `${POSTGRES_HOST}` from env/.env: that file is
+      # authored for the Poetry host profile and sets it to `localhost`, so interpolating
+      # it here made the API dial *itself* (`[Errno 111] ... 127.0.0.1:5432`) and crash-loop
+      # on every start. Inside the network only the service name resolves; a DB outside
+      # compose is reached with `docker run -e POSTGRES_HOST=...` (docs/docker.md §7).
       POSTGRES_HOST: postgres
+      # Same split as POSTGRES_HOST above: `POSTGRES_PORT` is the *client* value for the
+      # Poetry host profile and any port published to the host is `POSTGRES_PUBLISH_PORT`
+      # (see the postgres service). Interpolating the client value here let a stray
+      # `POSTGRES_PORT=5434` in the operator's shell — shell env outranks `--env-file` in
+      # Compose interpolation — reach the container and crash-loop it against
+      # `postgres:5434`. In-network the port is always 5432; `REDIS_PORT` is pinned the
+      # same way (020: no host-authored value decides an in-network route). Pinned as a
+      # literal, not `${POSTGRES_PORT:-5432}`: a default does not protect against a
+      # host-authored value — the shell outranks env_file, so interpolation alone
+      # re-opens the same crash-loop.
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
@@ -556,7 +854,11 @@ services:
       LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      # The app reaches the v3 web container by service name; env/.env keeps the
+      # host-mode value (http://127.0.0.1:3000, the published loopback port). Same
+      # host-vs-container split as the attachment endpoints — a single value cannot
+      # serve both, and `localhost` inside this container resolves to the container.
+      LANGFUSE_HOST: http://langfuse-web:3000
     read_only: true
     volumes:
       # Writable target for ATTACHMENTS_BLOB_BACKEND=filesystem (dev only): the
@@ -590,6 +892,10 @@ volumes:
   palatium_clamav_db:
   palatium_attachment_data:
   palatium_minio_data:
+  # Langfuse v3 trace store. Logs are split out so a runaway log volume cannot fill
+  # the data volume the OLAP store runs on.
+  palatium_clickhouse:
+  palatium_clickhouse_logs:
 
 networks:
   default:

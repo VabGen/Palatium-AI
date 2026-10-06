@@ -152,6 +152,99 @@ def test_format_forces_response_formatting() -> None:
     assert effective.trust_prior_for_workers is True
 
 
+def test_format_with_turn_attachments_does_not_bind_prior_file() -> None:
+    """New upload + «сводка» must not rewrite the previous file via format-of-prior."""
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="Сделай сводку по файлу",
+        continuation_kind="format",
+        confidence=0.95,
+        refers_to_prior=True,
+        prior_assistant_excerpt="План...",
+        reasoning="format",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=("summarize",),
+        confidence=0.9,
+        reasoning="summarize upload",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=dialog,
+        raw_intent=raw,
+        has_turn_attachments=True,
+    )
+    assert effective.task_kind == "knowledge_request"
+    assert effective.trust_prior_for_workers is False
+    assert effective.continuation_kind == "answer"
+    # New fence owns evidence — prior assistant body about another file must not
+    # reach Researcher/Formatter (cross-file bleed regression).
+    assert effective.prior_context is None
+
+
+def test_attachment_grounds_false_clarify_on_knowledge_request() -> None:
+    """Regression: upload + «дай текст из файла» must not mint discrete_choice HITL."""
+    ctx = ContextualizerOutput(
+        rewritten_query="дай полный текст из файла",
+        continuation_kind="clarify",
+        confidence=0.9,
+        refers_to_prior=False,
+        prior_assistant_excerpt=None,
+        reasoning="discrete_choice about file ops",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.9,
+        reasoning="extract from upload",
+        requires_user_choice=True,
+        underspecification_kind="discrete_choice",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=None,
+        raw_intent=raw,
+        has_turn_attachments=True,
+    )
+    assert effective.task_kind == "knowledge_request"
+    assert effective.requires_user_choice is False
+    assert effective.underspecification_kind == "none"
+    assert effective.continuation_kind == "answer"
+
+
+def test_attachment_grounds_false_clarify_when_intent_also_clarified() -> None:
+    """Intent may already be clarification_needed; upload still grounds the ask."""
+    ctx = ContextualizerOutput(
+        rewritten_query="дай полный текст из файла",
+        continuation_kind="clarify",
+        confidence=0.85,
+        refers_to_prior=False,
+        prior_assistant_excerpt=None,
+        reasoning="ambiguous file op",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="clarification_needed",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.85,
+        reasoning="menu",
+        requires_user_choice=True,
+        underspecification_kind="discrete_choice",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=None,
+        raw_intent=raw,
+        has_turn_attachments=True,
+    )
+    assert effective.task_kind == "knowledge_request"
+    assert effective.requires_user_choice is False
+    assert effective.continuation_kind == "answer"
+
+
 def test_new_topic_trusts_intent() -> None:
     ctx = ContextualizerOutput(
         rewritten_query="Какая погода в Минске?",

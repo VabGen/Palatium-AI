@@ -44,6 +44,7 @@ alwaysApply: false
 | `palatium_memory_query_duration_seconds` | — |
 | `palatium_memory_entry_size_bytes` | `memory_type` |
 | `palatium_context_tokens_used` | `agent_type` |
+| `palatium_attachment_parse_total` | `extraction_source`, `media_kind` |
 
 ## Audit log — hash-chained
 

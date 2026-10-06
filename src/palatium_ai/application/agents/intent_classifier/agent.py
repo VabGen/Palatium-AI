@@ -15,6 +15,7 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
+from palatium_ai.domain.hitl.choice_resume import ChoiceResumePolicy
 from palatium_ai.domain.llm.models import ChatMessage
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 
 class IntentClassifierAgent(BaseAgent):
-    """Classifies user intent. LLM only via Harness."""
+    """Classifies user intent. LLM only via Harness (except deterministic HITL resume)."""
 
     @property
     def config(self) -> AgentConfig:
@@ -37,6 +38,29 @@ class IntentClassifierAgent(BaseAgent):
     @traceable(name="intent_classifier.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")
+
+        # Intent-first graph: HITL envelope must not hit the LLM (Contextualizer rewrites later).
+        hitl_resume = ChoiceResumePolicy.try_parse_graph_user_text(input.instruction)
+        if hitl_resume is not None:
+            agent_metrics.record_node_execution(self._config.role, "hitl_resume_passthrough")
+            output = IntentClassifierOutput(
+                task_kind="clarification_needed",
+                requires_mcp=False,
+                requires_user_choice=False,
+                underspecification_kind="none",
+                candidate_capabilities=(),
+                confidence=1.0,
+                reasoning=(
+                    f"deterministic HITL choice resume kind={hitl_resume.resume_kind} action_id={hitl_resume.action_id}"
+                ),
+            )
+            return AgentOutput(
+                task_id=input.task_id,
+                status="success",
+                confidence=output.confidence,
+                output=output,
+            )
+
         continuation_kind = input.context.get("continuation_kind") or None
         has_prior_dialog = input.context.get("has_prior_dialog", "false").lower() == "true"
         messages = [

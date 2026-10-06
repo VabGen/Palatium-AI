@@ -50,6 +50,10 @@ class CriticGrader:
             requires_tool_call=bool(raw_input["requires_tool_call"]),
             worker_summary=raw_input.get("worker_summary"),
             user_input_chars=int(raw_input.get("user_input_chars", 0)),
+            worker_confidence=(
+                float(raw_input["worker_confidence"]) if raw_input.get("worker_confidence") is not None else None
+            ),
+            has_attachment_context=bool(raw_input.get("has_attachment_context", False)),
         )
         policy_output = {
             "invoke_llm": decision.invoke_llm,

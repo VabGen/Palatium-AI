@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -78,11 +80,14 @@ async def _search_namespaces(
     query: str,
     overfetch: int,
 ) -> list[tuple[tuple[str, ...], dict[str, object]]]:
+    async def _one(namespace: tuple[str, ...]) -> list[tuple[tuple[str, ...], dict[str, object]]]:
+        items = await memory_port.search(namespace=namespace, query=query, limit=overfetch)
+        return [(namespace, item) for item in items]
+
+    batches = await asyncio.gather(*(_one(ns) for ns in namespaces))
     raw: list[tuple[tuple[str, ...], dict[str, object]]] = []
-    for namespace in namespaces:
-        raw.extend(
-            (namespace, item) for item in await memory_port.search(namespace=namespace, query=query, limit=overfetch)
-        )
+    for batch in batches:
+        raw.extend(batch)
     return raw
 
 

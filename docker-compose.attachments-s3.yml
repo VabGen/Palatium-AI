@@ -1,0 +1,16 @@
+# =============================================================================
+# Attachments overlay — S3 object store (loaded only by `make up-full`, never auto-loaded).
+# =============================================================================
+# Same contract as docker-compose.attachments-av.yml: `environment:` beats the api
+# service's `env_file: env/.env`, so a full launch moves the API off the dev filesystem
+# store and onto MinIO. It is loaded only when attachments_probe.py proved the store image
+# is pullable, so the `attachments-s3` profile and this override are always decided
+# together — the API can never be pointed at a container that was not started (§16.9).
+#
+# The endpoint/credentials come from env/.env unchanged: compose already overrides
+# ATTACHMENTS_MINIO_ENDPOINT to the service name (minio:9000), and the browser keeps the
+# published loopback address. SigV4 signs the Host header, so both must stay distinct (020).
+services:
+  api:
+    environment:
+      ATTACHMENTS_BLOB_BACKEND: minio

@@ -97,6 +97,58 @@ export function attachmentTicket(): {
   };
 }
 
+/**
+ * Мок upload-цепочки для paste→`text/plain` chip.
+ * Имя — тот же локальный календарный штамп, что `pastedTextFilename` в
+ * `src/lib/attachments.ts` (не UTC ISO: иначе aria «Убрать …» разъедется).
+ */
+export function stubPastedTextUpload(server: MockServer, text: string, filename?: string): string {
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const name = filename ?? `pasted-text_${stamp}.txt`;
+  const uploaded = readyAttachment({
+    filename: name,
+    mime_type: 'text/plain',
+    size_bytes: Buffer.byteLength(text, 'utf8'),
+    status: 'uploaded',
+    page_count: null,
+    expires_at: null,
+  });
+  server.reply('attachments.init', {
+    json: { ...attachmentTicket(), mode: 'attach' },
+  });
+  server.reply('attachments.content', { json: uploaded });
+  server.reply('attachments.complete', {
+    json: { ...uploaded, status: 'ready', page_count: 1 },
+  });
+  return name;
+}
+
+/**
+ * Синтетический paste в composer (реальный Clipboard API в CI недоступен).
+ * Если обработчик не вызвал preventDefault — вставляем текст сами, как браузер.
+ */
+export async function pasteIntoComposer(page: Page, text: string): Promise<void> {
+  const box = page.getByRole('textbox');
+  await box.focus();
+  await box.evaluate((el, value) => {
+    const target = el as HTMLTextAreaElement;
+    const clipboardData = {
+      getData: (type: string) => (type === 'text' || type === 'text/plain' ? value : ''),
+    };
+    const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: clipboardData });
+    target.dispatchEvent(event);
+    if (event.defaultPrevented) return;
+    const start = target.selectionStart ?? target.value.length;
+    const end = target.selectionEnd ?? target.value.length;
+    const next = target.value.slice(0, start) + value + target.value.slice(end);
+    const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+    proto?.set?.call(target, next);
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+  }, text);
+}
+
 /** Байты приняты, но пайплайн ещё не отработал (`complete` вернёт финальный статус). */
 export function uploadedAttachment(filename = 'dogovor.pdf'): AttachmentResponse {
   return readyAttachment({

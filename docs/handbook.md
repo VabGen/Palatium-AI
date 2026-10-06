@@ -24,7 +24,7 @@
 12. [Security & Observability](#12-security--observability)
 13. [Отладка в VS Code](#13-отладка-в-vs-code)
 14. [Разработка и проверки](#14-разработка-и-проверки)
-15. [Retention MCP tool calls](#15-retention-mcp-tool-calls)
+15. [Retention](#15-retention)
 16. [Секреты, CI, Vault](#16-секреты-ci-vault)
 17. [Карта кода](#17-карта-кода)
 18. [Документы в `docs/`](#18-документы-в-docs)
@@ -621,9 +621,13 @@ CI: `.github/workflows/ci.yml` гоняет тот же baseline на push/PR (�
 poetry run ruff check .
 poetry run ruff format .
 poetry run mypy --strict src/palatium_ai
-poetry run pytest -q
+poetry run pytest -q -m "not live and not llm_live and not slow"
 poetry run python scripts/run_sla_gates.py --check-math
 ```
+
+`slow` — нагрузочный гейт сложности hot-path (счёт инструкций байткода, правило 080):
+в PR-путь не входит, но исключён из него явно; запуск — `make perf`
+(то же делает `.github/workflows/perf-nightly.yml` nightly).
 
 **Не ставьте** PyPI-пакет `jwt` — только `PyJWT`. Иначе ломается `from jwt import PyJWKClient`.
 
@@ -631,7 +635,27 @@ Cursor hooks (quality / secret-scan) — в `.cursor/hooks/` (`python-quality-ga
 
 ---
 
-## 15. Retention MCP tool calls
+## 15. Retention
+
+Полный гайд по платформенному job (окна, классы, CLI, диагностика):
+**[`global-retention.md`](global-retention.md)**. ADR —
+[`adr/0002-global-retention-scheduler.md`](adr/0002-global-retention-scheduler.md).
+
+### 15.1. Global data retention (CronJob / CLI)
+
+```powershell
+poetry run alembic upgrade head   # d4e5f6a7b8c9 + e5f6a7b8c9d0
+poetry run python -m palatium_ai.jobs.retention --list-classes
+poetry run python -m palatium_ai.jobs.retention   # dry-run всех classes
+# poetry run python -m palatium_ai.jobs.retention --execute --class memory_medium
+```
+
+- Env: `RETENTION_*` в `env/.env.example` §10b (и ваш `env/.env`).
+- Default — dry-run; destructive только `--execute` или `RETENTION_EXECUTE=true`.
+- Attachments: global cron = SoT; `POST /api/attachments/sweep` — per-owner defense
+  ([`runbook.md`](runbook.md) §16.6 / §17).
+
+### 15.2. MCP tool calls (отдельные скрипты)
 
 Скрипты:
 
@@ -664,7 +688,8 @@ Env для scheduler:
 
 Exit codes: `0` ok · `2` config · `3` runtime.
 
-Пример cron / GitHub Actions — в истории репо и в [`secrets.md`](secrets.md) / CI examples.
+Пример cron / GitHub Actions — в [`secrets.md`](secrets.md) / CI examples.
+Wire в единый оркестратор — волна W5 плана global-retention.
 
 ---
 
@@ -709,6 +734,7 @@ Dockerfile          # multi-stage runtime / test / devtools
 | [`runbook.md`](runbook.md) | операторский runbook: симптомы, фиксы, полный сброс |
 | [`secrets.md`](secrets.md) | Vault / CI / Compose secrets |
 | [`ops-readiness.md`](ops-readiness.md) | staging/prod чеклист после Weeks 0–8 |
+| [`global-retention.md`](global-retention.md) | global retention: `RETENTION_*`, CLI, классы, диагностика |
 | [`agent-evals.md`](agent-evals.md) | agent evals: PR baseline / cassette / nightly judge |
 | [`../deploy/observability/README.md`](../deploy/observability/README.md) | Prometheus / Grafana / Loki / Alertmanager + SLO |
 | [`README.md`](README.md) | индекс документации |

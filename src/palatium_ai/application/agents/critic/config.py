@@ -7,7 +7,8 @@ from palatium_ai.domain.agents.agent_config import AgentConfig
 CRITIC_CONFIG = AgentConfig(
     name="critic",
     role="critic",
-    model_tier="frontier",
+    # P1.7: mid-risk judge — frontier was overkill for most quality gates.
+    model_tier="mid",
     temperature=0.0,
     allowed_tools=(),
     timeout_seconds=60,

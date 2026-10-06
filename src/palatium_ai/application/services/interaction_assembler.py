@@ -56,6 +56,16 @@ class InteractionAssembler:
         if document is None:
             return AssembledInteraction(document=None, plan=plan)
 
+        if plan.reason == "interaction_downgraded_informational":
+            # Clear the soft choice/confirm tag so the UI does not expect cards.
+            clean = document.model_copy(
+                update={
+                    "actions": (),
+                    "meta": document.meta.model_copy(update={"interaction": "none"}),
+                }
+            )
+            return AssembledInteraction(document=clean, plan=plan)
+
         if plan.choice_actions:
             framed = HitlInteractionPolicy.document_with_choice_framing(
                 document,

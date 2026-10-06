@@ -2,7 +2,9 @@
 
 """Модуль database содержит настройки PostgreSQL и Redis."""
 
-from pydantic import Field, SecretStr, ValidationInfo, computed_field, field_validator
+from typing import Self
+
+from pydantic import Field, SecretStr, ValidationInfo, computed_field, field_validator, model_validator
 
 from palatium_ai.core.security.identifiers import assert_safe_sql_identifier
 
@@ -25,6 +27,23 @@ class DatabaseConfig(BaseConfig):
     connect_timeout_seconds: float = Field(default=15.0, gt=0, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
     startup_timeout_seconds: float = Field(default=60.0, gt=0, validation_alias="DB_STARTUP_TIMEOUT_SECONDS")
     echo: bool = Field(default=False, validation_alias="DB_ECHO")
+    # Connection-acquisition retry (035): Postgres answers 57P03 while it recovers from a
+    # restart, so a brief bounded retry keeps a restart from surfacing as an ASGI 500.
+    # 1 attempt = fail fast (no retry at all).
+    retry_attempts: int = Field(default=4, ge=1, validation_alias="DB_RETRY_ATTEMPTS")
+    retry_initial_delay_seconds: float = Field(
+        default=0.25,
+        gt=0,
+        validation_alias="DB_RETRY_INITIAL_DELAY_SECONDS",
+    )
+    retry_max_delay_seconds: float = Field(default=2.0, gt=0, validation_alias="DB_RETRY_MAX_DELAY_SECONDS")
+
+    @model_validator(mode="after")
+    def _retry_window_is_coherent(self) -> Self:
+        """Верхняя граница backoff'а не может быть меньше первой паузы (010: падать на загрузке)."""
+        if self.retry_max_delay_seconds < self.retry_initial_delay_seconds:
+            raise ValueError("DB_RETRY_MAX_DELAY_SECONDS must be >= DB_RETRY_INITIAL_DELAY_SECONDS")
+        return self
 
     @field_validator("db", "db_schema")
     @classmethod

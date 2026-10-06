@@ -191,6 +191,12 @@ def test_repository_itself_has_no_malformed_markers() -> None:
     assert findings == [], [finding.render() for finding in findings]
 
 
+def test_pyproject_toml_is_in_scan_files() -> None:
+    """Root manifests with debt markers (BLE backlog) must not sit outside the gate."""
+    module = _load_module()
+    assert "pyproject.toml" in module._SCAN_FILES
+
+
 def test_stale_records_are_reported_without_blocking(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

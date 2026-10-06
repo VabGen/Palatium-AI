@@ -16,7 +16,6 @@ from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 from tests.conftest import (
     FakeDialogTurnStore,
     FakeLLMPort,
-    SequentialFakeLLMPort,
     make_analyst_agent,
     make_coder_agent,
     make_continuation_agent,
@@ -148,15 +147,16 @@ async def test_graph_process_full_pipeline_fake_llm() -> None:
 @pytest.mark.integration()
 @pytest.mark.asyncio()
 async def test_graph_social_phatic_skips_researcher() -> None:
-    """Social greeting: ack_only route → critic passthrough → formatter (no researcher LLM)."""
+    """Social greeting: Intent-only LLM → ack template Formatter (P0.1 fast path)."""
     intent_json = (
         '{"task_kind": "social_conversation", "requires_mcp": false, '
         '"candidate_capabilities": [], "confidence": 0.96, "reasoning": "greeting"}'
     )
-    llm = SequentialFakeLLMPort([intent_json, _formatter_json("Hello")])
+    llm = FakeLLMPort(intent_json)
     harness = Harness(llm=llm)
     intent_agent = IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG)
     unused_researcher = FakeLLMPort('{"summary": "must-not-run", "confidence": 0.1, "sources_used": []}')
+    unused_formatter = FakeLLMPort(_formatter_json("must-not-run"))
     graph = build_agent_graph(
         GraphAgents(
             continuation_agent=make_continuation_agent(harness=harness),
@@ -167,7 +167,7 @@ async def test_graph_social_phatic_skips_researcher() -> None:
             coder_agent=make_coder_agent(harness=harness),
             analyst_agent=make_analyst_agent(harness=harness),
             critic_agent=make_critic_agent(FakeLLMPort("should-not-be-called")),
-            formatter_agent=make_formatter_agent(llm, harness=harness),
+            formatter_agent=make_formatter_agent(unused_formatter, harness=harness),
         ),
         harness=harness,
         checkpointer=make_graph_checkpointer(),
@@ -182,8 +182,10 @@ async def test_graph_social_phatic_skips_researcher() -> None:
 
     assert result.status == "success"
     assert result.output is not None
-    assert result.output.title == "Hello"
+    assert result.output.title == "Hello!"
     assert len(unused_researcher.calls) == 0
+    assert len(unused_formatter.calls) == 0
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.integration()
@@ -199,6 +201,8 @@ async def test_graph_format_followup_with_dialog_memory() -> None:
     )
 
     harness, continuation, intent_agent, pipeline_llm = make_dual_agent_stack(
+        '{"task_kind": "response_formatting", "requires_mcp": false, '
+        '"candidate_capabilities": ["format"], "confidence": 0.9, "reasoning": "format"}',
         """{
           "rewritten_query": "Представь предыдущий план встречи в виде таблицы",
           "continuation_kind": "format",
@@ -207,8 +211,6 @@ async def test_graph_format_followup_with_dialog_memory() -> None:
           "prior_assistant_excerpt": "План встречи",
           "reasoning": "format follow-up"
         }""",
-        '{"task_kind": "response_formatting", "requires_mcp": false, '
-        '"candidate_capabilities": ["format"], "confidence": 0.9, "reasoning": "format"}',
     )
     unused_researcher = FakeLLMPort('{"summary": "unused", "confidence": 0.1, "sources_used": []}')
     graph = build_agent_graph(

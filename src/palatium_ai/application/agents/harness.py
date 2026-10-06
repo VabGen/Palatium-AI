@@ -16,7 +16,10 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.core.observability.turn_tokens import get_turn_token_collector
 from palatium_ai.core.resilience import CircuitOpenError
-from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text, scan_text_fields
+from palatium_ai.core.security.secret_scanner import (
+    redact_text,
+    secret_pattern_labels,
+)
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion, LLMResponseFormat
@@ -31,6 +34,55 @@ if TYPE_CHECKING:
     from palatium_ai.infrastructure.llm.factory import LLMClientFactory
 
 logger = get_logger(__name__)
+
+
+def _with_system_prompt_cache(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Mark the leading system message for provider prompt/prefix cache (P0.3)."""
+    if not messages:
+        return messages
+    first = messages[0]
+    if first.role != "system" or first.cache_control is not None:
+        return messages
+    return [first.model_copy(update={"cache_control": "ephemeral"}), *messages[1:]]
+
+
+def _resolve_cost_usd(
+    *,
+    completion: LLMCompletion,
+    fallback_model: str,
+    estimator: LlmCostEstimatorPort | None,
+) -> float:
+    """Prefer the provider/gateway-reported cost; fall back to the local price table (040).
+
+    A gateway resolving opaque tier aliases (``tier-small`` → real model) is the only
+    component that can price the call, so its reported cost is authoritative. The local
+    estimator cannot resolve an alias at all and raised on every call, which left
+    ``palatium_agent_cost_usd_total`` permanently at zero.
+    """
+    if completion.cost_usd is not None:
+        return completion.cost_usd
+    if estimator is None:
+        return 0.0
+    return estimator(
+        model=completion.model or fallback_model,
+        prompt_tokens=completion.usage.prompt_tokens,
+        completion_tokens=completion.usage.completion_tokens,
+    )
+
+
+def _redact_secret_fields(value: str, *, agent_type: str, stage: str) -> str:
+    """Mask secret-shaped substrings, recording a metric when anything matched (020, 040)."""
+    labels = secret_pattern_labels(value)
+    if not labels:
+        return value
+    agent_metrics.record_secret_redaction(agent_type=agent_type, stage=stage)
+    logger.warning(
+        "harness.secret_redacted",
+        agent=agent_type,
+        stage=stage,
+        rules=list(labels),
+    )
+    return redact_text(value)
 
 
 class Harness:
@@ -88,9 +140,10 @@ class Harness:
             try:
                 if self._cost_budget is not None:
                     self._cost_budget.assert_turn_allows_call()
+                cached_messages = _with_system_prompt_cache(messages)
                 completion = await asyncio.wait_for(
                     llm.generate(
-                        messages,
+                        cached_messages,
                         model=resolved_model,
                         temperature=config.temperature,
                         response_format=response_format,
@@ -98,13 +151,11 @@ class Harness:
                     timeout=config.timeout_seconds,
                 )
                 usage = completion.usage
-                cost_usd = 0.0
-                if self._cost_estimator is not None:
-                    cost_usd = self._cost_estimator(
-                        model=completion.model or (resolved_model or ""),
-                        prompt_tokens=usage.prompt_tokens,
-                        completion_tokens=usage.completion_tokens,
-                    )
+                cost_usd = _resolve_cost_usd(
+                    completion=completion,
+                    fallback_model=resolved_model or "",
+                    estimator=self._cost_estimator,
+                )
                 agent_metrics.record_token_usage(
                     agent_type=config.role,
                     model=completion.model,
@@ -144,22 +195,20 @@ class Harness:
         agent: BaseAgent,
         input: AgentInput,
     ) -> AgentOutput:
-        """Domain agent path: JIT context → secret scan → run → verify → confidence gate."""
+        """Domain agent path: JIT context → secret redaction → run → verify → confidence gate."""
         role = agent._config.role
         agent_metrics.record_node_execution(role, "harness_execute")
 
-        try:
-            scan_text(input.instruction, field="instruction")
-            scan_text_fields(input.context)
-        except SecretScanError as exc:
-            agent_metrics.record_error(role, "SecretScanError")
-            return AgentOutput(
-                task_id=input.task_id,
-                status="failure",
-                confidence=0.0,
-                output=_empty_output_payload(input.task_id),
-                error_message=str(exc),
-            )
+        # The instruction crosses the LLM boundary, not a durable write path: a
+        # credential-shaped token must never reach the model, but it must not brick
+        # the thread either — mask it and continue (020, redact_text contract).
+        instruction = _redact_secret_fields(
+            input.instruction,
+            agent_type=role,
+            stage="instruction",
+        )
+        if instruction != input.instruction:
+            input = input.model_copy(update={"instruction": instruction})
 
         keys = agent.get_required_context_keys()
         missing = [key for key in keys if key not in input.context]
@@ -184,7 +233,11 @@ class Harness:
                     error_message=str(exc),
                 )
 
+        # Context assembled here is history/derived data, so it is masked rather than
+        # rejected; the second pass covers the compaction summary's own output (020).
+        input = self._redact_context_secrets(input, agent_type=role, stage="assembled_context")
         input = await self._maybe_compact_context(agent, input)
+        input = self._redact_context_secrets(input, agent_type=role, stage="compacted_context")
 
         try:
             output = await asyncio.wait_for(
@@ -219,6 +272,42 @@ class Harness:
             agent_metrics.record_human_escalation(f"low_confidence_{role}")
 
         return output
+
+    def _redact_context_secrets(
+        self,
+        input: AgentInput,
+        *,
+        agent_type: str,
+        stage: str,
+    ) -> AgentInput:
+        """Mask secret-shaped substrings in every string context value (020).
+
+        Context is assembled history/derived data (including ``dialog_window_json``),
+        so a credential that slipped into an earlier turn must not poison the whole
+        thread — it is redacted here, on every read, rather than hard-failing.
+        """
+        redacted: dict[str, str] = {}
+        changed = False
+        for key, value in input.context.items():
+            if isinstance(value, str):
+                masked = redact_text(value)
+                if masked != value:
+                    agent_metrics.record_secret_redaction(
+                        agent_type=agent_type,
+                        stage=f"{stage}.{key}",
+                    )
+                    logger.warning(
+                        "harness.secret_redacted",
+                        agent=agent_type,
+                        stage=stage,
+                        context_key=key,
+                        rules=list(secret_pattern_labels(value)),
+                    )
+                    redacted[key] = masked
+                    changed = True
+        if not changed:
+            return input
+        return input.model_copy(update={"context": {**input.context, **redacted}})
 
     async def _maybe_compact_context(self, agent: BaseAgent, input: AgentInput) -> AgentInput:
         """Compact dialog history at 80% tier budget; preserve goal/plan/last_results (065)."""

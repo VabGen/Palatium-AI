@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from palatium_ai.domain.agents.analyst import AnalystInput, AnalystOutput
@@ -223,6 +223,7 @@ def critic_to_agent_input(
             "selected_strategy": task_input.selected_strategy,
             "continuation_kind": task_input.continuation_kind or "",
             "user_input_chars": str(task_input.user_input_chars),
+            "worker_confidence": ("" if task_input.worker_confidence is None else str(task_input.worker_confidence)),
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },
@@ -348,6 +349,7 @@ def context_weaver_to_agent_input(
             "route_plan": task_input.route_plan,
             "requires_mcp": "true" if task_input.requires_mcp else "false",
             "candidate_capabilities_json": json.dumps(list(task_input.candidate_capabilities), ensure_ascii=False),
+            "has_attachment_context": "true" if task_input.has_attachment_context else "false",
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },
@@ -569,6 +571,42 @@ def analyst_output_to_execution_result(
         requires_review=agent_output.status == "partial",
         output=parsed,
         error=agent_output.error_message,
+    )
+
+
+def merge_parallel_worker_results(
+    research: ResearcherTaskResult,
+    analyst: ResearcherTaskResult,
+) -> ResearcherTaskResult:
+    """Merge Researcher∥Analyst outcomes into one execution slot for Critic/Formatter."""
+    research_summary = research.output.summary if research.output is not None else (research.error or "research empty")
+    analyst_summary = analyst.output.summary if analyst.output is not None else (analyst.error or "analyst empty")
+    sources: list[str] = []
+    if research.output is not None:
+        sources.extend(research.output.sources_used)
+    if analyst.output is not None:
+        sources.extend(analyst.output.sources_used)
+    statuses = {research.status, analyst.status}
+    if "failure" in statuses and "success" not in statuses and "partial" not in statuses:
+        status: Literal["success", "failure", "partial"] = "failure"
+    elif "failure" in statuses or "partial" in statuses:
+        status = "partial"
+    else:
+        status = "success"
+    confidence = min(research.confidence, analyst.confidence)
+    errors = [e for e in (research.error, analyst.error) if e]
+    return ResearcherTaskResult(
+        task_id=research.task_id,
+        agent_role="parallel_workers",
+        status=status,
+        confidence=confidence,
+        requires_review=research.requires_review or analyst.requires_review or status != "success",
+        output=ResearcherOutput(
+            summary=f"[research]\n{research_summary}\n\n[analysis]\n{analyst_summary}",
+            confidence=confidence,
+            sources_used=tuple(dict.fromkeys(sources)),
+        ),
+        error="; ".join(errors) if errors else None,
     )
 
 

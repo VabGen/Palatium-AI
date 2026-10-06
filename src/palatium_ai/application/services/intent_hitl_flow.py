@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Literal, cast
+from uuid import UUID
 
 from langgraph.types import Command
 
@@ -13,10 +14,12 @@ from palatium_ai.application.orchestration.run_config import build_graph_run_con
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.hitl_service import HitlInvalidActionError
 from palatium_ai.application.services.intent_turn_helpers import (
+    PENDING_ATTACHMENT_IDS_KEY,
     argument_preview,
     assistant_turn_content,
     assistant_turn_payload,
     extract_interrupt,
+    parse_pending_attachment_ids,
     response_preview,
     snapshot_awaits_resume,
     tenant_budget_key,
@@ -83,6 +86,14 @@ class IntentHitlFlow:
         self._consolidation = consolidation
         self._option_synthesizer = option_synthesizer
 
+    async def _pending_attachment_ids(self, *, thread_id: str) -> list[UUID] | None:
+        """Restore ready attachments from the prior upload turn (HITL resume)."""
+        session = await self._session_service.get_session(thread_id=thread_id)
+        if session is None or not isinstance(session.context, dict):
+            return None
+        pending = parse_pending_attachment_ids(session.context.get(PENDING_ATTACHMENT_IDS_KEY))
+        return pending or None
+
     async def process_hitl_choice(
         self,
         *,
@@ -104,6 +115,7 @@ class IntentHitlFlow:
         )
         selection = ChoiceResumePolicy.selection_from_card(card, action_id)
         safe_text = ChoiceResumePolicy.graph_user_text(selection)
+        pending_attachments = await self._pending_attachment_ids(thread_id=thread_id)
         await self._session_service.touch_session(
             thread_id=thread_id,
             user_id=user_id,
@@ -120,6 +132,7 @@ class IntentHitlFlow:
             user_id=user_id,
             org_id=org_id,
             is_admin=is_admin,
+            attachment_ids=pending_attachments,
         )
 
     async def acknowledge_quality_approve(
@@ -295,7 +308,7 @@ class IntentHitlFlow:
                 reason="no_pending_interrupt",
             )
             return None
-        with turn_hop_timings() as hops, turn_token_usage() as tokens:
+        with turn_hop_timings(budget_ms=self._graph_runner.turn_hop_budget_ms) as hops, turn_token_usage() as tokens:
             final_state = cast(
                 "AgentGraphState",
                 await self._graph_runner.graph.ainvoke(
@@ -617,15 +630,10 @@ class IntentHitlFlow:
         document = parse_content_document(document.model_dump(mode="json"))
         formatted = formatted.model_copy(update={"output": document})
 
-        strategy = (
-            selected_strategy.value
-            if selected_strategy is not None and hasattr(selected_strategy, "value")
-            else selected_strategy
-        )
         assembled = InteractionAssembler.assemble(
             document,
             requires_review=formatted.requires_review,
-            selected_strategy=strategy if isinstance(strategy, str) else None,
+            selected_strategy=selected_strategy,
             task_kind=task_kind,
             requires_user_choice=requires_user_choice,
         )
@@ -662,7 +670,7 @@ class IntentHitlFlow:
                 assembled = InteractionAssembler.assemble(
                     document,
                     requires_review=formatted.requires_review,
-                    selected_strategy=strategy if isinstance(strategy, str) else None,
+                    selected_strategy=selected_strategy,
                     task_kind=task_kind,
                     requires_user_choice=True,
                 )
@@ -672,7 +680,7 @@ class IntentHitlFlow:
             thread_id=thread_id,
             task_id=task_id,
             task_kind=task_kind,
-            selected_strategy=strategy,
+            selected_strategy=selected_strategy,
             requires_user_choice=requires_user_choice,
             underspecification_kind=underspecification_kind,
             **interaction_plan_log_fields(assembled),
@@ -685,7 +693,7 @@ class IntentHitlFlow:
                 metadata={
                     "task_id": task_id,
                     "task_kind": task_kind or "",
-                    "selected_strategy": str(strategy or ""),
+                    "selected_strategy": str(selected_strategy or ""),
                     "menu_shaped": str(assembled.plan.menu_shaped),
                     "promoted_from": assembled.plan.promoted_from,
                     "force_structural": str(assembled.plan.force_structural),

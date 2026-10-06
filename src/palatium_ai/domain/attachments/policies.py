@@ -29,10 +29,13 @@ if TYPE_CHECKING:
 _MEDIA_EXTENSIONS: dict[str, frozenset[str]] = {
     "application/pdf": frozenset({".pdf"}),
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": frozenset({".docx"}),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": frozenset({".xlsx"}),
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": frozenset({".pptx"}),
     "image/jpeg": frozenset({".jpg", ".jpeg"}),
     "image/png": frozenset({".png"}),
     "image/webp": frozenset({".webp"}),
     "text/csv": frozenset({".csv"}),
+    "text/html": frozenset({".html", ".htm"}),
     "text/markdown": frozenset({".md"}),
     "text/plain": frozenset({".txt", ".log"}),
 }
@@ -44,7 +47,11 @@ _FORBIDDEN_FILENAME_CHARS = frozenset({"\x00", "\r", "\n"})
 
 
 class AttachmentLimits(BaseModel):
-    """Numeric intake limits; values come from AttachmentConfig in infrastructure wiring."""
+    """Numeric intake limits; values come from AttachmentConfig in infrastructure wiring.
+
+    Project-scoped KB (``mode=index`` + optional ``project_id``) will add per-project
+    caps here when indexing storage ships (G09); not enforced in the W5 slice.
+    """
 
     model_config = {"frozen": True}
 
@@ -59,6 +66,8 @@ class AttachmentLimits(BaseModel):
     #: Rows reclaimed per sweep pass. Bounded on purpose: an unbounded batch would
     #: turn one interactive request into an arbitrarily long delete loop (080).
     retention_sweep_batch: int = Field(default=200, ge=1, le=5000)
+    #: Per-request body cap for ``POST /{id}/chunks/{index}`` (resumable upload).
+    max_chunk_bytes: int = Field(default=8 * 1024 * 1024, ge=64 * 1024, le=64 * 1024 * 1024)
 
 
 DEFAULT_ATTACHMENT_LIMITS = AttachmentLimits()
@@ -80,7 +89,7 @@ class IntakeDecision(BaseModel):
 
 
 class AttachmentIntakePolicy:
-    """Pure gate for size, media type, filename safety and per-turn quota."""
+    """Pure gate for size, media type, filename safety and the per-thread quota."""
 
     @staticmethod
     def validate(
@@ -88,10 +97,15 @@ class AttachmentIntakePolicy:
         filename: str,
         mime_type: str,
         size_bytes: int,
-        existing_count: int = 0,
         limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS,
     ) -> IntakeDecision:
-        """Validate one incoming upload before any blob or row is created."""
+        """Validate the *file* properties of one upload before any blob or row exists.
+
+        The quota axis is deliberately absent: it depends on a database count that
+        must be read inside the same transaction that inserts the row, so a caller
+        could otherwise treat a racy pre-read as authoritative (020).
+        :meth:`quota_decision` owns that rule instead.
+        """
         safe_name = AttachmentIntakePolicy.sanitize_filename(
             filename,
             max_chars=limits.max_filename_chars,
@@ -102,13 +116,32 @@ class AttachmentIntakePolicy:
             return IntakeDecision(allowed=False, filename=safe_name, reason="size_invalid")
         if size_bytes > limits.max_size_bytes:
             return IntakeDecision(allowed=False, filename=safe_name, reason="size_exceeded")
-        if existing_count >= limits.max_attachments_per_turn:
-            return IntakeDecision(allowed=False, filename=safe_name, reason="turn_limit_exceeded")
         if mime_type not in SUPPORTED_MEDIA_TYPES:
             return IntakeDecision(allowed=False, filename=safe_name, reason="mime_not_allowed")
         if not AttachmentIntakePolicy.extension_matches(mime_type, safe_name):
             return IntakeDecision(allowed=False, filename=safe_name, reason="extension_mismatch")
         return IntakeDecision(allowed=True, filename=safe_name)
+
+    @staticmethod
+    def quota_decision(
+        *,
+        filename: str,
+        in_flight: int,
+        limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS,
+    ) -> IntakeDecision:
+        """Decide the quota axis from the thread's *in-flight* upload count.
+
+        In-flight means rows still ``pending`` whose presigned ticket has not
+        expired — uploads that are actually occupying a slot right now. Counting
+        every row the thread ever created (including rejected and abandoned ones)
+        locked a thread for the whole attachment TTL after a handful of attempts,
+        so a legitimate message was refused as if it carried too many files.
+        ``__init__`` is the sole writer of the threshold: the service maps a refusal
+        from the repository through this policy so the typed reason has one home (010).
+        """
+        if in_flight >= limits.max_attachments_per_turn:
+            return IntakeDecision(allowed=False, filename=filename, reason="turn_limit_exceeded")
+        return IntakeDecision(allowed=True, filename=filename)
 
     @staticmethod
     def sanitize_filename(filename: str, *, max_chars: int = DEFAULT_ATTACHMENT_LIMITS.max_filename_chars) -> str:
@@ -135,6 +168,47 @@ class AttachmentIntakePolicy:
         return suffix in allowed_extensions
 
     @staticmethod
+    def content_matches_declared(
+        *,
+        declared_mime: str,
+        detected_mime: str | None,
+        filename: str,
+    ) -> IntakeDecision:
+        """Refuse when magic-byte sniff disagrees with the intake declaration (020).
+
+        ``detected_mime`` of ``None`` means sniff could not classify the payload:
+        binary registry types fail closed; ``text/*`` declarations may proceed when
+        the sniff returned the ambiguous ``text/*`` sentinel or nothing *only if*
+        the declared type is already a text registry member (defence for UTF-8
+        without a distinctive magic).
+        """
+        safe_name = AttachmentIntakePolicy.sanitize_filename(filename)
+        if not safe_name:
+            return IntakeDecision(allowed=False, filename="", reason="filename_invalid")
+        declared = declared_mime.strip().lower()
+        if declared not in SUPPORTED_MEDIA_TYPES:
+            return IntakeDecision(allowed=False, filename=safe_name, reason="mime_not_allowed")
+
+        detected = detected_mime.strip().lower() if detected_mime else None
+        if detected is None:
+            if declared.startswith("text/"):
+                return IntakeDecision(allowed=True, filename=safe_name)
+            return IntakeDecision(allowed=False, filename=safe_name, reason="mime_mismatch")
+
+        if detected == "text/*":
+            if declared.startswith("text/"):
+                return IntakeDecision(allowed=True, filename=safe_name)
+            return IntakeDecision(allowed=False, filename=safe_name, reason="mime_mismatch")
+
+        if detected not in SUPPORTED_MEDIA_TYPES:
+            return IntakeDecision(allowed=False, filename=safe_name, reason="mime_not_allowed")
+        if detected != declared:
+            return IntakeDecision(allowed=False, filename=safe_name, reason="mime_mismatch")
+        if not AttachmentIntakePolicy.extension_matches(detected, safe_name):
+            return IntakeDecision(allowed=False, filename=safe_name, reason="extension_mismatch")
+        return IntakeDecision(allowed=True, filename=safe_name)
+
+    @staticmethod
     def blob_key(attachment_id: UUID) -> str:
         """Content-addressed-by-id key: no filename, no user id, no traversal surface."""
         return f"attachments/{attachment_id}"
@@ -143,6 +217,20 @@ class AttachmentIntakePolicy:
     def derived_text_key(attachment_id: UUID) -> str:
         """Where the parser writes extracted text (keeps the original blob intact)."""
         return f"attachments/{attachment_id}.text.json"
+
+    @staticmethod
+    def chunk_part_key(attachment_id: UUID, index: int) -> str:
+        """Staging object for one resumable upload part (deleted after finalize)."""
+        if index < 0:
+            msg = "chunk index must be non-negative"
+            raise ValueError(msg)
+        return f"attachments/{attachment_id}/parts/{index}"
+
+    @staticmethod
+    def max_chunk_part_index(limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS) -> int:
+        """Upper bound on part indices for retention cleanup (ceil(size/chunk))."""
+        chunk = limits.max_chunk_bytes
+        return (limits.max_size_bytes + chunk - 1) // chunk
 
     @staticmethod
     def expiry_for(
@@ -169,13 +257,33 @@ class AttachmentRetentionPolicy:
     @staticmethod
     def is_due(attachment: Attachment, *, now: datetime) -> bool:
         """True when the attachment's TTL has elapsed and its objects may be dropped."""
-        if now.tzinfo is None or now.utcoffset() is None:
-            msg = "retention cutoff must be timezone-aware (UTC)"
-            raise ValueError(msg)
+        _require_aware(now)
         if attachment.expires_at is None:
             # No TTL means "keep until the owner deletes it" — never an accidental purge.
             return False
         return attachment.expires_at <= now
+
+    @staticmethod
+    def is_stale_pending(attachment: Attachment, *, now: datetime, after_seconds: int) -> bool:
+        """True when an upload that never completed can no longer legitimately complete.
+
+        A ``pending`` row is minted together with a presigned PUT ticket. Once that
+        ticket has expired the bytes can never arrive through the presigned path, so
+        the row is dead weight: it must stop occupying a quota slot and it becomes
+        reclaimable long before the row's own retention TTL elapses (020, 080).
+        """
+        _require_aware(now)
+        if attachment.status != "pending":
+            # Only an unfinished upload can be stale; a shorter TTL never revives it.
+            return False
+        return attachment.created_at + timedelta(seconds=after_seconds) <= now
+
+
+def _require_aware(now: datetime) -> None:
+    """Refuse a naive cutoff instead of comparing it in local time (050)."""
+    if now.tzinfo is None or now.utcoffset() is None:
+        msg = "retention cutoff must be timezone-aware (UTC)"
+        raise ValueError(msg)
 
 
 def _truncate_keeping_suffix(name: str, *, max_chars: int) -> str:

@@ -28,6 +28,7 @@ class HopTimingCollector:
     """Mutable list of hops for the current turn."""
 
     hops: list[HopTiming] = field(default_factory=list)
+    budget_ms: int = 0
 
     def record(
         self,
@@ -40,20 +41,25 @@ class HopTimingCollector:
         """Записывает хоп в список."""
         self.hops.append(HopTiming(node=node, agent=agent, duration_ms=duration_ms, status=status))
 
+    def total_ms(self) -> int:
+        """Sum of recorded hop durations."""
+        return sum(hop.duration_ms for hop in self.hops)
+
     def as_log_fields(self) -> dict[str, object]:
         """Compact fields for structlog (hop_ms map + total)."""
         by_node = {hop.node: hop.duration_ms for hop in self.hops}
         return {
             "hop_ms": by_node,
-            "hop_total_ms": sum(hop.duration_ms for hop in self.hops),
+            "hop_total_ms": self.total_ms(),
             "hop_count": len(self.hops),
         }
 
-    def budget_status(self, budget_ms: int) -> dict[str, object]:
+    def budget_status(self, budget_ms: int | None = None) -> dict[str, object]:
         """Compare turn total against SLA budget; surface slowest hop."""
+        resolved = budget_ms if budget_ms is not None else self.budget_ms
         fields = self.as_log_fields()
-        total = sum(hop.duration_ms for hop in self.hops)
-        exceeded = total > budget_ms
+        total = self.total_ms()
+        exceeded = resolved > 0 and total > resolved
         slowest_node: str | None = None
         slowest_ms = 0
         for hop in self.hops:
@@ -62,7 +68,7 @@ class HopTimingCollector:
                 slowest_node = hop.node
         return {
             **fields,
-            "hop_budget_ms": budget_ms,
+            "hop_budget_ms": resolved,
             "hop_budget_exceeded": exceeded,
             "hop_slowest_node": slowest_node,
             "hop_slowest_ms": slowest_ms,
@@ -78,9 +84,9 @@ def get_hop_collector() -> HopTimingCollector | None:
 
 
 @contextmanager
-def turn_hop_timings() -> Iterator[HopTimingCollector]:
+def turn_hop_timings(*, budget_ms: int = 0) -> Iterator[HopTimingCollector]:
     """Bind a fresh collector for one IntentService turn."""
-    collector = HopTimingCollector()
+    collector = HopTimingCollector(budget_ms=budget_ms)
     token: Token[HopTimingCollector | None] = _current.set(collector)
     try:
         yield collector

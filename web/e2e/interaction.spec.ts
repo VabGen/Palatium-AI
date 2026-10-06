@@ -144,6 +144,150 @@ test.describe('запросы к API', () => {
     });
   });
 
+  test('после send ready-чип уходит из композера на пузырь сообщения', async ({ page }) => {
+    // ChatGPT/Claude pattern: composer = staging; sent file lives on the user message.
+    const server = defaultApi();
+    const uploaded = {
+      attachment_id: ATTACHMENT_ID,
+      filename: 'scan.webp',
+      mime_type: 'image/webp',
+      size_bytes: E2E_PDF_BYTES.byteLength,
+      mode: 'attach',
+      status: 'uploaded',
+      page_count: null,
+      rejection_reason: null,
+      error: null,
+      thread_id: null,
+      created_at: '2026-09-29T12:00:00Z',
+      expires_at: null,
+    };
+    server.reply('attachments.init', {
+      json: {
+        attachment_id: ATTACHMENT_ID,
+        upload_url: `memory://items/${ATTACHMENT_ID}`,
+        expires_at: '2026-09-29T13:00:00Z',
+        mode: 'attach',
+      },
+    });
+    server.reply('attachments.content', { json: uploaded });
+    server.reply('attachments.complete', { json: { ...uploaded, status: 'ready', page_count: 1 } });
+    server.reply('intents.process', answer(), answer());
+    await stubSessionSocket(page);
+    await server.install(page);
+    await openWidget(page);
+
+    await page.locator('input[type=file]').setInputFiles({
+      name: 'scan.webp',
+      mimeType: 'image/webp',
+      buffer: E2E_PDF_BYTES,
+    });
+    await page.locator('.attachment-chip.is-ready').waitFor();
+    await ask(page, 'Что на изображении?');
+    await expectAnswer(page);
+    await expect(page.locator('.attachment-chips .attachment-chip')).toHaveCount(0);
+    await expect(page.locator('.msg.user .bubble-attachments')).toContainText('scan.webp');
+
+    await ask(page, 'Кратко повтори главное');
+    await expect(page.locator('.msg.assistant:not(.pending)')).toHaveCount(2);
+
+    const processCalls = server.callsTo('intents.process');
+    expect(processCalls).toHaveLength(2);
+    expect(processCalls[0]?.body).toMatchObject({ attachment_ids: [ATTACHMENT_ID] });
+    // Follow-up без повторной загрузки — без attachment_ids; ответ из истории диалога.
+    expect(processCalls[1]?.body).not.toHaveProperty('attachment_ids');
+  });
+
+  test('второй файл на новом ходе — единственный attachment_ids', async ({ page }) => {
+    const SECOND_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const server = defaultApi();
+    const baseRow = {
+      filename: 'first.webp',
+      mime_type: 'image/webp',
+      size_bytes: E2E_PDF_BYTES.byteLength,
+      mode: 'attach',
+      status: 'uploaded',
+      page_count: null,
+      rejection_reason: null,
+      error: null,
+      thread_id: null,
+      created_at: '2026-09-29T12:00:00Z',
+      expires_at: null,
+    };
+    server.reply(
+      'attachments.init',
+      {
+        json: {
+          attachment_id: ATTACHMENT_ID,
+          upload_url: `memory://items/${ATTACHMENT_ID}`,
+          expires_at: '2026-09-29T13:00:00Z',
+          mode: 'attach',
+        },
+      },
+      {
+        json: {
+          attachment_id: SECOND_ID,
+          upload_url: `memory://items/${SECOND_ID}`,
+          expires_at: '2026-09-29T13:00:00Z',
+          mode: 'attach',
+        },
+      }
+    );
+    server.reply(
+      'attachments.content',
+      { json: { ...baseRow, attachment_id: ATTACHMENT_ID } },
+      {
+        json: {
+          ...baseRow,
+          attachment_id: SECOND_ID,
+          filename: 'second.pdf',
+          mime_type: 'application/pdf',
+        },
+      }
+    );
+    server.reply(
+      'attachments.complete',
+      { json: { ...baseRow, attachment_id: ATTACHMENT_ID, status: 'ready', page_count: 1 } },
+      {
+        json: {
+          ...baseRow,
+          attachment_id: SECOND_ID,
+          filename: 'second.pdf',
+          mime_type: 'application/pdf',
+          status: 'ready',
+          page_count: 2,
+        },
+      }
+    );
+    server.reply('intents.process', answer(), answer());
+    await stubSessionSocket(page);
+    await server.install(page);
+    await openWidget(page);
+
+    await page.locator('input[type=file]').setInputFiles({
+      name: 'first.webp',
+      mimeType: 'image/webp',
+      buffer: E2E_PDF_BYTES,
+    });
+    await page.locator('.attachment-chip.is-ready').waitFor();
+    await ask(page, 'Что в первом файле?');
+    await expectAnswer(page);
+    await expect(page.locator('.attachment-chips .attachment-chip')).toHaveCount(0);
+
+    await page.locator('input[type=file]').setInputFiles({
+      name: 'second.pdf',
+      mimeType: 'application/pdf',
+      buffer: E2E_PDF_BYTES,
+    });
+    await page.locator('.attachment-chip.is-ready').waitFor();
+    await ask(page, 'Сделай сводку по файлу');
+    await expect(page.locator('.msg.assistant:not(.pending)')).toHaveCount(2);
+
+    const processCalls = server.callsTo('intents.process');
+    expect(processCalls).toHaveLength(2);
+    expect(processCalls[0]?.body).toMatchObject({ attachment_ids: [ATTACHMENT_ID] });
+    expect(processCalls[1]?.body).toMatchObject({ attachment_ids: [SECOND_ID] });
+  });
+
   test('память мутируется только через HITL-карточку', async ({ page }) => {
     const server = defaultApi();
     server.reply('memory.save', { json: { ...choiceCard(), purpose: 'quality_review' } });
@@ -215,7 +359,7 @@ test.describe('запросы к API', () => {
   test('оценка ответа уходит телом, которое ждёт бэкенд', async ({ page }) => {
     const server = defaultApi();
     server.reply('intents.process', answer());
-    server.reply('feedback', { json: { status: 'ok' } });
+    server.reply('feedback', { json: { status: 'stored', rating: 'like' } });
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);

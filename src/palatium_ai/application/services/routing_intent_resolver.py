@@ -19,10 +19,12 @@ def resolve_routing_intent(
     contextualizer: ContextualizerOutput | None,
     dialog: DialogTurnWindow | None,
     raw_intent: IntentClassifierOutput | None,
+    has_turn_attachments: bool = False,
 ) -> EffectiveRoutingIntent:
     """Single entry for continuity remap after IntentClassifier."""
     return ContinuityPolicy.resolve(
         contextualizer=contextualizer,
         dialog=dialog,
         raw_intent=raw_intent,
+        has_turn_attachments=has_turn_attachments,
     )

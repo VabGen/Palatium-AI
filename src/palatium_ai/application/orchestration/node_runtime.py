@@ -7,6 +7,7 @@ from __future__ import annotations
 from time import perf_counter, time
 from typing import TYPE_CHECKING, Any
 
+from palatium_ai.application.orchestration.selectors import require_task_id, resolved_thread_id
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.core.config.settings import get_settings
 from palatium_ai.core.logging import get_logger
@@ -75,8 +76,8 @@ async def run_logged_node(
 ) -> AgentGraphState:
     """Run a graph node with circuit breaker, hop timings, and structured logs."""
     agent_name, agent_role = agent_identity(agent, fallback=node_name)
-    task_id = state["task_id"]
-    thread_id = state.get("thread_id", task_id)
+    task_id = require_task_id(state)
+    thread_id = resolved_thread_id(state)
     node_metric = f"{node_name}_node"
     circuit = node_circuit(node_name)
     now = time()

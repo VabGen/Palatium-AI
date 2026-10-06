@@ -25,6 +25,12 @@ if TYPE_CHECKING:
     from minio import Minio
 
 
+#: S3 error codes that mean "the bucket is there", which is the only state we wanted.
+#: ``BucketAlreadyOwnedByYou`` is what the loser of a create race receives;
+#: ``BucketAlreadyExists`` is what a non-owner receives on the same bucket name.
+_BUCKET_ALREADY_EXISTS_CODES = frozenset({"BucketAlreadyOwnedByYou", "BucketAlreadyExists"})
+
+
 def resolve_public_endpoint(value: str | None, *, fallback_secure: bool) -> tuple[str, bool] | None:
     """Normalise ``ATTACHMENTS_MINIO_PUBLIC_ENDPOINT`` into ``(host:port, secure)``.
 
@@ -120,7 +126,19 @@ class MinIOAdapter:
     def _ensure_bucket_sync(self) -> bool:
         if self._client.bucket_exists(self._bucket):
             return True
-        self._client.make_bucket(self._bucket)
+        try:
+            self._client.make_bucket(self._bucket)
+        except Exception as exc:
+            # Every API worker calls this at startup, so two processes can both observe
+            # "not exists" and both attempt the create. The loser gets
+            # BucketAlreadyOwnedByYou although the desired end state — the bucket
+            # existing — has been reached. Letting that through crash-looped the whole
+            # process on an ordinary race (seen against a live store), so these codes are
+            # success; every other error still propagates untouched (020: fail closed on
+            # genuinely unexpected outcomes, not on a benign one).
+            if getattr(exc, "code", None) in _BUCKET_ALREADY_EXISTS_CODES:
+                return True
+            raise
         return False
 
     async def presigned_put_url(self, key: str, *, content_type: str, expires_seconds: int) -> str:

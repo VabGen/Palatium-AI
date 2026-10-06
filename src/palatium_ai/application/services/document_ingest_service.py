@@ -70,9 +70,10 @@ class DocumentIngestService:
         mime_type: str | None = None,
         locale: str | None = None,
         max_chunk_chars: int = 1500,
-        enrich_context_prefix: bool = False,
+        enrich_context_prefix: bool = True,
         document_title: str | None = None,
         trace_id: str | None = None,
+        persist_pending: bool = True,
     ) -> TextIngestorTaskResult:
         task_input = TextIngestorInput(
             task_id=task_id,
@@ -97,16 +98,17 @@ class DocumentIngestService:
             agent_role=self._text_ingestor.config.role,
         )
         if result.output is not None and result.status != "failure":
-            await self._store_pending(
-                IngestCommitPayload(
-                    thread_id=thread_id,
-                    prepare_task_id=task_id,
-                    document_id=document_id,
-                    document_title=document_title,
-                    mime_type=mime_type,
-                    chunks=result.output.chunks,
+            if persist_pending:
+                await self._store_pending(
+                    IngestCommitPayload(
+                        thread_id=thread_id,
+                        prepare_task_id=task_id,
+                        document_id=document_id,
+                        document_title=document_title,
+                        mime_type=mime_type,
+                        chunks=result.output.chunks,
+                    )
                 )
-            )
             logger.info(
                 "document_ingest.prepared",
                 task_id=task_id,
@@ -114,6 +116,7 @@ class DocumentIngestService:
                 chunk_count=len(result.output.chunks),
                 strategy=result.output.chunking_strategy,
                 context_prefixes_applied=result.output.context_prefixes_applied,
+                persist_pending=persist_pending,
             )
         return result
 

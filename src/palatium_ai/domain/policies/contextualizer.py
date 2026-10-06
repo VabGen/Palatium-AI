@@ -2,11 +2,14 @@
 
 """When Contextualizer must call an LLM vs pass-through.
 
-Primary graph order: Contextualizer → Intent. Without task_kind yet, any turn with
-assistant prior invokes rewrite so Intent receives live continuation_kind hints.
+Primary graph order (P0.1 latency): Intent → Contextualizer. Intent classifies the
+raw turn first; Contextualizer receives ``task_kind`` and only rewrites when the
+kind is prior-dependent (knowledge / tool / format / clarify). Social and capability
+asks skip the LLM even with assistant prior — they are self-contained; Continuity
+still sees dialog.
 
-When task_kind is already known (tests / optional re-entry), social and capability
-asks skip the LLM: they are self-contained; Continuity still sees dialog.
+When ``task_kind`` is missing (tests / incomplete state), fail closed: invoke LLM
+if assistant prior exists so rewrite hints are not silently dropped.
 
 Does not inspect user phrasing.
 """

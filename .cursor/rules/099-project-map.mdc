@@ -68,9 +68,10 @@ alwaysApply: true
   Vitest+RTL+MSW, Playwright+axe, бюджет бандла) — правило **084**.
   Гейты одной командой: `npm run verify` (`web/`), тот же агрегат в CI-джобе
   `frontend`; unit/integration — `web/tests/`, E2E — `web/e2e/`.
-- EDMS-интеграция: `mcp_servers/edms/edms_mcp_server.py`; JavaEdms — read-only
-  reference (090). MAX PRO процесс адаптера: правило **092** + скилл
-  `edms-mcp-max-pro` (legacy-чат → FastMCP, волны в `waves.md`).
+- EDMS-интеграция: **с нуля** в новой структуре под `mcp_servers/edms/` (**092**).
+  Reference-only: JavaEdms = SoT СЭД (**090**); `edms-ai-assistant/` = junior
+  chat↔СЭД; `edms_mcp_server.py` = старый stub — всё только для подглядки, не
+  копипаст. Скилл `edms-mcp-max-pro` (волны в `waves.md`).
 - **Полный план MCP (Host/stubs/gateway):** `.cursor/plans/mcp-roadmap.md`
   (Track A DONE · Track B platform local discovery · Track C EDMS).
 - Инструменты: закрытый перечень и контракт — 070 (`PlatformToolPin`).

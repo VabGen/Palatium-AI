@@ -71,6 +71,12 @@ class AttachmentConfig(BaseConfig):
         le=512 * 1024 * 1024,
         validation_alias="ATTACHMENTS_MAX_SIZE_BYTES",
     )
+    max_chunk_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=64 * 1024,
+        le=64 * 1024 * 1024,
+        validation_alias="ATTACHMENTS_MAX_CHUNK_BYTES",
+    )
     max_attachments_per_turn: int = Field(
         default=5,
         ge=1,
@@ -121,7 +127,109 @@ class AttachmentConfig(BaseConfig):
         validation_alias="ATTACHMENTS_MAX_PARSED_PAGES",
     )
 
-    @field_validator("minio_public_endpoint", "minio_access_key", "minio_secret_key", mode="before")
+    # Image OCR. Images carry no text layer, so the only way to make them usable in
+    # a text pipeline is OCR and/or a vision model. ``disabled`` means no image parser
+    # is wired (intake refuses image/*). ``auto`` (default) is progressive 2026:
+    # Tesseract first, Vision escalate on failure/low quality when a model is set.
+    # ``gateway`` always prefers Vision; ``tesseract`` is local-only / air-gapped.
+    image_ocr_backend: Literal["disabled", "auto", "gateway", "tesseract"] = Field(
+        default="auto",
+        validation_alias="ATTACHMENTS_IMAGE_OCR_BACKEND",
+    )
+    #: Gateway model alias for the vision model (e.g. ``tier-vision``). Must exist in
+    #: the gateway's ``model_list``; this is a routing name, not an upstream API id.
+    #: Required for ``gateway``; optional for ``auto`` (Vision escalate when present).
+    image_ocr_model: str | None = Field(default=None, validation_alias="ATTACHMENTS_IMAGE_OCR_MODEL")
+    #: Upper bound on the original image bytes sent to the model. The intake cap is far
+    #: larger than any sane model payload, so a raw 50 MiB upload must not be forwarded.
+    image_ocr_max_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=64 * 1024,
+        le=64 * 1024 * 1024,
+        validation_alias="ATTACHMENTS_IMAGE_OCR_MAX_BYTES",
+    )
+    image_ocr_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        le=600.0,
+        validation_alias="ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS",
+        description="Vision OCR call timeout (P2.16); upload pipeline only — chat requires ready ids.",
+    )
+    #: Escalate to Vision when local OCR yields fewer than this many chars (G14 progressive).
+    ocr_min_chars: int = Field(
+        default=12,
+        ge=1,
+        le=10_000,
+        validation_alias="ATTACHMENTS_OCR_MIN_CHARS",
+    )
+    #: Escalate when printable ratio of OCR text is below this (0–1).
+    ocr_min_printable_ratio: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        validation_alias="ATTACHMENTS_OCR_MIN_PRINTABLE_RATIO",
+    )
+    #: Escalate when Tesseract mean word confidence is below this (0–100).
+    #: Catches Latin gibberish from Cyrillic handwriting that still looks "printable".
+    ocr_min_confidence: float = Field(
+        default=55.0,
+        ge=0.0,
+        le=100.0,
+        validation_alias="ATTACHMENTS_OCR_MIN_CONFIDENCE",
+    )
+    #: Average chars/page below this → treat PDF as scan and route to OCR.
+    pdf_min_avg_chars_per_page: int = Field(
+        default=200,
+        ge=1,
+        le=10_000,
+        validation_alias="ATTACHMENTS_PDF_MIN_AVG_CHARS_PER_PAGE",
+    )
+    #: Absolute path to the ``tesseract`` binary when it is not on ``PATH``
+    #: (Windows portable install, custom container layout). Empty → system PATH.
+    tesseract_cmd: str | None = Field(
+        default=None,
+        validation_alias="ATTACHMENTS_TESSERACT_CMD",
+    )
+    #: Cap on PDF pages sent to the vision model (cost/latency; G14).
+    pdf_vision_max_pages: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        validation_alias="ATTACHMENTS_PDF_VISION_MAX_PAGES",
+    )
+    #: When text layer is usable, still VLM pages that embed images/charts (G14).
+    pdf_figure_enrichment: bool = Field(
+        default=True,
+        validation_alias="ATTACHMENTS_PDF_FIGURE_ENRICHMENT",
+    )
+    #: Soft cap on figure-enrichment vision calls per document.
+    pdf_figure_max_pages: int = Field(
+        default=8,
+        ge=0,
+        le=50,
+        validation_alias="ATTACHMENTS_PDF_FIGURE_MAX_PAGES",
+    )
+    #: Attachment analysis sandbox (G15 ADA). ``disabled`` fail-closed; ``local``
+    #: runs deterministic dataframe summaries on CSV/XLSX with HITL before use.
+    analysis_backend: Literal["disabled", "local"] = Field(
+        default="disabled",
+        validation_alias="ATTACHMENTS_ANALYSIS_BACKEND",
+    )
+    #: Extracted-text PII tiers (G06). ``tag`` records ``contains_pii`` only;
+    #: ``mask`` redacts detectors in ``safe_text``; ``reject`` refuses intake.
+    pii_policy: Literal["tag", "mask", "reject"] = Field(
+        default="tag",
+        validation_alias="ATTACHMENTS_PII_POLICY",
+    )
+
+    @field_validator(
+        "minio_public_endpoint",
+        "minio_access_key",
+        "minio_secret_key",
+        "image_ocr_model",
+        "tesseract_cmd",
+        mode="before",
+    )
     @classmethod
     def _empty_string_as_none(cls, value: object) -> object:
         """An unanswered env template placeholder is *absent*, not a value (020)."""
@@ -160,5 +268,15 @@ class AttachmentConfig(BaseConfig):
             return self
         if not self.filesystem_root.strip():
             msg = "ATTACHMENTS_BLOB_BACKEND=filesystem requires ATTACHMENTS_FILESYSTEM_ROOT"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _image_ocr_backend_requires_model(self) -> Self:
+        """Gateway-only mode without a model would silently reject every image."""
+        if self.image_ocr_backend != "gateway":
+            return self
+        if not (self.image_ocr_model or "").strip():
+            msg = "ATTACHMENTS_IMAGE_OCR_BACKEND=gateway requires ATTACHMENTS_IMAGE_OCR_MODEL"
             raise ValueError(msg)
         return self

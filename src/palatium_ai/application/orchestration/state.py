@@ -20,7 +20,13 @@ from palatium_ai.domain.policies import EffectiveRoutingIntent
 
 
 class AgentGraphState(TypedDict, total=False):
-    """Shared state для StateGraph."""
+    """Shared state для StateGraph.
+
+    ``total=False`` is required: LangGraph nodes return *partial* updates that merge
+    into checkpointed state. Core keys (``task_id``, ``user_text``, …) are always set
+    at ``ainvoke`` — read them via ``selectors`` / ``state_access`` helpers, not bare
+    ``state["task_id"]`` (basedpyright KeyError risk on TypedDict).
+    """
 
     task_id: str
     user_text: str

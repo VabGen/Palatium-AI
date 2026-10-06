@@ -1,3 +1,10 @@
 # Force LF for scripts used inside Linux containers (Windows CRLF breaks shebang).
 *.sh text eol=lf
 scripts/docker-entrypoint.sh text eol=lf
+
+# Frontend (`web/`) — LF на всех ОС, а не только как конвенция.
+# `web/custom-elements.json` встраивает JSDoc из `src/widget.tsx` ДОСЛОВНО, включая
+# переводы строк. При `core.autocrlf=true` исходник в рабочей копии становится CRLF,
+# регенерация манифеста даёт другие байты, и гейт `npm run cem:check` падает локально
+# при зелёном CI. Явный `eol=lf` убирает зависимость результата от платформы.
+web/** text eol=lf

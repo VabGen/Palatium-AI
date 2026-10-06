@@ -73,6 +73,36 @@ class AttachmentModeMismatchError(AttachmentError):
         super().__init__(f"attachment {attachment_id} mode is {actual}, expected {expected}")
 
 
+class AttachmentRestoreNotAllowedError(AttachmentError):
+    """Quarantine restore is only allowed for injection-detected quarantine (020)."""
+
+    def __init__(self, attachment_id: UUID, *, status: str, rejection_reason: str | None) -> None:
+        self.attachment_id = attachment_id
+        self.status = status
+        self.rejection_reason = rejection_reason
+        super().__init__(
+            f"attachment {attachment_id} cannot be restored (status={status}, reason={rejection_reason})",
+        )
+
+
+class AttachmentChunkedUploadError(AttachmentError):
+    """Resumable upload failed validation or is missing staged parts."""
+
+    def __init__(self, attachment_id: UUID, *, detail: str) -> None:
+        self.attachment_id = attachment_id
+        self.detail = detail
+        super().__init__(f"chunked upload for attachment {attachment_id}: {detail}")
+
+
+class AttachmentConnectorUnavailableError(AttachmentError):
+    """External import source is catalogued but not wired for writes yet (G10)."""
+
+    def __init__(self, *, connector_id: str, reason: str) -> None:
+        self.connector_id = connector_id
+        self.reason = reason
+        super().__init__(f"attachment connector {connector_id!r} unavailable: {reason}")
+
+
 class AttachmentContentMissingError(AttachmentError):
     """Derived content is absent even though the row claims a ready state.
 
@@ -86,11 +116,14 @@ class AttachmentContentMissingError(AttachmentError):
 
 
 __all__ = [
+    "AttachmentChunkedUploadError",
+    "AttachmentConnectorUnavailableError",
     "AttachmentContentMissingError",
     "AttachmentError",
     "AttachmentIntakeRejectedError",
     "AttachmentModeMismatchError",
     "AttachmentNotFoundError",
     "AttachmentNotUsableError",
+    "AttachmentRestoreNotAllowedError",
     "AttachmentUploadTooLargeError",
 ]

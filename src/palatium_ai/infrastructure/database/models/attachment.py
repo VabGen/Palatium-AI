@@ -8,7 +8,7 @@ from datetime import datetime
 
 import sqlalchemy as sa
 
-from sqlalchemy import BigInteger, DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from palatium_ai.infrastructure.database.base import (
@@ -52,4 +52,11 @@ class AttachmentORM(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     derived_text_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     rejection_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    contains_pii: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=sa.text("false"),
+    )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -77,6 +77,9 @@ async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
     )
 
     harness, contextualizer, intent_agent, _pipeline_llm = make_dual_agent_stack(
+        '{"task_kind": "response_formatting", "requires_mcp": false, '
+        '"candidate_capabilities": ["format"], "confidence": 0.91, '
+        '"reasoning": "Rewritten format request"}',
         """{
               "rewritten_query": "Представь предыдущий план встречи в виде таблицы",
               "continuation_kind": "format",
@@ -85,9 +88,6 @@ async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
               "prior_assistant_excerpt": "План встречи:\\n1. Цель\\n2. Повестка",
               "reasoning": "format follow-up"
             }""",
-        '{"task_kind": "response_formatting", "requires_mcp": false, '
-        '"candidate_capabilities": ["format"], "confidence": 0.91, '
-        '"reasoning": "Rewritten format request"}',
     )
     graph = build_agent_graph(
         GraphAgents(
@@ -149,6 +149,9 @@ async def test_followup_answer_overrides_false_clarification() -> None:
     )
 
     harness, contextualizer, intent_agent, _pipeline_llm = make_dual_agent_stack(
+        '{"task_kind": "clarification_needed", "requires_mcp": false, '
+        '"candidate_capabilities": [], "confidence": 0.9, '
+        '"reasoning": "No meeting details provided"}',
         """{
                   "rewritten_query": "Когда завершится встреча?",
                   "continuation_kind": "answer",
@@ -157,9 +160,6 @@ async def test_followup_answer_overrides_false_clarification() -> None:
                   "prior_assistant_excerpt": "Завершение встречи (15:00–15:15)",
                   "reasoning": "anaphora to prior schedule"
                 }""",
-        '{"task_kind": "clarification_needed", "requires_mcp": false, '
-        '"candidate_capabilities": [], "confidence": 0.9, '
-        '"reasoning": "No meeting details provided"}',
     )
     graph = build_agent_graph(
         GraphAgents(
@@ -242,6 +242,9 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
         '{"accuracy_score": 1, "safety_score": 1, "requires_review": true, "summary": "should not run"}'
     )
     harness, contextualizer, intent_agent, pipeline_llm = make_dual_agent_stack(
+        '{"task_kind": "social_conversation", "requires_mcp": false, '
+        '"candidate_capabilities": [], "confidence": 0.94, '
+        '"reasoning": "Phatic follow-up after greeting"}',
         """{
           "rewritten_query": "как дела",
           "continuation_kind": "new_topic",
@@ -250,9 +253,6 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
           "prior_assistant_excerpt": null,
           "reasoning": "phatic; self-contained"
         }""",
-        '{"task_kind": "social_conversation", "requires_mcp": false, '
-        '"candidate_capabilities": [], "confidence": 0.94, '
-        '"reasoning": "Phatic follow-up after greeting"}',
     )
     graph = build_agent_graph(
         GraphAgents(
@@ -297,5 +297,8 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
     assert result.requires_review is False
     assert len(llm_researcher.calls) == 0
     assert len(llm_critic.calls) == 0
-    # Contextualizer runs before Intent when assistant prior exists (live continuation hints).
-    assert len(pipeline_llm.calls) >= 1
+    # P0.1: Intent-only LLM; Contextualizer skips (social + known task_kind); Formatter ack template.
+    assert len(pipeline_llm.calls) == 1
+    assert result.output is not None
+    # "как дела" is <8 letters → ReplyLocalePolicy weak → und → en ack template.
+    assert result.output.title == "Hello!"

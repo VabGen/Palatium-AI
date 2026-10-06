@@ -31,7 +31,7 @@ def test_text_ingestor_to_agent_input_maps_flags() -> None:
 
 @pytest.mark.asyncio()
 async def test_text_ingestor_output_to_task_result_roundtrip() -> None:
-    harness = Harness(llm=StaticLLMPort("{}"))
+    harness = Harness(llm=StaticLLMPort('{"prefixes": ["Chunk one context.", "Chunk two context."]}'))
     agent = TextIngestorAgent(harness, TEXT_INGESTOR_CONFIG)
     agent_input = text_ingestor_to_agent_input(
         TextIngestorInput(task_id="ti-2", thread_id="thread-2", raw_text="one\n\ntwo"),

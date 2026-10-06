@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ClipboardEvent } from 'react';
 import toast from 'react-hot-toast';
 import {
   ChevronDown,
@@ -20,9 +21,15 @@ import {
   downloadDocumentPdf,
   ensureAccessToken,
   fetchDialogTurns,
-  processIntent,
+  issueAttachmentDownload,
+  requestAttachmentAnalysis,
+  requestAttachmentIndex,
+  requestAttachmentQuarantineRestore,
+  listAttachmentConnectors,
+  processIntentStream,
   sendFeedback,
 } from '../api/client';
+import type { AttachmentConnectorSource } from '../api/client';
 import type { ContentDocument, FormatterTaskResult, HITLCardView } from '../types/contentDocument';
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
@@ -35,8 +42,11 @@ import {
   MAX_ATTACHMENTS_PER_TURN,
   MAX_ATTACHMENT_LABEL,
   attachmentRefusalReason,
+  createPastedTextFile,
   formatAttachmentSize,
+  isTabularAttachmentFilename,
   refusalLabel,
+  shouldAutoAttachText,
   uploadAttachment,
 } from '../lib/attachments';
 import type { AttachmentDraft } from '../lib/attachments';
@@ -201,11 +211,15 @@ export function ChatShell() {
   const [devMode, setDevMode] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
+  const [projectId, setProjectId] = useState('');
+  const [connectors, setConnectors] = useState<AttachmentConnectorSource[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const uploading = attachments.some(chip => chip.status === 'uploading');
+  const uploading = attachments.some(
+    chip => chip.status === 'uploading' || chip.status === 'scanning'
+  );
 
   // ── Лимит символов ───────────────────────────────────────────────────────
   const inputLength = input.length;
@@ -213,13 +227,20 @@ export function ChatShell() {
   const overLimit = inputRemaining < 0;
   const nearLimit = !overLimit && inputRemaining <= COUNTER_WARN_THRESHOLD;
 
-  const canSend = useMemo(
-    () => input.trim().length > 0 && !busy && !uploading && !overLimit,
-    [input, busy, uploading, overLimit]
-  );
+  const canSend = useMemo(() => {
+    const hasText = input.trim().length > 0;
+    const hasReadyAttachment = attachments.some(
+      chip => chip.status === 'ready' && Boolean(chip.serverId)
+    );
+    // Send stays blocked while any chip is still uploading or scanning (W1 G04 / W2).
+    return (hasText || hasReadyAttachment) && !busy && !uploading && !overLimit;
+  }, [input, attachments, busy, uploading, overLimit]);
 
-  const addFiles = useCallback(
-    (files: File[]) => {
+  const enqueueFiles = useCallback(
+    (
+      files: File[],
+      meta: { sourceText?: string; origin?: 'paste' | 'file' } = {}
+    ) => {
       if (files.length === 0) return;
       const slots = MAX_ATTACHMENTS_PER_TURN - attachments.length;
       if (slots <= 0) {
@@ -245,12 +266,32 @@ export function ChatShell() {
             filename: file.name,
             sizeBytes: file.size,
             status: 'uploading',
+            sourceText: meta.sourceText,
+            origin: meta.origin ?? 'file',
           },
         ]);
 
         void (async () => {
           try {
-            const stored = await uploadAttachment(file, { threadId, userId, orgId });
+            const stored = await uploadAttachment(
+              file,
+              {
+                threadId,
+                userId,
+                orgId,
+                projectId: projectId.trim() || undefined,
+              },
+              phase => {
+              if (phase === 'scanning') {
+                setAttachments(prev =>
+                  prev.map(chip =>
+                    chip.localId === localId
+                      ? { ...chip, status: 'scanning', error: t('attach.scanning') }
+                      : chip
+                  )
+                );
+              }
+            });
             // A refused file still exists as a row: it is shown with its reason
             // instead of vanishing, so the user learns *why* it never reached a turn.
             const failure = refusalLabel(stored);
@@ -262,6 +303,10 @@ export function ChatShell() {
                       serverId: stored.attachment_id,
                       status: failure ? 'failed' : 'ready',
                       error: failure ?? undefined,
+                      pageCount: stored.page_count,
+                      mode: stored.mode,
+                      rejectionReason: stored.rejection_reason,
+                      containsPii: Boolean(stored.contains_pii),
                     }
                   : chip
               )
@@ -279,7 +324,42 @@ export function ChatShell() {
         })();
       }
     },
-    [attachments.length, threadId, userId, orgId]
+    [attachments.length, threadId, userId, orgId, projectId]
+  );
+
+  const addFiles = useCallback(
+    (files: File[]) => {
+      enqueueFiles(files, { origin: 'file' });
+    },
+    [enqueueFiles]
+  );
+
+  const attachPastedText = useCallback(
+    (text: string) => {
+      const slots = MAX_ATTACHMENTS_PER_TURN - attachments.length;
+      if (slots <= 0) {
+        toast.error(t('composer.pasteSlotFull'));
+        return;
+      }
+      const file = createPastedTextFile(text);
+      if (file === null) {
+        toast.error(t('composer.pasteTooLarge', { size: MAX_ATTACHMENT_LABEL }));
+        return;
+      }
+      enqueueFiles([file], { sourceText: text, origin: 'paste' });
+      toast.success(t('composer.pasteConverted'));
+    },
+    [attachments.length, enqueueFiles]
+  );
+
+  const handleComposerPaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const pasted = event.clipboardData.getData('text');
+      if (!pasted || !shouldAutoAttachText(pasted)) return;
+      event.preventDefault();
+      attachPastedText(pasted);
+    },
+    [attachPastedText]
   );
 
   const removeAttachment = useCallback(
@@ -295,6 +375,37 @@ export function ChatShell() {
       setAttachments(prev => prev.filter(item => item.localId !== localId));
     },
     [attachments, userId, orgId]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void listAttachmentConnectors(userId, orgId)
+      .then(items => {
+        if (!cancelled) setConnectors(items);
+      })
+      .catch(() => {
+        if (!cancelled) setConnectors([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, orgId]);
+
+  const showAttachmentInField = useCallback(
+    (localId: string) => {
+      const chip = attachments.find(item => item.localId === localId);
+      const text = chip?.sourceText;
+      if (!chip || text === undefined) return;
+      if (text.length > INTENT_TEXT_LIMIT) {
+        toast.error(
+          t('composer.showInFieldTooLong', { limit: formatNumber(INTENT_TEXT_LIMIT) })
+        );
+        return;
+      }
+      setInput(text);
+      removeAttachment(localId);
+    },
+    [attachments, removeAttachment]
   );
 
   useEffect(() => {
@@ -445,29 +556,28 @@ export function ChatShell() {
   );
 
   async function send() {
-    const text = input.trim();
+    const typed = input.trim();
+    const outgoing = attachments.filter(chip => chip.status === 'ready' && chip.serverId);
+    const attachmentIds = outgoing.map(chip => chip.serverId as string);
+    const attachmentNames = outgoing.map(chip => chip.filename);
+    // Attachment-only send: intent text cannot be empty (API), so use a short default.
+    const text = typed || (attachmentIds.length > 0 ? t('composer.pastedDefaultPrompt') : '');
     if (!text || busy || uploading) return;
 
     // Дублируем клиентскую валидацию из `processIntent` — здесь она защищает
     // от случайного сабмита по Enter при вставке слишком длинного текста.
-    if (input.length > INTENT_TEXT_LIMIT) {
+    if (text.length > INTENT_TEXT_LIMIT) {
       toast.error(
         t('error.messageTooLong', {
-          used: formatNumber(input.length),
+          used: formatNumber(text.length),
           limit: formatNumber(INTENT_TEXT_LIMIT),
         })
       );
       return;
     }
 
-    const outgoing = attachments.filter(chip => chip.status === 'ready' && chip.serverId);
-    const attachmentIds = outgoing.map(chip => chip.serverId as string);
-    const attachmentNames = outgoing.map(chip => chip.filename);
     setInput('');
     setBusy(true);
-    // Файлы уже уехали в этот ход: снимаем чипы, иначе тот же файл молча ушёл бы
-    // ещё раз со следующим сообщением. Неудачные оставляем — их причину надо видеть.
-    setAttachments(prev => prev.filter(chip => chip.status !== 'ready'));
     const userMsgId = crypto.randomUUID();
     setMessages(prev => [
       ...prev,
@@ -475,7 +585,7 @@ export function ChatShell() {
     ]);
 
     try {
-      const result = await processIntent(text, threadId, userId, orgId, attachmentIds);
+      const result = await processIntentStream(text, threadId, userId, orgId, attachmentIds);
       const hydratedCards = await hydratePendingHitlCards(
         fieldsFromFormatterResult(result).hitlCards,
         userId,
@@ -483,6 +593,10 @@ export function ChatShell() {
       );
       const assistant = buildAssistantMessage({ ...result, hitl_cards: hydratedCards });
       setMessages(prev => [...prev, assistant]);
+      // Industry chat pattern (ChatGPT/Claude/Gemini): composer is staging only.
+      // After a successful send the file lives on the user message; ready chips
+      // leave the composer. Failed chips stay so the user can see why / retry.
+      setAttachments(prev => prev.filter(chip => chip.status !== 'ready'));
     } catch (err) {
       // Сообщение уже humanized в `errorDetail` (см. client.ts).
       const message = err instanceof Error ? err.message : t('error.requestFailed');
@@ -499,6 +613,7 @@ export function ChatShell() {
           status: 'failure',
         },
       ]);
+      // Keep ready chips on failure so the user can retry without re-upload.
     } finally {
       setBusy(false);
     }
@@ -522,7 +637,7 @@ export function ChatShell() {
       );
       setBusy(true);
       try {
-        const result = await processIntent(
+        const result = await processIntentStream(
           userMsg.text,
           threadId,
           userId,
@@ -585,7 +700,13 @@ export function ChatShell() {
       );
 
       try {
-        await sendFeedback(messageId, type, userId, orgId);
+        await sendFeedback(
+          messageId,
+          newActive ? type : 'clear',
+          userId,
+          orgId,
+          threadId
+        );
         setMessages(prev =>
           prev.map(msg => {
             if (msg.id !== messageId || msg.role !== 'assistant') return msg;
@@ -603,7 +724,7 @@ export function ChatShell() {
         toast.error(t('toast.feedbackFailed'));
       }
     },
-    [messages, userId, orgId]
+    [messages, userId, orgId, threadId]
   );
 
   const copyMessageContent = useCallback((message: ChatMessage) => {
@@ -736,6 +857,15 @@ export function ChatShell() {
                 ) : message.document ? (
                   <>
                     <BlockRenderer document={message.document} />
+                    {message.document.meta.source_refs.length > 0 && (
+                      <ul className="source-ref-chips" aria-label={t('attach.sources')}>
+                        {message.document.meta.source_refs.map(ref => (
+                          <li key={ref} className="source-ref-chip">
+                            {ref}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {showDevGap && <p className="hitl-dev-gap">{t('msg.devGap')}</p>}
                     {message.error && <p className="msg-error">{message.error}</p>}
                     <div className="msg-actions">
@@ -844,23 +974,193 @@ export function ChatShell() {
           disabled={busy}
           onCardCreated={handleMemoryCardCreated}
         />
+        <label className="attachment-project">
+          <span className="attachment-project-label">{t('attach.projectId')}</span>
+          <input
+            type="text"
+            value={projectId}
+            maxLength={64}
+            disabled={busy || uploading}
+            placeholder={t('attach.projectIdHint')}
+            onChange={e => setProjectId(e.target.value)}
+            aria-label={t('attach.projectId')}
+          />
+        </label>
+        {connectors.length > 0 && (
+          <div className="attachment-connectors" aria-label={t('attach.connectors')}>
+            <span className="attachment-connectors-label">{t('attach.connectors')}</span>
+            <ul className="attachment-connectors-list">
+              {connectors.map(source => (
+                <li
+                  key={source.id}
+                  className={`attachment-connector${source.available ? ' is-available' : ' is-unavailable'}`}
+                  title={source.reason || source.label}
+                >
+                  <span className="attachment-connector-label">{source.label}</span>
+                  <span className="attachment-connector-state">
+                    {source.available ? t('attach.connectorReady') : t('attach.connectorUnavailable')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {attachments.length > 0 && (
           <ul className="attachment-chips" aria-label={t('composer.attachedFiles')}>
             {attachments.map(chip => (
               <li
                 key={chip.localId}
-                className={`attachment-chip is-${chip.status}`}
+                className={`attachment-chip is-${chip.status}${chip.origin === 'paste' ? ' is-paste' : ''}`}
                 title={chip.error ?? `${chip.filename} (${formatAttachmentSize(chip.sizeBytes)})`}
               >
-                {chip.status === 'uploading' ? (
+                {chip.status === 'uploading' || chip.status === 'scanning' ? (
                   <LoaderCircle className="spin" size={13} />
                 ) : (
                   <FileText size={13} />
                 )}
                 <span className="attachment-name">{chip.filename}</span>
+                {chip.origin === 'paste' && (
+                  <span className="attachment-badge">{t('composer.asDocument')}</span>
+                )}
+                {chip.containsPii && chip.status === 'ready' && (
+                  <span className="attachment-badge is-pii">{t('attach.containsPii')}</span>
+                )}
                 <span className="attachment-size">{formatAttachmentSize(chip.sizeBytes)}</span>
+                {chip.status === 'scanning' && (
+                  <span className="attachment-reason">{t('attach.scanning')}</span>
+                )}
                 {chip.status === 'failed' && chip.error && (
                   <span className="attachment-reason">{chip.error}</span>
+                )}
+                {chip.status === 'failed' &&
+                  chip.serverId &&
+                  chip.rejectionReason === 'injection_detected' &&
+                  !chip.restoreRequested && (
+                    <button
+                      type="button"
+                      className="attachment-show"
+                      onClick={() => {
+                        const id = chip.serverId;
+                        if (!id) return;
+                        void (async () => {
+                          try {
+                            const card = await requestAttachmentQuarantineRestore(
+                              id,
+                              userId,
+                              orgId
+                            );
+                            setAttachments(prev =>
+                              prev.map(c =>
+                                c.localId === chip.localId
+                                  ? { ...c, restoreRequested: true }
+                                  : c
+                              )
+                            );
+                            handleMemoryCardCreated(card, t('attach.restoreRequested'));
+                          } catch (err) {
+                            const message =
+                              err instanceof Error ? err.message : t('toast.uploadFailed');
+                            toast.error(message.slice(0, 160));
+                          }
+                        })();
+                      }}
+                    >
+                      {t('attach.requestRestore')}
+                    </button>
+                  )}
+                {chip.status === 'ready' && chip.serverId && (
+                  <button
+                    type="button"
+                    className="attachment-show"
+                    onClick={() => {
+                      const id = chip.serverId;
+                      if (!id) return;
+                      void (async () => {
+                        try {
+                          const ticket = await issueAttachmentDownload(id, userId, orgId);
+                          window.open(ticket.download_url, '_blank', 'noopener,noreferrer');
+                        } catch (err) {
+                          const message =
+                            err instanceof Error ? err.message : t('toast.uploadFailed');
+                          toast.error(message.slice(0, 160));
+                        }
+                      })();
+                    }}
+                    aria-label={t('attach.download')}
+                    title={t('attach.download')}
+                  >
+                    <Download size={12} aria-hidden />
+                  </button>
+                )}
+                {chip.status === 'ready' && chip.serverId && chip.mode === 'index' && (
+                  <button
+                    type="button"
+                    className="attachment-show"
+                    onClick={() => {
+                      const id = chip.serverId;
+                      if (!id) return;
+                      void (async () => {
+                        try {
+                          const card = await requestAttachmentIndex(
+                            id,
+                            { thread_id: threadId, document_title: chip.filename },
+                            userId,
+                            orgId
+                          );
+                          handleMemoryCardCreated(card, t('attach.indexRequested'));
+                        } catch (err) {
+                          const message =
+                            err instanceof Error ? err.message : t('toast.uploadFailed');
+                          toast.error(message.slice(0, 160));
+                        }
+                      })();
+                    }}
+                  >
+                    {t('attach.index')}
+                  </button>
+                )}
+                {chip.status === 'ready' &&
+                  chip.serverId &&
+                  isTabularAttachmentFilename(chip.filename) && (
+                    <button
+                      type="button"
+                      className="attachment-show"
+                      onClick={() => {
+                        const id = chip.serverId;
+                        if (!id) return;
+                        void (async () => {
+                          try {
+                            const card = await requestAttachmentAnalysis(
+                              id,
+                              {
+                                thread_id: threadId,
+                                instruction: t('attach.analyzeRequested'),
+                              },
+                              userId,
+                              orgId
+                            );
+                            handleMemoryCardCreated(card, t('attach.analyzeRequested'));
+                          } catch (err) {
+                            const message =
+                              err instanceof Error ? err.message : t('toast.uploadFailed');
+                            toast.error(message.slice(0, 160));
+                          }
+                        })();
+                      }}
+                    >
+                      {t('attach.analyze')}
+                    </button>
+                  )}
+                {chip.origin === 'paste' && chip.sourceText !== undefined && chip.status !== 'uploading' && chip.status !== 'scanning' && (
+                  <button
+                    type="button"
+                    className="attachment-show"
+                    onClick={() => showAttachmentInField(chip.localId)}
+                    aria-label={t('composer.showInField')}
+                    title={t('composer.showInField')}
+                  >
+                    {t('composer.showInField')}
+                  </button>
                 )}
                 <button
                   type="button"
@@ -906,6 +1206,7 @@ export function ChatShell() {
           <textarea
             value={input}
             onChange={e => setInput(e.target.value)}
+            onPaste={handleComposerPaste}
             placeholder={t('composer.placeholder')}
             rows={2}
             onKeyDown={e => {

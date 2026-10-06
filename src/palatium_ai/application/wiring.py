@@ -39,6 +39,8 @@ from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.application.services.memory_extract import MemoryExtractService
 from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
 from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
+from palatium_ai.application.services.response_cache_service import ResponseCacheService
+from palatium_ai.application.services.retention import retention_windows_from_settings
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.core.logging import logger
 from palatium_ai.domain.attachments.policies import AttachmentLimits
@@ -49,6 +51,7 @@ from palatium_ai.domain.mcp.timeout_policy import (
 )
 from palatium_ai.infrastructure.blob.factory import build_blob_store
 from palatium_ai.infrastructure.blob.minio_adapter import MinIOAdapter
+from palatium_ai.infrastructure.cache.response_cache import InMemoryResponseCache, RedisResponseCache
 from palatium_ai.infrastructure.database.attachment_repository import PostgresAttachmentRepository
 from palatium_ai.infrastructure.database.repositories import McpToolCallRepository
 from palatium_ai.infrastructure.embeddings.factory import create_embedding_client_for_schema
@@ -273,7 +276,11 @@ def build_intent_service(
             embedding_client = create_embedding_client_for_schema(settings, "memory")
         except Exception as exc:
             logger.warning("Memory embeddings disabled", error=str(exc))
-        resolved_memory = PostgresMemoryPort(session_factory, embeddings=embedding_client)
+        resolved_memory = PostgresMemoryPort(
+            session_factory,
+            embeddings=embedding_client,
+            retention_windows=retention_windows_from_settings(settings),
+        )
         logger.info(
             "MemoryPort: Postgres memory.entries",
             vector_search=embedding_client is not None,
@@ -395,6 +402,19 @@ def build_intent_service(
     )
     logger.info("Document ingest: TextIngestor service enabled")
 
+    cache_port = RedisResponseCache(redis_client) if redis_client is not None else InMemoryResponseCache()
+    response_cache = ResponseCacheService(
+        cache_port,
+        ttl_seconds=settings.observability.response_cache_ttl_seconds,
+        enabled=settings.observability.response_cache_enabled,
+    )
+    if settings.observability.response_cache_enabled:
+        logger.info(
+            "L1 response cache enabled",
+            backend="redis" if redis_client is not None else "memory",
+            ttl_seconds=settings.observability.response_cache_ttl_seconds,
+        )
+
     intent_service = IntentService(
         graph,
         session_service=session_service,
@@ -413,6 +433,7 @@ def build_intent_service(
         mcp_tool_output_max_chars=settings.memory.mcp_tool_output_max_chars,
         turn_hop_budget_ms=settings.observability.turn_hop_budget_ms,
         attachment_service=attachment_service,
+        response_cache=response_cache,
     )
     return intent_service, memory_extract, capability_index, document_ingest
 
@@ -476,6 +497,7 @@ def build_attachment_limits(settings: Settings) -> AttachmentLimits:
     cfg = settings.attachments
     return AttachmentLimits(
         max_size_bytes=cfg.max_size_bytes,
+        max_chunk_bytes=cfg.max_chunk_bytes,
         max_attachments_per_turn=cfg.max_attachments_per_turn,
         max_filename_chars=cfg.max_filename_chars,
         presigned_url_ttl_seconds=cfg.presigned_url_ttl_seconds,
@@ -493,6 +515,7 @@ def build_attachment_service(
     mcp_registry: MCPRegistry,
     redis_client: Redis | None = None,
     mcp_tool_call_repository: McpToolCallRecorderPort | None = None,
+    document_ingest_service: DocumentIngestService | None = None,
 ) -> AttachmentService:
     """Build the attachment use-case layer over probed ports (000).
 
@@ -505,12 +528,26 @@ def build_attachment_service(
         blob_store=ports.blob_store,
         malware_scanner=ports.malware_scanner,
         document_parser=ports.document_parser,
+        pii_policy=settings.attachments.pii_policy,
+    )
+    from palatium_ai.infrastructure.analysis import (
+        DisabledAttachmentAnalysis,
+        LocalDataframeAttachmentAnalysis,
+    )
+    from palatium_ai.infrastructure.connectors import DisabledAttachmentConnector
+
+    analysis = (
+        LocalDataframeAttachmentAnalysis()
+        if settings.attachments.analysis_backend == "local"
+        else DisabledAttachmentAnalysis()
     )
     logger.info(
         "AttachmentService wired",
         blob_backend=settings.attachments.blob_backend,
         scanner_backend=settings.attachments.scanner_backend,
+        analysis_backend=settings.attachments.analysis_backend,
         max_per_turn=limits.max_attachments_per_turn,
+        index_enrich=document_ingest_service is not None,
     )
     return AttachmentService(
         repository=ports.repository,
@@ -520,5 +557,8 @@ def build_attachment_service(
         mcp_registry=mcp_registry,
         redis_client=redis_client,
         mcp_tool_call_repository=mcp_tool_call_repository,
+        document_ingest_service=document_ingest_service,
+        analysis=analysis,
+        connector=DisabledAttachmentConnector(),
         limits=limits,
     )

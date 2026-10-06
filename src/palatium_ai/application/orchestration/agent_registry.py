@@ -39,6 +39,7 @@ from palatium_ai.core.types.graph_nodes import (
     NODE_CRITIC,
     NODE_FORMATTER,
     NODE_INTENT_CLASSIFIER,
+    NODE_PARALLEL_WORKERS,
     NODE_QUALITY_REVISION,
     NODE_RESEARCHER,
     NODE_SUPERVISOR,
@@ -108,13 +109,13 @@ class GraphAgents:
         No change to `application/wiring.py` call shape or `graph.py` builder.
         """
         return (
+            bind_agent(NODE_INTENT_CLASSIFIER, self.intent_agent, nodes.intent_classifier_node, harness),
             bind_agent(
                 NODE_CONTEXT_ENRICHER_CONTINUATION,
                 self.continuation_agent,
                 nodes.continuation_node,
                 harness,
             ),
-            bind_agent(NODE_INTENT_CLASSIFIER, self.intent_agent, nodes.intent_classifier_node, harness),
             bind_agent(NODE_SUPERVISOR, self.supervisor_agent, nodes.supervisor_node, harness),
             bind_agent(
                 NODE_CONTEXT_ENRICHER_WEAVING,
@@ -125,7 +126,18 @@ class GraphAgents:
             bind_agent(NODE_RESEARCHER, self.researcher_agent, nodes.researcher_node, harness),
             bind_agent(NODE_CODER, self.coder_agent, nodes.coder_node, harness),
             bind_agent(NODE_ANALYST, self.analyst_agent, nodes.analyst_node, harness),
+            self._bind_parallel_workers(harness),
             bind_agent(NODE_CRITIC, self.critic_agent, nodes.critic_node, harness),
             bind_plain_node(NODE_QUALITY_REVISION, nodes.quality_revision_node),
             bind_agent(NODE_FORMATTER, self.formatter_agent, nodes.formatter_node, harness),
         )
+
+    def _bind_parallel_workers(self, harness: Harness) -> BoundNode:
+        """Fan-out node shares researcher + analyst agents (P2.15)."""
+        researcher = self.researcher_agent
+        analyst = self.analyst_agent
+
+        async def _run(state: AgentGraphState) -> AgentGraphState:
+            return await nodes.parallel_workers_node(state, researcher, analyst, harness)
+
+        return (NODE_PARALLEL_WORKERS, _run)

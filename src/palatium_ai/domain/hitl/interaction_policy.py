@@ -117,6 +117,25 @@ class HitlInteractionPolicy:
         )
 
         if not choice_actions and required_choice:
+            # Rhetorical interaction=choice on an informational report (e.g. compare
+            # ending with "which version?") must not kill a usable answer. Fail-closed
+            # only when Intent/structure truly demand exclusive cards.
+            if cls._can_downgrade_rhetorical_choice(
+                requires_user_choice=requires_user_choice,
+                menu_shaped=menu_shaped,
+                selected_strategy=selected_strategy,
+                task_kind=task_kind,
+                interaction=interaction,
+            ):
+                return HitlCardPlan(
+                    choice_actions=(),
+                    mint_quality_review=mint_quality_review,
+                    reason="interaction_downgraded_informational",
+                    menu_shaped=menu_shaped,
+                    promoted_from=promoted_from,
+                    force_structural=False,
+                    required_choice=False,
+                )
             return HitlCardPlan(
                 choice_actions=(),
                 mint_quality_review=False,
@@ -136,6 +155,25 @@ class HitlInteractionPolicy:
             force_structural=force_structural,
             required_choice=required_choice,
         )
+
+    @classmethod
+    def _can_downgrade_rhetorical_choice(
+        cls,
+        *,
+        requires_user_choice: bool,
+        menu_shaped: bool,
+        selected_strategy: ExecutionStrategy | str | None,
+        task_kind: str | None,
+        interaction: str,
+    ) -> bool:
+        """True when LLM tagged choice/confirm without a real exclusive menu contract."""
+        _ = cls
+        if requires_user_choice or menu_shaped:
+            return False
+        strategy = _strategy_value(selected_strategy)
+        if strategy == "clarify" or task_kind == "clarification_needed":
+            return False
+        return interaction in {"choice", "confirm"}
 
     @classmethod
     def requires_choice_mint(

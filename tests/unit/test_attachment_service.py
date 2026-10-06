@@ -25,13 +25,16 @@ from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.domain.attachments import (
     DEFAULT_ATTACHMENT_LIMITS,
     Attachment,
+    AttachmentChunkedUploadError,
     AttachmentContent,
     AttachmentContentMissingError,
+    AttachmentIntakePolicy,
     AttachmentIntakeRejectedError,
     AttachmentLimits,
     AttachmentModeMismatchError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
+    AttachmentRestoreNotAllowedError,
     AttachmentScanSummary,
     AttachmentUploadTooLargeError,
 )
@@ -58,14 +61,40 @@ class _FakeAttachmentRepository:
 
     def __init__(self) -> None:
         self.rows: dict[UUID, Attachment] = {}
-        self.list_expired_calls: list[tuple[datetime, str, int]] = []
+        self.list_reclaimable_calls: list[tuple[datetime, datetime, str, int]] = []
         # Test knobs: a store that lies about expiry, and a store that is down.
-        self.expired_override: list[Attachment] | None = None
-        self.list_expired_error: Exception | None = None
+        self.reclaimable_override: list[Attachment] | None = None
+        self.list_reclaimable_error: Exception | None = None
 
     async def create(self, attachment: Attachment) -> Attachment:
         self.rows[attachment.id] = attachment
         return attachment
+
+    async def create_under_upload_quota(
+        self,
+        attachment: Attachment,
+        *,
+        limit: int,
+        pending_cutoff: datetime,
+    ) -> Attachment | None:
+        """Mirror the adapter's gate, so the service contract is what gets asserted.
+
+        In-flight = ``pending`` and created after the cutoff. Anything else —
+        admitted, rejected, quarantined or an abandoned ticket — has released its
+        slot (080).
+        """
+        if attachment.thread_id:
+            in_flight = sum(
+                1
+                for row in self.rows.values()
+                if row.thread_id == attachment.thread_id
+                and row.user_id == attachment.user_id
+                and row.status == "pending"
+                and row.created_at > pending_cutoff
+            )
+            if in_flight >= limit:
+                return None
+        return await self.create(attachment)
 
     async def save(self, attachment: Attachment) -> Attachment:
         if attachment.id not in self.rows:
@@ -91,9 +120,6 @@ class _FakeAttachmentRepository:
     async def list_for_thread(self, thread_id: str, *, user_id: str) -> list[Attachment]:
         return [row for row in self.rows.values() if row.thread_id == thread_id and row.user_id == user_id]
 
-    async def count_for_thread(self, thread_id: str, *, user_id: str) -> int:
-        return len(await self.list_for_thread(thread_id, user_id=user_id))
-
     async def delete(self, attachment_id: UUID, *, user_id: str) -> None:
         row = await self.get(attachment_id, user_id=user_id)
         if row is None:
@@ -101,18 +127,29 @@ class _FakeAttachmentRepository:
             raise LookupError(msg)
         del self.rows[attachment_id]
 
-    async def list_expired(self, cutoff: datetime, *, user_id: str, limit: int) -> list[Attachment]:
-        self.list_expired_calls.append((cutoff, user_id, limit))
-        if self.list_expired_error is not None:
-            raise self.list_expired_error
-        if self.expired_override is not None:
-            return self.expired_override[:limit]
+    async def list_reclaimable(
+        self,
+        cutoff: datetime,
+        *,
+        pending_before: datetime,
+        user_id: str,
+        limit: int,
+    ) -> list[Attachment]:
+        self.list_reclaimable_calls.append((cutoff, pending_before, user_id, limit))
+        if self.list_reclaimable_error is not None:
+            raise self.list_reclaimable_error
+        if self.reclaimable_override is not None:
+            return self.reclaimable_override[:limit]
         rows = [
             row
             for row in self.rows.values()
-            if row.user_id == user_id and row.expires_at is not None and row.expires_at <= cutoff
+            if row.user_id == user_id
+            and (
+                (row.expires_at is not None and row.expires_at <= cutoff)
+                or (row.status == "pending" and row.created_at <= pending_before)
+            )
         ]
-        rows.sort(key=lambda row: row.expires_at or cutoff)
+        rows.sort(key=lambda row: row.created_at)
         return rows[:limit]
 
 
@@ -129,15 +166,20 @@ class _FakeScanner:
 
 
 class _FakeParser:
-    """Deterministic parser returning fixed pages."""
+    """Deterministic parser returning fixed pages.
 
-    def __init__(self, document: ParsedDocument) -> None:
+    ``supported`` models the wired deployment: ``None`` means "everything parses"
+    (the pipeline-only tests), a set narrows it to the media types a real install
+    has an adapter for, so capability-gated intake can be exercised (020).
+    """
+
+    def __init__(self, document: ParsedDocument, *, supported: frozenset[str] | None = None) -> None:
         self._document = document
+        self._supported = supported
         self.calls = 0
 
     def supports(self, mime_type: str) -> bool:
-        _ = mime_type
-        return True
+        return self._supported is None or mime_type in self._supported
 
     async def parse(self, data: bytes, *, mime_type: str, filename: str) -> ParsedDocument:
         _ = (data, mime_type, filename)
@@ -220,6 +262,116 @@ async def test_init_upload_rejects_unsupported_media_type() -> None:
     assert excinfo.value.reason == "mime_not_allowed"
 
 
+async def test_init_upload_rejects_a_known_mime_without_a_configured_parser() -> None:
+    """Regression: ``image/webp`` passed intake although no parser could read it.
+
+    The registry and the wired parsers had drifted, so ``init`` accepted the file,
+    the client uploaded and AV-scanned it, and only then did the pipeline reject it
+    as ``mime_not_allowed`` — surfacing as "file type is not accepted" after a full
+    round-trip. Intake must refuse the moment no parser handles the type (055).
+    """
+    parser = _FakeParser(_document(), supported=frozenset({"text/plain"}))
+    service, _blob, repository = _stack(parser=parser)
+
+    with pytest.raises(AttachmentIntakeRejectedError) as excinfo:
+        await service.init_upload(
+            user_id=_USER,
+            filename="scan.webp",
+            mime_type="image/webp",
+            size_bytes=1024,
+            mode="attach",
+            thread_id=_THREAD,
+        )
+
+    assert excinfo.value.reason == "mime_not_allowed"
+    # Refused before anything exists: no row, so no quota slot and no orphan blob.
+    assert repository.rows == {}
+
+
+def _settled_rows(count: int) -> list[Attachment]:
+    """Past uploads that are no longer in flight: they must not hold an upload slot."""
+    return [
+        Attachment(
+            id=uuid4(),
+            user_id=_USER,
+            thread_id=_THREAD,
+            filename=f"old-{index}.txt",
+            mime_type="text/plain",
+            size_bytes=10,
+            blob_key=f"attachments/old-{index}",
+            mode="attach",
+            status="ready",
+            created_at=datetime.now(UTC) - timedelta(days=1),
+        )
+        for index in range(count)
+    ]
+
+
+async def _age_pending_row(
+    service: AttachmentService,
+    repository: _FakeAttachmentRepository,
+    *,
+    filename: str = "report.txt",
+) -> UUID:
+    """Create a pending row whose presigned ticket has already expired."""
+    attachment_id = await _pending(service, filename=filename)
+    stale_at = datetime.now(UTC) - timedelta(
+        seconds=DEFAULT_ATTACHMENT_LIMITS.presigned_url_ttl_seconds + 1,
+    )
+    repository.rows[attachment_id] = repository.rows[attachment_id].model_copy(update={"created_at": stale_at})
+    return attachment_id
+
+
+async def test_init_upload_is_not_blocked_by_settled_rows_in_the_thread() -> None:
+    """Regression: five past uploads locked a thread for the whole attachment TTL.
+
+    ``turn_limit_exceeded`` must mean "too many uploads are in flight right now",
+    not "this thread has ever seen five files". Counting every row — including
+    admitted, rejected and abandoned ones — refused every subsequent upload of a
+    legitimate message until the seven-day TTL elapsed (080).
+    """
+    service, _blob, repository = _stack()
+    limit = DEFAULT_ATTACHMENT_LIMITS.max_attachments_per_turn
+    for row in _settled_rows(limit + 3):
+        repository.rows[row.id] = row
+
+    ticket = await service.init_upload(
+        user_id=_USER,
+        filename="new.txt",
+        mime_type="text/plain",
+        size_bytes=5,
+        mode="attach",
+        thread_id=_THREAD,
+    )
+
+    assert ticket.attachment_id in repository.rows
+
+
+async def test_init_upload_refuses_when_in_flight_uploads_reach_the_limit() -> None:
+    """The anti-abuse cap still holds: concurrent unfinished uploads are bounded."""
+    service, _blob, _repo = _stack()
+    limit = DEFAULT_ATTACHMENT_LIMITS.max_attachments_per_turn
+    for index in range(limit):
+        await _pending(service, filename=f"pending-{index}.txt")
+
+    with pytest.raises(AttachmentIntakeRejectedError) as excinfo:
+        await _pending(service, filename="one-too-many.txt")
+
+    assert excinfo.value.reason == "turn_limit_exceeded"
+
+
+async def test_init_upload_frees_the_slot_when_an_abandoned_ticket_expired() -> None:
+    """An upload whose presigned ticket expired can never receive bytes again."""
+    service, _blob, repository = _stack()
+    limit = DEFAULT_ATTACHMENT_LIMITS.max_attachments_per_turn
+    for index in range(limit):
+        await _age_pending_row(service, repository, filename=f"abandoned-{index}.txt")
+
+    ticket = await _pending(service, filename="fresh.txt")
+
+    assert ticket in repository.rows
+
+
 async def test_complete_upload_admits_and_persists_derived_content() -> None:
     service, blob, _repo = _stack()
     attachment = await _uploaded(service, blob)
@@ -244,6 +396,58 @@ async def test_complete_upload_quarantines_without_persisting_text_when_scanner_
     assert attachment.rejection_reason == "scan_failed"
     assert attachment.derived_text_key is None
     assert attachment.page_count is None
+
+
+async def test_finalize_chunked_upload_assembles_staged_parts() -> None:
+    service, blob, _repo = _stack()
+    payload = b"hello-chunked-upload-body"
+    ticket = await service.init_upload(
+        user_id=_USER,
+        filename="data.txt",
+        mime_type="text/plain",
+        size_bytes=len(payload),
+        mode="attach",
+        thread_id=_THREAD,
+    )
+    midpoint = len(payload) // 2
+    await service.put_upload_chunk(
+        attachment_id=ticket.attachment_id,
+        user_id=_USER,
+        chunk_index=0,
+        data=payload[:midpoint],
+    )
+    await service.put_upload_chunk(
+        attachment_id=ticket.attachment_id,
+        user_id=_USER,
+        chunk_index=1,
+        data=payload[midpoint:],
+    )
+    row = await service.finalize_chunked_upload(
+        attachment_id=ticket.attachment_id,
+        user_id=_USER,
+        chunk_count=2,
+    )
+    assert row.status == "uploaded"
+    assert await blob.read_bytes(row.blob_key) == payload
+    assert not await blob.exists(AttachmentIntakePolicy.chunk_part_key(ticket.attachment_id, 0))
+
+
+async def test_finalize_chunked_upload_refuses_a_missing_part() -> None:
+    service, _blob, _repo = _stack()
+    ticket = await service.init_upload(
+        user_id=_USER,
+        filename="data.txt",
+        mime_type="text/plain",
+        size_bytes=10,
+        mode="attach",
+        thread_id=_THREAD,
+    )
+    with pytest.raises(AttachmentChunkedUploadError, match="missing staged part"):
+        await service.finalize_chunked_upload(
+            attachment_id=ticket.attachment_id,
+            user_id=_USER,
+            chunk_count=1,
+        )
 
 
 async def test_complete_upload_rejects_when_object_never_arrived() -> None:
@@ -307,7 +511,8 @@ async def test_build_turn_context_wraps_text_in_untrusted_fence() -> None:
     fenced = context.fenced_text
     assert fenced.startswith("<<<UNTRUSTED_TOOL_OUTPUT")
     assert fenced.rstrip().endswith("<<<END_UNTRUSTED_TOOL_OUTPUT>>>")
-    assert f"source=attachment:{attachment.filename}" in fenced
+    assert f"source=attachment:{attachment.id}:" in fenced
+    assert attachment.filename in fenced or attachment.filename.replace(" ", "_") in fenced
     assert _CLEAN_TEXT in fenced
 
 
@@ -464,6 +669,73 @@ async def test_execute_after_approval_requires_mcp_registry() -> None:
         await service.execute_after_approval(task_id=card.task_id)
 
 
+async def test_request_quarantine_restore_mints_hitl_card() -> None:
+    service, blob, _repo = _stack(parser=_FakeParser(_document(_INJECTION_TEXT)))
+    attachment = await _uploaded(service, blob)
+
+    card = await service.request_quarantine_restore(
+        attachment_id=attachment.id,
+        user_id=_USER,
+        thread_id=_THREAD,
+        org_id="org-1",
+    )
+
+    assert card.task_id.startswith("att-restore-")
+    assert card.purpose == "mcp_tool_approval"
+    assert "attachment_quarantine_restore" in card.title
+
+
+async def test_request_quarantine_restore_rejects_malware_quarantine() -> None:
+    infected = ScanVerdict(clean=False, engine="fake-av", signature="EICAR")
+    service, blob, _repo = _stack(scanner=_FakeScanner(infected))
+    attachment = await _uploaded(service, blob)
+    assert attachment.rejection_reason == "malware_detected"
+
+    with pytest.raises(AttachmentRestoreNotAllowedError):
+        await service.request_quarantine_restore(
+            attachment_id=attachment.id,
+            user_id=_USER,
+            thread_id=_THREAD,
+            org_id="org-1",
+        )
+
+
+async def test_execute_restore_after_approval_marks_ready_with_mask() -> None:
+    service, blob, _repo = _stack(parser=_FakeParser(_document(_INJECTION_TEXT)))
+    attachment = await _uploaded(service, blob)
+    card = await service.request_quarantine_restore(
+        attachment_id=attachment.id,
+        user_id=_USER,
+        thread_id=_THREAD,
+        org_id="org-1",
+    )
+
+    result = await service.execute_after_approval(task_id=card.task_id)
+
+    assert result["status"] == "ready"
+    refreshed = await service.get(attachment_id=attachment.id, user_id=_USER)
+    assert refreshed.status == "ready"
+    assert refreshed.rejection_reason is None
+    assert refreshed.derived_text_key is not None
+    raw = await blob.read_bytes(refreshed.derived_text_key)
+    content = AttachmentContent.model_validate_json(raw)
+    assert content.scan.action == "mask"
+
+
+async def test_compliance_export_returns_metadata_without_content() -> None:
+    service, blob, _repo = _stack()
+    attachment = await _uploaded(service, blob)
+
+    records = await service.compliance_export_for_thread(thread_id=_THREAD, owner_user_id=_USER)
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.id == attachment.id
+    assert record.filename == attachment.filename
+    assert record.status == "ready"
+    assert not hasattr(record, "safe_text")
+
+
 async def test_discard_pending_drops_the_parked_payload() -> None:
     service, blob, _repo = _stack()
     attachment = await _uploaded(service, blob, mode="index")
@@ -577,11 +849,39 @@ async def test_sweep_expired_keeps_rows_inside_their_window() -> None:
     assert await blob.exists(attachment.blob_key) is True
 
 
+async def test_sweep_reclaims_an_abandoned_pending_upload() -> None:
+    """Regression: an abandoned intake was invisible to the sweep for its whole TTL.
+
+    ``list_reclaimable`` must surface it as soon as its presigned ticket expires —
+    otherwise the row occupies a quota slot for seven days and never gets collected.
+    """
+    service, _blob, repository = _stack()
+    attachment_id = await _age_pending_row(service, repository)
+
+    result = await service.sweep_expired(user_id=_USER)
+
+    assert result.considered == 1
+    assert result.purged == 1
+    assert result.skipped == 0
+    assert attachment_id not in repository.rows
+
+
+async def test_sweep_spares_a_pending_upload_whose_ticket_is_still_valid() -> None:
+    """Defence in depth: a fresh intake must survive a sweep racing it (020)."""
+    service, _blob, repository = _stack()
+    attachment_id = await _pending(service)
+
+    result = await service.sweep_expired(user_id=_USER)
+
+    assert result.considered == 0
+    assert attachment_id in repository.rows
+
+
 async def test_sweep_never_purges_a_row_the_store_reported_wrongly() -> None:
     """Defence in depth: a loose adapter must not be able to delete live data."""
     service, blob, repository = _stack()
     attachment = await _uploaded(service, blob)
-    repository.expired_override = [attachment]
+    repository.reclaimable_override = [attachment]
 
     result = await service.sweep_expired(user_id=_USER)
 
@@ -614,9 +914,9 @@ async def test_sweep_uses_the_configured_batch_and_is_user_scoped() -> None:
     await service.sweep_expired(user_id=_USER)
     await service.sweep_expired(user_id=_USER, limit=7)
 
-    assert repository.list_expired_calls[0][1] == _USER
-    assert repository.list_expired_calls[0][2] == DEFAULT_ATTACHMENT_LIMITS.retention_sweep_batch
-    assert repository.list_expired_calls[1][2] == 7
+    assert repository.list_reclaimable_calls[0][2] == _USER
+    assert repository.list_reclaimable_calls[0][3] == DEFAULT_ATTACHMENT_LIMITS.retention_sweep_batch
+    assert repository.list_reclaimable_calls[1][3] == 7
 
 
 async def test_sweep_audits_the_reclamation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -650,7 +950,7 @@ async def test_list_for_thread_survives_a_failing_reclaim() -> None:
     """A degraded retention store must not take the listing down with it (050)."""
     service, blob, repository = _stack()
     live = await _uploaded(service, blob)
-    repository.list_expired_error = RuntimeError("store down")
+    repository.list_reclaimable_error = RuntimeError("store down")
 
     listed = await service.list_for_thread(thread_id=_THREAD, user_id=_USER)
 

@@ -17,6 +17,8 @@ class ChatMessage(BaseModel):
 
     role: Literal["system", "user", "assistant", "tool"]
     content: str
+    #: Anthropic/LiteLLM prompt-cache hint for static system prefixes (P0.3).
+    cache_control: Literal["ephemeral"] | None = None
 
 
 class LLMUsage(BaseModel):
@@ -38,6 +40,10 @@ class LLMCompletion(BaseModel):
     model: str
     usage: LLMUsage = Field(default_factory=LLMUsage)
     finish_reason: str | None = None
+    # Cost reported by the provider/gateway for this call (USD), or None when it reports none.
+    # A gateway that routes opaque tier aliases (``tier-small`` → real model) is the ONLY
+    # component that can price the call, so this is authoritative over any local price table.
+    cost_usd: float | None = Field(default=None, ge=0.0)
 
 
 class LLMStreamDelta(BaseModel):

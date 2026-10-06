@@ -59,8 +59,11 @@ ExecutionStrategy = Literal[
 
 type RouteStrategy = ExecutionStrategy
 
+# L1 response-cache allow-list only. Graph Critic skip is decided in
+# ``route_after_context`` (social also uses ``format_only`` — must not inherit skip).
+# ``ack_only`` is eval/cassette-only; live social is ``format_only`` + Formatter LLM.
 LOW_RISK_ROUTE_STRATEGIES: frozenset[RouteStrategy] = frozenset(
-    {"ack_only", "format_only"},
+    {"format_only"},
 )
 
 # --- Untrusted content (attachments, MCP/tool output) ---

@@ -182,9 +182,13 @@ _RULE_SPECS: tuple[_Rule, ...] = (
     _Rule(
         "credential_exfiltration_ru",
         "critical",
+        # Object side must stay credential-shaped. ``секрет\w*`` falsely matched
+        # classification stamps (секретно/секретный) and office roles (секретарь)
+        # that dominate scanned corporate PDFs — noun forms of «секрет» only.
         r"\b(?:отправ\w*|переда\w*|перешл\w*|загруз\w*|выгруз\w*|пошли)\b"
-        r"[^.\n]{0,60}\b(?:парол\w*|токен\w*|api[_\s-]?ключ\w*|секрет\w*|"
-        r"приватн\w*\s+ключ\w*|учётн\w*\s+данн\w*)",
+        r"[^.\n]{0,60}\b(?:парол\w*|токен\w*|api[_\s-]?ключ\w*|"
+        r"секрет(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b|"
+        r"приватн\w*\s+ключ\w*|учётн\w*\s+данн\w*|учетн\w*\s+данн\w*)",
         elastic=True,
     ),
     _Rule(

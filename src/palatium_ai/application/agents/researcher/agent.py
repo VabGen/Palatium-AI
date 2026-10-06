@@ -17,6 +17,7 @@ from palatium_ai.application.agents.researcher.parsing import (
     decode_researcher_input,
     parse_researcher_output,
     redact_mcp_arguments,
+    score_mcp_tool_confidence,
     summarize_mcp_content,
 )
 from palatium_ai.application.agents.researcher.prompts import RESEARCHER_SYSTEM_PROMPT
@@ -124,7 +125,14 @@ class ResearcherAgent(BaseAgent):
             requires_tool_call=execution_plan.requires_tool_call,
             selected_strategy=execution_plan.strategy,
         )
-        if mcp_gate.allowed and self._mcp_registry is not None and self._capability_index is not None:
+        if mcp_gate.allowed:
+            if self._mcp_registry is None or self._capability_index is None:
+                # The plan mandates a tool call, but the runtime wired no MCP registry/index (070).
+                return _failure_output(
+                    input.task_id,
+                    summary="Required MCP capability is unavailable. No tool result was produced.",
+                    error="MCP capability unavailable",
+                )
             try:
                 mcp_result = await self._execute_mcp_capability(task_input, context, input.task_id)
             except Exception:
@@ -137,13 +145,23 @@ class ResearcherAgent(BaseAgent):
                 )
             if mcp_result is not None:
                 return mcp_result
-
-        if task_input.context_packet.requires_mcp or execution_plan.requires_tool_call:
+            # MCP was attempted but produced no usable result (no binding / descriptor / outcome).
             return _failure_output(
                 input.task_id,
                 summary="Required MCP capability is unavailable. No tool result was produced.",
                 error="MCP capability unavailable",
             )
+
+        # mcp_gate refused the tool path. That is a *policy decision* (intent needs no MCP, or the
+        # route strategy deliberately answers without a tool call), not a capability failure.
+        # Treating it as one killed the node in <5 ms without a single LLM call and retried it
+        # three times (055: false escalation). Fall through to the ordinary LLM research path.
+        logger.debug(
+            "researcher MCP path skipped by policy",
+            reason=mcp_gate.reason,
+            strategy=execution_plan.strategy,
+            task_id=str(input.task_id),
+        )
 
         messages = [
             ChatMessage(role="system", content=RESEARCHER_SYSTEM_PROMPT),
@@ -478,9 +496,13 @@ class ResearcherAgent(BaseAgent):
             server_name=server_name,
             tool_name=tool_name,
         )
+        confidence = score_mcp_tool_confidence(
+            is_error=outcome.is_error,
+            summary_chars=len(summary.strip()),
+        )
         output = ResearcherOutput(
             summary=summary,
-            confidence=0.65 if not outcome.is_error else 0.2,
+            confidence=confidence,
             sources_used=(f"mcp:{server_name}.{tool_name}",),
         )
         requires_review = outcome.is_error or output.confidence < self._config.confidence_threshold

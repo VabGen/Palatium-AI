@@ -44,7 +44,8 @@ async def test_supervisor_social_with_mcp_goes_researcher() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_planner_ack_only_for_social_formatter_route() -> None:
+async def test_planner_format_only_for_social_formatter_route() -> None:
+    """Social uses Formatter LLM — no canned ack_only template (2026)."""
     bundle = await ExecutionPlanner().build(
         ContextWeaverInput(
             task_id="t3",
@@ -56,7 +57,7 @@ async def test_planner_ack_only_for_social_formatter_route() -> None:
             candidate_capabilities=(),
         )
     )
-    assert bundle.selected_strategy == "ack_only"
+    assert bundle.selected_strategy == "format_only"
     assert bundle.requires_tool_call is False
 
 
@@ -111,7 +112,9 @@ async def test_planner_multi_step_is_single_retrieve_pass() -> None:
     )
     assert len(bundle.steps) == 1
     assert bundle.selected_strategy == "retrieve_then_reason"
-    assert bundle.requires_tool_call is False
+    assert bundle.requires_tool_call is True
+    assert bundle.steps[0].server_name == "platform"
+    assert bundle.steps[0].tool_name == "search_knowledge"
 
 
 @pytest.mark.asyncio()

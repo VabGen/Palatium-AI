@@ -20,6 +20,7 @@ from palatium_ai.core.types.embeddings import assert_vector_dim
 from palatium_ai.domain.memory.pii import mask_memory_value
 from palatium_ai.domain.memory.promotion import PromotionCandidate
 from palatium_ai.domain.memory.types import MemoryType
+from palatium_ai.domain.policies.retention import DEFAULT_RETENTION_WINDOWS, RetentionPolicy, RetentionWindows
 from palatium_ai.infrastructure.database.models.memory_entry import MemoryEntryORM
 from palatium_ai.infrastructure.database.rls import set_rls_user_scope
 from palatium_ai.infrastructure.memory.user_scope import resolve_user_id
@@ -52,6 +53,11 @@ def normalize_memory_type(value: dict[str, object]) -> MemoryType:
     return "fact"
 
 
+def _active_memory_clause(*, now: datetime) -> Any:
+    """Rows with no TTL (legacy) or future expires_at remain searchable."""
+    return or_(MemoryEntryORM.expires_at.is_(None), MemoryEntryORM.expires_at > now)
+
+
 def merge_hybrid_scores(
     fts_hits: list[tuple[str, float, dict[str, object]]],
     vector_hits: list[tuple[str, float, dict[str, object]]],
@@ -79,9 +85,11 @@ class PostgresMemoryPort:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         embeddings: EmbeddingPort | None = None,
+        retention_windows: RetentionWindows | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._embeddings = embeddings
+        self._windows = retention_windows or DEFAULT_RETENTION_WINDOWS
 
     async def put(self, *, namespace: tuple[str, ...], key: str, value: dict[str, object]) -> None:
         """Upsert a memory item under namespace/key."""
@@ -91,6 +99,13 @@ class PostgresMemoryPort:
         memory_type = normalize_memory_type(value)
         importance = max(0.0, min(1.0, coerce_float(value.get("importance", value.get("confidence", 0.0)))))
         contains_pii = bool(value.get("contains_pii", False))
+        written_at = datetime.now(UTC)
+        expires_at = RetentionPolicy.memory_expires_at(
+            memory_type=memory_type,
+            contains_pii=contains_pii,
+            created_at=written_at,
+            windows=self._windows,
+        )
         embedding: list[float] | None = None
         if self._embeddings is not None and search_blob.strip():
             vectors = await self._embeddings.embed([search_blob])
@@ -117,6 +132,7 @@ class PostgresMemoryPort:
                     importance=importance,
                     contains_pii=contains_pii,
                     embedding=embedding,
+                    expires_at=expires_at,
                 )
                 .on_conflict_do_update(
                     constraint="uq_memory_entries_user_ns_key",
@@ -127,6 +143,7 @@ class PostgresMemoryPort:
                         "importance": importance,
                         "contains_pii": contains_pii,
                         "embedding": embedding,
+                        "expires_at": expires_at,
                     },
                 )
             )
@@ -134,9 +151,10 @@ class PostgresMemoryPort:
             await session.commit()
 
     async def get(self, *, namespace: tuple[str, ...], key: str) -> dict[str, object] | None:
-        """Fetch one item or None."""
+        """Fetch one item or None (expired rows are invisible)."""
         user_id = resolve_user_id(namespace)
         ns = encode_namespace(namespace)
+        now = datetime.now(UTC)
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
             result = await session.execute(
@@ -144,6 +162,7 @@ class PostgresMemoryPort:
                     MemoryEntryORM.user_id == user_id,
                     MemoryEntryORM.namespace == ns,
                     MemoryEntryORM.entry_key == key,
+                    _active_memory_clause(now=now),
                 )
             )
             row = result.scalar_one_or_none()
@@ -250,6 +269,7 @@ class PostgresMemoryPort:
                     MemoryEntryORM.promoted_at.is_(None),
                     MemoryEntryORM.access_frequency >= min_access_frequency,
                     MemoryEntryORM.importance >= min_importance,
+                    _active_memory_clause(now=datetime.now(UTC)),
                 )
                 .order_by(MemoryEntryORM.access_frequency.desc(), MemoryEntryORM.importance.desc())
                 .limit(safe_limit)
@@ -299,6 +319,51 @@ class PostgresMemoryPort:
             await session.commit()
             return bool(getattr(result, "rowcount", 0))
 
+    async def sweep_expired_for_user(
+        self,
+        *,
+        user_id: str,
+        limit: int | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        """Hard-delete expired medium-term rows for one owner (RLS-scoped)."""
+        uid = user_id.strip()
+        if not uid:
+            return 0
+        cutoff = now or datetime.now(UTC)
+        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            msg = "sweep cutoff must be timezone-aware (UTC)"
+            raise ValueError(msg)
+        batch = self._windows.batch_size if limit is None else max(1, min(limit, 5000))
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, uid)
+            candidate_ids = (
+                (
+                    await session.execute(
+                        select(MemoryEntryORM.id)
+                        .where(
+                            MemoryEntryORM.user_id == uid,
+                            MemoryEntryORM.expires_at.is_not(None),
+                            MemoryEntryORM.expires_at <= cutoff,
+                        )
+                        .order_by(MemoryEntryORM.expires_at.asc())
+                        .limit(batch)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not candidate_ids:
+                return 0
+            result = await session.execute(
+                delete(MemoryEntryORM).where(
+                    MemoryEntryORM.user_id == uid,
+                    MemoryEntryORM.id.in_(list(candidate_ids)),
+                )
+            )
+            await session.commit()
+            return int(getattr(result, "rowcount", 0) or 0)
+
     async def _search_fts(
         self,
         *,
@@ -310,6 +375,7 @@ class PostgresMemoryPort:
         ts_vector = func.to_tsvector("simple", MemoryEntryORM.search_text)
         ts_query = func.plainto_tsquery("simple", query)
         rank = cast(func.ts_rank_cd(ts_vector, ts_query), Float)
+        now = datetime.now(UTC)
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
             result = await session.execute(
@@ -318,6 +384,7 @@ class PostgresMemoryPort:
                     MemoryEntryORM.user_id == user_id,
                     MemoryEntryORM.namespace == namespace,
                     ts_vector.op("@@")(ts_query),
+                    _active_memory_clause(now=now),
                 )
                 .order_by(rank.desc(), MemoryEntryORM.importance.desc())
                 .limit(limit)
@@ -350,6 +417,7 @@ class PostgresMemoryPort:
         assert_vector_dim(schema="memory", vector_len=len(query_vec))
         distance = MemoryEntryORM.embedding.cosine_distance(query_vec)
         similarity = (1.0 - distance).label("similarity")
+        now = datetime.now(UTC)
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
             result = await session.execute(
@@ -358,6 +426,7 @@ class PostgresMemoryPort:
                     MemoryEntryORM.user_id == user_id,
                     MemoryEntryORM.namespace == namespace,
                     MemoryEntryORM.embedding.is_not(None),
+                    _active_memory_clause(now=now),
                 )
                 .order_by(distance.asc(), MemoryEntryORM.importance.desc())
                 .limit(limit)
@@ -381,11 +450,13 @@ class PostgresMemoryPort:
         limit: int,
     ) -> list[dict[str, object]]:
         tokens = {t for t in re.findall(r"[a-zA-Zа-яА-Я0-9_]{2,}", query.lower())}
+        now = datetime.now(UTC)
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
             filters = [
                 MemoryEntryORM.user_id == user_id,
                 MemoryEntryORM.namespace == namespace,
+                _active_memory_clause(now=now),
             ]
             if tokens:
                 filters.append(or_(*[MemoryEntryORM.search_text.ilike(f"%{token}%") for token in list(tokens)[:8]]))

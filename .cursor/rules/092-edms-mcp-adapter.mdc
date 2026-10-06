@@ -1,46 +1,136 @@
 ---
 description: >-
-  EDMS MCP adapter — MAX PRO: legacy-чат код → laconic FastMCP; JavaEdms
-  read-only; не выдумывать API/auth/DTO
+  EDMS MCP с нуля: новая структура в mcp_servers/edms. Reference-only:
+  JavaEdms (SoT), edms-ai-assistant (junior), текущий edms_mcp_server.py (старый stub)
 globs:
   - "mcp_servers/edms/**"
   - "mcp_servers/gateway/**"
   - "src/palatium_ai/domain/mcp/external_schemas.py"
   - "src/palatium_ai/domain/mcp/tool_policy.py"
+  - "src/palatium_ai/domain/mcp/edms_*.py"
 alwaysApply: false
 ---
 
-# EDMS MCP adapter (092)
+# EDMS MCP adapter (092) — инструкция разработки
 
-Скилл процесса: `.cursor/skills/edms-mcp-max-pro/SKILL.md`.
-Справочник СЭД: **090**. Host control plane: **070 / 020 / Phase 5 pins**.
+Скилл процесса: `.cursor/skills/edms-mcp-max-pro/SKILL.md` (+ `waves.md`).
+СЭД SoT: **090**. Host control plane: **070 / 020**. Качество кода платформы:
+**001 / 010 / 015 / 035 / 050 / 055 / 075 / 080 / 082 / 086**. Spec-driven: **005**.
 
 ## Цель
 
-Laconic **реальный** (или эволюционирующий) EDMS MCP server на FastMCP 2026:
-pinned schemas, JWT `aud=mcp:edms`, Host ToolPolicy/HITL — без переноса control
-plane на сервер. Legacy AI-Assistant / junior-код — **сырьё на разбор**, не эталон.
+С нуля, **по шагам**, собрать боевой EDMS MCP на FastMCP 2026 в **новой
+структуре пакета** под `mcp_servers/edms/` (не наращивать монолитный
+`edms_mcp_server.py`). Контракты Host — `domain/mcp/` (frozen schemas + pins).
+JWT `aud=mcp:edms`, ToolPolicy/HITL — на Host; control plane на MCP server не
+переносить.
+
+Целевой layout (имена уточнять волнами; дух — слои, не один файл):
+
+```
+mcp_servers/edms/
+  <package>/           ← НОВАЯ структура (сервер, tools, client СЭД, auth wiring)
+  edms_mcp_server.py   ← старый stub: только подглядка / временный runtime
+  JavaEdms/            ← SoT СЭД (090, ТОЛЬКО ЧТЕНИЕ)
+  edms-ai-assistant/   ← junior working-integration (подглядка, НЕ эталон)
+```
+
+Новый код = spec → pin/schema → минимальный модуль в новой структуре → тест.
+Миграция compose/entrypoint на новый пакет — отдельным шагом волны, не «заодно».
+
+## Три reference (не смешивать роли)
+
+| Источник | Роль | Доверие | Править? |
+|---|---|---|---|
+| **JavaEdms** | Канон API, DTO, Permission, workflow, терминов | Высокое. Нет → **спроси** (090) | ❌ |
+| **edms-ai-assistant** | Живой junior chat↔СЭД: сценарии, HTTP, intent→action | Низкое; часто ломает логику СЭД | ❌ |
+| **`edms_mcp_server.py`** | Исторический stub (pins/demo tools) | Среднее как образец wiring FastMCP; **не** целевая архитектура | ❌ наращивать; ✅ читать; замена — новая структура |
+| UI `next.edo.iba` | Только для человека | — | — |
+
+### `edms-ai-assistant` — оговорки
+
+Рабочая интеграция (можно подсмотреть flow), код **junior**:
+
+- нарушения логики/терминов СЭД vs JavaEdms;
+- поломки слоёв/структуры; игнор SOLID, DRY, KISS, YAGNI;
+- God-клиенты, хардкод, сырые dict; слабая type safety / не fail-closed.
+
+**Запрещено** копипастить as-is в новую структуру или в `src/palatium_ai/`.
+
+### `edms_mcp_server.py` — оговорки
+
+Однофайловый stub эпохи Track C: полезен чтобы увидеть регистрацию tools /
+hardening / shared `mcp_stub_*`. **Не** расширять новыми EDMS-сценариями и **не**
+считать финальным адаптером. Новая функциональность — только в новой структуре
+пакета; stub может остаться thin entrypoint или быть снят после cutover.
+
+**При заимствовании intent (assistant или stub):**
+
+1. Сценарий → кандидат MCP tool.
+2. Verify endpoint/auth/DTO/права в **JavaEdms**.
+3. Конфликт junior/stub vs JavaEdms → побеждает JavaEdms (`REJECT: …`).
+4. Реализовать **заново** в новой структуре + контракт 070 (schema + pin + HITL).
+5. Чеклист качества ниже + скилл.
+
+`JavaEdms/**` и `edms-ai-assistant/**` — не наша зона правок (017, 090).
 
 ## Жёстко
 
 | ❌ | ✅ |
 |---|---|
-| Править `JavaEdms/**` | Читать JavaEdms как reference |
-| Выдумать endpoint/auth/DTO/статус | Спросить пользователя или найти в JavaEdms |
-| Копировать «грязный» чат-код as-is | Извлечь intent → контракт → минимальный tool |
+| Править `JavaEdms/**` / `edms-ai-assistant/**` | Читать как reference |
+| Наращивать `edms_mcp_server.py` как основную интеграцию | Новая структура пакета под `mcp_servers/edms/` |
+| Копипаст junior / vibe coding | Intent → JavaEdms verify → rewrite |
+| Выдумать endpoint/auth/DTO/статус | JavaEdms или вопрос пользователю |
 | Доверять server `readOnlyHint` | Только `PlatformToolPin` + fingerprint (Host) |
 | Write без HITL | interrupt + irreversible pin (020) |
-| Новый tool молча | Правка pins + 070/RBAC обсуждение |
+| Новый tool молча | Правка pins + перечень 070 + RBAC |
+| Control plane на MCP server | HITL/ACL/pins только на Host (070) |
 
 ## Источники истины (порядок)
 
-1. Поведение СЭД — **JavaEdms** (код), не UI-стенд и не legacy-чат.
-2. Контракт tool — `domain/mcp/external_schemas.py` + `tool_policy` pin.
-3. Транспорт/auth — FastMCP stub/gateway patterns (`mcp_stub_runtime`, Phase 1–6).
-4. Legacy-файлы пользователя — гипотезы; опровергать через JavaEdms.
+1. Поведение СЭД — **JavaEdms**.
+2. Контракт tool — `external_schemas.py` + pin в `tool_policy`.
+3. Authority СЭД — генерируемый `edms_authorities.py`.
+4. Транспорт/auth patterns — `mcp_stub_*` / gateway (читать, не копировать грязь).
+5. `edms-ai-assistant` / старый stub / вложения чата — **гипотезы**.
 
-## Качество ответа агенту/пользователю
+## Качество 2026 (карта → правила репо)
+
+Один владелец темы — существующие правила (050). Здесь чек перед «done».
+
+### Архитектура
+
+- Spec-driven: контракт/pin/сценарии → код (**005**, онбординг **070**).
+- SOLID / DRY / KISS / YAGNI; без абстракций «на будущее» (**050**, **055**).
+- Нет God-модуля: tools / SED client / auth / runtime — раздельные модули новой структуры.
+
+### Качество кода
+
+- Ruff + `mypy --strict` (**010**, **015**); C90 ≤ 10; вложенность ≤ 3; fn ≤ 50 строк.
+- Fail-closed (**035**); frozen pydantic I/O, без `dict[str, Any]` контрактов (**070**).
+
+### Безопасность
+
+- OWASP карта **020**; supply-chain **025**; secrets только env.
+- RBAC + HITL на write/PII (**020**, **070**); PII → **060** / маскирование **070**.
+
+### Производительность / тесты / ops
+
+- Async I/O, таймауты per-tool (**080**, **070**).
+- Happy / empty / invalid / auth fail / write+HITL / ambiguous / PII (**075** + скилл).
+- Digest images, non-root (**082**); span+метрика (**040**); TODO формат **086**.
+
+## Порядок работы (агент)
+
+1. Режим `INGEST` / `ANALYZE` / `FIX` / `CONTRACT` — скилл; не смешивать.
+2. Волны: сначала layout новой структуры (если ещё нет) + контракт; не патч stub.
+3. Intent map → JavaEdms verify → reject junior/stub ошибок.
+4. Реализация в **новой** структуре → wiring Host pins → тест.
+5. Cutover entrypoint/compose — явный шаг; без тихого раздувания stub.
+
+## Качество ответа пользователю
 
 - Сценарии: search / get / list / write / ambiguous / empty / permission denied.
-- Результат: типизированный, без галлюцинации id; truncate + `truncated` флаг.
-- Ошибка: fail-closed, mask internals (`mask_error_details`), без утечки PII в лог.
+- Типизированный результат, без галлюцинации id; truncate + `truncated`.
+- Ошибка fail-closed, без утечки PII; gap API/auth — явный вопрос.

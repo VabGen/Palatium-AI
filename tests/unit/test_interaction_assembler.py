@@ -109,6 +109,33 @@ def test_assembler_fail_closed_when_choice_required_without_options() -> None:
     assert assembled.plan.reason == "formatter_output_invalid"
 
 
+def test_assembler_downgrades_rhetorical_choice_to_informational() -> None:
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        title="Сравнение",
+        blocks=(ParagraphBlock(type="paragraph", text="Единственное отличие в инициалах."),),
+        actions=(),
+        meta=DocumentMeta(
+            confidence=0.95,
+            requires_review=False,
+            source_refs=(),
+            interaction="choice",
+        ),
+    )
+    assembled = InteractionAssembler.assemble(
+        doc,
+        requires_review=False,
+        task_kind="knowledge_request",
+        requires_user_choice=False,
+    )
+    assert assembled.invalid is False
+    assert assembled.plan.reason == "interaction_downgraded_informational"
+    assert assembled.document is not None
+    assert assembled.document.meta.interaction == "none"
+    assert assembled.document.actions == ()
+
+
 def test_heading_plus_list_still_menu_shaped() -> None:
     doc = ContentDocument(
         schema_version=1,

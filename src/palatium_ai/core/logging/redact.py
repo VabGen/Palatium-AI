@@ -1,19 +1,23 @@
 # src/palatium_ai/core/logging/redact.py
 
-"""Structlog secret redaction (never echo credentials into logs)."""
+"""Structlog secret redaction (never echo credentials into logs).
+
+Value masking delegates to ``core.security.secret_scanner`` so logs and the
+pre-LLM gate cannot drift apart on what counts as a secret (050).
+"""
 
 from __future__ import annotations
 
-import re
-
 from typing import TYPE_CHECKING
 
-from palatium_ai.core.security.secret_scanner import secret_value_patterns
+from palatium_ai.core.security.secret_scanner import redact_text
 
 if TYPE_CHECKING:
     import logging
 
     from structlog.types import EventDict
+
+__all__ = ["redact_secrets", "redact_text"]
 
 _REDACTED = "[REDACTED]"
 _MAX_DEPTH = 6
@@ -56,8 +60,6 @@ _SENSITIVE_KEY_MARKERS: tuple[str, ...] = (
     "bearer",
 )
 
-_SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = secret_value_patterns()
-
 
 def redact_secrets(
     _logger: logging.Logger,
@@ -66,14 +68,6 @@ def redact_secrets(
 ) -> EventDict:
     """Strip credential-shaped keys/values from a structlog event dict."""
     return _redact_mapping(event_dict, depth=0)
-
-
-def redact_text(value: str) -> str:
-    """Redact secret-shaped substrings in a free-form string (e.g. exception text)."""
-    redacted = value
-    for pattern in _SECRET_VALUE_PATTERNS:
-        redacted = pattern.sub(_REDACTED, redacted)
-    return redacted
 
 
 def _is_sensitive_key(key: str) -> bool:

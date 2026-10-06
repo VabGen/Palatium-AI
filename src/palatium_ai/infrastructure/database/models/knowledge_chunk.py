@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from palatium_ai.core.types.embeddings import KNOWLEDGE_EMBEDDING_DIM
 from palatium_ai.infrastructure.database.base import Base, UUIDPrimaryKeyMixin
@@ -35,6 +35,14 @@ class KnowledgeDocumentORM(UUIDPrimaryKeyMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    # Relationship (не для чтения в рантайме): задаёт зависимость unit-of-work,
+    # чтобы INSERT documents всегда шёл до INSERT chunks. Без неё SQLAlchemy
+    # сортирует мапперы по имени и вставляет chunks первыми → FK violation.
+    chunks: Mapped[list[KnowledgeChunkORM]] = relationship(
+        back_populates="document",
+        passive_deletes=True,
+    )
+
 
 class KnowledgeChunkORM(UUIDPrimaryKeyMixin, Base):
     """Searchable knowledge chunk with contextual prefix for embedding."""
@@ -58,3 +66,5 @@ class KnowledgeChunkORM(UUIDPrimaryKeyMixin, Base):
     search_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     embedding: Mapped[list[float] | None] = mapped_column(Vector(KNOWLEDGE_EMBEDDING_DIM), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    document: Mapped[KnowledgeDocumentORM] = relationship(back_populates="chunks")

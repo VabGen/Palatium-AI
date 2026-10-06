@@ -24,6 +24,13 @@ def text_looks_like_pii(text: str) -> bool:
     return bool(_EMAIL_RE.search(blob) or _PHONE_RE.search(blob) or _PASSPORT_LIKE_RE.search(blob))
 
 
+def mask_pii_in_text(text: str) -> str:
+    """Replace structured PII detectors with stable placeholders (attachments G06, 060)."""
+    out = _EMAIL_RE.sub("[EMAIL]", text)
+    out = _PHONE_RE.sub("[PHONE]", out)
+    return _PASSPORT_LIKE_RE.sub("[ID]", out)
+
+
 def resolve_contains_pii(*, text: str, client_flag: bool = False) -> bool:
     """Client may escalate to true; false is never trusted without server scan."""
     return bool(client_flag) or text_looks_like_pii(text)

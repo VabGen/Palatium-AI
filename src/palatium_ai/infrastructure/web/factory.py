@@ -15,8 +15,15 @@ if TYPE_CHECKING:
     from palatium_ai.core.config.settings import Settings
 
 
+class WebSearchConfigurationError(RuntimeError):
+    """HTTP web search was requested but cannot be wired (fail-closed)."""
+
+
 def build_web_search_port(settings: Settings) -> WebSearchPort:
-    """Select web search backend; fail open to stub when misconfigured."""
+    """Select web search backend; explicit stub only when ``backend=stub``.
+
+    Misconfigured ``backend=http`` raises — never silently degrade to stub (050).
+    """
     if settings.web.backend != "http":
         return StubWebSearchPort()
 
@@ -54,5 +61,5 @@ def build_web_search_port(settings: Settings) -> WebSearchPort:
             retry_delay_seconds=settings.web.retry_delay_seconds,
         )
     except (ImportError, ValueError) as exc:
-        logger.warning("HTTP web search unavailable; using stub", error=str(exc))
-        return StubWebSearchPort()
+        logger.error("HTTP web search unavailable; refusing stub fallback", error=str(exc))
+        raise WebSearchConfigurationError(f"WEB_BACKEND=http but web search cannot start ({provider}): {exc}") from exc

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import math
+
 from typing import TYPE_CHECKING
 
 import structlog
@@ -28,8 +30,26 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-def _to_litellm_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
-    return [{"role": message.role, "content": message.content} for message in messages]
+def _to_litellm_messages(messages: list[ChatMessage]) -> list[dict[str, object]]:
+    """Map domain messages; attach Anthropic-style cache_control on system prefixes."""
+    out: list[dict[str, object]] = []
+    for message in messages:
+        if message.cache_control is not None and message.role == "system":
+            out.append(
+                {
+                    "role": message.role,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": message.content,
+                            "cache_control": {"type": message.cache_control},
+                        }
+                    ],
+                }
+            )
+        else:
+            out.append({"role": message.role, "content": message.content})
+    return out
 
 
 def _parse_usage(usage_obj: object | None) -> LLMUsage:
@@ -55,6 +75,26 @@ def _parse_usage(usage_obj: object | None) -> LLMUsage:
     )
 
 
+def _parse_response_cost(response: object) -> float | None:
+    """Provider-reported USD cost for the call, or None when none was reported.
+
+    LiteLLM surfaces the gateway's ``x-litellm-response-cost`` through ``_hidden_params``.
+    A gateway routing opaque tier aliases is the only component that can price the call,
+    so this value is authoritative over any local price table. Absent, non-numeric or
+    negative values mean "not reported" — never invent a rate (050).
+    """
+    hidden = getattr(response, "_hidden_params", None)
+    if not isinstance(hidden, dict):
+        return None
+    raw = hidden.get("response_cost")
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
+        return None
+    cost = float(raw)
+    if not math.isfinite(cost) or cost < 0.0:
+        return None
+    return cost
+
+
 def _parse_completion(response: object) -> LLMCompletion:
     content = ""
     finish_reason: str | None = None
@@ -77,7 +117,13 @@ def _parse_completion(response: object) -> LLMCompletion:
         model = raw_model
 
     usage = _parse_usage(getattr(response, "usage", None))
-    return LLMCompletion(content=content, model=model, usage=usage, finish_reason=finish_reason)
+    return LLMCompletion(
+        content=content,
+        model=model,
+        usage=usage,
+        finish_reason=finish_reason,
+        cost_usd=_parse_response_cost(response),
+    )
 
 
 def _parse_stream_delta(chunk: object) -> LLMStreamDelta:
@@ -191,6 +237,10 @@ class LiteLLMAdapter:
         response_format: LLMResponseFormat | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         """Возвращает поток частичных ответов."""
+        from time import perf_counter
+
+        from palatium_ai.core.observability.metrics import agent_metrics
+
         params = self._build_params(
             model=model,
             temperature=temperature,
@@ -199,6 +249,12 @@ class LiteLLMAdapter:
             response_format=response_format,
         )
         params["messages"] = _to_litellm_messages(messages)
+        started = perf_counter()
+        first_token = True
         stream = await acompletion(**params)
         async for chunk in stream:
-            yield _parse_stream_delta(chunk)
+            delta = _parse_stream_delta(chunk)
+            if first_token and delta.content:
+                agent_metrics.record_llm_ttft(perf_counter() - started)
+                first_token = False
+            yield delta

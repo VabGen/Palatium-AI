@@ -13,11 +13,13 @@ from .attachments import AttachmentConfig
 from .base import BaseConfig
 from .database import DatabaseConfig, RedisConfig
 from .embeddings import EmbeddingConfig
+from .knowledge import KnowledgeConfig
 from .llm import LLMConfig
 from .logging import LoggingConfig
 from .mcp import MCPConfig
 from .memory import MemoryConfig
 from .observability import ObservabilityConfig
+from .retention import RetentionConfig
 from .security import SecurityConfig
 from .web import WebConfig
 
@@ -32,9 +34,11 @@ class Settings(BaseConfig):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embeddings: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     attachments: AttachmentConfig = Field(default_factory=AttachmentConfig)
 

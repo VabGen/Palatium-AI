@@ -2,7 +2,6 @@
 description: JavaEdms под mcp_servers/edms — read-only справочник СЭД для интеграции
 globs:
   - "mcp_servers/edms/JavaEdms/**"
-  - "mcp_servers/edms/edms_mcp_server.py"
 alwaysApply: true
 ---
 
@@ -19,25 +18,29 @@ alwaysApply: true
   URL ДЛЯ ЧЕЛОВЕКА-РАЗРАБОТЧИКА. AI по нему не ходит и контент страницы
   не выдумывает; термины СЭД — только из кода JavaEdms или от пользователя.
 
-## Структура
+## Структура (рядом с SoT)
 
 ```
-mcp_servers/
-  edms/
-    edms_mcp_server.py   ← наш Python MCP stub (менять можно, по правилам ниже)
-    JavaEdms/            ← справочник СЭД (ТОЛЬКО ЧТЕНИЕ)
-      edms/              ← бэкенд СЭД
-      frontend/          ← фронтенд СЭД (/home-page)
+mcp_servers/edms/
+  <новая структура пакета>   ← целевая интеграция с нуля (092)
+  edms_mcp_server.py         ← старый stub: только подглядка (092)
+  JavaEdms/                  ← SoT СЭД (ТОЛЬКО ЧТЕНИЕ) — это правило
+    edms/                    ← бэкенд СЭД
+    frontend/                ← фронтенд СЭД (/home-page)
+  edms-ai-assistant/         ← junior working-integration: подглядка (092)
 ```
+
+Полная инструкция разработки MCP EDMS (новая структура, запрет копипаста,
+роли reference) — правило **092** + скилл `edms-mcp-max-pro`.
 
 ## Жёсткие запреты
 
 - ❌ **Не изменяй** файлы внутри `mcp_servers/edms/JavaEdms/` (ни бэкенд, ни frontend).
 - ❌ Не рефакторь, не «чисти», не переноси код Java/TS из JavaEdms в palatium-ai.
 - ❌ Не добавляй зависимости от JavaEdms в Python-пакет `palatium_ai`.
-- ✅ Интеграцию реализуй через **MCP-слой** платформы
-  (`mcp_servers/edms/edms_mcp_server.py` → будущий реальный MCP-адаптер),
-  читая JavaEdms только как reference.
+- ✅ Интеграцию реализуй **с нуля** в новой структуре под `mcp_servers/edms/`
+  (092), читая JavaEdms только как reference. Не наращивай `edms_mcp_server.py`
+  как основную интеграцию.
 - Если изменение в JavaEdms кажется необходимым — НЕ правь файлы: предложи
   дифф/изменение в ответе или описании задачи для человека. Рекомендация
   репозиторию: CI/CODEOWNERS блокируют PR с правками `mcp_servers/edms/JavaEdms/**`.
@@ -49,35 +52,22 @@ mcp_servers/
 Документы, поручения, договоры, ФИО участников — персональные и конфиденциальные
 данные. При проектировании EDMS-контрактов помнить: PII-классификация при
 записи в память (060), маскирование на выходе инструментов (070),
-HITL для необратимых write-операций (020, 070 — `ingest_document`).
+HITL для необратимых write-операций (020, 070).
 
-## Правила для stub (`edms_mcp_server.py`)
+## Контракт Host (не в JavaEdms)
 
-- Это Python-код репозитория — действуют общие правила (типизация, pydantic,
-  010, 050).
-- Stub и будущий реальный адаптер подчиняются контракту инструментов 070:
-  frozen pydantic-схемы входа/выхода в `external_schemas.py` + платформенный
-  `PlatformToolPin` (side_effect/risk_tier/requires_hitl/fingerprint),
-  без сырых dict и произвольных API.
-- EDMS-инструменты НЕ добавляются в канонический перечень 070 молча:
-  новый инструмент = правка перечня 070 + обсуждение RBAC-маппинга (020),
-  затем реализация в stub по контракту.
-- Auth и endpoints СЭД: если сведений в JavaEdms не хватает (API endpoints,
-  auth, DTO, статусы workflow) — **спроси пользователя**, не выдумывай
-  контракты (070, 000). Полученные креды — только через env/секреты (020),
-  схему auth — фиксировать в контракте адаптера, не в комментарии.
+- Схемы/пины EDMS tools — `domain/mcp/` + онбординг **070**; новый tool = правка
+  перечня 070 + RBAC (020), затем реализация в **новой** структуре MCP (092).
+- Auth и endpoints СЭД: если сведений в JavaEdms не хватает — **спроси
+  пользователя**, не выдумывай (070, 000). Креды — только env/секреты (020).
 
-## Что править вместо этого
+## Что править вместо JavaEdms
 
 | Нужно | Куда |
 |---|---|
-| MCP stub / tools list-call | `mcp_servers/edms/edms_mcp_server.py` (по контракту 070) |
-| Клиент MCP, capabilities, researcher | `src/palatium_ai/` |
-| Dev-запуск stubs | `scripts/dev-up.ps1` / `scripts/dev-down.ps1` |
-| Новый EDMS-инструмент в перечне | расширение закрытого перечня 070 + обсуждение |
+| Целевой EDMS MCP (с нуля) | новая структура под `mcp_servers/edms/` (092) |
+| Контракты / pins Host | `src/palatium_ai/domain/mcp/` |
+| Клиент MCP, capabilities | `src/palatium_ai/` |
+| Dev-запуск | `scripts/dev-up.ps1` / `scripts/dev-down.ps1` (cutover на новый пакет — волна) |
 
-Если для интеграции не хватает сведений из JavaEdms (API endpoints, auth, DTO,
-статусы workflow) — **спроси пользователя**, не выдумывай контракты.
-
-MAX PRO процесс (разбор legacy AI-Assistant → адаптер): скилл
-`edms-mcp-max-pro` + правило **092** (не дублировать процедуру здесь).
+MAX PRO процесс: скилл `edms-mcp-max-pro` + **092** (не дублировать процедуру здесь).

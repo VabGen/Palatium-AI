@@ -8,7 +8,7 @@
       "route": "formatter",
       "route_plan": "Format social reply",
       "requires_mcp": false,
-      "selected_strategy": "ack_only",
+      "selected_strategy": "format_only",
       "worker_summary": "Краткий ответ пользователю.",
       "critic_summary": "ok"
     },

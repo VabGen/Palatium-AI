@@ -11,7 +11,14 @@ from .prompt_injection import (
     severity_rank,
     worst_severity,
 )
-from .secret_scanner import SecretScanError, scan_text, scan_text_fields, secret_value_patterns
+from .secret_scanner import (
+    SecretScanError,
+    redact_text,
+    scan_text,
+    scan_text_fields,
+    secret_pattern_labels,
+    secret_value_patterns,
+)
 
 __all__ = [
     "InjectionFinding",
@@ -23,9 +30,11 @@ __all__ = [
     "fold_for_scan",
     "quote_sql_identifier",
     "redact_findings",
+    "redact_text",
     "scan_prompt_injection",
     "scan_text",
     "scan_text_fields",
+    "secret_pattern_labels",
     "secret_value_patterns",
     "severity_rank",
     "worst_severity",

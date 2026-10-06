@@ -1,9 +1,3 @@
-# Packaging & dependency manifest.
-#   * runtime deps        -> [project].dependencies
-#   * optional feature sets -> [project.optional-dependencies] (published PEP 621 extras)
-#   * developer tooling     -> [dependency-groups] (PEP 735)
-# Environment management is Poetry; the resolved graph lives in `poetry.lock`.
-
 [project]
 name = "palatium-ai"
 version = "0.1.0"
@@ -26,30 +20,26 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === poetry remove
+# === === === === === === A B C D E F G H I J K L M N O P Q R S T U V W X Y Z === === === === === === === === === poetry add
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
+# ===============================================================================================================
+
 dependencies = [
     "alembic (>=1.19.1,<2.0.0)",
     "asyncpg (>=0.30.0,<0.40.0)",
-    # Security floor: pip-audit flags cryptography <48 (PYSEC-2026-3552/3553/3554,
-    # GHSA-537c-gmf6-5ccf) — the old `<47` bound pinned the project onto vulnerable
-    # releases, so `scripts/ci_security.py` could never pass.
     "cryptography (>=50.0.0,<51.0.0)",
     "fastapi (>=0.140.0,<0.150.0)",
-    # Exact pin on purpose: the MCP stubs and gateway subclass fastmcp internals
-    # (`build_http_app`, `PinAllowlistMiddleware`) and 4.x ships breaking changes.
     "fastmcp (==4.0.0)",
     "fpdf2 (>=2.8.8,<3.0.0)",
     "httpx (>=0.28.0,<0.29.0)",
     "json-repair (>=0.63.4,<0.64.0)",
     "jsonschema (>=4.25.0,<5.0.0)",
-    # Imported directly by `application/orchestration/run_config.py`.
     "langchain-core (>=1.6.4,<2.0.0)",
     "langfuse (>=3.0.0,<4.0.0)",
     "langgraph (>=1.2.10,<2.0.0)",
     "langgraph-checkpoint-postgres (>=2.0.0,<4.0.0)",
     "litellm (>=1.97.0,<2.0.0)",
-    # litellm >=1.97 requires openai>=2.20, so the old `openai (<2.0.0)` bound made the
-    # whole project unresolvable: `poetry lock` / `poetry install` failed with
-    # "version solving failed", i.e. the CI install step could never succeed.
     "openai (>=2.20.0,<3.0.0)",
     "opentelemetry-api (>=1.29.0,<2.0.0)",
     "opentelemetry-exporter-otlp-proto-http (>=1.29.0,<2.0.0)",
@@ -63,39 +53,32 @@ dependencies = [
     "pyjwt (>=2.9.0,<3.0.0)",
     "redis (>=8.0.0,<9.0.0)",
     "sqlalchemy[asyncio] (>=2.0.50,<3.0.0)",
-    # Imported directly by `presentation/middleware/*` (was transitive via fastapi).
     "starlette (>=1.7.0,<2.0.0)",
     "structlog (>=26.1.0,<27.0.0)",
     "tenacity (>=9.0.0,<10.0.0)",
     "uvicorn[standard] (>=0.50.0,<0.60.0)",
 ]
 
-# Optional feature sets (PEP 621 extras, published for `pip install palatium-ai[...]`).
-# `graph` / `attachments` are mirrored in [dependency-groups] because the tooling
-# invokes them as Poetry groups (`poetry install --with attachments`) — keep both
-# copies in sync when editing.
 [project.optional-dependencies]
 mysql = ["mysqlclient (>=2.2.0,<3.0.0)"]
 pgsql = ["psycopg2 (>=2.9,<3.0)"]
 graph = ["neo4j (>=5.28.0,<6.0.0)"]
 graphiti = ["graphiti-core (>=0.11.0,<1.0.0)"]
-# Attachment pipeline: object storage + local text extraction. Optional so the
-# core install stays lean.
 attachments = [
-    # Explicit pins of the extra's native transitive deps (python-docx -> lxml;
-    # minio -> argon2-cffi, pycryptodome) so `pip-audit` audits fixed versions.
     "argon2-cffi (>=25.1.0,<26.0.0)",
     "lxml (>=6.1.3,<7.0.0)",
     "minio (>=7.2.0,<8.0.0)",
+    "pillow (>=11.0.0,<12.0.0)",
     "pycryptodome (>=3.23.0,<4.0.0)",
+    "pymupdf (>=1.24.0,<2.0.0)",
     "pypdf (>=6.0.0,<7.0.0)",
+    "pytesseract (>=0.3.13,<1.0.0)",
     "python-docx (>=1.1.0,<2.0.0)",
+    "openpyxl (>=3.1.5,<4.0.0)",
 ]
 
 [dependency-groups]
 test = [
-    # Security floor: PYSEC-2026-1845 affects pytest <9.0.3 (`pip-audit` gate).
-    # pytest-asyncio >=1.x is the line that supports pytest 9 (0.25 does not).
     "pytest (>=9.0.3,<10.0.0)",
     "pytest-asyncio (>=1.0.0,<2.0.0)",
     "pytest-cov (>=6.0.0,<9.0.0)",
@@ -113,26 +96,23 @@ dev = [
     { include-group = "lint" },
     { include-group = "type-check" },
     { include-group = "security" },
-    # Upper bound kept below 4.60: tox >=4.60 requires `packaging>=26`, while
-    # `langfuse` caps `packaging<26` — together they made `poetry lock` unsolvable.
-    # tox is local-only tooling (CI uses `scripts/ci_quality.py`), so it yields.
     "tox (>=4.20.0,<4.60.0)",
-    # Mirrors the fast CI gates (.pre-commit-config.yaml).
     "pre-commit (>=3.5.0,<5.0.0)",
 ]
-# Mirrors of the published extras — the tooling/docker invoke `--with graph|attachments`.
 graph = ["neo4j (>=5.28.0,<6.0.0)"]
 attachments = [
     "argon2-cffi (>=25.1.0,<26.0.0)",
     "lxml (>=6.1.3,<7.0.0)",
     "minio (>=7.2.0,<8.0.0)",
+    "pillow (>=11.0.0,<12.0.0)",
     "pycryptodome (>=3.23.0,<4.0.0)",
+    "pymupdf (>=1.24.0,<2.0.0)",
     "pypdf (>=6.0.0,<7.0.0)",
+    "pytesseract (>=0.3.13,<1.0.0)",
     "python-docx (>=1.1.0,<2.0.0)",
+    "openpyxl (>=3.1.5,<4.0.0)",
 ]
 
-# src-layout package. `mcp_servers/` is intentionally NOT packaged: the stubs ship
-# as separate images (mcp_servers/Dockerfile, PYTHONPATH=/app) — see docs/runbook.md.
 [tool.poetry]
 packages = [{ include = "palatium_ai", from = "src" }]
 
@@ -150,6 +130,13 @@ build-backend = "poetry.core.masonry.api"
 [tool.ruff]
 line-length = 120
 target-version = "py314"
+# `mcp_servers/edms/edms-ai-assistant/` — чужой legacy-код СЭД, который разбирается как
+# референс для адаптера (092), а не поддерживается нами. Находки в нём (56 на момент
+# разбора) не его проблема и не наша: они тонут в шуме и прячут находки в нашем коде.
+# По 017/050 такой путь исключается в конфиге тула, а не редактируется. mypy/pyright
+# уже пропускают `mcp_servers` целиком; ruff — точечно, чтобы наши stub-серверы
+# (`edms_mcp_server.py`, `contract.py`) остались под линтером.
+exclude = ["mcp_servers/edms/edms-ai-assistant"]
 
 [tool.ruff.lint]
 select = [
@@ -166,15 +153,6 @@ ignore = [
 ]
 fixable = ["ALL"]
 
-# RUF001/002/003 flag characters that are visually confusable with ASCII. The
-# repo is RU/EN mixed, so Cyrillic letters inside Russian docstrings, prompts and
-# test fixtures are legitimate — but only for the specific homoglyphs below.
-# Allowlisting exactly those keeps the rule armed for everything else (Greek,
-# fullwidth, other look-alikes) instead of muting it repo-wide with `ignore` (050).
-#
-# The second line is empirical: ruff's confusable table also maps б→6, г→r, З→3,
-# so ordinary Russian words trip the rule with the "canonical" Cyrillic subset
-# alone. `–` (EN DASH) and `×` are Russian typography, not smuggling attempts.
 allowed-confusables = [
     "А", "В", "Е", "К", "М", "Н", "О", "Р", "С", "Т", "У", "Х",
     "а", "е", "о", "р", "с", "у", "х",
@@ -203,6 +181,12 @@ raises-require-match-for = ["ValueError", "RuntimeError", "ValidationError"]
 "mcp_servers/**/*.py" = ["C901"]
 "scripts/**/*.py" = ["C901", "T20", "BLE", "PTH"]
 ".cursor/hooks/**/*.py" = ["T20", "BLE"]
+# Граничный broad-catch — легитимный приём (035) при явной причине на сайте, но не «на весь
+# слой»: пока перечислено 42 сайта `except Exception` в адаптерах, и отключённый целиком
+# `BLE` их не различает. Исключение без TODO — ошибка ревью (015), поэтому долг записан
+# явно; долг закрывается переносом причины на сам сайт (`# noqa: BLE001  # boundary catch: …`)
+# и удалением этих двух строк.
+# TODO(hardening после W6, plans/cursor-rules-hardening §5, 2026-09-30): сузить BLE001 по сайтам.
 "src/palatium_ai/application/**/*.py" = ["BLE"]
 "src/palatium_ai/infrastructure/**/*.py" = ["BLE"]
 
@@ -219,8 +203,6 @@ force-wrap-aliases = true
 lines-between-types = 1
 
 # ── mypy ────────────────────────────────────────────────────────────────────────
-# The redundant flags of old configs (warn_return_any, disallow_untyped_defs,
-# disallow_any_generics, warn_unused_configs) are implied by `strict = true`.
 [tool.mypy]
 python_version = "3.14"
 strict = true
@@ -228,9 +210,6 @@ warn_unreachable = true
 show_error_codes = true
 show_column_numbers = true
 exclude = ["tests/", "build/", "dist/", ".venv/", "mcp_servers/"]
-# Required: the CI gate invokes `mypy --strict src/palatium_ai`, and without the
-# source root on the search path the same file resolves twice (`src.palatium_ai.…`
-# and `palatium_ai.…`) → "Source file found twice under different module names".
 mypy_path = ["src"]
 explicit_package_bases = true
 ignore_missing_imports = true
@@ -241,7 +220,7 @@ init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
 
-# ── Pyright (read by Pylance / pyright; basedpyright reads its own table) ───────
+# ── Pyright ─────────────────────────────────────────────────────────────────────
 [tool.pyright]
 pythonVersion = "3.14"
 extraPaths = ["src", ".cursor/hooks"]
@@ -264,11 +243,17 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning:pkg_resources",
     "ignore:^.*litellm.*:DeprecationWarning",
+    "ignore::DeprecationWarning:neo4j.*",
+    # Python 3.14 → 3.16: asyncio event-loop policies. pytest-asyncio≥1 avoids
+    # most of these; keep ignores for residual third-party / Windows policy pin.
+    "ignore:.*asyncio\\.(get|set)_event_loop_policy.*:DeprecationWarning",
+    "ignore:.*asyncio\\.(AbstractEventLoopPolicy|WindowsSelectorEventLoopPolicy|DefaultEventLoopPolicy).*:DeprecationWarning",
 ]
 markers = [
     "live: hits a real LLM / network; opt-in via PALATIUM_LIVE_EVAL=1",
     "llm_live: live llm_judge evals; opt-in via PALATIUM_EVAL_LIVE_JUDGE=1",
     "integration: graph/service integration tests (fake LLM; no DATABASE_URL required)",
+    "slow: load/latency/scaling regression tests; excluded from PR CI (080, 075)",
 ]
 log_cli = false
 log_cli_level = "INFO"
@@ -276,9 +261,6 @@ log_cli_level = "INFO"
 # ── Coverage ────────────────────────────────────────────────────────────────────
 [tool.coverage.run]
 source = ["palatium_ai"]
-# Branch coverage on: a line that runs but takes only one side of an `if` is not
-# covered. Measured impact is ~3.8pp (line 79.9% -> combined 76.1%), and the
-# `fail_under` gate still has ~6pp headroom.
 branch = true
 omit = [
     "*/migrations/*",
@@ -297,9 +279,26 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
-    # Protocol/ABC stub bodies are not executable statements: a bare `...` never
-    # fires a line event, so without this every port file reports phantom misses
-    # (`domain/ports/context_compact.py` at 0%). Behaviour is asserted by the
-    # adapters' tests, so excluding the stub keeps the report honest (050).
     '^\s*\.\.\.\s*$',
 ]
+
+# ===================================================================================================================
+
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
+# === Линтинг и проверка форматирования - poetry run ruff check .                                              ~~ ===
+# === Автоисправление линтинга - poetry run ruff check --fix .                                                 ~~ ===
+# === Форматирование кода - poetry run ruff format .                                                           ~~ ===
+# === Проверка типов - poetry run mypy .                                                                       ~~ ===
+# === Запуск тестов - poetry run pytest . || poetry run pytest --cov=palatium_ai --cov-report=term-missing     ~~ ===
+# === poetry.lock & poetry install --with dev || poetry sync                                                   ~~ ===
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
+
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
+# === Установка Python - uv python install 3.14                                                                ~~ ===
+# === Синхронизация окружения - uv sync                                                                        ~~ ===
+# === Установка всех зависимостей  - uv sync --all-extras --all-groups || uv sync --group type-check           ~~ ===
+# === Обновит uv.lock до последних совместимых версий - uv lock --upgrade || uv lock --upgrade-package httpx   ~~ ===
+# === Сборка пакета: Создаст source и wheel дистрибутивы в папке dist/. - uv tree                              ~~ ===
+# === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
+
+# ===================================================================================================================

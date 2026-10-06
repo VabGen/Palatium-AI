@@ -7,7 +7,7 @@ Default: одна волна за ход. Scope «весь EDMS» → начни
 
 | Wave | Scope | Цель |
 |------|--------|------|
-| **W0** | Карта | Inventory legacy-файлов пользователя + текущий `edms_mcp_server` / pins / gateway; без кода |
+| **W0** | Карта | Inventory: JavaEdms + edms-ai-assistant + старый `edms_mcp_server.py` (все — reference) + pins/gateway; **предложить layout новой структуры** под `mcp_servers/edms/`; без прод-кода |
 | **W1** | Контракты | Закрытый набор EDMS tools (имена, I/O pydantic, R/W, HITL); сверить с JavaEdms; gaps → вопросы |
 | **W2** | Read path | Реализовать/укрепить read tools (search/get/list) против реального или stub upstream; empty/deny сценарии |
 | **W3** | Write path | Write tools + Host HITL + idempotency; never fake success |

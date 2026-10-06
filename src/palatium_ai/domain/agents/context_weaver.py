@@ -26,6 +26,8 @@ class ContextWeaverInput(BaseModel):
     route_plan: str = Field(min_length=1)
     requires_mcp: bool
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
+    # True when this turn already carries fenced upload OCR/text (prefer reason_only).
+    has_attachment_context: bool = False
 
 
 class ContextWeaverOutput(BaseModel):

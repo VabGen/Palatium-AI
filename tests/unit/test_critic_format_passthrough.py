@@ -51,8 +51,9 @@ async def test_critic_skips_llm_for_format_only_with_prior_content() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_critic_skips_llm_for_ack_only_social() -> None:
-    llm = FakeLLMPort("should-not-be-called")
+async def test_critic_invokes_llm_for_social_format_only() -> None:
+    """Social format_only must not skip Critic LLM (no canned ack passthrough)."""
+    llm = FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok greeting"}')
     packet = ContextPacket(
         task_id="t3",
         user_text="привет",
@@ -62,11 +63,11 @@ async def test_critic_skips_llm_for_ack_only_social() -> None:
         requires_mcp=False,
         candidate_capabilities=(),
         execution_plan=ToolExecutionPlan(
-            strategy="ack_only",
+            strategy="format_only",
             requires_tool_call=False,
             rationale="social",
         ),
-        context_summary="ack_only",
+        context_summary="format_only",
     )
     result = await run_critic(
         CriticInput(
@@ -75,14 +76,13 @@ async def test_critic_skips_llm_for_ack_only_social() -> None:
             classification_confidence=0.95,
             classification_reasoning="greeting",
             worker_summary=None,
-            selected_strategy="ack_only",
+            selected_strategy="format_only",
             continuation_kind="new_topic",
         ),
         llm,
     )
     assert result.status == "success"
-    assert result.requires_review is False
-    assert len(llm.calls) == 0
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.asyncio()

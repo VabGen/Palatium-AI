@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -26,6 +26,7 @@ from palatium_ai.application.agents.formatter.prompts import (
     FORMATTER_SYSTEM_PROMPT,
 )
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
@@ -33,6 +34,7 @@ from palatium_ai.domain.agents.formatter import FORMATTER_OUTPUT_INVALID, Format
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 if TYPE_CHECKING:
@@ -77,7 +79,18 @@ class FormatterAgent(BaseAgent):
         try:
             document = await self._generate_document(messages)
             document = align_formatter_meta(document, task_input)
-            document = await self._maybe_repair_locale(messages, document, task_input)
+            hop = get_hop_collector()
+            skip_repairs = (
+                hop is not None
+                and HopBudgetPolicy.should_skip_formatter_repairs(
+                    hop_total_ms=hop.total_ms(),
+                    budget_ms=hop.budget_ms,
+                ).degrade
+            )
+            if not skip_repairs:
+                document = await self._maybe_repair_locale(messages, document, task_input)
+            elif hop is not None:
+                agent_metrics.record_node_execution(self._config.role, "hop_budget_skip_locale_repair")
         except Exception:
             logger.exception("formatter document generation failed", task_id=str(input.task_id))
             agent_metrics.record_error(self._config.role, "llm_stage_failure")
@@ -89,7 +102,7 @@ class FormatterAgent(BaseAgent):
                 error_message=FORMATTER_OUTPUT_INVALID,
             )
 
-        status: Literal["success", "failure", "partial"] = "partial" if task_input.requires_review else "success"
+        status = "partial" if task_input.requires_review else "success"
         return AgentOutput(
             task_id=input.task_id,
             status=status,
@@ -114,6 +127,16 @@ class FormatterAgent(BaseAgent):
         try:
             return parse_formatter_document(completion.content)
         except (ValidationError, ValueError, json.JSONDecodeError, TypeError) as first_error:
+            hop = get_hop_collector()
+            if (
+                hop is not None
+                and HopBudgetPolicy.should_skip_formatter_repairs(
+                    hop_total_ms=hop.total_ms(),
+                    budget_ms=hop.budget_ms,
+                ).degrade
+            ):
+                agent_metrics.record_node_execution(self._config.role, "hop_budget_skip_schema_repair")
+                raise
             logger.warning(
                 "formatter output invalid, attempting repair",
                 error=str(first_error)[:300],

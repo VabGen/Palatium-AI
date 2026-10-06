@@ -18,6 +18,7 @@ from palatium_ai.domain.attachments.policies import (
     AttachmentRetentionPolicy,
     IntakeDecision,
 )
+from palatium_ai.domain.attachments.types import AttachmentRejectionReason, AttachmentStatus
 
 _NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
 
@@ -30,6 +31,12 @@ def _validate(**overrides: object) -> IntakeDecision:
     }
     payload.update(overrides)
     return AttachmentIntakePolicy.validate(**payload)  # type: ignore[arg-type]
+
+
+def _quota(**overrides: object) -> IntakeDecision:
+    payload: dict[str, object] = {"filename": "invoice.pdf", "in_flight": 0}
+    payload.update(overrides)
+    return AttachmentIntakePolicy.quota_decision(**payload)  # type: ignore[arg-type]
 
 
 def test_supported_media_types_are_a_closed_registry() -> None:
@@ -61,9 +68,32 @@ def test_extension_must_match_declared_media_type() -> None:
 
 
 def test_turn_limit_is_enforced() -> None:
+    """The quota axis counts *in-flight* uploads, and it is its own policy call.
+
+    It cannot live in ``validate`` any more: the count comes from the database and
+    must be read inside the transaction that inserts the row (020).
+    """
     limit = DEFAULT_ATTACHMENT_LIMITS.max_attachments_per_turn
-    assert _validate(existing_count=limit - 1).allowed
-    assert _validate(existing_count=limit).reason == "turn_limit_exceeded"
+    assert _quota(in_flight=limit - 1).allowed
+    assert _quota(in_flight=limit).reason == "turn_limit_exceeded"
+
+
+def test_quota_decision_does_not_revalidate_the_file() -> None:
+    """The two axes are independent: a good file may still be over quota, and vice versa."""
+    limit = DEFAULT_ATTACHMENT_LIMITS.max_attachments_per_turn
+    assert _validate(filename="payload.exe", mime_type="application/x-msdownload").reason == "mime_not_allowed"
+    assert _quota(filename="payload.exe", in_flight=limit).reason == "turn_limit_exceeded"
+
+
+def test_validate_has_no_quota_axis() -> None:
+    """Regression: passing a count to ``validate`` must not be possible again."""
+    with pytest.raises(TypeError):
+        AttachmentIntakePolicy.validate(  # type: ignore[call-arg]
+            filename="invoice.pdf",
+            mime_type="application/pdf",
+            size_bytes=1024,
+            existing_count=99,
+        )
 
 
 def test_path_traversal_filename_is_reduced_to_basename() -> None:
@@ -125,6 +155,22 @@ def test_allowed_alternative_extensions() -> None:
     assert _validate(filename="server.log", mime_type="text/plain").allowed
 
 
+def test_xlsx_is_allowed_when_extension_matches() -> None:
+    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert _validate(filename="budget.xlsx", mime_type=mime).allowed
+    assert _validate(filename="budget.xls", mime_type=mime).reason == "extension_mismatch"
+
+
+def test_pptx_and_html_are_allowed_when_extension_matches() -> None:
+    pptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    assert _validate(filename="deck.pptx", mime_type=pptx).allowed
+    assert _validate(filename="deck.ppt", mime_type=pptx).reason == "extension_mismatch"
+    assert _validate(filename="page.html", mime_type="text/html").allowed
+    assert _validate(filename="page.htm", mime_type="text/html").allowed
+    assert pptx in SUPPORTED_MEDIA_TYPES
+    assert "text/html" in SUPPORTED_MEDIA_TYPES
+
+
 def test_blob_keys_are_uuid_only_and_derived_key_differs() -> None:
     attachment_id = uuid4()
     blob_key = AttachmentIntakePolicy.blob_key(attachment_id)
@@ -162,7 +208,13 @@ def test_default_expiry_uses_current_utc_clock() -> None:
     assert expiry > datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _attachment(*, expires_at: datetime | None) -> Attachment:
+def _attachment(
+    *,
+    expires_at: datetime | None,
+    status: AttachmentStatus = "ready",
+    created_at: datetime = _NOW,
+    rejection_reason: AttachmentRejectionReason | None = None,
+) -> Attachment:
     """Minimal aggregate for retention checks (no I/O, no pipeline)."""
     attachment_id = uuid4()
     return Attachment(
@@ -173,9 +225,10 @@ def _attachment(*, expires_at: datetime | None) -> Attachment:
         size_bytes=1024,
         blob_key=f"attachments/{attachment_id}",
         mode="attach",
-        status="ready",
-        created_at=_NOW,
+        status=status,
+        created_at=created_at,
         expires_at=expires_at,
+        rejection_reason=rejection_reason,
     )
 
 
@@ -200,9 +253,71 @@ def test_naive_cutoff_is_refused_instead_of_compared() -> None:
 
 
 def test_model_expiry_property_uses_the_same_rule() -> None:
-    """One rule, two callers: the property must not drift from the policy (010)."""
-    assert _attachment(expires_at=_NOW - timedelta(seconds=1)).is_expired
-    assert not _attachment(expires_at=_NOW + timedelta(days=1)).is_expired
+    """One rule, two callers: the property must not drift from the policy (010).
+
+    ``is_expired`` reads the wall clock itself, so the fixtures must be relative to
+    ``now`` — pinning them to a hardcoded ``_NOW`` turns the assertion into a
+    time-bomb that goes red a day after it is written.
+    """
+    now = datetime.now(UTC)
+    assert _attachment(expires_at=now - timedelta(seconds=1)).is_expired
+    assert not _attachment(expires_at=now + timedelta(days=1)).is_expired
+
+
+def test_pending_upload_is_stale_once_its_ticket_expired() -> None:
+    """Regression: an abandoned intake held its quota slot for its whole TTL.
+
+    The presigned PUT ticket is minted with the row, so once it expires the bytes
+    can never arrive and the row is dead weight (080).
+    """
+    ticket_ttl = DEFAULT_ATTACHMENT_LIMITS.presigned_url_ttl_seconds
+    fresh = _attachment(
+        status="pending",
+        created_at=_NOW - timedelta(seconds=ticket_ttl - 1),
+        expires_at=_NOW + timedelta(days=7),
+    )
+    stale = _attachment(
+        status="pending",
+        created_at=_NOW - timedelta(seconds=ticket_ttl),
+        expires_at=_NOW + timedelta(days=7),
+    )
+
+    assert not AttachmentRetentionPolicy.is_stale_pending(fresh, now=_NOW, after_seconds=ticket_ttl)
+    assert AttachmentRetentionPolicy.is_stale_pending(stale, now=_NOW, after_seconds=ticket_ttl)
+
+
+def test_stale_pending_rule_ignores_rows_that_never_needed_a_ticket() -> None:
+    """A short ticket TTL must not turn settled rows into reclaim candidates."""
+    long_ago = _NOW - timedelta(days=30)
+    ticket_ttl = DEFAULT_ATTACHMENT_LIMITS.presigned_url_ttl_seconds
+    # Terminal refusals must carry a typed reason, so the settled rows are spelled
+    # out as (status, reason) instead of relying on a cast (010).
+    settled: tuple[tuple[AttachmentStatus, AttachmentRejectionReason | None], ...] = (
+        ("ready", None),
+        ("indexed", None),
+        ("rejected", "mime_not_allowed"),
+        ("quarantined", "malware_detected"),
+    )
+    for status, reason in settled:
+        row = _attachment(
+            status=status,
+            created_at=long_ago,
+            expires_at=_NOW + timedelta(days=7),
+            rejection_reason=reason,
+        )
+        assert not AttachmentRetentionPolicy.is_stale_pending(row, now=_NOW, after_seconds=ticket_ttl)
+
+
+def test_stale_pending_refuses_a_naive_cutoff() -> None:
+    """Same clock rule as ``is_due``: never compare a naive datetime (050)."""
+    ticket_ttl = DEFAULT_ATTACHMENT_LIMITS.presigned_url_ttl_seconds
+    row = _attachment(status="pending", created_at=_NOW, expires_at=None)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        AttachmentRetentionPolicy.is_stale_pending(
+            row,
+            now=datetime(2026, 9, 25, 12, 0),
+            after_seconds=ticket_ttl,
+        )
 
 
 def test_retention_sweep_batch_has_sane_bounds() -> None:

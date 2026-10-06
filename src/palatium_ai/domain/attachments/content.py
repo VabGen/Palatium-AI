@@ -44,6 +44,9 @@ class AttachmentContent(BaseModel):
     page_count: int = Field(default=0, ge=0)
     #: Extraction hit the parser's char/page cap, so the tail was not reviewed.
     truncated: bool = False
+    #: Heuristic PII on extracted flow text (060); tier via ``ATTACHMENTS_PII_POLICY``
+    #: (``tag`` / ``mask`` / ``reject``). Does not block under default ``tag``.
+    contains_pii: bool = False
 
     @property
     def is_prompt_eligible(self) -> bool:

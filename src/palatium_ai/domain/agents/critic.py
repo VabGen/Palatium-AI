@@ -27,6 +27,7 @@ class CriticInput(BaseModel):
     selected_strategy: ExecutionStrategy = "reason_only"
     continuation_kind: str | None = None
     user_input_chars: int = Field(default=0, ge=0)
+    worker_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class CriticOutput(BaseModel):

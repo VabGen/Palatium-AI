@@ -1,0 +1,17 @@
+# =============================================================================
+# Attachments overlay — AV engine (loaded only by `make up-full`, never auto-loaded).
+# =============================================================================
+# Why this file exists: a compose profile decides which *containers* run, while the API
+# decides what it talks to from ATTACHMENTS_SCANNER_BACKEND. `--profile attachments`
+# therefore starts clamd without the API ever using it. Here `environment:` wins over the
+# api service's `env_file: env/.env`, so the full launch actually scans uploads instead of
+# leaving the engine idle (runbook §16.8).
+#
+# Kept separate from docker-compose.attachments-s3.yml because the two profiles are
+# independent: an unreachable object store must not also switch the scanner back off.
+# `make up` / `make attach-*` never load this file, so plain dev stays on
+# ATTACHMENTS_SCANNER_BACKEND="disabled" from env/.env.
+services:
+  api:
+    environment:
+      ATTACHMENTS_SCANNER_BACKEND: clamav

@@ -10,6 +10,7 @@ from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.execution import ExecutionStrategy
 from palatium_ai.domain.agents.intent import IntentTaskResult, TaskKind
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult, WorkerRoute
+from palatium_ai.domain.mcp.models import ToolExecutionPlan
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
 from palatium_ai.domain.memory.tool_output import compress_worker_context
@@ -41,12 +42,23 @@ def _clip_worker_text(state: AgentGraphState, text: str | None) -> str | None:
     )
 
 
+def require_task_id(state: AgentGraphState) -> str:
+    """Fail-closed read of invoke-time ``task_id`` (always set by IntentGraphRunner)."""
+    task_id = state.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("AgentGraphState.task_id is required")
+    return task_id
+
+
 def resolved_user_text(state: AgentGraphState) -> str:
     """Rewritten query if Contextualizer ran, else raw user_text."""
     effective = state.get("effective_user_text")
     if isinstance(effective, str) and effective.strip():
         return effective
-    return state["user_text"]
+    raw = state.get("user_text")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("AgentGraphState.user_text is required")
+    return raw
 
 
 def memory_hints(state: AgentGraphState) -> tuple[str, ...]:
@@ -89,6 +101,7 @@ def ensure_routing_intent(state: AgentGraphState) -> EffectiveRoutingIntent:
         contextualizer=ctx.output if ctx is not None else None,
         dialog=state.get("dialog_window"),
         raw_intent=classification.output if classification is not None else None,
+        has_turn_attachments=bool((state.get("untrusted_context") or "").strip()),
     )
 
 
@@ -139,7 +152,10 @@ def resolved_revision_feedback(state: AgentGraphState) -> str | None:
 
 def resolved_thread_id(state: AgentGraphState) -> str:
     """Возвращает thread id с fallback на task id."""
-    return state.get("thread_id", state["task_id"])
+    thread_id = state.get("thread_id")
+    if isinstance(thread_id, str) and thread_id.strip():
+        return thread_id
+    return require_task_id(state)
 
 
 def classification_result(state: AgentGraphState) -> IntentTaskResult:
@@ -214,6 +230,14 @@ def resolved_worker_summary(state: AgentGraphState) -> str | None:
     return resolved_prior_assistant_content(state)
 
 
+def resolved_worker_confidence(state: AgentGraphState) -> float | None:
+    """Confidence of the last worker TaskResult, if any."""
+    execution = state.get("execution")
+    if execution is None:
+        return None
+    return float(execution.confidence)
+
+
 def resolved_critic_summary(state: AgentGraphState) -> str | None:
     """Возвращает summary critic-а, если он был."""
     critic = state.get("critic")
@@ -269,3 +293,11 @@ def selected_strategy(state: AgentGraphState) -> ExecutionStrategy:
         # Fail-open to reason_only; ContinuityPolicy/Supervisor own real clarify.
         return "reason_only"
     return context_bundle.output.execution_bundle.selected_strategy
+
+
+def execution_plan_steps(state: AgentGraphState) -> tuple[ToolExecutionPlan, ...]:
+    """Execution steps from ContextWeaver bundle (empty if weaving not run)."""
+    context_bundle = state.get("context_bundle")
+    if context_bundle is None or context_bundle.output is None:
+        return ()
+    return context_bundle.output.execution_bundle.steps
