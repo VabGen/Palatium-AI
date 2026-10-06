@@ -231,15 +231,31 @@ async def test_followup_answer_overrides_false_clarification() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
-    """Bug: 'привет → как дела' routed to Researcher + Critic HITL."""
+async def test_phatic_followup_skips_researcher_not_critic() -> None:
+    """Phatic follow-up must not route to Researcher / false HITL.
+
+    Social uses format_only (2026): Critic LLM quality-gates the Formatter draft.
+    Regression target is Researcher skip + no review — not Critic passthrough
+    (that would collide with CriticPolicy / route_after_context for social).
+    """
     dialog = FakeDialogTurnStore()
     await dialog.append_turn(thread_id="social-follow", role="user", content="привет")
     await dialog.append_turn(thread_id="social-follow", role="assistant", content="Привет!")
 
     llm_researcher = FakeLLMPort('{"summary": "unused", "confidence": 0.1, "sources_used": []}')
-    llm_critic = FakeLLMPort(
-        '{"accuracy_score": 1, "safety_score": 1, "requires_review": true, "summary": "should not run"}'
+    llm_critic = FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
+    formatter_llm = FakeLLMPort(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "locale": "ru-RU",
+                "title": "Ответ",
+                "blocks": [{"type": "paragraph", "text": "У меня всё хорошо, спасибо!"}],
+                "actions": [],
+                "meta": {"confidence": 0.95, "requires_review": False, "source_refs": []},
+            },
+            ensure_ascii=False,
+        )
     )
     harness, contextualizer, intent_agent, pipeline_llm = make_dual_agent_stack(
         '{"task_kind": "social_conversation", "requires_mcp": false, '
@@ -263,21 +279,7 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
             coder_agent=make_coder_agent(harness=harness),
             analyst_agent=make_analyst_agent(harness=harness),
             critic_agent=make_critic_agent(llm_critic),
-            formatter_agent=make_formatter_agent(
-                FakeLLMPort(
-                    json.dumps(
-                        {
-                            "schema_version": 1,
-                            "locale": "ru-RU",
-                            "title": "Ответ",
-                            "blocks": [{"type": "paragraph", "text": "У меня всё хорошо, спасибо!"}],
-                            "actions": [],
-                            "meta": {"confidence": 0.95, "requires_review": False, "source_refs": []},
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-            ),
+            formatter_agent=make_formatter_agent(formatter_llm),
             continuation_agent=contextualizer,
         ),
         harness=harness,
@@ -296,9 +298,9 @@ async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
     assert result.status == "success"
     assert result.requires_review is False
     assert len(llm_researcher.calls) == 0
-    assert len(llm_critic.calls) == 0
-    # P0.1: Intent-only LLM; Contextualizer skips (social + known task_kind); Formatter ack template.
+    assert len(llm_critic.calls) == 1
+    assert len(formatter_llm.calls) >= 1
+    # Intent LLM only on the shared pipeline; Contextualizer skips social.
     assert len(pipeline_llm.calls) == 1
     assert result.output is not None
-    # "как дела" is <8 letters → ReplyLocalePolicy weak → und → en ack template.
-    assert result.output.title == "Hello!"
+    assert result.output.title == "Ответ"

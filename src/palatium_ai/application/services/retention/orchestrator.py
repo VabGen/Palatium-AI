@@ -34,6 +34,8 @@ class RetentionRunResult(BaseModel, frozen=True):
 class PolicySnapshotHandler:
     """W0 placeholder: reports policy disposition without touching stores."""
 
+    retention_class: RetentionClass
+
     def __init__(self, retention_class: RetentionClass, *, windows: RetentionWindows) -> None:
         self.retention_class = retention_class
         self._windows = windows

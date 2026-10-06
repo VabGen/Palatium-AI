@@ -15,11 +15,10 @@ from palatium_ai.domain.ports.retention import RetentionClassReport
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-_MEMORY_CLASSES: frozenset[str] = frozenset({"memory_medium", "memory_episode", "memory_pii"})
-
-
 class MemoryRetentionHandler:
     """Backfill NULL expires_at then delete due rows for one memory RetentionClass."""
+
+    _retention_class: RetentionClass
 
     def __init__(
         self,
@@ -28,12 +27,20 @@ class MemoryRetentionHandler:
         retention_class: RetentionClass,
         windows: RetentionWindows,
     ) -> None:
-        if retention_class not in _MEMORY_CLASSES:
-            msg = f"unsupported memory retention class: {retention_class}"
-            raise ValueError(msg)
-        self.retention_class = retention_class
+        # ``in`` against a str-container widens Literal→str under basedpyright;
+        # match keeps the RetentionClass pin.
+        match retention_class:
+            case "memory_medium" | "memory_episode" | "memory_pii":
+                self._retention_class = retention_class
+            case _:
+                msg = f"unsupported memory retention class: {retention_class}"
+                raise ValueError(msg)
         self._session_factory = session_factory
         self._windows = windows
+
+    @property
+    def retention_class(self) -> RetentionClass:
+        return self._retention_class
 
     async def plan(self, *, limit: int) -> RetentionClassReport:
         now = datetime.now(UTC)

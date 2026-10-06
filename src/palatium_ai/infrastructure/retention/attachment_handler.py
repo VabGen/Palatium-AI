@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_ATTACHMENT_CLASSES: frozenset[str] = frozenset({"attachment_attach", "attachment_index", "attachment_pii"})
-
 
 class AttachmentRetentionHandler:
     """Reclaim expired/stale-pending attachments cross-tenant (ADR 0002 / W3)."""
+
+    _retention_class: RetentionClass
 
     def __init__(
         self,
@@ -38,10 +38,14 @@ class AttachmentRetentionHandler:
         pending_ttl_seconds: int,
         max_chunk_part_index: int | None = None,
     ) -> None:
-        if retention_class not in _ATTACHMENT_CLASSES:
-            msg = f"unsupported attachment retention class: {retention_class}"
-            raise ValueError(msg)
-        self.retention_class = retention_class
+        # ``in`` against a str-container widens Literal→str under basedpyright;
+        # match keeps the RetentionClass pin.
+        match retention_class:
+            case "attachment_attach" | "attachment_index" | "attachment_pii":
+                self._retention_class = retention_class
+            case _:
+                msg = f"unsupported attachment retention class: {retention_class}"
+                raise ValueError(msg)
         self._session_factory = session_factory
         self._windows = windows
         self._blob_store = blob_store
@@ -51,6 +55,10 @@ class AttachmentRetentionHandler:
             if max_chunk_part_index is not None
             else AttachmentIntakePolicy.max_chunk_part_index(DEFAULT_ATTACHMENT_LIMITS)
         )
+
+    @property
+    def retention_class(self) -> RetentionClass:
+        return self._retention_class
 
     async def plan(self, *, limit: int) -> RetentionClassReport:
         now = datetime.now(UTC)

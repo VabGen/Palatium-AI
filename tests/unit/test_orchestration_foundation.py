@@ -154,7 +154,7 @@ def test_node_input_builders_use_context_bundle_when_available() -> None:
     snapshot = OrchestrationSnapshot.from_state(state)
 
     supervisor_input = build_supervisor_input(snapshot)
-    context_weaver_input = build_context_weaver_input(snapshot)
+    context_weaver_input = build_context_weaver_input(snapshot, state)
     researcher_input = build_researcher_input(snapshot, state)
     critic_input = build_critic_input(snapshot, state)
     formatter_input = build_formatter_input(snapshot, state)

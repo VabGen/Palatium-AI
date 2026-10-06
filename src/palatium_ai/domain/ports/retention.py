@@ -24,9 +24,17 @@ class RetentionClassReport(BaseModel, frozen=True):
 
 
 class RetentionClassHandler(Protocol):
-    """One store adapter behind the orchestrator."""
+    """One store adapter behind the orchestrator.
 
-    retention_class: RetentionClass
+    ``retention_class`` is a property (not a mutable attribute): Protocol mutable
+    attrs are invariant and basedpyright rejects concrete handlers that assign the
+    field in ``__init__``. Orchestrator only reads the key for routing.
+    """
+
+    @property
+    def retention_class(self) -> RetentionClass:
+        """Stable RetentionClass key for this handler."""
+        ...
 
     async def plan(self, *, limit: int) -> RetentionClassReport:
         """Count candidates without mutating."""

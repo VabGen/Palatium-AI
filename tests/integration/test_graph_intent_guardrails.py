@@ -147,7 +147,12 @@ async def test_graph_process_full_pipeline_fake_llm() -> None:
 @pytest.mark.integration()
 @pytest.mark.asyncio()
 async def test_graph_social_phatic_skips_researcher() -> None:
-    """Social greeting: Intent-only LLM → ack template Formatter (P0.1 fast path)."""
+    """Social greeting: skip Researcher; Critic + Formatter LLM (2026 format_only).
+
+    Canned ack_only templates are eval/cassette-only (execution_planner, ack_reply).
+    Live social goes through Critic quality gate then Formatter — not the P0.1
+    Intent→ack short-circuit.
+    """
     intent_json = (
         '{"task_kind": "social_conversation", "requires_mcp": false, '
         '"candidate_capabilities": [], "confidence": 0.96, "reasoning": "greeting"}'
@@ -156,7 +161,8 @@ async def test_graph_social_phatic_skips_researcher() -> None:
     harness = Harness(llm=llm)
     intent_agent = IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG)
     unused_researcher = FakeLLMPort('{"summary": "must-not-run", "confidence": 0.1, "sources_used": []}')
-    unused_formatter = FakeLLMPort(_formatter_json("must-not-run"))
+    critic_llm = FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
+    formatter_llm = FakeLLMPort(_formatter_json("Hello!"))
     graph = build_agent_graph(
         GraphAgents(
             continuation_agent=make_continuation_agent(harness=harness),
@@ -166,8 +172,8 @@ async def test_graph_social_phatic_skips_researcher() -> None:
             researcher_agent=make_researcher_agent(unused_researcher, harness=harness),
             coder_agent=make_coder_agent(harness=harness),
             analyst_agent=make_analyst_agent(harness=harness),
-            critic_agent=make_critic_agent(FakeLLMPort("should-not-be-called")),
-            formatter_agent=make_formatter_agent(unused_formatter, harness=harness),
+            critic_agent=make_critic_agent(critic_llm),
+            formatter_agent=make_formatter_agent(formatter_llm),
         ),
         harness=harness,
         checkpointer=make_graph_checkpointer(),
@@ -181,10 +187,12 @@ async def test_graph_social_phatic_skips_researcher() -> None:
     result = await service.process(text="hello", thread_id="integration-social-1")
 
     assert result.status == "success"
+    assert result.requires_review is False
     assert result.output is not None
     assert result.output.title == "Hello!"
     assert len(unused_researcher.calls) == 0
-    assert len(unused_formatter.calls) == 0
+    assert len(critic_llm.calls) == 1
+    assert len(formatter_llm.calls) >= 1
     assert len(llm.calls) == 1
 
 
