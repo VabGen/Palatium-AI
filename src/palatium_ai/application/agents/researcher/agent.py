@@ -157,6 +157,7 @@ class ResearcherAgent(BaseAgent):
                         "candidate_capabilities": task_input.context_packet.candidate_capabilities,
                         "route_plan": task_input.context_packet.route_plan,
                         "context_summary": task_input.context_packet.context_summary,
+                        "attachment_context": task_input.context_packet.untrusted_context,
                         "prior_context": task_input.prior_context,
                         "revision_feedback": task_input.revision_feedback,
                     },
@@ -260,7 +261,7 @@ class ResearcherAgent(BaseAgent):
             return execution_plan.server_name, execution_plan.tool_name
 
         try:
-            binding = await self._capability_index.resolve_best(  # type: ignore[union-attr]
+            binding = await self._capability_index.resolve_best(  # type: ignore[union-attr]  # индекс проверен вызывающим (017)
                 task_text=task_input.context_packet.user_text,
                 requested_capabilities=task_input.context_packet.candidate_capabilities,
                 local_retrieval_empty=local_retrieval_empty,

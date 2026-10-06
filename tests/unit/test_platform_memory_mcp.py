@@ -13,7 +13,7 @@ from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHan
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 
 
-@pytest.fixture
+@pytest.fixture()
 def handler() -> PlatformToolHandler:
     return PlatformToolHandler(
         knowledge_port=InMemoryKnowledgePort(),
@@ -21,7 +21,7 @@ def handler() -> PlatformToolHandler:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_save_and_search_memory(handler: PlatformToolHandler) -> None:
     save = await handler.call_tool(
         "save_memory",
@@ -46,7 +46,7 @@ async def test_save_and_search_memory(handler: PlatformToolHandler) -> None:
     assert "Russian" in payload["hits"][0]["text"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_forget_memory_removes_entry(handler: PlatformToolHandler) -> None:
     await handler.call_tool(
         "save_memory",
@@ -79,7 +79,7 @@ async def test_forget_memory_removes_entry(handler: PlatformToolHandler) -> None
     assert search_payload["hit_count"] == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_save_memory_rejects_org_without_matching_claim(handler: PlatformToolHandler) -> None:
     result = await handler.call_tool(
         "save_memory",
@@ -94,7 +94,7 @@ async def test_save_memory_rejects_org_without_matching_claim(handler: PlatformT
     assert result.is_error is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_save_memory_org_with_matching_claim(handler: PlatformToolHandler) -> None:
     result = await handler.call_tool(
         "save_memory",
@@ -110,7 +110,7 @@ async def test_save_memory_org_with_matching_claim(handler: PlatformToolHandler)
     assert result.is_error is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_save_memory_rejects_mismatched_user_scope(handler: PlatformToolHandler) -> None:
     result = await handler.call_tool(
         "save_memory",
@@ -125,7 +125,7 @@ async def test_save_memory_rejects_mismatched_user_scope(handler: PlatformToolHa
     assert result.is_error is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_save_memory_sets_pii_from_text(handler: PlatformToolHandler) -> None:
     save = await handler.call_tool(
         "save_memory",
@@ -138,7 +138,7 @@ async def test_save_memory_sets_pii_from_text(handler: PlatformToolHandler) -> N
         },
     )
     assert save.is_error is False
-    item = await handler._memory.get(  # noqa: SLF001
+    item = await handler._memory.get(
         namespace=("user", "user-pii"),
         key="email",
     )
@@ -147,7 +147,7 @@ async def test_save_memory_sets_pii_from_text(handler: PlatformToolHandler) -> N
     assert item.get("contains_pii") is True or item.get("text") == "[PII]"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_consolidate_memory_without_worker_returns_error(handler: PlatformToolHandler) -> None:
     result = await handler.call_tool(
         "consolidate_memory",

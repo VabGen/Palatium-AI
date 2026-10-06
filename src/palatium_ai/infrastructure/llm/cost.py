@@ -41,4 +41,4 @@ def estimate_completion_cost_usd(
         return 0.0
 
     total = float(prompt_cost) + float(completion_cost)
-    return total if total > 0.0 else 0.0
+    return max(0.0, total)

@@ -60,7 +60,7 @@ class _AlwaysFailTransport(_FakeWebTransport):
         raise httpx.ConnectError("always down")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_stub_web_search_returns_empty_tagged_note() -> None:
     port = StubWebSearchPort()
     result = await port.search(WebSearchQuery(user_id="u1", query="architecture", max_results=3))
@@ -69,7 +69,7 @@ async def test_stub_web_search_returns_empty_tagged_note() -> None:
     assert "stub" in result.note
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_http_web_search_port_maps_hits() -> None:
     transport = _FakeWebTransport()
     port = HttpWebSearchPort(transport, provider="ddg")
@@ -81,7 +81,7 @@ async def test_http_web_search_port_maps_hits() -> None:
     assert transport.closed is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_http_web_search_skips_secret_snippets() -> None:
     transport = _FakeWebTransport(
         hits=[
@@ -105,7 +105,7 @@ async def test_http_web_search_skips_secret_snippets() -> None:
     assert result.hits[0].title == "safe"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_http_web_search_retries_transient_errors() -> None:
     transport = _FlakyWebTransport(fail_times=2)
     port = HttpWebSearchPort(
@@ -119,7 +119,7 @@ async def test_http_web_search_retries_transient_errors() -> None:
     assert transport.calls == 3
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_http_web_search_circuit_opens_after_failures() -> None:
     circuit = ConsecutiveFailureCircuit(failures_to_open=2, open_seconds=60.0)
     transport = _AlwaysFailTransport()
@@ -148,7 +148,7 @@ def test_build_web_search_port_defaults_to_stub() -> None:
     assert isinstance(port, StubWebSearchPort)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_platform_web_fallback_uses_injected_port() -> None:
     handler = PlatformToolHandler(
         knowledge_port=InMemoryKnowledgePort(),
@@ -167,7 +167,7 @@ async def test_platform_web_fallback_uses_injected_port() -> None:
     assert payload["hits"][0]["source"] == "web"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_platform_web_fallback_without_port_errors() -> None:
     handler = PlatformToolHandler(knowledge_port=InMemoryKnowledgePort())
     result = await handler.call_tool(

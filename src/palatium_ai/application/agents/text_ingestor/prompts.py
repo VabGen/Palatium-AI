@@ -22,6 +22,5 @@ def build_context_prefix_user_prompt(
     if document_title:
         lines.append(f"document_title: {document_title}")
     lines.append("chunks:")
-    for chunk in chunks:
-        lines.append(f"[{chunk.index}] {chunk.text[:800]}")
+    lines.extend(f"[{chunk.index}] {chunk.text[:800]}" for chunk in chunks)
     return "\n".join(lines)

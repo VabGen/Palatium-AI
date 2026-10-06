@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Palatium Assistant — standalone</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #07090b;
+        color: #93a0b4;
+        font-family: system-ui, sans-serif;
+      }
+
+      .stand {
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .stand-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #1d242e;
+        font-size: 13px;
+      }
+
+      .stand-bar strong {
+        color: #e8edf4;
+        margin-right: 4px;
+      }
+
+      .stand-bar button {
+        font: inherit;
+        color: #e8edf4;
+        background: #12161c;
+        border: 1px solid #2a3340;
+        border-radius: 8px;
+        padding: 5px 10px;
+        cursor: pointer;
+      }
+
+      .stand-bar button:hover {
+        border-color: #3dbea0;
+      }
+
+      .stand-hint {
+        margin-left: auto;
+      }
+
+      .stand-host {
+        min-height: 0;
+      }
+
+      palatium-assistant {
+        height: 100%;
+      }
+
+      /*
+       * Публичный styling API (план 2.6): хост переопределяет и токены, и части.
+       * Стенд показывает оба рычага — в СЭД это будут брендовые цвета.
+       */
+      palatium-assistant::part(launcher) {
+        background: #123024;
+        color: #e8edf4;
+        border-color: #3dbea0;
+        font-weight: 600;
+      }
+
+      palatium-assistant::part(header) {
+        border-bottom-color: #3dbea0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stand">
+      <div class="stand-bar">
+        <strong>standalone</strong>
+        <button type="button" id="btn-context">Отправить контекст host'а</button>
+        <button type="button" id="btn-document">Сменить документ</button>
+        <button type="button" id="btn-expire">Испортить токен (401 → refresh)</button>
+        <button type="button" id="btn-collapse">Свернуть: close()</button>
+        <button type="button" id="btn-expand">Развернуть: open()</button>
+        <button type="button" id="btn-theme">Тема: светлая</button>
+        <span class="stand-hint" id="mode">режим: без host'а (dev-token)</span>
+      </div>
+      <div class="stand-host">
+        <palatium-assistant id="assistant" lang="ru"></palatium-assistant>
+      </div>
+    </div>
+
+    <!--
+      Мок-хост СЭД. Загружается ОБЫЧНЫМ скриптом (не module), то есть выполняется
+      до апгрейда кастомного элемента — так проверяется гонка из плана §2.2.
+      Токен при этом берётся у бэкенда (`/api/auth/dev-token`): стенд проверяет
+      реальный путь «host выдал токен», а не подсовывает фиктивный JWT.
+    -->
+    <script>
+      (function () {
+        var MOCK_USER = {
+          id: '11111111-1111-4111-8111-111111111111',
+          orgId: '114',
+          firstName: 'Иван',
+          lastName: 'Петров',
+          fullName: 'Петров Иван Сергеевич',
+          departmentId: '22222222-2222-4222-8222-222222222222',
+          departmentName: 'Канцелярия',
+          localization: 'RU',
+          active: true,
+          fired: false,
+        };
+        var MOCK_PERMISSIONS = {
+          authorities: ['READ_DOCUMENT', 'CREATE_ACCESS_GRIEF'],
+          roles: [],
+          subordinatesDepartments: ['33333333-3333-4333-8333-333333333333'],
+          responsibleNomenclatureDepartmentIds: [],
+          archivist: false,
+        };
+        var documentRef = {
+          id: '44444444-4444-4444-8444-444444444444',
+          type: 'INCOMING',
+          title: 'Входящее №42',
+        };
+        var hostToken = null;
+        var hostEnabled = false;
+        var modeLabel = document.getElementById('mode');
+        /*
+         * Тред диалога — ЗАБОТА ХОСТА, а не виджета (виджету storage запрещён).
+         * Здесь он лежит в `sessionStorage` ровно для того, чтобы стенд
+         * воспроизводил реальный сценарий: перезагрузка страницы СЭД → host
+         * возвращает id в контексте → виджет продолжает тот же диалог.
+         * Формула интеграции: подписаться на `sed:thread-changed` и вернуть id
+         * в `SedContext.threadId`. В СЭД роль хранилища играет её own state/БД.
+         */
+        var hostThreadId = window.sessionStorage.getItem('palatium-thread-id');
+
+        function buildContext() {
+          var context = {
+            token: hostToken,
+            user: MOCK_USER,
+            permissions: MOCK_PERMISSIONS,
+            document: documentRef,
+            scope: {
+              tenantId: MOCK_USER.orgId,
+              departmentIds: [MOCK_USER.departmentId].concat(
+                MOCK_PERMISSIONS.subordinatesDepartments
+              ),
+            },
+          };
+          // Поля нет, пока тред неизвестен: `threadId: null` виджет отбросил бы,
+          // но контекст с мусорным полем хуже честного отсутствия поля.
+          if (hostThreadId) context.threadId = hostThreadId;
+          return context;
+        }
+
+        window.addEventListener('sed:thread-changed', function (event) {
+          hostThreadId = event.detail.threadId;
+          window.sessionStorage.setItem('palatium-thread-id', hostThreadId);
+        });
+
+        async function mintToken() {
+          var res = await fetch('/api/auth/dev-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: MOCK_USER.id, org_id: MOCK_USER.orgId }),
+          });
+          if (!res.ok) throw new Error('dev-token ' + res.status);
+          return (await res.json()).access_token;
+        }
+
+        window.addEventListener('sed:assistant-context-requested', async function () {
+          if (!hostEnabled) return;
+          try {
+            if (!hostToken) hostToken = await mintToken();
+            window.dispatchEvent(
+              new CustomEvent('sed:context-changed', { detail: buildContext() })
+            );
+            modeLabel.textContent = 'режим: host (СЭД-контекст)';
+          } catch (err) {
+            modeLabel.textContent = 'ошибка мок-хоста: ' + err.message;
+          }
+        });
+
+        window.addEventListener('sed:auth-token-requested', async function () {
+          try {
+            hostToken = await mintToken();
+            window.dispatchEvent(
+              new CustomEvent('sed:auth-token-refreshed', { detail: { token: hostToken } })
+            );
+          } catch (err) {
+            modeLabel.textContent = 'ошибка refresh: ' + err.message;
+          }
+        });
+
+        document.getElementById('btn-context').addEventListener('click', async function () {
+          hostEnabled = true;
+          try {
+            if (!hostToken) hostToken = await mintToken();
+            window.dispatchEvent(
+              new CustomEvent('sed:context-changed', { detail: buildContext() })
+            );
+            modeLabel.textContent = 'режим: host (СЭД-контекст)';
+          } catch (err) {
+            modeLabel.textContent = 'ошибка мок-хоста: ' + err.message;
+          }
+        });
+
+        document.getElementById('btn-document').addEventListener('click', function () {
+          if (!hostEnabled) return;
+          documentRef = {
+            id: '55555555-5555-4555-8555-555555555555',
+            type: 'OUTGOING',
+            title: 'Исходящее №77',
+          };
+          window.dispatchEvent(new CustomEvent('sed:context-changed', { detail: buildContext() }));
+        });
+
+        document.getElementById('btn-expire').addEventListener('click', function () {
+          if (!hostEnabled) return;
+          hostToken = 'expired.token.value';
+          window.dispatchEvent(new CustomEvent('sed:context-changed', { detail: buildContext() }));
+        });
+
+        // Публичный API сворачивания: `close()` показывает лончер, `open()` возвращает панель.
+        var assistant = document.getElementById('assistant');
+
+        document.getElementById('btn-collapse').addEventListener('click', function () {
+          assistant.close();
+        });
+
+        document.getElementById('btn-expand').addEventListener('click', function () {
+          assistant.open();
+        });
+
+        // Светлая тема — явный opt-in хоста (`data-theme`), а не prefers-color-scheme.
+        var themeButton = document.getElementById('btn-theme');
+        themeButton.addEventListener('click', function () {
+          var light = assistant.getAttribute('data-theme') === 'light';
+          if (light) assistant.removeAttribute('data-theme');
+          else assistant.setAttribute('data-theme', 'light');
+          themeButton.textContent = light ? 'Тема: светлая' : 'Тема: тёмная';
+        });
+
+        // Контекст, выставленный ДО загрузки виджета (проверка ветки window.__palatiumSedContext).
+        if (new URLSearchParams(location.search).has('preload')) {
+          hostEnabled = true;
+          mintToken()
+            .then(function (token) {
+              hostToken = token;
+              window.__palatiumSedContext = buildContext();
+              modeLabel.textContent = 'режим: host (контекст до загрузки)';
+            })
+            .catch(function (err) {
+              modeLabel.textContent = 'ошибка preload: ' + err.message;
+            });
+        }
+      })();
+    </script>
+    <script type="module" src="/src/widget.tsx"></script>
+  </body>
+</html>

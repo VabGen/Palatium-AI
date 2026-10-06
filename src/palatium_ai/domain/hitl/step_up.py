@@ -98,7 +98,7 @@ def render_step_up_authorize_url(
     cleaned = template.strip()
     if not cleaned:
         return None
-    if not (cleaned.startswith("https://") or cleaned.startswith("http://")):
+    if not cleaned.startswith(("https://", "http://")):
         raise ValueError("HITL_STEP_UP_AUTHORIZE_URL must be http(s)")
     return cleaned.format(
         card_id=quote(card_id, safe=""),

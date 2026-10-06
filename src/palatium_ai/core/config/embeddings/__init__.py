@@ -122,11 +122,11 @@ class EmbeddingConfig(BaseConfig):
 
 
 __all__ = [
-    "EmbeddingConfig",
-    "EmbeddingSchema",
-    "OpenAIEmbeddingConfig",
-    "OllamaEmbeddingConfig",
-    "QwenEmbeddingConfig",
     "CohereEmbeddingConfig",
+    "EmbeddingConfig",
     "EmbeddingProviderConfig",
+    "EmbeddingSchema",
+    "OllamaEmbeddingConfig",
+    "OpenAIEmbeddingConfig",
+    "QwenEmbeddingConfig",
 ]

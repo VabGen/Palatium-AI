@@ -85,7 +85,7 @@ def _resolve_import(path: Path, node: ast.ImportFrom) -> str | None:
 
 
 def _target_layer(module: str | None) -> str | None:
-    if not module or module != _PACKAGE and not module.startswith(f"{_PACKAGE}."):
+    if not module or (module != _PACKAGE and not module.startswith(f"{_PACKAGE}.")):
         return None
     rest = module[len(_PACKAGE) :].lstrip(".")
     if not rest:

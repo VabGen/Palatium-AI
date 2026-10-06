@@ -30,10 +30,10 @@ CODER_STRATEGIES: frozenset[ExecutionStrategy] = frozenset({"code_sandbox"})
 ANALYST_STRATEGIES: frozenset[ExecutionStrategy] = frozenset({"data_analysis"})
 
 __all__ = [
-    "ExecutionStrategy",
-    "WORKER_STRATEGIES",
-    "RESEARCHER_STRATEGIES",
-    "CODER_STRATEGIES",
     "ANALYST_STRATEGIES",
     "CLARIFY_STRATEGY",
+    "CODER_STRATEGIES",
+    "RESEARCHER_STRATEGIES",
+    "WORKER_STRATEGIES",
+    "ExecutionStrategy",
 ]

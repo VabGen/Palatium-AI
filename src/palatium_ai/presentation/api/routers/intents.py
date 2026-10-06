@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
@@ -11,6 +13,11 @@ from palatium_ai.application.services.cost_budget import CostBudgetExceededError
 from palatium_ai.application.services.kill_switch import KillSwitchEngagedError
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.attachments.errors import (
+    AttachmentError,
+    AttachmentNotFoundError,
+    AttachmentNotUsableError,
+)
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal, principal_is_admin
@@ -23,6 +30,9 @@ class ClassifyIntentRequest(BaseModel):
 
     text: str = Field(min_length=1, max_length=32_000)
     thread_id: str = Field(min_length=1, max_length=128)
+    #: Attachments to fold into this turn as fenced untrusted context (020).
+    #: Ids must belong to the caller and be ``ready``/``indexed`` already.
+    attachment_ids: tuple[UUID, ...] = Field(default_factory=tuple, max_length=5)
     org_id: str | None = Field(
         default=None,
         max_length=128,
@@ -37,6 +47,12 @@ def _map_runtime_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc))
     if isinstance(exc, SessionOwnershipError):
         return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if isinstance(exc, AttachmentNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, AttachmentNotUsableError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, AttachmentError):
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     raise exc
 
 
@@ -52,8 +68,14 @@ async def classify_intent(body: ClassifyIntentRequest, request: Request) -> Inte
             user_id=principal.subject,
             org_id=principal.org_id,
             is_admin=principal_is_admin(request, principal),
+            attachment_ids=list(body.attachment_ids),
         )
-    except (KillSwitchEngagedError, CostBudgetExceededError, SessionOwnershipError) as exc:
+    except (
+        KillSwitchEngagedError,
+        CostBudgetExceededError,
+        SessionOwnershipError,
+        AttachmentError,
+    ) as exc:
         raise _map_runtime_error(exc) from exc
 
 
@@ -69,6 +91,12 @@ async def process_intent(body: ClassifyIntentRequest, request: Request) -> Forma
             user_id=principal.subject,
             org_id=principal.org_id,
             is_admin=principal_is_admin(request, principal),
+            attachment_ids=list(body.attachment_ids),
         )
-    except (KillSwitchEngagedError, CostBudgetExceededError, SessionOwnershipError) as exc:
+    except (
+        KillSwitchEngagedError,
+        CostBudgetExceededError,
+        SessionOwnershipError,
+        AttachmentError,
+    ) as exc:
         raise _map_runtime_error(exc) from exc

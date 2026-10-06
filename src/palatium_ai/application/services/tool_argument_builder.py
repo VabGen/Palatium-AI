@@ -66,7 +66,7 @@ class ToolArgumentBuilder:
     ) -> dict[str, object]:
         """Генерирует JSON arguments object, соответствующий tool schema.
 
-        Raises
+        Raises:
         ------
         ToolArgumentBuildError
             Если после всех retry аргументы не прошли валидацию.

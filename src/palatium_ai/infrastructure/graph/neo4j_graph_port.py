@@ -73,18 +73,15 @@ class Neo4jDriverTransport:
         """Execute write Cypher in a write transaction (promote MERGE)."""
         from neo4j import WRITE_ACCESS
 
-        rows: list[dict[str, object]] = []
-
         async def _work(tx: object) -> list[dict[str, object]]:
-            result = await tx.run(cypher, params)  # type: ignore[attr-defined]
-            out: list[dict[str, object]] = []
-            async for record in result:
-                out.append(record.data())
-            return out
+            result = await tx.run(cypher, params)  # type: ignore[attr-defined]  # tx: object — граница без neo4j-типов (017)
+            return [record.data() async for record in result]
 
         async with self._driver.session(default_access_mode=WRITE_ACCESS) as session:
-            rows = await session.execute_write(_work)
-        return rows
+            # execute_write returns the callback's value; tx is typed as ``object`` (optional
+            # neo4j dep), so the driver generic collapses to Any — pin it at this boundary (017).
+            written: list[dict[str, object]] = await session.execute_write(_work)
+            return written
 
     async def aclose(self) -> None:
         if self._closed:

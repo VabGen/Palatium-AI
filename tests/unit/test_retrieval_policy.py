@@ -49,7 +49,7 @@ class _PlatformWebRegistry(FakeMCPRegistry):
         ]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_capability_index_skips_web_fallback_until_local_empty() -> None:
     registry = _PlatformWebRegistry()
     index = MCPCapabilityIndex(registry)
@@ -70,7 +70,7 @@ async def test_capability_index_skips_web_fallback_until_local_empty() -> None:
     assert allowed.tool_name == "web_fallback"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_researcher_blocks_web_fallback_without_local_empty_flag() -> None:
     from uuid import uuid4
 

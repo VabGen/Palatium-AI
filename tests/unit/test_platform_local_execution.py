@@ -56,7 +56,7 @@ def test_requires_local_handler_platform_only() -> None:
     assert has_local_capability("edms") is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_compose_profile_without_platform_url_wires_capability() -> None:
     """Regression: Docker MCP_SERVERS without platform still has 070 tools."""
     registry = MCPRegistry(settings=_settings_remote_only())  # type: ignore[arg-type]
@@ -98,7 +98,7 @@ async def test_compose_profile_without_platform_url_wires_capability() -> None:
     assert result.is_error is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_platform_url_in_env_is_ignored() -> None:
     registry = MCPRegistry(settings=_settings_with_platform_url())  # type: ignore[arg-type]
     await registry.initialize()
@@ -108,7 +108,7 @@ async def test_platform_url_in_env_is_ignored() -> None:
     assert tools
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_call_tool_platform_without_handler_raises() -> None:
     registry = MCPRegistry(settings=_settings_remote_only())  # type: ignore[arg-type]
     await registry.initialize()
@@ -130,7 +130,7 @@ async def test_call_tool_platform_without_handler_raises() -> None:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_assert_local_handlers_wired_fails_without_handler() -> None:
     registry = MCPRegistry(settings=_settings_remote_only())  # type: ignore[arg-type]
     await registry.initialize()

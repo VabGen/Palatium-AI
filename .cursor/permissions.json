@@ -1,0 +1,89 @@
+{
+  // Cursor Auto-Run — «не спрашивать каждый раз».
+  // Схема: resources/app/extensions/cursor-always-local/schemas/permissions.schema.json
+  // Допустимы ТОЛЬКО ключи ниже (unevaluatedProperties: false), плюс //-комментарии.
+  //
+  // approvalMode:
+  //   "manual"       — Ask Every Time (поведение без этого файла);
+  //   "allowlist"    — авто-запуск только того, что в terminalAllowlist/mcpAllowlist;
+  //   "unrestricted" — Always Run: без подтверждений (выбрано пользователем).
+  //
+  // ВАЖНО (020): жёсткие запреты живут НЕ здесь, а в .cursor/hooks.json и
+  // остаются в силе при любом approvalMode:
+  //   beforeShellExecution → deny-dangerous-shell.py — deny на rm -rf /, force-push, curl|bash;
+  //   beforeMCPExecution   → mcp-rbac-guard.sh        — ask на мутации памяти/EDMS (HITL, 020/070).
+  "approvalMode": "unrestricted",
+
+  // «Безопасный набор» для терминала. Действует, если approvalMode = "allowlist"
+  // (в "unrestricted" игнорируется, оставлен как готовый scoped-профиль).
+  "terminalAllowlist": [
+    "git status*",
+    "git diff*",
+    "git log*",
+    "git show*",
+    "git branch*",
+    "git blame*",
+    "git fetch*",
+    "git rev-parse*",
+    "git ls-files*",
+    "git stash list*",
+    "ruff *",
+    "mypy *",
+    "pytest*",
+    "python -m pytest*",
+    "python -m compileall*",
+    "poetry run*",
+    "poetry env*",
+    "poetry show*",
+    "poetry check*",
+    "python -c*",
+    "python -m*",
+    "rg*",
+    "grep*",
+    "findstr*",
+    "where.exe*",
+    "Get-ChildItem*",
+    "Get-Content*",
+    "Select-String*",
+    "Test-Path*",
+    "docker compose ps*",
+    "docker compose logs*",
+    "docker ps*",
+    "docker images*",
+    "node *",
+    "npm run*",
+    "npm test*",
+    "npx *",
+    "pnpm *",
+    "make *",
+    "gum *"
+  ],
+
+  // Только read-инструменты из закрытого перечня 070.
+  // Мутации памяти/EDMS (save_memory, forget_memory, consolidate_memory,
+  // ingest_document) сюда НЕ добавлять — они обязаны проходить HITL (020)
+  // через mcp-rbac-guard.sh.
+  "mcpAllowlist": [
+    "*:search_knowledge",
+    "*:search_memory",
+    "*:graph_query",
+    "*:web_fallback"
+  ],
+
+  // Подсказки для Auto-review Auto-Run (действуют в соответствующем режиме).
+  "autoReview": {
+    "allow_instructions": [
+      "Read-only git-команды (status/diff/log/show/branch/blame) безопасны — запускать без вопроса.",
+      "Локальные quality gates: ruff, mypy, pytest, compileall, poetry run — безопасны.",
+      "Чтение и поиск по репозиторию (rg, grep, cat, Get-Content, Select-String, Test-Path) — безопасны.",
+      "Просмотр состояния инфраструктуры (docker compose ps/logs, docker ps/images) — безопасен."
+    ],
+    "block_instructions": [
+      "git push, особенно --force, в main/master/prod — блокировать (020).",
+      "rm -rf, DROP TABLE/DATABASE, TRUNCATE, alembic upgrade/downgrade на реальной БД — блокировать.",
+      "curl|bash, wget|sh, установка пакетов из недоверенных источников — блокировать.",
+      "Любые write-операции в EDMS — только через HITL-карточку (020, 070).",
+      "Запись/удаление в Neo4j мимо MemoryPromotionService — блокировать (060)."
+    ]
+  }
+}

@@ -60,8 +60,7 @@ def build_researcher_input(
         prior_context=selectors.resolved_prior_assistant_content(state),
         mcp_tool_output_max_chars=selectors.prompt_budget(state).mcp_tool_output_max_chars,
         revision_feedback=selectors.resolved_revision_feedback(state),
-        # dialog_window=state.get("dialog_window"),
-        # memory_hints=selectors.memory_hints(state),
+        # dialog_window и memory_hints в ResearcherInput не пробрасываются (осознанно).
     )
 
 

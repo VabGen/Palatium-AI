@@ -11,9 +11,6 @@ source "$SCRIPT_DIR/lib/audit-chain.sh"
 
 INPUT="$(cat)"
 
-# Не failClosed-хук (afterFileEdit) — при отсутствии jq не молчим и не падаем,
-# а деградируем на python3-фолбэк для извлечения полей (audit-chain при этом
-# всё равно пропустится: он сам требует jq и явно предупредит в stderr).
 if command -v jq >/dev/null 2>&1; then
   FILE_PATH="$(echo "$INPUT" | jq -r '.file_path // ""')"
   NEW_CONTENT="$(echo "$INPUT" | jq -r '.new_content // ""')"
@@ -26,7 +23,6 @@ fi
 LOG_DIR="$SCRIPT_DIR/../logs"
 mkdir -p "$LOG_DIR"
 
-# name:pattern — имя нужно для audit-события и для читаемого сообщения.
 SECRET_PATTERNS=(
   "openai_or_anthropic_key:sk-[a-zA-Z0-9]{20,}"
   "aws_access_key:AKIA[0-9A-Z]{16}"
@@ -48,5 +44,4 @@ for entry in "${SECRET_PATTERNS[@]}"; do
   fi
 done
 
-# afterFileEdit не блокирует — только наблюдательный хук.
 exit 0

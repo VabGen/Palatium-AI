@@ -14,7 +14,7 @@ from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemo
 from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_platform_handler_persists_chunks() -> None:
     knowledge = InMemoryKnowledgePort()
     handler = PlatformToolHandler(knowledge_port=knowledge)
@@ -36,7 +36,7 @@ async def test_platform_handler_persists_chunks() -> None:
     assert knowledge.documents[0].chunk_count == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_in_memory_knowledge_port_command() -> None:
     port = InMemoryKnowledgePort()
     result = await port.ingest_document(

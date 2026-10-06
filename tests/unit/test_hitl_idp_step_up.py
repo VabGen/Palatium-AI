@@ -13,7 +13,7 @@ from palatium_ai.infrastructure.hitl.idp_acr_step_up import IdpAcrHitlStepUpProv
 
 # ≥32 bytes: the platform rejects shorter HS secrets (infrastructure/mcp/jwt_auth.py) and
 # PyJWT warns below RFC 7518 §3.2 minimum — the fixture must honour the real contract (020).
-_TEST_HS_KEY = "unit-test-hs-key-32-bytes-long!!"  # noqa: S105
+_TEST_HS_KEY = "unit-test-hs-key-32-bytes-long!!"
 
 
 def _mint(
@@ -69,13 +69,13 @@ def test_idp_acr_verify_accepts_bound_token() -> None:
 
 
 @pytest.mark.parametrize(
-    ("kwargs",),
-    [
-        ({"sub": "other"},),
-        ({"card_id": "wrong-card"},),
-        ({"acr": "urn:other"},),
-        ({"iat_offset": -400, "exp_offset": 10},),
-    ],
+    "kwargs",
+    (
+        {"sub": "other"},
+        {"card_id": "wrong-card"},
+        {"acr": "urn:other"},
+        {"iat_offset": -400, "exp_offset": 10},
+    ),
 )
 def test_idp_acr_verify_rejects_broken_binding(kwargs: dict[str, object]) -> None:
     provider = IdpAcrHitlStepUpProvider(

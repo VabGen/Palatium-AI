@@ -63,13 +63,21 @@ LOW_RISK_ROUTE_STRATEGIES: frozenset[RouteStrategy] = frozenset(
     {"ack_only", "format_only"},
 )
 
+# --- Untrusted content (attachments, MCP/tool output) ---
+
+# How a payload with detected injection signals may be used. ``allow`` keeps it
+# verbatim, ``mask`` redacts the matched spans, ``quarantine``/``reject`` let
+# nothing reach the prompt and require human review (020, OWASP LLM01).
+UntrustedContentAction = Literal["allow", "mask", "quarantine", "reject"]
+
 __all__ = [
+    "LOW_RISK_ROUTE_STRATEGIES",
     "AgentRole",
     "ContinuationKind",
     "ExecutionStrategy",
-    "LOW_RISK_ROUTE_STRATEGIES",
     "ModelTier",
     "RouteStrategy",
     "TaskKind",
     "UnderspecificationKind",
+    "UntrustedContentAction",
 ]

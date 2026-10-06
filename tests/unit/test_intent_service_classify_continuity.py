@@ -25,7 +25,7 @@ class _FakeSessionService:
 
     async def get_session(self, **_kwargs: object) -> None:
         """Reply-locale lookup (065); no persisted session in unit tests."""
-        return None
+        return
 
 
 class _FakeHitlService:
@@ -41,7 +41,7 @@ class _FakeGraph:
         return self._state
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_classify_overlays_routing_intent_axes() -> None:
     raw = IntentTaskResult(
         task_id="t1",

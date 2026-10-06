@@ -34,7 +34,7 @@ async def _contextualize(llm: FakeLLMPort, task_input: ContextualizerInput):
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_contextualizer_passthrough_without_history() -> None:
     llm = FakeLLMPort("should-not-be-called")
     result = await _contextualize(
@@ -52,7 +52,7 @@ async def test_contextualizer_passthrough_without_history() -> None:
     assert len(llm.calls) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_contextualizer_rewrites_format_followup() -> None:
     llm = FakeLLMPort(
         """{
@@ -95,7 +95,7 @@ async def test_contextualizer_rewrites_format_followup() -> None:
     assert result.output.refers_to_prior is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_contextualizer_uses_memory_hints_without_turns() -> None:
     """Memory hints alone do not require rewrite when there is no assistant prior."""
     llm = FakeLLMPort("should-not-be-called")
@@ -113,7 +113,7 @@ async def test_contextualizer_uses_memory_hints_without_turns() -> None:
     assert len(llm.calls) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_contextualizer_skips_llm_for_social_with_prior() -> None:
     llm = FakeLLMPort("should-not-be-called")
     window = DialogTurnWindow(
@@ -152,7 +152,7 @@ async def test_contextualizer_skips_llm_for_social_with_prior() -> None:
     assert len(llm.calls) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_contextualizer_passthrough_user_only_history() -> None:
     """First turn in thread: user message stored but no assistant reply yet."""
     llm = FakeLLMPort("should-not-be-called")

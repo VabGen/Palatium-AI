@@ -28,7 +28,7 @@ class _FakeNeo4jTransport:
         self.closed = True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_neo4j_graph_port_serializes_rows() -> None:
     transport = _FakeNeo4jTransport()
     port = Neo4jGraphPort(transport)
@@ -46,7 +46,7 @@ async def test_neo4j_graph_port_serializes_rows() -> None:
     assert transport.last_query[1]["user_id"] == "u1"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_neo4j_graph_port_rejects_write_cypher() -> None:
     port = Neo4jGraphPort(_FakeNeo4jTransport())
     with pytest.raises(ValueError, match="read-only"):
@@ -59,7 +59,7 @@ async def test_neo4j_graph_port_rejects_write_cypher() -> None:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_neo4j_graph_port_rejects_unscoped_cypher() -> None:
     """070: an unscoped read must never reach the driver (cross-tenant leak)."""
     port = Neo4jGraphPort(_FakeNeo4jTransport())
@@ -74,7 +74,7 @@ async def test_neo4j_graph_port_rejects_unscoped_cypher() -> None:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_neo4j_graph_port_forces_tenant_param() -> None:
     """Client-supplied user_id in params must be overwritten by the authenticated user (020)."""
     transport = _FakeNeo4jTransport()
@@ -91,7 +91,7 @@ async def test_neo4j_graph_port_forces_tenant_param() -> None:
     assert transport.last_query[1]["user_id"] == "u-actor"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_neo4j_graph_port_closes_transport() -> None:
     transport = _FakeNeo4jTransport()
     port = Neo4jGraphPort(transport)

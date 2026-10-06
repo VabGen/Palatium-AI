@@ -94,14 +94,15 @@ def _normalize_timestamp(raw: str) -> str:
     Единая точка нормализации убирает класс ошибок целиком.
     """
     try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        # py3.11+: fromisoformat понимает суффикс Z (FURB162).
+        dt = datetime.fromisoformat(raw)
     except ValueError:
         logger.warning("audit timestamp is not ISO-8601: %r", raw[:64])
         return raw
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    # return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return dt.replace(tzinfo=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # astimezone(UTC): конвертирует смещение, а не переклеивает tzinfo (иначе +03:00 → неверный момент).
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @dataclass(slots=True)
@@ -443,11 +444,13 @@ def get_audit_logger() -> AuditChainLogger:
         return _LOGGER
 
     with _SINGLETON_LOCK:
-        if _LOGGER is not None:
-            return _LOGGER
-        env_path = os.getenv("AUDIT_LOG_FILE")
-        file_path = Path(env_path) if env_path else _default_audit_log_path()
-        _LOGGER = AuditChainLogger(file_path=file_path, hmac_secret=_audit_hmac_secret())
+        # Re-check inside the lock: mypy narrows the global to None after the guard
+        # above, but another thread may have created the logger while this one was
+        # waiting, and two instances would fork the hash chain (020).
+        if _LOGGER is None:
+            env_path = os.getenv("AUDIT_LOG_FILE")
+            file_path = Path(env_path) if env_path else _default_audit_log_path()
+            _LOGGER = AuditChainLogger(file_path=file_path, hmac_secret=_audit_hmac_secret())
         return _LOGGER
 
 

@@ -21,6 +21,7 @@ from palatium_ai.infrastructure.database import (
 
 # Bind models so MetaData is fully populated for autogenerate (not a dead import).
 _REGISTERED_ORM_MODELS = (
+    orm_models.AttachmentORM,
     orm_models.DialogTurnORM,
     orm_models.MemoryItemORM,
     orm_models.SessionORM,

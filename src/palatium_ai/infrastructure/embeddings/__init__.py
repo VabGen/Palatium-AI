@@ -6,8 +6,8 @@ from .factory import EmbeddingClientFactory, create_embedding_client, create_emb
 from .litellm_adapter import LiteLLMEmbeddingAdapter
 
 __all__ = [
-    "LiteLLMEmbeddingAdapter",
     "EmbeddingClientFactory",
+    "LiteLLMEmbeddingAdapter",
     "create_embedding_client",
     "create_embedding_client_for_schema",
 ]

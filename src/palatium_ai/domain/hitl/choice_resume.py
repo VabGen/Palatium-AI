@@ -116,7 +116,7 @@ class ChoiceResumePolicy:
         if kind not in {"format", "tool", "clarify"}:
             return None
         return ParsedHitlChoiceResume(
-            resume_kind=kind,  # type: ignore[arg-type]
+            resume_kind=kind,  # type: ignore[arg-type]  # membership-проверка не сужает str→Literal (010, 017)
             action_id=header.group("action_id")[:120],
             option_kind=header.group("option_kind")[:40],
             label=label[:200],

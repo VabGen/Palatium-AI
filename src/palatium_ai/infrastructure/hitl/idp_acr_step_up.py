@@ -86,7 +86,7 @@ class IdpAcrHitlStepUpProvider:
     def issue_challenge(self, *, card_id: str, subject: str) -> HitlStepUpChallenge:
         """Return IdP ceremony metadata; client obtains JWT from IdP (assertion left null)."""
         nonce = secrets.token_urlsafe(24)
-        primary_acr = sorted(self._required_acr)[0]
+        primary_acr = min(self._required_acr)  # _required_acr провалидирован непустым в __init__
         authorize_url = render_step_up_authorize_url(
             self._authorize_template,
             card_id=card_id,

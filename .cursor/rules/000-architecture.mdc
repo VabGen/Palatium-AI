@@ -39,7 +39,7 @@
 | `application/agents` | Реализации агентов (BaseAgent-наследники), Harness |
 | `application/orchestration` | LangGraph: state, nodes, graph |
 | `application/services` | Сервисы-фасады над агентами |
-| `application/tools` | ToolRegistry, обёртки MCP-инструментов |
+| `application/tools` | Типизированная обёртка MCP-вызова (`mcp.py`) и RBAC-исполнитель (`executor.py`) |
 | `infrastructure/llm` | Адаптеры LiteLLM/OpenAI, fallback-цепочки |
 | `infrastructure/memory` | Реализация MemoryPort (pgvector + LangMem) |
 | `infrastructure/mcp` | FastMCP-сервер и клиент |

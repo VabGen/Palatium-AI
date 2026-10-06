@@ -74,7 +74,7 @@ def test_baseline_covers_all_agents() -> None:
         assert agent in agent_baseline, f"missing baseline for {agent}"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_all_agent_evals_pass_baseline_gate() -> None:
     reports = await run_all_agent_evals()
     for agent, report in reports.items():
@@ -82,10 +82,10 @@ async def test_all_agent_evals_pass_baseline_gate() -> None:
     assert_baseline_gate(reports)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 @pytest.mark.parametrize(
-    ("agent", "task_id"),
-    [
+    "agent, task_id",
+    (
         ("intent_classifier", "knowledge_with_mcp"),
         ("intent_classifier", "social_phatic"),
         ("context_enricher", "continuation-format-followup"),
@@ -102,7 +102,7 @@ async def test_all_agent_evals_pass_baseline_gate() -> None:
         ("formatter", "minimal_document"),
         ("text_ingestor", "paragraph-split"),
         ("text_ingestor", "context-prefix-enrich"),
-    ],
+    ),
 )
 async def test_cassette_task_runs_through_harness(agent: str, task_id: str) -> None:
     reports = await run_all_agent_evals()
@@ -128,7 +128,7 @@ def test_nightly_tasks_load() -> None:
         assert task.get("judge_cassette")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_nightly_llm_judge_passes_with_cassette() -> None:
     reports = await run_all_nightly_evals()
     nightly = reports["nightly"]
@@ -154,7 +154,7 @@ def test_grade_from_judge_payload_threshold() -> None:
     assert low.passed is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_live_judge_rejects_same_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PALATIUM_EVAL_LIVE_JUDGE", "1")
     monkeypatch.setenv("PALATIUM_EVAL_JUDGE_PROVIDER", "openai")

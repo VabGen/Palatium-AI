@@ -16,6 +16,7 @@
 #
 # Build:
 #   docker build -t palatium-ai:local .
+#   docker build --build-arg WITH_ATTACHMENTS=1 -t palatium-ai:local .  # + minio/pypdf/python-docx
 #   docker build --target test -t palatium-ai:test .
 #   docker build --target devtools -t palatium-ai:devtools .
 #
@@ -28,11 +29,19 @@ ARG APP_VERSION=0.1.0
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 ARG WITH_GRAPHITI=0
+ARG WITH_ATTACHMENTS=0
 
 # ---------------------------------------------------------------------------
 # Stage: base
 # ---------------------------------------------------------------------------
-FROM python:${PYTHON_VERSION}-slim AS base
+# Pinned by digest, not by the mutable `3.14-slim` tag (025): the tag is a moving target,
+# so the code we build on could change without a pull request in this repo. The digest
+# below is the multi-arch index of `python:3.14-slim` = 3.14.7-slim-trixie (2026-09-19);
+# the tag stays on the line as the human-readable hint. Bumping PYTHON_VERSION without
+# refreshing the digest fails the build on purpose (`manifest unknown`) — a silent
+# base-image swap is the outcome this pin exists to prevent. Drift is gated by
+# `scripts/ci_security.py` (base image pin check).
+FROM python:${PYTHON_VERSION}-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS base
 
 ARG PYTHON_VERSION
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -75,7 +84,10 @@ RUN apt-get update \
 WORKDIR /app
 
 # poetry.lock должен быть в репо и в build context (не в .dockerignore).
-COPY pyproject.toml poetry.lock README.md ./
+# LICENSE обязателен: pyproject declares `license-files = ["LICENSE"]`, and the root
+# package is built in the *builder* stage — Poetry's backend fails on a declared-but-absent
+# license file, which is exactly how the image shipped without `palatium_ai` (see below).
+COPY pyproject.toml poetry.lock README.md LICENSE ./
 
 # poetry check --lock — не пересчитывает lock, только валидирует.
 # Если lock расходится с pyproject → fail fast (reproducible builds).
@@ -89,20 +101,41 @@ RUN --mount=type=cache,target=/tmp/poetry_cache \
 FROM deps AS builder
 
 ARG WITH_GRAPHITI=0
+ARG WITH_ATTACHMENTS=0
 
 # Только src — mcp_servers идёт через свой Dockerfile (не часть этого образа).
 COPY src ./src
 COPY alembic.ini ./
 COPY alembic ./alembic
 
+# `--only main` keeps the image lean, but the attachment pipeline needs the
+# optional `attachments` group (minio / pypdf / python-docx). Without it an
+# ATTACHMENTS_BLOB_BACKEND=minio container fails closed on boot, and PDF/DOCX
+# parsing raises at request time (see docs/runbook.md §16.2).
+#
+# The import assertions below are not decoration. `poetry install` builds the root project
+# *last*, and its failure used to be swallowed by a trailing `|| true` — the image built
+# "successfully" while shipping a venv without `palatium_ai`, and the API died at boot with
+# `ModuleNotFoundError: No module named 'palatium_ai'`. Asserting the imports converts that
+# into a build failure, which is where it belongs (035: fail fast, never ship a silently
+# degraded image). Pinned by tests/unit/test_dockerfile_build_contract.py.
 RUN --mount=type=cache,target=/tmp/poetry_cache \
-    poetry install --only main \
+    if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
+        poetry install --with attachments; \
+    else \
+        poetry install --only main; \
+    fi \
     && if [ "${WITH_GRAPHITI}" = "1" ]; then \
-         /app/.venv/bin/pip install --no-cache-dir "graphiti-core>=0.11.0,<1.0.0"; \
+         /app/.venv/bin/pip install --no-cache-dir "graphiti-core>=0.11.0,<1.0.0" \
+         && /app/.venv/bin/python -c "import graphiti_core"; \
        fi \
-    && find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
-    && find /app/.venv -type f -name "*.pyc" -delete \
-    && find /app/.venv -type f -name "*.pyo" -delete
+    && /app/.venv/bin/python -c "import palatium_ai; print('palatium_ai ->', palatium_ai.__file__)"
+
+# Best-effort cleanup, deliberately its own step: a stray __pycache__ must never be able to
+# fail the build, and — the other half of the same bug — its `|| true` must never be able to
+# hide a failed install by terminating the `&&` chain that precedes it.
+RUN find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true; \
+    find /app/.venv -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Stage: runtime (default)
@@ -144,11 +177,14 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=app:app /app/alembic /app/alembic
+# Shipped for licence compliance: the image carries MIT code, so it carries the notice
+# (OCI `org.opencontainers.image.licenses` above is a label, not the licence text).
+COPY --chown=app:app LICENSE /app/LICENSE
 COPY --chown=app:app scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
 
 RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
     && chmod 0555 /app/scripts/docker-entrypoint.sh \
-    && chmod -R a-w /app/.venv /app/src /app/alembic /app/alembic.ini \
+    && chmod -R a-w /app/.venv /app/src /app/alembic /app/alembic.ini /app/LICENSE \
     && chmod u+w /app/logs /app/tmp
 
 USER app

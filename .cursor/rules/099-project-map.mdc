@@ -9,11 +9,27 @@ alwaysApply: true
 - Стек: Python 3.14, FastAPI, LangGraph, LangMem, Cognee, FastMCP, PostgreSQL
   (pgvector; FTS через tsvector/ts_rank_cd — 060), Neo4j, Redis, LiteLLM,
   structlog, OpenTelemetry.
-- **Индекс правил:** 000-архитектура · 010-типизация · 020-безопасность ·
-  030-контракты · 040-observability · 050-антипаттерны · 055-принципиальные фиксы ·
-  060-память · 065-контекст · 070-MCP · 075-тесты · 090-JavaEdms ·
-  **092-EDMS-MCP-adapter**. Этот файл — навигация; источники истины — указанные
-  правила, дублей не создаём (050).
+- **Индекс правил:** 001-рабочее соглашение · 005-spec-driven · 000-архитектура · 010-типизация ·
+  015-качество кода · 017-триаж находок · 020-безопасность · 025-supply-chain ·
+  030-контракты ·
+  035-обработка ошибок · 040-observability · 050-антипаттерны · 055-принципиальные
+  фиксы · 060-память · 065-контекст · 070-MCP · 075-тесты · 080-производительность ·
+  082-доставка/DevOps · 084-качество фронтенда · 086-документация · 088-git-процесс ·
+  090-JavaEdms · **092-EDMS-MCP-adapter**.
+  Этот файл — навигация; источники истины — указанные правила, дублей не создаём (050).
+- **План усиления правил:** `.cursor/plans/cursor-rules-hardening.md` — темы вводились
+  волнами (W0–W6 закрыты 2026-09-30: от дрейфа индекса до spec-driven `005`).
+  Канонический индекс выше обновляется ПО МЕРЕ мержа; ссылки на ещё не созданные файлы
+  здесь не появляются.
+- **Git-договор и поставка:** шаблон PR — `.github/pull_request_template.md`, владельцы
+  путей — `.github/CODEOWNERS` (088); branch protection и commitlint — осознанно НЕ вводим
+  (решение 2026-09-30). Гейты: CI-jobs `quality` / `security` / `compose` / `frontend`,
+  быстрые — `.pre-commit-config.yaml`; образы и compose — 082, пины — 025.
+- **Документация:** индекс — `docs/README.md`; ADR — `docs/adr/` (формат — `docs/adr/README.md`);
+  маркеры долгов `MARKER(owner, ticket, date): …` проверяет `scripts/check_todos.py`
+  (086, CI + pre-commit).
+- Нагрузочные (сложность hot-path) тесты — `tests/perf/` под маркером `slow`:
+  вне PR-пути (`make perf`, `.github/workflows/perf-nightly.yml`), гейт — 080.
 - Исходники: `src/palatium_ai/` — 5 слоёв (см. 000-architecture).
 - Точка входа API: `presentation/api/` → routers. WS: `presentation/websockets/`.
   Composition root (DI) — см. 000; запуск: `python -m palatium_ai` (или uvicorn-скриптом).
@@ -30,18 +46,37 @@ alwaysApply: true
 - Схемы БД: `knowledge` / `memory` — размерности и embedding-модели ТОЛЬКО в
   реестре `core/types/embeddings.py` (060), не в этом файле.
   Миграции в `infrastructure/database/migrations/`.
-- Скиллы: `.cursor/skills/<name>/SKILL.md`; `reference.md` — через tool call
-  `skill_reference` (065).
-- Фронтенд: React 18 + Vite (SPA, без SSR/RSC — гидратационные оговорки
-  из apple-design/animate тут неприменимы), Tailwind CSS. Пакет — `web/`.
+- Вложения (attachments): домен — `domain/attachments/` (агрегат, статусы,
+  `AttachmentIntakePolicy`, `AttachmentRetentionPolicy`); порты —
+  `domain/ports/{attachments,blob_store,document_parser,scanner}.py`; адаптеры —
+  `infrastructure/blob/` (MinIO / in-memory), `infrastructure/scanning/` (ClamAV /
+  disabled), `infrastructure/parsing/document_parser.py`,
+  `infrastructure/database/attachment_repository.py`; use-cases —
+  `application/services/{attachment_service,attachment_pipeline}.py`
+  (scan → parse → prompt-injection gate → fence); роутер —
+  `presentation/api/routers/attachments.py` (`/api/attachments`), HITL-индексация через
+  `platform.ingest_document`. Таблица `palatium_ai.attachments` под `FORCE RLS` (060),
+  retention — per-owner sweep. Эксплуатация и env — `docs/runbook.md` §16.
+- Скиллы: `.cursor/skills/<name>/SKILL.md`. Загрузка `reference.md` через tool
+  call `skill_reference` **не реализована** (roadmap, 065) — сегодня скиллы
+  читаются файлами, runtime-механизма нет.
+- Фронтенд: React 19 + Vite + TypeScript (SPA, без SSR/RSC — гидратационные
+  оговорки из apple-design/animate тут неприменимы). Стили — обычный CSS
+  (`web/src/styles.css`), **Tailwind НЕ используется**. Пакет — `web/`.
   Фронтенд-craft скиллы (анимация/UI-полировка Emil Kowalski) — индекс в
-  `.cursor/skills/web-craft/SKILL.md`.
+  `.cursor/skills/web-craft/SKILL.md`. Качество фронта (TS strict, ESLint/Prettier,
+  Vitest+RTL+MSW, Playwright+axe, бюджет бандла) — правило **084**.
+  Гейты одной командой: `npm run verify` (`web/`), тот же агрегат в CI-джобе
+  `frontend`; unit/integration — `web/tests/`, E2E — `web/e2e/`.
 - EDMS-интеграция: `mcp_servers/edms/edms_mcp_server.py`; JavaEdms — read-only
   reference (090). MAX PRO процесс адаптера: правило **092** + скилл
   `edms-mcp-max-pro` (legacy-чат → FastMCP, волны в `waves.md`).
 - **Полный план MCP (Host/stubs/gateway):** `.cursor/plans/mcp-roadmap.md`
   (Track A DONE · Track B platform local discovery · Track C EDMS).
-- Инструменты: закрытый перечень и контракт — 070 (`ToolDefinition`).
+- Инструменты: закрытый перечень и контракт — 070 (`PlatformToolPin`).
+- Authority СЭД (capability whitelist, W10): генерируемый реестр —
+  `domain/mcp/edms_authorities.py` (+ разбор `domain/mcp/edms_permissions.py`),
+  генератор `scripts/gen_edms_authorities.py`; ручной список запрещён (дрейф).
 - Перед изменением: найди все использования через grep по порту/классу,
   не угадывай сигнатуры.
 - `__pycache__` никогда не индексировать и не редактировать.

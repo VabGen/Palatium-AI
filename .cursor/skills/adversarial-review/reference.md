@@ -26,7 +26,7 @@ context_enricher). Сверяй фактический граф с `orchestratio
 Флаги среды хода: HITL on/off, kill switch, circuit open, budget exceeded,
 MCP down, low confidence, fallback LLM, empty/malformed memory.
 
-### MCP / tools — как было + «перечень и ToolDefinition — 070»
+### MCP / tools — как было + «перечень и PlatformToolPin — 070»
 
 ### Контекст / харнесс — «execute_with_guardrails — единая точка, 065»
 

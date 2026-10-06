@@ -51,7 +51,7 @@ class _FakeAuditLogger:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_tool_argument_builder_returns_validated_arguments() -> None:
     fake_audit = _FakeAuditLogger()
     builder_module.get_audit_logger = lambda: fake_audit
@@ -71,7 +71,7 @@ async def test_tool_argument_builder_returns_validated_arguments() -> None:
     assert fake_audit.calls[-1]["conversation_id"] == "thread-valid-args"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_tool_argument_builder_rejects_schema_invalid_arguments() -> None:
     fake_audit = _FakeAuditLogger()
     builder_module.get_audit_logger = lambda: fake_audit

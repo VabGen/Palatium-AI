@@ -14,7 +14,7 @@ from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from tests.conftest import PlatformKnowledgeMcpRegistry
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_call_mcp_tool_rebinds_org_scope_to_actor() -> None:
     port = InMemoryMemoryPort()
     registry = PlatformKnowledgeMcpRegistry(
@@ -45,7 +45,7 @@ async def test_call_mcp_tool_rebinds_org_scope_to_actor() -> None:
     assert attacker_hits
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_call_mcp_tool_rejects_org_write_without_actor() -> None:
     port = InMemoryMemoryPort()
     registry = PlatformKnowledgeMcpRegistry(
@@ -70,7 +70,7 @@ async def test_call_mcp_tool_rejects_org_write_without_actor() -> None:
     assert "actor_org_id" in outcome.content[0]["text"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_call_mcp_tool_search_memory_rebinds_user() -> None:
     port = InMemoryMemoryPort()
     from palatium_ai.domain.memory.namespaces import user_namespace

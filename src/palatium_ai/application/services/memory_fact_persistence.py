@@ -171,7 +171,7 @@ def _resolve_save_user_id(*, job: MemoryExtractJob, namespace_kind: str, scope_i
 def _canonical_memory_type(kind: str) -> MemoryType:
     normalized = kind.strip().lower()
     if normalized in _CANONICAL_MEMORY_TYPES:
-        return normalized  # type: ignore[return-value]
+        return normalized  # type: ignore[return-value]  # membership не сужает str→MemoryType (017)
     return "fact"
 
 

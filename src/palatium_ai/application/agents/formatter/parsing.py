@@ -4,9 +4,8 @@
 
 from __future__ import annotations
 
+import json
 import math
-
-from pydantic import json
 
 from palatium_ai.application.agents.formatter.config import MIN_PIPELINE_CONFIDENCE, REVIEW_CONFIDENCE_CAP
 from palatium_ai.domain.agents.formatter import FormatterInput
@@ -88,6 +87,7 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
         "route": task_input.context_packet.route,
         "route_plan": task_input.context_packet.route_plan,
         "context_summary": task_input.context_packet.context_summary,
+        "attachment_context": task_input.context_packet.untrusted_context,
         "worker_summary": task_input.worker_summary,
         "critic_summary": task_input.critic_summary,
         "requires_review": task_input.requires_review,

@@ -1,5 +1,5 @@
 ---
-description: MCP-инструменты: единый шлюз, ToolRegistry, RBAC
+description: MCP-инструменты: единый шлюз, платформенные пины (PlatformToolPin), RBAC
 globs:
   - "src/palatium_ai/application/tools/**/*.py"
   - "src/palatium_ai/infrastructure/mcp/**/*.py"
@@ -23,49 +23,74 @@ alwaysApply: true
 (`MemoryPromotionService`). Переименование в `extract_transcript_memories` /
 добавление `promote_memory` — только правкой этого перечня + обсуждение.
 
-## Контракт инструмента (application/tools/base.py — единственный источник)
+## Контракт инструмента (domain/mcp/ — единственный источник)
+
+Пин — это весь контракт инструмента: имя, схема (через fingerprint), класс
+побочного эффекта, риск и обязанность HITL. Отдельного `ToolDefinition` нет
+намеренно — второй контракт рядом с пином был бы вторым источником истины (050).
 
 ```python
-from typing import Literal
-from pydantic import BaseModel
+# domain/mcp/tool_policy.py
+SideEffectClass = Literal["read", "write", "unknown"]
+ToolRiskTier = Literal["low", "medium", "high"]  # оба перечня закрыты
 
 
-class ToolDefinition(Protocol):
-    name: str                      # из канонического перечня
-    input_schema: type[BaseModel]  # pydantic, замороженная
-    output_schema: type[BaseModel] # pydantic, замороженная
-    permission: ToolPermission     # ОДНА метка, не свободная строка
-
-
-ToolPermission = Literal[
-    "memory.read", "memory.write", "knowledge.read",
-    "graph.query", "document.ingest", "web.access",
-]
-# Закрытый перечень. Расширение — правкой Literal + обсуждение RBAC-маппинга (020).
+class PlatformToolPin(BaseModel, frozen=True):
+    side_effect: SideEffectClass
+    schema_fingerprint: str   # sha256 от JSON Schema входа
+    risk_tier: ToolRiskTier
+    requires_hitl: bool
+    irreversible: bool = False
 ```
 
-- Схемы входа/выхода — frozen pydantic, сырые dict в контракте инструмента запрещены (050).
-- `ingest_document`, если пишет в EDMS — write-операция: до вызова HITL-карточка (020),
-  помечается в `ToolDefinition` как `irreversible=True`.
+- Схемы входа/выхода — frozen pydantic в `platform_schemas.py` (platform) /
+  `external_schemas.py` (edms, analytics), не сырые dict (050).
+- Пин действует, только если fingerprint входной схемы совпал: самозаявление
+  сервера (`annotations`, self-attested `readOnly`) недоверенно и риск не понижает.
+- Непринятый (unpinned / schema-mismatch) инструмент классифицируется `unknown`
+  → HITL; `MCPRegistry.call_tool` отказывает без `allow_unpinned=True` (после HITL).
+- `ingest_document`, `archive_document` — write: HITL-карточка до вызова (020),
+  в пине `irreversible=True`.
+
+**Онбординг инструмента (порядок обязателен, не stub-first):**
+
+1. frozen I/O в `platform_schemas.py` / `external_schemas.py` (SoT схемы);
+2. `PlatformToolPin` в `_PLATFORM_SIDE_EFFECTS` — side_effect, fingerprint, risk_tier, requires_hitl;
+3. `mcp:<server>.<tool>` в `AgentConfig.allowed_tools` нужного агента (030);
+4. для remote (edms/analytics) — URL в `MCP_SERVERS`; для Host-local `platform` — ветка в bootstrap, URL не нужен.
 
 ## Регистрация и RBAC
 
 1. ВСЕ внешние вызовы (БД, web, песочница) — через MCP-инструменты.
    Агент с прямым `asyncpg`/`httpx` — ошибка ревью.
-2. ToolRegistry — единственная регистрация; Harness фильтрует по
-   `AgentConfig.allowed_tools` (030) ПЕРЕД передачей агенту.
-3. **Отказ RBAC — не исключение наружу.** Harness возвращает агенту
-   структурированный результат отказа (типизированная модель), агент отражает
-   его в `AgentOutput(status="failure", error_message=...)` (030.8). Параллельно
-   Harness пишет audit-событие `permission_denied` (020) и инкрементирует
-   `palatium_rbac_denied_total` (040). Ловить/глотать `PermissionError`
-   в агенте — запрещено.
+2. Единственная регистрация — платформенные пины (§выше). Единственная точка
+   проверки — `ToolExecutor.try_execute` (`application/tools/executor.py`),
+   который решает по `AgentConfig.allowed_tools` (030) через
+   `is_tool_invocation_allowed` (`domain/mcp/tool_policy.py`). Ключ ACL —
+   точный `mcp:<server>.<tool>`; `mcp.call` сам по себе не авторизует ничего,
+   wildcard'ы не принимаются.
+3. **Отказ RBAC — не исключение наружу.** `ToolExecutor` возвращает
+   типизированный `ToolRbacDenied` (не `PermissionError`), агент отражает его в
+   `AgentOutput(status="failure", error_message=...)` (030.8). Параллельно
+   пишется audit-событие `permission_denied` (020) и инкрементируется
+   `palatium_rbac_denied_total` (040). Ловить/глотать отказ в агенте — запрещено.
+   Legacy-метод `execute()` бросает `ToolNotAllowedError` и остался только для
+   обратной совместимости: production-код (Researcher) зовёт `try_execute`.
 4. Audit-события на каждый вызов чувствительных инструментов:
    `save_memory`, `forget_memory`, `consolidate_memory`, `ingest_document`,
    `web_fallback` (что вызывалось, кем, task — без payload-содержимого).
 5. Выход инструмента проходит secret scanner (020); записи с `contains_pii=true`
    из памяти (060) отдаются агенту только в замаскированном виде, если
    `permission` сценария не разрешает явный доступ (HITL).
+
+**Roadmap (не контракт, пока не реализовано):** capability whitelist —
+привязка «authority СЭД → доступные инструменты»; закрытый `ToolPermission`-перечень
+из прошлой редакции. Источник прав — валидированный токен/principal, не
+клиентский `SedContext` (020, Zero Trust). Сам перечень authority уже
+генерируется из `Permission.java` (`scripts/gen_edms_authorities.py` →
+`domain/mcp/edms_authorities.py`), ручной список запрещён (дрейф). Маппинг
+«инструмент → authority» — по согласованию с СЭД, не выдумывать
+(090; план `web-embed-assistant` §5 п.16).
 
 ## Правила вызова
 
@@ -79,7 +104,10 @@ params = {"uid": user_id, "lim": limit}
 
    f-string / `%` / конкатенация в Cypher — критическая уязвимость (050).
 2. Таймауты и retry (core/resilience) на каждом MCP-вызове; значения —
-   per-tool в конфиге ToolRegistry (`ToolTimeouts`), не магические числа (050).
+   per-tool в конфиге `mcp.tool_timeouts` (`core/config/mcp.py`), ключ
+   `<server>.<tool>`; проверка бюджета — `domain/mcp/timeout_policy.py`
+   (`assert_tool_timeouts_within_agent_budget` в `application/wiring.py`).
+   Магические числа в коде — запрещены (050).
    Per-tool timeout < `AgentConfig.timeout_seconds` (030), иначе агент умрёт раньше,
    чем tool успеет ответить.
 3. `web_fallback` — последним, только если локальный поиск вернул пусто.

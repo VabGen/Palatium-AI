@@ -79,7 +79,7 @@ def test_chunked_body_without_content_length_is_capped() -> None:
     assert response.status_code == 413
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_body_size_limit_passes_non_http_scope_through() -> None:
     """Lifespan must pass through untouched or the app never starts."""
     seen: list[str] = []
@@ -151,7 +151,7 @@ def test_harden_asgi_app_combines_both_guards(monkeypatch: pytest.MonkeyPatch) -
     assert client.post("/", content=b"z" * 10).status_code == 429
 
 
-@pytest.mark.parametrize("bad_value", ["not-a-number", "0", "-5", ""])
+@pytest.mark.parametrize("bad_value", ("not-a-number", "0", "-5", ""))
 def test_harden_asgi_app_falls_back_on_bad_env(monkeypatch: pytest.MonkeyPatch, bad_value: str) -> None:
     """Invalid/blank env must fall back to defaults, never disable a guard."""
     for name in ("MCP_RATE_LIMIT", "MCP_RATE_LIMIT_WINDOW_SECONDS"):
@@ -185,7 +185,7 @@ def test_stub_modules_use_package_qualified_sibling_imports() -> None:
             continue
         for line in path.read_text(encoding="utf-8").splitlines():
             bare = line.strip()
-            if bare.startswith("from mcp_stub_") or bare.startswith("import mcp_stub_"):
+            if bare.startswith(("from mcp_stub_", "import mcp_stub_")):
                 offenders.append(f"{path.relative_to(_MCP_ROOT).as_posix()}: {bare}")
 
     assert not offenders, f"flat sibling imports found (use `mcp_servers.…`): {offenders}"

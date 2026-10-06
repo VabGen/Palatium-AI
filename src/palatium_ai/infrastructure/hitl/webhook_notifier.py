@@ -24,7 +24,7 @@ class WebhookHitlNotifier:
 
     def __init__(self, url: str, *, timeout_seconds: float = 5.0) -> None:
         cleaned = url.strip()
-        if not (cleaned.startswith("https://") or cleaned.startswith("http://")):
+        if not cleaned.startswith(("https://", "http://")):
             raise ValueError("HITL notify webhook URL must be http(s)")
         self._url = cleaned
         self._timeout = max(0.5, float(timeout_seconds))
@@ -64,7 +64,7 @@ class CompositeHitlNotifier:
         for notifier in self._notifiers:
             try:
                 await notifier.notify_escalation(notice)
-            except Exception as exc:  # noqa: BLE001 — keep sweep path alive
+            except Exception as exc:
                 name = type(notifier).__name__
                 errors.append(f"{name}: {exc}")
                 logger.warning(

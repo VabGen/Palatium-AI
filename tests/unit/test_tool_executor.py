@@ -51,7 +51,7 @@ class _FakeAuditLogger:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_tool_executor_allows_listed_tool(sample_agent_config: AgentConfig) -> None:
     fake_audit = _FakeAuditLogger()
     executor_module.get_audit_logger = lambda: fake_audit
@@ -68,7 +68,7 @@ async def test_tool_executor_allows_listed_tool(sample_agent_config: AgentConfig
     assert fake_audit.calls[-1]["conversation_id"] == "thread-allow"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_tool_executor_denies_unlisted_tool_structured(sample_agent_config: AgentConfig) -> None:
     fake_audit = _FakeAuditLogger()
     executor_module.get_audit_logger = lambda: fake_audit
@@ -88,7 +88,7 @@ async def test_tool_executor_denies_unlisted_tool_structured(sample_agent_config
     assert agent_metrics.rbac_denied_count(sample_agent_config.role, "send_email") == before + 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_tool_executor_execute_raises_for_legacy_callers(sample_agent_config: AgentConfig) -> None:
     fake_audit = _FakeAuditLogger()
     executor_module.get_audit_logger = lambda: fake_audit

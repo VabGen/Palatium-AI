@@ -10,8 +10,8 @@ from palatium_ai.domain.graph.types import GraphQueryCommand
 from palatium_ai.infrastructure.graph.neo4j_graph_port import Neo4jDriverTransport, Neo4jGraphPort
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_neo4j_graph_query_returns_rows(requires_neo4j: tuple[str, str, str]) -> None:
     uri, user, password = requires_neo4j
     transport = Neo4jDriverTransport(uri=uri, user=user, password=password)
@@ -33,8 +33,8 @@ async def test_neo4j_graph_query_returns_rows(requires_neo4j: tuple[str, str, st
     assert result.rows[0].values["label"] == "palatium-graph-smoke"
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_platform_graph_query_via_handler(requires_neo4j: tuple[str, str, str]) -> None:
     uri, user, password = requires_neo4j
     from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort

@@ -7,7 +7,7 @@ import pytest
 from palatium_ai.application.agents.evals.runner import _resolve_task_output
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_resolve_task_output_runs_researcher_args_cassette_without_main_cassette() -> None:
     task = {
         "id": "researcher-search-knowledge",

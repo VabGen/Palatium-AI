@@ -46,7 +46,7 @@ def test_formatter_parse_tolerates_trailing_commas() -> None:
 
 
 def test_loads_rejects_unbalanced() -> None:
-    with pytest.raises(ValueError, match="Unbalanced|No JSON"):
+    with pytest.raises(ValueError, match=r"Unbalanced|No JSON"):
         loads_llm_json('{"a": 1')
 
 

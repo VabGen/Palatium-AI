@@ -27,7 +27,7 @@ from uuid import uuid4
 
 def _http_url(url: str) -> str:
     cleaned = url.strip()
-    if not (cleaned.startswith("http://") or cleaned.startswith("https://")):
+    if not cleaned.startswith(("http://", "https://")):
         raise ValueError(f"only http(s) URLs allowed, got: {url!r}")
     return cleaned
 
@@ -65,7 +65,7 @@ def _request_json(
     return status, None
 
 
-def _approve_mcp_hitl(  # noqa: C901
+def _approve_mcp_hitl(
     *,
     base: str,
     token: str,
@@ -131,7 +131,7 @@ def _approve_mcp_hitl(  # noqa: C901
     return respond
 
 
-def main() -> int:  # noqa: C901
+def main() -> int:
     """Smoke: live /api/intents/process that should hit EDMS MCP stub."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")

@@ -53,7 +53,7 @@ class _FakeFastMcpClient:
         return item
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_mcp_client_retries_transient_connect_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -73,7 +73,7 @@ async def test_mcp_client_retries_transient_connect_then_succeeds(
     assert _FakeFastMcpClient.behavior == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_mcp_client_does_not_retry_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
     request = httpx.Request("POST", "http://127.0.0.1:8080/")
     response = httpx.Response(401, request=request)
@@ -109,7 +109,7 @@ class _SlowCallClient(_FakeFastMcpClient):
         return SimpleNamespace(content=[], is_error=False)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_mcp_client_call_tool_enforces_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """050: a hung upstream must surface as a typed MCP error, not hang the agent."""
     monkeypatch.setattr("fastmcp.Client", _SlowCallClient)

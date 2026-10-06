@@ -18,7 +18,7 @@ def database_url() -> str | None:
     return os.environ.get("DATABASE_URL")
 
 
-@pytest.fixture
+@pytest.fixture()
 def requires_database(database_url: str | None) -> str:
     if not database_url:
         pytest.skip("DATABASE_URL not set — skip Postgres integration")
@@ -35,7 +35,7 @@ def neo4j_credentials() -> tuple[str, str, str] | None:
     return uri, user, password
 
 
-@pytest.fixture
+@pytest.fixture()
 def requires_neo4j(neo4j_credentials: tuple[str, str, str] | None) -> tuple[str, str, str]:
     if neo4j_credentials is None:
         pytest.skip("GRAPHITI_NEO4J_URI/PASSWORD not set — skip Neo4j integration")

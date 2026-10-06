@@ -112,7 +112,7 @@ litellm_settings:
 #
 #  # 5. Проверка health и моделей
 #  curl http://localhost:4000/health/liveliness
-#curl http://localhost:4000/v1/models -H "Authorization: Bearer sk-palatium-master"
+#curl http://localhost:4000/v1/models -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 #
 ## 6. Тестовый запрос
 #  curl http://localhost:4000/v1/chat/completions `

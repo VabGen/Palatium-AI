@@ -100,7 +100,7 @@ def test_dev_hitl_step_up_hidden_outside_development() -> None:
     assert response.status_code == 404
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_dev_mint_tool_approval_development_only(monkeypatch: pytest.MonkeyPatch) -> None:
     security = _security()
     tokens = JwtTokenService(security)

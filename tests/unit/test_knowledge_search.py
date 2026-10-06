@@ -24,7 +24,7 @@ def test_merge_hybrid_knowledge_hits_prefers_vector_overlap() -> None:
     assert float(merged[0]["score"]) > float(merged[1]["score"])
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_in_memory_search_knowledge_token_overlap() -> None:
     port = InMemoryKnowledgePort()
     await port.ingest_document(
@@ -44,7 +44,7 @@ async def test_in_memory_search_knowledge_token_overlap() -> None:
     assert result.hits[0].document_title == "Handbook"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_platform_handler_search_knowledge() -> None:
     knowledge = InMemoryKnowledgePort()
     handler = PlatformToolHandler(knowledge_port=knowledge)

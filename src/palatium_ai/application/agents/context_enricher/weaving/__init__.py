@@ -8,4 +8,4 @@ from palatium_ai.application.agents.context_enricher.weaving.config import (
     WEAVING_CONFIG,
 )
 
-__all__ = ["CONTEXT_WEAVER_CONFIG", "ContextWeaverAgent", "WEAVING_CONFIG"]
+__all__ = ["CONTEXT_WEAVER_CONFIG", "WEAVING_CONFIG", "ContextWeaverAgent"]

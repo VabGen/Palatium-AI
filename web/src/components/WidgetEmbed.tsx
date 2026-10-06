@@ -7,7 +7,10 @@ function safeHttpHref(href: string): string | null {
   try {
     const parsed = new URL(href);
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return href;
-  } catch {}
+  } catch {
+    // Unparseable href is unsafe by definition — same rejection as an unsupported scheme.
+    return null;
+  }
   return null;
 }
 

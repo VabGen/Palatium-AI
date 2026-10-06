@@ -28,8 +28,8 @@ def _live_judge_env_ok() -> bool:
     )
 
 
-@pytest.mark.llm_live
-@pytest.mark.asyncio
+@pytest.mark.llm_live()
+@pytest.mark.asyncio()
 async def test_live_judge_smoke_grade() -> None:
     if not _live_judge_env_ok():
         pytest.skip("PALATIUM_EVAL_LIVE_JUDGE and PALATIUM_EVAL_JUDGE_PROVIDER required")
@@ -53,8 +53,8 @@ async def test_live_judge_smoke_grade() -> None:
     assert result.score >= 0.5
 
 
-@pytest.mark.llm_live
-@pytest.mark.asyncio
+@pytest.mark.llm_live()
+@pytest.mark.asyncio()
 async def test_nightly_suite_with_live_judge() -> None:
     """Full nightly suite with live judge — only when PALATIUM_EVAL_LIVE_NIGHTLY=1."""
     if not _live_judge_env_ok():

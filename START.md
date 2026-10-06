@@ -996,8 +996,9 @@ PowerShell `Invoke-RestMethod` плохо работает с chunked-ответ
 ```powershell
 $json = '{"model":"tier-mid","messages":[{"role":"user","content":"Say OK"}]}'
 
+$masterKey = $env:LITELLM_MASTER_KEY
 curl.exe -s -S http://127.0.0.1:4000/v1/chat/completions `
-  -H "Authorization: Bearer sk-palatium-master" `
+  -H "Authorization: Bearer $masterKey" `
   -H "Content-Type: application/json" `
   --max-time 300 `
   -d $json
@@ -1146,8 +1147,9 @@ curl http://127.0.0.1:8091/health
 curl.exe -H "Authorization: Bearer sk-palatium-master" http://127.0.0.1:4000/v1/models
 
 $json = '{"model":"tier-mid","messages":[{"role":"user","content":"Say OK"}]}'
+$masterKey = $env:LITELLM_MASTER_KEY
 curl.exe -s -S http://127.0.0.1:4000/v1/chat/completions `
-  -H "Authorization: Bearer sk-palatium-master" `
+  -H "Authorization: Bearer $masterKey" `
   -H "Content-Type: application/json" `
   --max-time 300 `
   -d $json

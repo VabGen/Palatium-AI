@@ -40,7 +40,7 @@ class _FakeDialogTurnStore:
         return DialogTurnWindow(thread_id=thread_id, turns=tuple(items), limit=limit)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_fake_dialog_store_orders_turns() -> None:
     store = _FakeDialogTurnStore()
     await store.append_turn(thread_id="t", role="user", content="a")

@@ -14,10 +14,10 @@ from palatium_ai.application.agents.context_enricher.weaving import (
 )
 
 __all__ = [
-    "CONTINUATION_CONFIG",
     "CONTEXTUALIZER_CONFIG",
-    "ContextualizerAgent",
     "CONTEXT_WEAVER_CONFIG",
-    "ContextWeaverAgent",
+    "CONTINUATION_CONFIG",
     "WEAVING_CONFIG",
+    "ContextWeaverAgent",
+    "ContextualizerAgent",
 ]

@@ -67,7 +67,6 @@ from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
 from palatium_ai.domain.policies.types import ExecutionStrategy
 
 
-# _CASSETTE_ROOT = Path(__file__).resolve().parents[5] / "tests" / "fixtures" / "llm"
 def _find_project_root(start: Path) -> Path:
     """Ищем корень проекта по маркеру tests/fixtures/llm."""
     for parent in (start, *start.parents):

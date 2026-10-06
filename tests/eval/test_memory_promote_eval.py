@@ -19,7 +19,7 @@ from palatium_ai.infrastructure.graph.in_memory_graph_write_port import InMemory
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_eval_recall_increments_access_frequency() -> None:
     """access_frequency increments when a durable hit enters the recall bundle."""
     port = InMemoryMemoryPort()
@@ -60,7 +60,7 @@ def test_eval_promote_gate_rejects_low_importance() -> None:
     assert PromotionPolicy.should_promote(candidate, thresholds=thresholds) is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_eval_high_freq_promotes_to_graph_node() -> None:
     """Medium entry with freq+importance thresholds → graph upsert + mark."""
     port = InMemoryMemoryPort()

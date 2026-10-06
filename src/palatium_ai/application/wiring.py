@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -26,6 +27,8 @@ from palatium_ai.application.agents.supervisor import SUPERVISOR_CONFIG, Supervi
 from palatium_ai.application.agents.text_ingestor import TEXT_INGESTOR_CONFIG, TextIngestorAgent
 from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
+from palatium_ai.application.services.attachment_pipeline import AttachmentPipeline
+from palatium_ai.application.services.attachment_service import AttachmentService
 from palatium_ai.application.services.context_builder import ContextBuilder
 from palatium_ai.application.services.cost_budget import CostBudgetService
 from palatium_ai.application.services.dialog_compact_summarizer import LlmDialogSummarizer
@@ -38,11 +41,15 @@ from palatium_ai.application.services.memory_fact_persistence import MemoryFactP
 from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.core.logging import logger
+from palatium_ai.domain.attachments.policies import AttachmentLimits
 from palatium_ai.domain.mcp.timeout_policy import (
     McpAgentBudget,
     assert_tool_timeouts_within_agent_budget,
     mcp_tool_keys,
 )
+from palatium_ai.infrastructure.blob.factory import build_blob_store
+from palatium_ai.infrastructure.blob.minio_adapter import MinIOAdapter
+from palatium_ai.infrastructure.database.attachment_repository import PostgresAttachmentRepository
 from palatium_ai.infrastructure.database.repositories import McpToolCallRepository
 from palatium_ai.infrastructure.embeddings.factory import create_embedding_client_for_schema
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
@@ -53,6 +60,8 @@ from palatium_ai.infrastructure.memory.checkpoint_serde import build_checkpoint_
 from palatium_ai.infrastructure.memory.dialog_turn_store import PostgresDialogTurnStore
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
+from palatium_ai.infrastructure.parsing.factory import build_document_parser
+from palatium_ai.infrastructure.scanning.factory import build_malware_scanner
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -64,6 +73,11 @@ if TYPE_CHECKING:
     from palatium_ai.core.config.settings import Settings
     from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
+    from palatium_ai.domain.ports.attachments import AttachmentRepositoryPort
+    from palatium_ai.domain.ports.blob_store import BlobStorePort
+    from palatium_ai.domain.ports.document_parser import DocumentParserPort
+    from palatium_ai.domain.ports.mcp import McpToolCallRecorderPort
+    from palatium_ai.domain.ports.scanner import MalwareScannerPort
     from palatium_ai.infrastructure.mcp.registry import MCPRegistry
 
 
@@ -239,6 +253,7 @@ def build_intent_service(
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     enable_sleep_time: bool = True,
     graph_write: GraphWritePort | None = None,
+    attachment_service: AttachmentService | None = None,
 ) -> tuple[IntentService, MemoryExtractService | None, MCPCapabilityIndex, DocumentIngestService]:
     """Создаёт IntentService + optional sleep-time extract worker handle."""
     llm_factory = LLMClientFactory(settings)
@@ -345,7 +360,7 @@ def build_intent_service(
             # EXCEPTION (020): sleep-time promote batch; prefer shared GraphWritePort from bootstrap.
             resolved_write = graph_write if graph_write is not None else build_graph_write_port(settings)
             promotion = MemoryPromotionService(
-                memory=resolved_memory,  # type: ignore[arg-type]
+                memory=resolved_memory,  # type: ignore[arg-type]  # hasattr-guard не сужает Protocol (017)
                 graph_write=resolved_write,
                 thresholds=PromotionThresholds(
                     min_access_frequency=settings.memory.promote_min_access_frequency,
@@ -397,6 +412,7 @@ def build_intent_service(
         worker_summary_max_chars=settings.memory.worker_summary_max_chars,
         mcp_tool_output_max_chars=settings.memory.mcp_tool_output_max_chars,
         turn_hop_budget_ms=settings.observability.turn_hop_budget_ms,
+        attachment_service=attachment_service,
     )
     return intent_service, memory_extract, capability_index, document_ingest
 
@@ -408,3 +424,101 @@ async def warm_mcp_capability_cache(index: MCPCapabilityIndex) -> None:
         logger.info("MCP capability cache warmed", bindings=count)
     except Exception as exc:
         logger.warning("MCP capability cache warm failed", error=str(exc))
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentPorts:
+    """Attachment infrastructure ports; built only when the subsystem is enabled."""
+
+    repository: AttachmentRepositoryPort
+    blob_store: BlobStorePort
+    malware_scanner: MalwareScannerPort
+    document_parser: DocumentParserPort
+
+
+async def build_attachment_ports(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AttachmentPorts | None:
+    """Build the attachment ports, or ``None`` when the feature is disabled (000).
+
+    This is where the fail-closed configuration guards actually run: an in-process
+    blob store or a disabled AV scanner outside local/test aborts startup here,
+    rather than on the first upload (020). A MinIO backend is also probed now, so
+    a wrong endpoint fails the boot instead of the first user request.
+    """
+    if not settings.attachments.enabled:
+        logger.info("Attachments disabled (ATTACHMENTS_ENABLED=false)")
+        return None
+
+    blob_store = build_blob_store(settings)
+    if isinstance(blob_store, MinIOAdapter):
+        already_present = await blob_store.ensure_bucket()
+        logger.info("Attachment bucket ready", created=not already_present)
+
+    ports = AttachmentPorts(
+        repository=PostgresAttachmentRepository(session_factory),
+        blob_store=blob_store,
+        malware_scanner=build_malware_scanner(settings),
+        document_parser=build_document_parser(settings),
+    )
+    logger.info("Attachment ports wired", blob_backend=settings.attachments.blob_backend)
+    return ports
+
+
+def build_attachment_limits(settings: Settings) -> AttachmentLimits:
+    """Map flat ``AttachmentConfig`` values onto the domain value object (010).
+
+    ``core`` cannot import ``domain``, so the composition root owns this
+    translation; keeping it in one function means the router, pipeline and
+    repository can never disagree about a limit (050).
+    """
+    cfg = settings.attachments
+    return AttachmentLimits(
+        max_size_bytes=cfg.max_size_bytes,
+        max_attachments_per_turn=cfg.max_attachments_per_turn,
+        max_filename_chars=cfg.max_filename_chars,
+        presigned_url_ttl_seconds=cfg.presigned_url_ttl_seconds,
+        attach_ttl_seconds=cfg.attach_ttl_seconds,
+        index_retention_days=cfg.index_retention_days,
+        retention_sweep_batch=cfg.sweep_batch_size,
+    )
+
+
+def build_attachment_service(
+    settings: Settings,
+    ports: AttachmentPorts,
+    *,
+    hitl_service: HitlService,
+    mcp_registry: MCPRegistry,
+    redis_client: Redis | None = None,
+    mcp_tool_call_repository: McpToolCallRecorderPort | None = None,
+) -> AttachmentService:
+    """Build the attachment use-case layer over probed ports (000).
+
+    Requires an already-constructed ``HitlService``: indexing user files into the
+    durable knowledge base is a write-side effect and must mint a one-shot card
+    before ``platform.ingest_document`` runs (020, 070).
+    """
+    limits = build_attachment_limits(settings)
+    pipeline = AttachmentPipeline(
+        blob_store=ports.blob_store,
+        malware_scanner=ports.malware_scanner,
+        document_parser=ports.document_parser,
+    )
+    logger.info(
+        "AttachmentService wired",
+        blob_backend=settings.attachments.blob_backend,
+        scanner_backend=settings.attachments.scanner_backend,
+        max_per_turn=limits.max_attachments_per_turn,
+    )
+    return AttachmentService(
+        repository=ports.repository,
+        blob_store=ports.blob_store,
+        pipeline=pipeline,
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+        limits=limits,
+    )

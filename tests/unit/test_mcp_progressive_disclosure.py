@@ -84,7 +84,7 @@ def test_mcp_server_auth_tokens_are_secret_str() -> None:
     assert "tok-edms" not in blob
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_registry_summaries_do_not_warm_full_tools_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """Discovery must not populate full-schema tools cache."""
     from palatium_ai.infrastructure.mcp.registry import MCPRegistry

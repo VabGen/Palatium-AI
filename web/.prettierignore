@@ -1,0 +1,11 @@
+# Generated/derived artifacts — not sources, and not ours to reformat (017: exclude the
+# path in the tool rather than editing generated output). Prettier 3 does not consult
+# .gitignore, so this file is the only thing keeping `format:check` honest.
+dist/
+dist-widget/
+node_modules/
+playwright-report/
+test-results/
+.shots/
+package-lock.json
+custom-elements.json

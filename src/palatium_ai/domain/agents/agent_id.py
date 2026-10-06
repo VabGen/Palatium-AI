@@ -10,5 +10,3 @@ from palatium_ai.core.types import UUIDv7
 @dataclass(frozen=True, slots=True)
 class AgentId(UUIDv7):
     """Идентификатор агента (наследует UUIDv7)."""
-
-    pass

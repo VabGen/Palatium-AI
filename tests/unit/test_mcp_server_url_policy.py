@@ -55,4 +55,5 @@ def test_filter_skips_bad_entries() -> None:
         }
     )
     assert set(accepted) == {"edms"}
-    assert rejected and rejected[0][0] == "evil"
+    assert rejected
+    assert rejected[0][0] == "evil"

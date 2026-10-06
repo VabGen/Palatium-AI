@@ -23,11 +23,11 @@ def setup_observability(settings: Settings) -> None:
 
 
 __all__ = [
-    "traceable",
     "AgentMetrics",
     "agent_metrics",
+    "apply_langsmith_env",
     "get_audit_logger",
     "setup_observability",
     "setup_otel_tracing",
-    "apply_langsmith_env",
+    "traceable",
 ]

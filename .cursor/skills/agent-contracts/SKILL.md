@@ -37,10 +37,11 @@ description: >-
 ## Шаг 3 — MCP-инструмент (если нужен новый tool)
 
 - Перечень инструментов — **закрытый, по 070**; новый tool — только если он
-  в перечне или явно согласован. Схема — `ToolDefinition` (070).
+  в перечне или явно согласован. Контракт — пайплайн из 070: frozen схема +
+  `PlatformToolPin` (side_effect/risk_tier/requires_hitl/fingerprint).
 - `inputSchema` — JSON Schema draft 2020-12, валидируется на клиенте до сетевого вызова.
 - Ответ `tools/call` парсится в Pydantic-модель, не читается как сырой `dict`.
-- RBAC-фильтрация — в harness/execute_with_guardrails, до вызова (070); не дублировать в узле.
+- RBAC-фильтрация — в `ToolExecutor.try_execute` по `allowed_tools`, до вызова (070); не дублировать в узле.
 - Ошибки JSON-RPC — в audit с `thread_id` и `tool_id` (040).
 - Tool descriptions — first-class prompt engineering (ACI = HCI): как документация
   для junior-разработчика, с examples в schema.

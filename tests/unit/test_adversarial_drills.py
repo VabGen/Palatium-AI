@@ -117,7 +117,7 @@ def test_drill_session_ownership_blocks_foreign_principal() -> None:
 # --- Drill 3: kill switch ---
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_kill_switch_blocks_turns() -> None:
     audit = _FakeAudit()
     kill_switch_module.get_audit_logger = lambda: audit
@@ -135,7 +135,7 @@ async def test_drill_kill_switch_blocks_turns() -> None:
 # --- Drill 4: MCP call circuit ---
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_mcp_call_circuit_opens(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = SimpleNamespace(mcp=SimpleNamespace(servers={"edms": "http://edms"}, cache_ttl_seconds=60))
     reg = MCPRegistry(settings=settings)  # type: ignore[arg-type]
@@ -193,7 +193,7 @@ def test_drill_agent_node_circuit() -> None:
 # --- Drill 6: cost budget ---
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_cost_budget_fail_closed() -> None:
     turn = CostBudgetService(turn_budget_usd=0.05)
     with turn_token_usage() as tokens:
@@ -210,7 +210,7 @@ async def test_drill_cost_budget_fail_closed() -> None:
 # --- Drill 7: per-tool ACL ---
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_mcp_tool_acl_denies_unlisted() -> None:
     audit = _FakeAudit()
     executor_module.get_audit_logger = lambda: audit
@@ -284,7 +284,7 @@ def test_drill_tool_args_reject_ssrf_and_path_traversal() -> None:
     assert_arguments_safe({"url": "https://edms.example.com/api/docs"})
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_argument_builder_rejects_secrets() -> None:
     audit = _FakeAudit()
     builder_module.get_audit_logger = lambda: audit
@@ -555,7 +555,7 @@ def test_drill_mcp_registry_rejects_ssrf_metadata_url() -> None:
         assert_mcp_server_url_safe("http://evil.example/mcp")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_researcher_does_not_invent_mcp_when_unavailable() -> None:
     """requires_mcp + no registry → failure; LLM must not invent tool sources."""
     from palatium_ai.application.agents.harness import Harness
@@ -617,7 +617,7 @@ def test_drill_mcp_api_redaction_and_unowned_read_deny() -> None:
 
     redacted = redact_mcp_arguments({"query": "x", "api_key": "sk-leak", "token": "t"})
     assert redacted["api_key"] == "[REDACTED]"
-    assert redacted["token"] == "[REDACTED]"  # noqa: S105
+    assert redacted["token"] == "[REDACTED]"
 
     denied = evaluate_session_access(
         owner_user_id=None,
@@ -637,7 +637,7 @@ def test_drill_mcp_api_redaction_and_unowned_read_deny() -> None:
     assert claim_denied.reason == "unowned_not_readable"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_idp_step_up_rejects_unbound_jwt() -> None:
     """IdP JWT without card binding / wrong ACR must not unlock high-risk MCP approve."""
     import time
@@ -646,7 +646,7 @@ async def test_drill_idp_step_up_rejects_unbound_jwt() -> None:
 
     from palatium_ai.infrastructure.hitl.idp_acr_step_up import IdpAcrHitlStepUpProvider
 
-    hs_key = "adversarial-step-up-secret-32bytes!!"  # noqa: S105
+    hs_key = "adversarial-step-up-secret-32bytes!!"
     provider = IdpAcrHitlStepUpProvider(
         method="idp_acr",
         decode_claims=lambda token: jwt.decode(token, hs_key, algorithms=["HS256"]),
@@ -685,7 +685,7 @@ async def test_drill_idp_step_up_rejects_unbound_jwt() -> None:
     assert provider.verify(card_id="card-bound", subject="owner", assertion=wrong_acr) is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_escalated_manager_ttl_goes_dead_letter_not_loop() -> None:
     """Second TTL on escalated must dead-letter once — no re-escalate notify storm."""
     from datetime import UTC, datetime, timedelta
@@ -696,7 +696,7 @@ async def test_drill_escalated_manager_ttl_goes_dead_letter_not_loop() -> None:
     store = InMemoryHitlCardStore()
     service = HitlService(
         store,
-        signing_secret="adversarial-hitl-hmac-key-32bytes!!",  # noqa: S106
+        signing_secret="adversarial-hitl-hmac-key-32bytes!!",
         manager_roles=frozenset({"manager"}),
     )
     card = await service.create_tool_approval_card(
@@ -714,19 +714,21 @@ async def test_drill_escalated_manager_ttl_goes_dead_letter_not_loop() -> None:
     first = await service.sweep_expired()
     assert first["escalated"] == 1
     escalated = await store.get(card.card_id)
-    assert escalated is not None and escalated.status == "escalated"
+    assert escalated is not None
+    assert escalated.status == "escalated"
     await store.save(escalated.model_copy(update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}))
     second = await service.sweep_expired()
     assert second["dead_letter"] == 1
     assert second["escalated"] == 0
     closed = await store.get(card.card_id)
-    assert closed is not None and closed.status == "dead_letter"
+    assert closed is not None
+    assert closed.status == "dead_letter"
 
 
 # --- Drill: memory HITL namespace IDOR (MEM-HITL-01/02) ---
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_memory_hitl_rejects_foreign_user_namespace() -> None:
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.memory_forget_service import MemoryForgetService
@@ -764,7 +766,7 @@ async def test_drill_memory_hitl_rejects_foreign_user_namespace() -> None:
     assert await port.search(namespace=user_namespace("victim"), query="cross-tenant", limit=4) == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_mcp_save_memory_rejects_mismatched_user_scope() -> None:
     import json
 
@@ -790,7 +792,7 @@ async def test_drill_mcp_save_memory_rejects_mismatched_user_scope() -> None:
     assert "scope_id must equal user_id" in result.content[0]["text"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_mcp_save_memory_rejects_org_without_claim() -> None:
     import json
 
@@ -829,7 +831,7 @@ async def test_drill_mcp_save_memory_rejects_org_without_claim() -> None:
     assert mismatched.is_error is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_platform_without_local_handler_refuses_call() -> None:
     """P0 dual-path: Host must not fall through to stub fake write success."""
     from types import SimpleNamespace
@@ -885,7 +887,7 @@ def test_drill_mcp_jwt_audience_is_server_bound() -> None:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_registry_refuses_unpinned_tool_call(monkeypatch: pytest.MonkeyPatch) -> None:
     """Phase 5: MCPRegistry.call_tool is a pin choke point (no Host HITL bypass)."""
     from types import SimpleNamespace
@@ -933,7 +935,7 @@ async def test_drill_registry_refuses_unpinned_tool_call(monkeypatch: pytest.Mon
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drill_call_mcp_tool_applies_argument_policy() -> None:
     """Phase 5: argument_policy runs for all call_mcp_tool callers, not only Researcher builder."""
     from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
@@ -986,7 +988,8 @@ def test_drill_gateway_never_proxies_platform() -> None:
 
     path = Path(__file__).resolve().parents[2] / "mcp_servers" / "gateway" / "pin_allowlist.py"
     spec = importlib.util.spec_from_file_location("gw_pins_drill", path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert "platform" not in mod.GATEWAY_PINNED_TOOLS

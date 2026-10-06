@@ -62,7 +62,7 @@ def test_namespace_to_scope_mapping() -> None:
     assert namespace_to_scope(thread_namespace("t1")) == {"run_id": "t1"}
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_mem0_port_put_search_get() -> None:
     transport = _FakeMem0Transport()
     port = Mem0MemoryPort(transport)

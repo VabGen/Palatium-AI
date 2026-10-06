@@ -67,7 +67,7 @@ def test_namespace_to_group_id() -> None:
     assert namespace_to_group_id(thread_namespace("t1")) == "thread:t1"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graphiti_port_put_search() -> None:
     transport = _FakeGraphitiTransport()
     port = GraphitiMemoryPort(transport)

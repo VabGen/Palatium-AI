@@ -13,7 +13,7 @@ from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from tests.conftest import make_platform_mcp_registry
 
 
-@pytest.fixture
+@pytest.fixture()
 def memory_save_stack() -> tuple[MemorySaveService, InMemoryMemoryPort, HitlService]:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
@@ -22,7 +22,7 @@ def memory_save_stack() -> tuple[MemorySaveService, InMemoryMemoryPort, HitlServ
     return service, port, hitl
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_save_requires_hitl_before_write(
     memory_save_stack: tuple[MemorySaveService, InMemoryMemoryPort, HitlService],
 ) -> None:
@@ -53,7 +53,7 @@ async def test_memory_save_requires_hitl_before_write(
     assert "Russian" in str(hits_after[0]["text"])
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_save_reject_discards_pending(
     memory_save_stack: tuple[MemorySaveService, InMemoryMemoryPort, HitlService],
 ) -> None:
@@ -74,7 +74,7 @@ async def test_memory_save_reject_discards_pending(
     assert hits == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_save_rejects_foreign_user_scope(
     memory_save_stack: tuple[MemorySaveService, InMemoryMemoryPort, HitlService],
 ) -> None:
@@ -93,7 +93,7 @@ async def test_memory_save_rejects_foreign_user_scope(
     assert hits == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_save_classifies_pii_despite_client_false(
     memory_save_stack: tuple[MemorySaveService, InMemoryMemoryPort, HitlService],
 ) -> None:
@@ -108,12 +108,12 @@ async def test_memory_save_classifies_pii_despite_client_false(
         text="Reach me at alice@example.com please.",
         contains_pii=False,
     )
-    pending = await service._load_pending(card.task_id)  # noqa: SLF001
+    pending = await service._load_pending(card.task_id)
     assert pending is not None
     assert '"contains_pii": true' in pending.value_json
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_hitl_respond_facade_runs_memory_save_on_approve(
     memory_save_stack: tuple[MemorySaveService, InMemoryMemoryPort, HitlService],
 ) -> None:

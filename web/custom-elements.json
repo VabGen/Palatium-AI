@@ -1,0 +1,233 @@
+{
+  "schemaVersion": "1.0.0",
+  "readme": "",
+  "modules": [
+    {
+      "kind": "javascript-module",
+      "path": "src/widget.tsx",
+      "declarations": [
+        {
+          "kind": "class",
+          "description": "Кастомный элемент `<palatium-assistant>` — точка входа embeddable-виджета.\n\nКонтракт элемента (план §2.3):\n- Shadow DOM `open`, стили через `adoptedStyleSheets` (без `<style>`: CSP и производительность);\n- React-root создаётся ОДИН раз и переживает `disconnectedCallback` — СЭД может\n  перемещать элемент по DOM, и unmount оставил бы пустой виджет навсегда;\n- публичный API: `setContext()`, `open()`, `close()` + событие `palatium:ready`;\n- контекст приходит событиями (см. `lib/hostContext.ts`), а не чтением storage.",
+          "name": "PalatiumAssistantElement",
+          "cssProperties": [
+            {
+              "description": "— акцент; любой токен из `tokens.css` переопределяется на хосте",
+              "name": "--accent",
+              "default": "#3dbea0"
+            }
+          ],
+          "cssParts": [
+            {
+              "description": "— кнопка-лончер (видна в свёрнутом состоянии)",
+              "name": "launcher"
+            },
+            {
+              "description": "— корневой контейнер панели",
+              "name": "shell"
+            },
+            {
+              "description": "— шапка с заголовком и действиями",
+              "name": "header"
+            },
+            {
+              "description": "— лента сообщений",
+              "name": "transcript"
+            },
+            {
+              "description": "— блок ввода с вложениями",
+              "name": "composer"
+            },
+            {
+              "description": "— кнопка сворачивания панели",
+              "name": "close"
+            }
+          ],
+          "members": [
+            {
+              "kind": "field",
+              "name": "#root",
+              "privacy": "private",
+              "type": {
+                "text": "Root | null"
+              },
+              "default": "null"
+            },
+            {
+              "kind": "field",
+              "name": "#mount",
+              "privacy": "private",
+              "type": {
+                "text": "HTMLDivElement"
+              },
+              "readonly": true
+            },
+            {
+              "kind": "field",
+              "name": "#bridge",
+              "privacy": "private",
+              "type": {
+                "text": "HostBridge | null"
+              },
+              "default": "null"
+            },
+            {
+              "kind": "field",
+              "name": "#unsubscribeRuntime",
+              "privacy": "private",
+              "type": {
+                "text": "(() => void) | null"
+              },
+              "default": "null"
+            },
+            {
+              "kind": "field",
+              "name": "#announcedThreadId",
+              "privacy": "private",
+              "type": {
+                "text": "string | null"
+              },
+              "default": "null",
+              "description": "Последний объявленный host'у тред — чтобы не повторять то же событие."
+            },
+            {
+              "kind": "method",
+              "name": "setContext",
+              "return": {
+                "type": {
+                  "text": "void"
+                }
+              },
+              "parameters": [
+                {
+                  "name": "context",
+                  "type": {
+                    "text": "SedContext"
+                  }
+                }
+              ],
+              "description": "Программная передача контекста — альтернатива событию `sed:context-changed`.\n\nБросает `TypeError` на структурно невалидный payload и на противоречивый\ntenant (`scope.tenantId` ≠ `user.orgId` ≠ claim токена). Здесь исключение, а\nне «тихий пропуск» как в событии: это вызов из кода host'а, и ошибку\nинтеграции надо показать в момент вызова, а не через 500 мс автономным режимом."
+            },
+            {
+              "kind": "method",
+              "name": "open",
+              "return": {
+                "type": {
+                  "text": "void"
+                }
+              },
+              "description": "Развернуть панель."
+            },
+            {
+              "kind": "method",
+              "name": "close",
+              "return": {
+                "type": {
+                  "text": "void"
+                }
+              },
+              "description": "Свернуть панель (виджет остаётся в DOM, показывается лончер)."
+            },
+            {
+              "kind": "method",
+              "name": "#reflectPanelState",
+              "privacy": "private",
+              "return": {
+                "type": {
+                  "text": "void"
+                }
+              }
+            },
+            {
+              "kind": "method",
+              "name": "#reflectThread",
+              "privacy": "private",
+              "return": {
+                "type": {
+                  "text": "void"
+                }
+              },
+              "description": "Объявляет host'у тред, когда его создал сам виджет.\n\nДо конца рукопожатия молчим: если host вот-вот пришлёт свой `threadId`,\nобъявленный id всё равно будет заменён, а host получил бы два разных треда\nна один запуск. После рукопожатия `hostStatus` уже не `pending`, и порядок\nоднозначен: контекст → (возможно) объявление."
+            },
+            {
+              "kind": "method",
+              "name": "#applyLang",
+              "privacy": "private",
+              "return": {
+                "type": {
+                  "text": "void"
+                }
+              },
+              "parameters": [
+                {
+                  "name": "next",
+                  "type": {
+                    "text": "string | null"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "field",
+              "name": "adoptedStyleSheets",
+              "type": {
+                "text": "array"
+              },
+              "default": "[elementStyles]"
+            },
+            {
+              "kind": "field",
+              "name": "id",
+              "type": {
+                "text": "string"
+              },
+              "default": "'palatium-root'"
+            }
+          ],
+          "events": [
+            {
+              "description": "— элемент апгрейдился и готов принимать контекст",
+              "name": "palatium:ready"
+            },
+            {
+              "description": "— виджет ведёт диалог в этом треде: host сохраняет id и возвращает его в `SedContext.threadId` (иначе перезагрузка страницы СЭД стирает диалог)",
+              "name": "sed:thread-changed"
+            }
+          ],
+          "attributes": [
+            {
+              "name": "lang",
+              "description": "— BCP-47 интерфейса и форматирования (перекрывает `localization` из контекста)"
+            },
+            {
+              "description": "— только для чтения: панель свёрнута (зеркало `close()`); не выставлять вручную",
+              "name": "collapsed"
+            }
+          ],
+          "superclass": {
+            "name": "HTMLElement"
+          },
+          "tagName": "palatium-assistant",
+          "customElement": true
+        }
+      ],
+      "exports": [
+        {
+          "kind": "js",
+          "name": "PalatiumAssistantElement",
+          "declaration": {
+            "name": "PalatiumAssistantElement",
+            "module": "src/widget.tsx"
+          }
+        },
+        {
+          "kind": "custom-element-definition",
+          "declaration": {
+            "name": "PalatiumAssistantElement",
+            "module": "src/widget.tsx"
+          }
+        }
+      ]
+    }
+  ]
+}

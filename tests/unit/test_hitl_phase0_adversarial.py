@@ -25,7 +25,7 @@ from palatium_ai.presentation.api.routers import hitl as hitl_router
 from palatium_ai.presentation.middleware.auth import AuthMiddleware
 from palatium_ai.presentation.security.jwt import JwtTokenService
 
-HITL_HMAC = "unit-test-hitl-hmac-key-32bytes!!"  # noqa: S105
+HITL_HMAC = "unit-test-hitl-hmac-key-32bytes!!"
 
 
 def _security(*, auth_enabled: bool = True) -> SecurityConfig:
@@ -121,7 +121,7 @@ def _bearer(tokens: JwtTokenService, *, sub: str, roles: tuple[str, ...] = ()) -
     return {"Authorization": f"Bearer {token}"}
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_hitl_idor_foreign_user_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     client, hitl_service, tokens, _intent = _client(monkeypatch)
     card = await hitl_service.create_review_card(
@@ -146,7 +146,7 @@ async def test_hitl_idor_foreign_user_denied(monkeypatch: pytest.MonkeyPatch) ->
     assert post_resp.status_code == 403
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_dialog_payload_strips_action_tokens() -> None:
     service = HitlService(InMemoryHitlCardStore(), signing_secret=HITL_HMAC)
     card = await service.create_review_card(
@@ -168,12 +168,13 @@ async def test_dialog_payload_strips_action_tokens() -> None:
     payload = _assistant_turn_payload(result)
     assert payload is not None
     cards = payload["hitl_cards"]
-    assert isinstance(cards, list) and cards
+    assert isinstance(cards, list)
+    assert cards
     for opt in cards[0]["options"]:
         assert opt["action_token"] == ""
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_manager_resolve_endpoint_for_escalated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -202,7 +203,8 @@ async def test_manager_resolve_endpoint_for_escalated(
             actor_subject="user-owner",
         )
     escalated = await hitl_service.get_card(card.card_id)
-    assert escalated is not None and escalated.status == "escalated"
+    assert escalated is not None
+    assert escalated.status == "escalated"
     option = next(opt for opt in escalated.options if opt.action_id == "approve")
     manager = _bearer(tokens, sub="manager-1", roles=("manager",))
     response = client.post(
@@ -225,7 +227,7 @@ async def test_manager_resolve_endpoint_for_escalated(
     assert resume_kwargs["org_id"] == "org-1"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_step_up_challenge_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -268,7 +270,7 @@ async def test_step_up_challenge_endpoint(
     assert respond.json()["resolve"]["card"]["status"] == "resolved"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_escalated_queue_redacts_and_scopes_org(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
+from uuid import UUID
 
 from palatium_ai.application.services.cost_budget import CostBudgetService
 from palatium_ai.application.services.intent_graph_runner import IntentGraphRunner
@@ -38,6 +40,7 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from palatium_ai.application.orchestration.state import AgentGraphState
+    from palatium_ai.application.services.attachment_service import AttachmentService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
@@ -47,12 +50,12 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 __all__ = [
-    "IntentService",
     "_MAX_QUALITY_REVISIONS",
-    "max_quality_revisions",
+    "IntentService",
     "_assistant_turn_content",
     "_assistant_turn_payload",
     "_snapshot_awaits_resume",
+    "max_quality_revisions",
 ]
 
 
@@ -79,6 +82,7 @@ class IntentService:
         worker_summary_max_chars: int = 4000,
         mcp_tool_output_max_chars: int = 3000,
         turn_hop_budget_ms: int = 15_000,
+        attachment_service: AttachmentService | None = None,
     ) -> None:
         self._session_service = session_service
         self._hitl_service = hitl_service
@@ -88,6 +92,7 @@ class IntentService:
         self._memory_port = memory_port
         self._consolidation = consolidation
         self._option_synthesizer = option_synthesizer
+        self._attachment_service = attachment_service
 
         self._graph_runner = IntentGraphRunner(
             graph,
@@ -119,6 +124,38 @@ class IntentService:
         )
         self._graph_runner.bind_attach_hitl_cards(self._hitl_flow.attach_hitl_cards)
 
+    async def _turn_untrusted_context(
+        self,
+        attachment_ids: Sequence[UUID] | None,
+        *,
+        thread_id: str,
+        user_id: str | None,
+    ) -> str:
+        """Resolve this turn's fenced attachment text (020).
+
+        Attachments are optional: with no service wired or no ids the turn runs
+        exactly as before. When ids are present the block is resolved through
+        ``AttachmentService``, which re-runs the injection policy and returns
+        text already wrapped in the untrusted fence; ``AttachmentError``
+        propagates to the API boundary so the caller sees a typed refusal
+        instead of a turn that silently drops the user's file.
+        """
+        if self._attachment_service is None or not attachment_ids:
+            if attachment_ids and self._attachment_service is None:
+                logger.warning(
+                    "attachment.turn_context_skipped",
+                    thread_id=thread_id,
+                    reason="attachment_service_unavailable",
+                    attachment_count=len(attachment_ids),
+                )
+            return ""
+        context = await self._attachment_service.build_turn_context(
+            attachment_ids=list(attachment_ids),
+            user_id=user_id or "",
+            thread_id=thread_id,
+        )
+        return context.fenced_text
+
     @traceable(name="intent_service.classify")
     async def classify(
         self,
@@ -129,6 +166,7 @@ class IntentService:
         org_id: str | None = None,
         *,
         is_admin: bool = False,
+        attachment_ids: Sequence[UUID] | None = None,
     ) -> IntentTaskResult:
         """Возвращает platform-level классификацию задачи."""
         resolved_task_id = task_id or thread_id
@@ -160,6 +198,11 @@ class IntentService:
             user_id=user_id,
             org_id=org_id,
             tenant_key=_tenant_budget_key(user_id=user_id, org_id=org_id, thread_id=thread_id),
+            untrusted_context=await self._turn_untrusted_context(
+                attachment_ids,
+                thread_id=thread_id,
+                user_id=user_id,
+            ),
         )
         classification = final_state.get("classification")
         critic = final_state.get("critic")
@@ -300,6 +343,7 @@ class IntentService:
         org_id: str | None = None,
         *,
         is_admin: bool = False,
+        attachment_ids: Sequence[UUID] | None = None,
     ) -> FormatterTaskResult:
         """Возвращает финальный отформатированный ответ платформы."""
         resolved_task_id = task_id or thread_id
@@ -345,6 +389,11 @@ class IntentService:
             user_id=user_id,
             org_id=org_id,
             tenant_key=tenant_key,
+            untrusted_context=await self._turn_untrusted_context(
+                attachment_ids,
+                thread_id=thread_id,
+                user_id=user_id,
+            ),
         )
         interrupted = _extract_interrupt(final_state)
         if interrupted is not None:

@@ -31,7 +31,7 @@ from tests.conftest import (
     make_weaving_agent,
 )
 
-_HITL_HMAC = "unit-test-hitl-hmac-key-32b"  # noqa: S105
+_HITL_HMAC = "unit-test-hitl-hmac-key-32b"
 
 
 class _FakeSessionService:
@@ -43,7 +43,7 @@ class _FakeSessionService:
 
     async def get_session(self, **_kwargs: object) -> None:
         """Reply-locale lookup (065); no persisted session in unit tests."""
-        return None
+        return
 
 
 def _formatter_document_json(title: str) -> str:
@@ -117,7 +117,7 @@ def _service_for_case(case: BenchmarkCase) -> IntentService:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_offline_benchmark_100_meets_success_gate() -> None:
     corpus = build_benchmark_corpus(size=100)
     successes = 0

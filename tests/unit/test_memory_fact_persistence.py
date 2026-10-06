@@ -25,7 +25,7 @@ def test_memory_key_avoids_colon_uri_scheme_shape() -> None:
     assert ":" not in hashed
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_persist_facts_uses_save_memory_mcp() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
@@ -44,7 +44,7 @@ async def test_persist_facts_uses_save_memory_mcp() -> None:
     assert hits[0]["kind"] == "preference"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_persist_facts_maps_entity_to_org_namespace() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
@@ -63,7 +63,7 @@ async def test_persist_facts_maps_entity_to_org_namespace() -> None:
     assert hits[0]["kind"] == "entity"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_persist_facts_blocks_secrets() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
@@ -81,7 +81,7 @@ async def test_persist_facts_blocks_secrets() -> None:
     assert hits == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_persist_facts_marks_pii_from_text() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)

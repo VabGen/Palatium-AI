@@ -2,6 +2,7 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Brain, ChevronDown, LoaderCircle } from 'lucide-react';
 import { requestMemoryConsolidate, requestMemoryForget, requestMemorySave } from '../api/client';
+import { t } from '../i18n';
 import type { HITLCardView } from '../types/contentDocument';
 
 type MemoryActionsProps = {
@@ -37,7 +38,7 @@ export function MemoryActions({
         const key = entryKey.trim();
         const body = text.trim();
         if (!key || !body) {
-          toast.error('Entry key and text are required');
+          toast.error(t('memory.error.entryKeyAndText'));
           return;
         }
         card = await requestMemorySave(
@@ -52,11 +53,11 @@ export function MemoryActions({
           userId,
           orgId
         );
-        label = 'Memory save awaiting approval';
+        label = t('memory.label.save');
       } else if (mode === 'forget') {
         const key = entryKey.trim();
         if (!key) {
-          toast.error('Entry key is required');
+          toast.error(t('memory.error.entryKey'));
           return;
         }
         card = await requestMemoryForget(
@@ -69,18 +70,18 @@ export function MemoryActions({
           userId,
           orgId
         );
-        label = 'Memory forget awaiting approval';
+        label = t('memory.label.forget');
       } else {
         card = await requestMemoryConsolidate({ thread_id: threadId }, userId, orgId);
-        label = 'Memory extract awaiting approval';
+        label = t('memory.label.extract');
       }
       onCardCreated(card, label);
       setText('');
       if (mode !== 'consolidate') setEntryKey('');
-      toast.success('HITL card created');
+      toast.success(t('memory.toast.cardCreated'));
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      toast.error(detail.slice(0, 180) || 'Memory request failed');
+      toast.error(detail.slice(0, 180) || t('memory.error.requestFailed'));
     } finally {
       setBusy(false);
     }
@@ -96,18 +97,18 @@ export function MemoryActions({
         onClick={() => setOpen(prev => !prev)}
       >
         <Brain size={14} />
-        <span>Memory</span>
+        <span>{t('memory.toggle')}</span>
         <ChevronDown size={14} className="memory-chevron" />
       </button>
 
       {open && (
-        <div className="memory-panel" role="group" aria-label="Memory HITL actions">
-          <div className="memory-modes" role="tablist" aria-label="Memory action">
+        <div className="memory-panel" role="group" aria-label={t('memory.panelLabel')}>
+          <div className="memory-modes" role="tablist" aria-label={t('memory.modesLabel')}>
             {(
               [
-                ['save', 'Save'],
-                ['forget', 'Forget'],
-                ['consolidate', 'Extract'],
+                ['save', t('memory.mode.save')],
+                ['forget', t('memory.mode.forget')],
+                ['consolidate', t('memory.mode.extract')],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -129,7 +130,7 @@ export function MemoryActions({
               className="memory-input"
               value={entryKey}
               onChange={e => setEntryKey(e.target.value)}
-              placeholder="entry_key (e.g. pref-lang)"
+              placeholder={t('memory.entryKeyPlaceholder')}
               disabled={busy || disabled}
               maxLength={256}
             />
@@ -139,18 +140,13 @@ export function MemoryActions({
               className="memory-textarea"
               value={text}
               onChange={e => setText(e.target.value)}
-              placeholder="What should be remembered?"
+              placeholder={t('memory.textPlaceholder')}
               rows={2}
               disabled={busy || disabled}
               maxLength={2000}
             />
           )}
-          {mode === 'consolidate' && (
-            <p className="memory-hint">
-              Queue sleep-time extract for this thread (transcript → medium; requires approve). Does
-              not promote facts into the knowledge graph.
-            </p>
-          )}
+          {mode === 'consolidate' && <p className="memory-hint">{t('memory.extractHint')}</p>}
 
           <button
             type="button"
@@ -161,10 +157,10 @@ export function MemoryActions({
             {busy ? <LoaderCircle className="spin" size={14} /> : null}
             <span>
               {mode === 'save'
-                ? 'Request save'
+                ? t('memory.submit.save')
                 : mode === 'forget'
-                  ? 'Request forget'
-                  : 'Request extract'}
+                  ? t('memory.submit.forget')
+                  : t('memory.submit.extract')}
             </span>
           </button>
         </div>

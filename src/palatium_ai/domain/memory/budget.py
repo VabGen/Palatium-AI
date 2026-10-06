@@ -21,6 +21,9 @@ class MemoryPromptBudget(BaseModel):
     prior_excerpt_max_chars: int = Field(default=1500, ge=100, le=16_000)
     worker_summary_max_chars: int = Field(default=8_000, ge=500, le=16_000)
     mcp_tool_output_max_chars: int = Field(default=3000, ge=500, le=16_000)
+    # Fenced attachment text for one turn. Above this the block is truncated with
+    # an explicit marker rather than silently cut (020, 065).
+    untrusted_context_max_chars: int = Field(default=24_000, ge=1000, le=60_000)
 
 
 DEFAULT_PROMPT_BUDGET = MemoryPromptBudget()

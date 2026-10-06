@@ -28,7 +28,7 @@ def _packet(*, task_kind: str = "response_formatting") -> ContextPacket:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_critic_skips_llm_for_format_only_with_prior_content() -> None:
     llm = FakeLLMPort("should-not-be-called")
     result = await run_critic(
@@ -50,7 +50,7 @@ async def test_critic_skips_llm_for_format_only_with_prior_content() -> None:
     assert len(llm.calls) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_critic_skips_llm_for_ack_only_social() -> None:
     llm = FakeLLMPort("should-not-be-called")
     packet = ContextPacket(
@@ -85,7 +85,7 @@ async def test_critic_skips_llm_for_ack_only_social() -> None:
     assert len(llm.calls) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_critic_still_calls_llm_for_research_path() -> None:
     llm = FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
     packet = ContextPacket(

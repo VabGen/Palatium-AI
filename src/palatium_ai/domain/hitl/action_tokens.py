@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 # Subject used when re-stamping options for the manager escalation queue.
-MANAGER_TOKEN_SUBJECT = "role:manager"  # noqa: S105
+MANAGER_TOKEN_SUBJECT = "role:manager"  # noqa: S105 — литерал-subject роли, не секрет (017)
 
 
 def new_token_nonce() -> str:
@@ -36,8 +36,7 @@ def mint_action_token(
         subject=subject,
         nonce=nonce,
     )
-    digest = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    return digest
+    return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def verify_action_token(

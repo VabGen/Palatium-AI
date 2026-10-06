@@ -12,7 +12,7 @@ from palatium_ai.core.security.identifiers import (
 )
 
 
-@pytest.mark.parametrize("name", ["palatium_dev", "palatium_ai", "d", "_internal", "mixed-Name_9"])
+@pytest.mark.parametrize("name", ("palatium_dev", "palatium_ai", "d", "_internal", "mixed-Name_9"))
 def test_safe_identifier_accepts_plain_names(name: str) -> None:
     assert assert_safe_sql_identifier(name) == name
     assert quote_sql_identifier(name) == f'"{name}"'
@@ -20,7 +20,7 @@ def test_safe_identifier_accepts_plain_names(name: str) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    [
+    (
         'foo"; DROP DATABASE postgres; --',
         "foo; DROP DATABASE postgres",
         "foo bar",
@@ -29,7 +29,7 @@ def test_safe_identifier_accepts_plain_names(name: str) -> None:
         "",
         "a" * 64,
         'quote"inside',
-    ],
+    ),
 )
 def test_safe_identifier_rejects_injection_and_junk(name: str) -> None:
     with pytest.raises(UnsafeSqlIdentifierError):

@@ -1,152 +1,126 @@
 # ==============================================================================
-# Makefile для palatium-ai
-# Linux / macOS / WSL. На Windows используйте .\scripts\menu.ps1
-#
-# Установка make:
-#   macOS:  brew install make
-#   Linux:  sudo apt install make
-#   Windows: choco install make -y
+# Palatium-AI — единая точка входа.
+# palatium-menu
+# Кросс-платформенный: Linux, macOS, WSL, Git Bash, Windows (scoop install make).
 # ==============================================================================
 
 ENV_FILE ?= env/.env
-COMPOSE  := docker compose --env-file $(ENV_FILE)
+COMPOSE  := docker compose --env-file $(ENV_FILE) --profile docker-mcp --profile docker-api
+# ^ профили обязательны: api.depends_on ссылается на mcp-edms/mcp-analytics.
 
-.PHONY: help menu init install dev staging prod \
-        up down reset ps logs logs-litellm logs-api \
-        verify migrate shell list-dbs models test-tier \
-        validate swagger litellm-ui
+LITELLM_MASTER_KEY ?= $(shell grep -E '^LITELLM_MASTER_KEY=' $(ENV_FILE) 2>/dev/null \
+                         | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'")
 
-# ------------------------------------------------------------------------------
-# Справка / меню
-# ------------------------------------------------------------------------------
-help:
-	@echo "Palatium-AI — доступные команды:"
-	@echo ""
-	@echo "  ── Управление стеком ──"
-	@echo "  make up          — поднять стек (build)"
-	@echo "  make down        — остановить"
-	@echo "  make reset       — остановить + удалить volumes"
-	@echo "  make ps          — статус сервисов"
-	@echo "  make logs        — логи всех"
-	@echo "  make logs-litellm — логи LiteLLM"
-	@echo "  make logs-api    — логи API"
-	@echo ""
-	@echo "  ── Проверки ──"
-	@echo "  make verify      — health всех endpoints"
-	@echo "  make models      — список моделей LiteLLM"
-	@echo "  make test-tier   — тестовый запрос tier-mid"
-	@echo "  make validate    — валидация docker-compose.yml"
-	@echo "  make list-dbs    — список БД Postgres"
-	@echo ""
-	@echo "  ── Разработка ──"
-	@echo "  make init        — создать .env из шаблона"
-	@echo "  make install     — poetry install --with dev"
-	@echo "  make dev         — запуск локально (env/.env.dev)"
-	@echo "  make staging     — запуск локально (env/.env.staging)"
-	@echo "  make prod        — запуск локально (env/.env.prod)"
-	@echo "  make migrate     — alembic upgrade head"
-	@echo "  make shell       — shell в контейнере api"
-	@echo ""
-	@echo "  ── UI ──"
-	@echo "  make swagger     — открыть Swagger UI"
-	@echo "  make litellm-ui  — открыть LiteLLM UI"
+.DEFAULT_GOAL := help
+.PHONY: help init install up down reset ps logs logs-api logs-litellm \
+        verify require-key models test-tier validate list-dbs migrate shell \
+        swagger litellm-ui attach-build attach-up attach-down attach-s3-up \
+        attach-s3-down attach-probe
 
-# ------------------------------------------------------------------------------
-# Инициализация окружения
-# ------------------------------------------------------------------------------
-init:
-	@echo "🔧 Создание файлов окружения из шаблона..."
-	@[ -f env/.env ]          || (cp env/.env.example env/.env          && echo "  ✅ env/.env")
-	@[ -f env/.env.dev ]      || (cp env/.env.example env/.env.dev      && echo "  ✅ env/.env.dev")
-	@[ -f env/.env.staging ]  || (cp env/.env.example env/.env.staging  && echo "  ✅ env/.env.staging")
-	@[ -f env/.env.prod ]     || (cp env/.env.example env/.env.prod     && echo "  ✅ env/.env.prod")
-	@echo "📦 Установка зависимостей..."
+# ──────────────────────────────────────────────────────────────────────────────
+help:  ## Показать эту справку
+	@awk 'BEGIN{FS=":.*##"; printf "\nPalatium-AI — команды:\n\n"} \
+	     /^[a-zA-Z_-]+:.*##/ {printf "  make %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@echo ""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Стек
+# ──────────────────────────────────────────────────────────────────────────────
+init: ## Создать env/.env из шаблона + poetry install
+	@[ -f $(ENV_FILE) ] || (cp env/.env.example $(ENV_FILE) && echo "✅ $(ENV_FILE)")
 	@poetry install --with dev
-	@echo "✅ Готово! Отредактируйте файлы в env/."
 
-install:
-	@echo "📦 Установка зависимостей..."
+install: ## poetry install --with dev
 	@poetry install --with dev
-	@echo "✅ Зависимости установлены."
 
-# ------------------------------------------------------------------------------
-# Управление стеком
-# ------------------------------------------------------------------------------
-up:
+up: ## Поднять весь стек
 	$(COMPOSE) up -d --build
-	@echo "✓ Стек поднят. Swagger: http://localhost:8000/docs"
+	@echo "✓ http://localhost:8000/docs"
 
-down:
+down: ## Остановить
 	$(COMPOSE) down
 
-reset:
+reset: ## Остановить + удалить volumes (DESTRUCTIVE)
 	$(COMPOSE) down -v
-	@echo "✓ Volumes удалены"
 
-ps:
+ps: ## Статус сервисов
 	$(COMPOSE) ps
 
-logs:
+logs: ## Логи всех (Ctrl+C для выхода)
 	$(COMPOSE) logs -f
 
-logs-litellm:
-	$(COMPOSE) logs -f litellm
-
-logs-api:
+logs-api: ## Логи api
 	$(COMPOSE) logs -f api
 
-# ------------------------------------------------------------------------------
-# Проверки
-# ------------------------------------------------------------------------------
-verify:
-	@echo "→ API health..." && curl -sf http://localhost:8000/health && echo " ✅" || echo " ❌"
-	@echo "→ LiteLLM liveness..." && curl -sf http://localhost:4000/health/liveliness && echo " ✅" || echo " ❌"
-	@echo "→ MCP EDMS..." && curl -sf http://localhost:8080/health && echo " ✅" || echo " ❌"
-	@echo "→ MCP Analytics..." && curl -sf http://localhost:8081/health && echo " ✅" || echo " ❌"
+logs-litellm: ## Логи litellm
+	$(COMPOSE) logs -f litellm
 
-models:
-	@curl -sf -H "Authorization: Bearer sk-palatium-master" \
+# ──────────────────────────────────────────────────────────────────────────────
+# Проверки
+# ──────────────────────────────────────────────────────────────────────────────
+verify: ## Health всех endpoints
+	@curl -sf http://localhost:8000/health && echo " ✅ API" || echo " ❌ API"
+	@curl -sf http://localhost:4000/health/liveliness && echo " ✅ LiteLLM" || echo " ❌ LiteLLM"
+	@curl -sf http://localhost:8080/health && echo " ✅ MCP EDMS" || echo " ❌ MCP EDMS"
+	@curl -sf http://localhost:8081/health && echo " ✅ MCP Analytics" || echo " ❌ MCP Analytics"
+
+require-key:
+	@[ -n "$(LITELLM_MASTER_KEY)" ] || { echo "❌ LITELLM_MASTER_KEY not set in $(ENV_FILE)"; exit 1; }
+
+models: require-key ## Список tier-моделей LiteLLM
+	@curl -sf -H "Authorization: Bearer $(LITELLM_MASTER_KEY)" \
 		http://localhost:4000/v1/models | python -m json.tool
 
-test-tier:
+test-tier: require-key ## Тестовый запрос через tier-mid
 	@curl -sf http://localhost:4000/v1/chat/completions \
-		-H "Authorization: Bearer sk-palatium-master" \
+		-H "Authorization: Bearer $(LITELLM_MASTER_KEY)" \
 		-H "Content-Type: application/json" \
 		-d '{"model":"tier-mid","messages":[{"role":"user","content":"Say OK"}]}' \
 		| python -m json.tool
 
-validate:
+validate: ## Валидация docker-compose.yml
 	$(COMPOSE) config --quiet && echo "✅ docker-compose.yml валиден"
-	@$(COMPOSE) config | grep -E "TIER_" || true
 
-list-dbs:
+list-dbs: ## Список БД + расширений Postgres
 	$(COMPOSE) exec postgres psql -U postgres -c "\l"
-	@echo "--- Расширения postgres ---"
 	$(COMPOSE) exec postgres psql -U postgres -d postgres -c "\dx"
 
-# ------------------------------------------------------------------------------
-# Разработка (локальный Poetry)
-# ------------------------------------------------------------------------------
-dev:
-	@ENV_FILE=env/.env.dev poetry run python -m palatium_ai.main
-
-staging:
-	@ENV_FILE=env/.env.staging poetry run python -m palatium_ai.main
-
-prod:
-	@ENV_FILE=env/.env.prod poetry run python -m palatium_ai.main
-
-migrate:
+migrate: ## Alembic upgrade head
 	$(COMPOSE) exec api alembic upgrade head
 
-shell:
+shell: ## Shell в контейнере api
 	$(COMPOSE) exec api sh
 
-# ------------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# Вложения (attachments): AV-движок и S3-хранилище — оба опциональны
+# ──────────────────────────────────────────────────────────────────────────────
+attach-build: ## Собрать api с extras attachments (minio/pypdf/python-docx)
+	$(COMPOSE) build --build-arg WITH_ATTACHMENTS=1 api
+
+attach-up: ## Поднять AV-движок clamd (профиль attachments)
+	$(COMPOSE) --profile attachments up -d clamav
+
+attach-down: ## Остановить AV и S3 (данные и volumes сохраняются)
+	$(COMPOSE) --profile attachments --profile attachments-s3 stop clamav minio
+
+# Preflight ОБЯЗАТЕЛЕН: upstream-образы MinIO больше нигде не отдаются анонимно
+# (Docker Hub 404 / quay.io 401 / ghcr.io 403). Без проверки `up` падает ошибкой
+# авторизации реестра, которую легко принять за битый compose (см. runbook §16.9).
+attach-s3-up: ## Поднять S3-хранилище minio (профиль attachments-s3) + preflight образа
+	python scripts/attachments_probe.py --preflight-image --skip-s3 --skip-clamav --skip-api
+	$(COMPOSE) --profile attachments-s3 up -d minio
+
+attach-s3-down: ## Остановить S3 (volume palatium_minio_data сохраняется)
+	$(COMPOSE) --profile attachments-s3 stop minio
+
+attach-probe: ## Диагностика вложений: API + clamd + S3 (что именно лежит)
+	python scripts/attachments_probe.py
+
+# ──────────────────────────────────────────────────────────────────────────────
 # UI
-# ------------------------------------------------------------------------------
-swagger:
+# ──────────────────────────────────────────────────────────────────────────────
+swagger: ## Открыть Swagger UI
 	@python -c "import webbrowser; webbrowser.open('http://localhost:8000/docs')"
 
-litellm-ui:
+litellm-ui: ## Открыть LiteLLM UI
 	@python -c "import webbrowser; webbrowser.open('http://localhost:4000/ui')"

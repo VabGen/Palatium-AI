@@ -174,7 +174,7 @@ class JSONCodec:
     ladder:
         Ordered strategies; first successful parse wins. Override in tests.
 
-    Example
+    Example:
     -------
     >>> codec = JSONCodec(on_repair=metric_hook)
     >>> codec.loads('```json\n{"a": 1}\n```')
@@ -192,10 +192,14 @@ class JSONCodec:
 
     # -- public API ---------------------------------------------------
 
-    def loads(self, raw: str) -> Any:
+    def loads(self, raw: str | bytes) -> Any:
         """Parse any top-level JSON value from LLM text.
 
-        Raises
+        Accepts ``bytes`` as well: a provider adapter may hand back the raw body,
+        and decoding it here keeps every caller from re-implementing the same
+        normalisation.
+
+        Raises:
         ------
         LLMJSONError
             If no valid JSON could be extracted or recovered.

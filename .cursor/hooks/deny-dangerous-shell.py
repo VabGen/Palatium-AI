@@ -50,7 +50,7 @@ def _read_stdin_json() -> dict[str, object] | None:
     """Parse hook stdin JSON. Cursor sends one JSON object then closes stdin."""
     try:
         raw = sys.stdin.read()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     if not raw or not raw.strip():
         return None

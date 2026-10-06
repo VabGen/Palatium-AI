@@ -56,7 +56,7 @@ def _settings_with_fallback(*, fallback: tuple[str, ...] = ("anthropic",)) -> Si
     return SimpleNamespace(llm=llm, app=app)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_fallback_chain_uses_second_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     factory = LLMClientFactory(settings=_settings_with_fallback())  # type: ignore[arg-type]
     primary = _FailThenOk(fail_times=99, content="primary")
@@ -85,7 +85,7 @@ def test_mcp_circuit_opens_after_three_call_failures() -> None:
     assert circuit.is_open(now)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_registry_call_tool_trips_circuit_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import httpx
 
@@ -147,7 +147,7 @@ def test_turn_cost_budget_fail_closed() -> None:
             budget.assert_turn_allows_call()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_daily_cost_budget_fail_closed() -> None:
     budget = CostBudgetService(daily_budget_usd=1.0)
     await budget.record_turn_cost(tenant_key="user-1", cost_usd=1.5)

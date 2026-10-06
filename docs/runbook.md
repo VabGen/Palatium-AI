@@ -35,6 +35,28 @@ docker compose --env-file env/.env up -d postgres redis neo4j litellm
 # Полный Docker-стек (api + mcp в контейнерах)
 docker compose --env-file env/.env --profile docker-mcp --profile docker-api up -d
 
+# Всё, кроме observability: API + MCP + вложения (AV/S3) — дефолтный запуск
+make up
+
+# Полная сборка и запуск, включая observability (Langfuse v3 + ClickHouse)
+#   требует VM ≥ ~9.1 GiB (см. `make up-full` и docs/docker.md)
+make up-full
+
+# Пересобрать и перезапустить только api + MCP (инфра не трогается)
+make rebuild-app
+```
+
+`make up`, `make up-full` и `make rebuild-app` завершаются **только когда стек реально
+отвечает**: после `up -d` они запускают `attachments_probe.py --wait` и возвращают
+ненулевой код, если за отведённое время S3/clamd/API не поднялись. Ждать приходится на
+уровне probe, а не `docker compose up --wait`: one-shot контейнер `silo-init` (создаёт
+бакеты и выходит с кодом 0) для compose — «упавший» контейнер, и `--wait` отклонял
+исправно поднятый стек. Повторно проверяются только те пробы, что ещё не ответили,
+поэтому холодный старт clamd (загрузка сигнатур до ~5 мин) не превращается в серию
+лишних запросов к уже зелёному store. `make rebuild-app` печатает и эффективные
+бэкенды (`blob_backend=`/`scanner_backend=`) — пересборка без overlay-файлов вложений
+молча вернула бы API на dev-бэкенды из `env/.env`.
+
 # Статус
 .\scripts\dev-status.ps1
 
@@ -52,7 +74,9 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api dow
 | Режим | Команда | Когда |
 |---|---|---|
 | **Host** | `docker compose up -d postgres redis neo4j litellm` + `dev-up.ps1` | Ежедневная разработка (hot-reload) |
-| **Docker** | `docker compose --profile docker-mcp --profile docker-api up -d` | CI, демо, prod-like |
+| **Docker** | `docker compose --profile docker-mcp --profile docker-api up -d` | CI, демо, prod-like (без вложений) |
+| **Docker + вложения** | `make up` (меню: STACK → *Start stack*) | Дефолтный запуск: AV/S3-путь вложений «из коробки» (§16.8). Обязателен при `ATTACHMENTS_BLOB_BACKEND=minio` — без store API падает на boot |
+| **Docker + вложения + observability** | `make up-full` (меню: STACK → *Start full stack*) | Трассировка Langfuse v3; требует VM ≥ ~9.1 GiB (§16.10) |
 | **Gateway** | `.\scripts\dev-up.ps1 -WithGateway` | Тест политик MCP |
 
 **Правило:** не смешивать. Host и Docker MCP конфликтуют на портах 8080/8081/8000.
@@ -110,12 +134,46 @@ docker compose --env-file env/.env @profiles logs mcp-edms --tail 30 2>&1
 
 ### 3.1. `api` → `ModuleNotFoundError: No module named 'palatium_ai'`
 
-**Причина:** `pyproject.toml` содержит `{ include = "mcp_servers" }`, но корневой
+Симптом: контейнер `api` стартует и падает в `docker-entrypoint.sh` на шаге
+`RUN_MIGRATIONS=1 → ensure schema + alembic upgrade head`. **Две известные причины** — обе
+дают ровно этот трейс, различаются они только логом сборки.
+
+#### 3.1.1. `license-files = ["LICENSE"]`, а `LICENSE` не копируется в образ
+
+**Причина:** `pyproject.toml` объявляет `license-files = ["LICENSE"]`. `poetry install`
+ставит корневой проект **последним** — уже после всех сторонних зависимостей. Если
+`LICENSE` нет в build-контексте, бэкенд Poetry не может собрать корневой пакет, установка
+обрывается, и в venv остаются зависимости без самого `palatium_ai`.
+
+**Почему это было невидимо:** `|| true`, который делал best-effort очистку `__pycache__`,
+стоял в конце всей `&&`-цепочки и глушил падение `poetry install`. Образ собирался
+«успешно», а падал уже контейнер. Симптом в логе сборки:
+
+```text
+Installing the current project: palatium-ai (0.1.0)
+No files found for license file glob pattern 'LICENSE'
+```
+
+**Статус: ✅ исправлено.** `Dockerfile` копирует `LICENSE`, а очистка вынесена в
+отдельный `RUN`; кроме того, сборка теперь **проверяет импорт** на этапе build:
+
+```dockerfile
+COPY pyproject.toml poetry.lock README.md LICENSE ./
+...
+    && /app/.venv/bin/python -c "import palatium_ai; print('palatium_ai ->', palatium_ai.__file__)"
+```
+
+Регрессия закреплена тестом `tests/unit/test_dockerfile_build_contract.py` (4 связи:
+LICENSE копируется, импорт проверяется, `graphiti` проверяется при `WITH_GRAPHITI=1`,
+`|| true` не висит в конце install-цепочки).
+
+#### 3.1.2. `mcp_servers` в `[tool.poetry].packages`
+
+**Причина:** `pyproject.toml` когда-то содержал `{ include = "mcp_servers" }`, но корневой
 `Dockerfile` не копирует `mcp_servers/` → `poetry install` падает целиком →
 `palatium_ai` не устанавливается.
 
-**Статус: ✅ уже исправлено в репозитории.** `mcp_servers` исключён из пакетов
-(`pyproject.toml`, блок `[tool.poetry]`):
+**Статус: ✅ исправлено.** `mcp_servers` исключён из пакетов (`[tool.poetry]`):
 
 ```toml
 packages = [
@@ -124,23 +182,32 @@ packages = [
 ]
 ```
 
-Проверка (регрессия):
+#### Диагностика (решает обе причины одним способом)
+
+Проверяйте **не сборку, а образ** — сборка могла пройти «успешно»:
 
 ```powershell
-Select-String -Path pyproject.toml -Pattern "packages" -Context 0,4
+# 1. Есть ли пакет внутри образа вообще?
+docker run --rm --entrypoint python palatium-ai:local `
+  -c "import palatium_ai; print(palatium_ai.__file__)"
 
-poetry check
-poetry install --only main
+# 2. Тот самый шаг entrypoint, который падает
+docker run --rm --entrypoint python palatium-ai:local `
+  -c "from palatium_ai.core.config import get_settings; from palatium_ai.infrastructure.database import ensure_database_and_schema; print('OK')"
+
+# 3. Что именно сказала сборка (искать причину, а не симптом)
+docker compose --env-file env/.env --profile docker-api build --progress plain api 2>&1 `
+  | Select-String -Pattern 'No files found|Installing the current project|palatium_ai ->|ERROR'
 ```
 
-**Если симптом вернулся** (кто-то вернул строку обратно) — убрать `include`
-и пересобрать без кэша:
+**Пересборка после фикса** (кэш `builder` инвалидируется изменением `COPY`/`RUN`, поэтому
+`--no-cache` обычно не нужен):
 
 ```powershell
-docker compose --env-file env/.env --profile docker-mcp --profile docker-api down
-docker compose --env-file env/.env --profile docker-mcp --profile docker-api build --no-cache api
-docker compose --env-file env/.env --profile docker-mcp --profile docker-api up -d
+make rebuild-app
 ```
+
+`make rebuild-app` пересобирает и перезапускает только `api` + MCP, не трогая инфраструктуру.
 
 ### 3.2. `api` → `Unknown default_provider: gateway`
 
@@ -275,6 +342,11 @@ docker compose --env-file env/.env up -d postgres redis neo4j litellm
 .\scripts\dev-up.ps1
 ```
 
+> `dev-down.ps1` снимает только host-процессы: если 8080/8081 держат контейнеры, он
+> напишет `[skip] ... not a repo process` — это ожидаемо, Docker-сторону убирает
+> `docker compose rm -f` выше. `-Force` защиту не отменяет; чужое добивает только
+> `-AllowForeign`, и это уносит весь Docker-стек (см. [`../START.md`](../START.md) §7).
+
 ### 3.7. Postgres падает / `in recovery mode`
 
 **Симптом:** циклический restart, `database system was not properly shut down`.
@@ -290,6 +362,73 @@ docker compose --env-file env/.env up -d postgres
 > Имя volume — `<project>_<volume>` = `palatium-ai_palatium_pgdata`
 > (том объявлен как `palatium_pgdata`, проект — `palatium-ai`).
 > Убедиться можно так: `docker volume ls | Select-String palatium`.
+
+**`57P03` во время рестарта больше не отдаёт `500`.** Пока Postgres поднимается, он
+отвечает на новые соединения `SQLSTATE 57P03` («the database system is in recovery
+mode») и рвёт соединения из пула. Слой БД (`infrastructure/database/resilience.py`)
+повторяет **только получение соединения** — не сам запрос, поэтому ни один statement
+не выполняется дважды. Бюджет — из конфига (050: не магические числа):
+
+| Переменная | Default | Смысл |
+|---|---|---|
+| `DB_RETRY_ATTEMPTS` | `4` | всего попыток подключения; `1` — fail-fast без повторов |
+| `DB_RETRY_INITIAL_DELAY_SECONDS` | `0.25` | первая пауза (дальше экспонента + jitter) |
+| `DB_RETRY_MAX_DELAY_SECONDS` | `2` | верхняя граница одной паузы; она же уходит в `Retry-After` |
+
+Когда бюджет исчерпан — или соединение не добыть из пула (`DB_POOL_TIMEOUT_SECONDS`) —
+API отвечает `503` + `Retry-After: <секунды>` и пишет событие `db_unavailable` в
+audit chain (035: fail-closed на границе, внутренние детали драйвера остаются в логе).
+Запрос при этом не выполнялся, поэтому повтор клиента безопасен. `500` в этом
+сценарии — регрессия сборки: проверьте, что образ API собран с текущим `src/`,
+а не просто перезапущен:
+
+```powershell
+docker exec palatium-ai-api-1 ls /app/src/palatium_ai/infrastructure/database/resilience.py
+docker exec palatium-ai-api-1 env | Select-String DB_RETRY
+```
+
+**Почему Postgres падал (и что мешает повториться).** В исходном инциденте дело было не
+в самом Postgres: у контейнеров не было потолков памяти, поэтому при пиковой нагрузке
+срабатывал OOM-killer *всей Docker-VM*. Он выбирает процесс с наибольшим RSS — а это
+`clamd` (~1 GiB резидентных сигнатур) или `postgres`; убийство Postgres даёт
+crash-recovery с многосекундными `fsync` (в логах инцидента — до 180 с) и каскад
+`socket hang up` на всех HTTP-запросах.
+
+Ограничения живут в `docker-compose.yml` (сумма — бюджет против RAM Docker-VM, 7884 MiB):
+
+| Сервис | `mem_limit` | Почему такой |
+|---|---|---|
+| `postgres` | 1024m | смерть Postgres — каскадный отказ, потолок обязателен |
+| `neo4j` | 1408m | 512m heap + off-heap / page cache |
+| `clamav` | 1792m | сигнатуры (main+daily+bytecode) резидентно в RSS ≈1 GiB; ниже — циклический OOM |
+| `litellm` | 1280m + `--num_workers 1` | каждый воркер форкает свой Prisma query-engine; форк-штор и убивал VM |
+| `api` | 1152m | |
+| `minio` | 448m | Go-рантайм ~200 MiB даже без нагрузки |
+| `redis` | 192m | в простое ~5 MiB |
+| `mcp-*`, gateway | 256m | |
+
+Поднять потолок = снять его у соседа или дать Docker Desktop больше RAM; правка одного
+числа ломает инвариант суммы (регрессионный тест `tests/unit/test_container_hardening.py`).
+
+Там же, в `deploy/clamav/clamd-watchdog.sh`, — PID-1 надзиратель: официальный образ
+запускает `clamd` отсоединённым (`clamd --foreground &`) и оставляет PID 1 = `tail`,
+поэтому **мёртвый clamd не роняет контейнер**: статус остаётся `Up`, healthcheck проходит,
+а каждый upload висит до таймаута скана. Обёртка владеет `/init`, опрашивает TCP-порт
+`3310` и, потеряв демон *после* первой удачной готовности, гасит контейнер — дальше
+срабатывает `restart: unless-stopped`. Холодный старт (freshclam) не считается сбоем.
+
+```powershell
+# потолки и OOM-статус
+docker stats --no-stream --format "{{.Name}}: {{.MemUsage}} ({{.MemPerc}})"
+docker inspect palatium-ai-postgres-1 --format 'oom={{.State.OOMKilled}} restarts={{.RestartCount}}'
+# надзиратель на месте у clamav
+docker inspect palatium-ai-clamav-1 --format '{{json .Config.Entrypoint}}'
+# ожидается ["/bin/bash","/usr/local/bin/clamd-watchdog.sh"]
+```
+
+LiteLLM при холодном старте прогоняет `prisma migrate deploy` (≈2 мин) до открытия порта
+4000 — поэтому у его healthcheck `start_period: 180s`; более короткий grace-период роняет
+`up -d` сообщением `dependency litellm failed to start: container is unhealthy`.
 
 ### 3.8. `palatium_dev does not exist`
 
@@ -486,8 +625,18 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api up 
 ```
 
 В логе появится `otel.tracing.disabled reason='OTEL_ENDPOINT unset'`, ретраи прекратятся.
-Нужен реальный трейсинг — указать URL коллектора (например `http://otel-collector:4317`,
-см. `deploy/observability/`), а не `localhost`.
+
+Нужен реальный трейсинг — сначала поднимите OTLP-коллектор и trace-store, затем
+укажите его HTTP-endpoint (**порт 4318**, путь `/v1/traces`):
+
+```bash
+OTEL_ENDPOINT="http://otel-collector:4318"
+```
+
+> В `deploy/observability/` trace-store **нет** (только Prometheus/Grafana/Loki —
+> метрики и логи). Спан-данные туда отправлять некуда: см. комментарий в
+> `grafana/provisioning/datasources/datasources.yml`. Добавление Tempo/Jaeger —
+> отдельная задача. Порт 4317 — gRPC, HTTP-экспортёр его не использует.
 
 ### 3.15. `api` помечен `unhealthy` при живом `/health`
 
@@ -500,6 +649,119 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api up 
 docker compose --env-file env/.env --profile docker-mcp --profile docker-api up -d api
 docker inspect --format '{{.State.Health.Status}}' palatium-ai-api-1   # → healthy
 ```
+
+### 3.16. `POST /api/attachments/*` → 503 `Attachments are disabled`
+
+**Причина:** подсистема вложений выключена (`ATTACHMENTS_ENABLED="false"`) — роутер
+отвечает 503 вместо того, чтобы принять файл «как есть» (fail-closed, 020).
+
+```powershell
+# Что реально видит контейнер
+docker compose --env-file env/.env exec api env | Select-String "ATTACHMENTS_"
+
+# Что решил composition root при старте
+docker compose --env-file env/.env --profile docker-mcp --profile docker-api logs api --tail 200 |
+    Select-String "Attachments disabled|Attachment ports wired|AttachmentService wired"
+```
+
+Ожидаемо при выключенной подсистеме: `Attachments disabled (ATTACHMENTS_ENABLED=false)`
+и ни одной строки `AttachmentService wired`.
+
+**Фикс:** включить и пересоздать `api` (см. §16.2 для полного набора переменных).
+
+```powershell
+docker compose --env-file env/.env --profile docker-mcp --profile docker-api up -d --force-recreate api
+```
+
+### 3.17. `api` не стартует: `RuntimeError: ATTACHMENTS_...`
+
+Это **не баг**, а fail-closed guard'ы (020): половина конфигурации вложений — это
+несканированные файлы, доходящие до модели, либо потерянные после рестарта аплоады.
+Сообщение | Причина | Фикс:
+
+| Сообщение в логе | Причина | Фикс |
+|---|---|---|
+| `ATTACHMENTS_BLOB_BACKEND=memory is not allowed in 'staging'` | in-process store вне `development` | `ATTACHMENTS_BLOB_BACKEND="minio"` |
+| `ATTACHMENTS_SCANNER_BACKEND=disabled is not allowed in 'production'` | файлы дойдут до LLM без AV | `ATTACHMENTS_SCANNER_BACKEND="clamav"` |
+| `ATTACHMENTS_MINIO_SECURE must be true in 'staging'` | креды и байты по plaintext | `ATTACHMENTS_MINIO_SECURE="true"` |
+| `ATTACHMENTS_BLOB_BACKEND=minio requires ATTACHMENTS_MINIO_ACCESS_KEY and ATTACHMENTS_MINIO_SECRET_KEY` | pydantic-валидация конфига | заполнить оба секрета |
+| `ATTACHMENTS_MINIO_BUCKET must not be empty` | пустое имя бакета | задать имя бакета |
+| `ATTACHMENTS_SCANNER_BACKEND=clamav requires ATTACHMENTS_CLAMAV_HOST` | пустой хост сканера | задать `ATTACHMENTS_CLAMAV_HOST` |
+
+Режим определяется переменной `ENVIRONMENT` (`development` | `staging` | `production`);
+`development` — единственный, где `memory` + `disabled` разрешены.
+
+### 3.18. MinIO / ClamAV недоступны из API
+
+**MinIO.** Endpoint проверяется **на старте** (`ensure_bucket()`): неверный адрес/креды →
+`api` не поднимается, в логе ошибка S3/MinIO. Бакет создаётся автоматически, если его нет.
+
+```powershell
+Test-NetConnection -ComputerName localhost -Port 9000
+
+# Из контейнера: localhost = сам контейнер, для MinIO на хосте — host.docker.internal
+docker compose --env-file env/.env exec api `
+    python -c "import socket; socket.create_connection(('host.docker.internal', 9000), 3).close(); print('ok')"
+```
+
+**ClamAV.** Контактируется **в момент `complete`**, не при старте: мёртвый `clamd` не
+ломает boot, но каждый upload получает `status="quarantined"`,
+`rejection_reason="scan_failed"` (отличайте от реального детекта —
+`malware_detected`, `status="quarantined"`). В логе — `attachment refused by scanner`,
+в метриках — `error_type="pipeline_scan_failed"` (см. §16.7).
+
+```powershell
+Test-NetConnection -ComputerName localhost -Port 3310
+
+# Адрес должен быть доступен ИЗ контейнера, а не только с хоста
+docker compose --env-file env/.env exec api `
+    python -c "import socket; socket.create_connection(('host.docker.internal', 3310), 3).close(); print('ok')"
+```
+
+> `localhost` внутри контейнера — это сам контейнер. Если MinIO/ClamAV подняты на
+> хосте, используйте `host.docker.internal`; если они в той же compose-сети — имя
+> сервиса (`minio`, `clamav`). clamd объявлен в `docker-compose.yml` под профилем
+> `attachments`, S3-хранилище — под профилем `attachments-s3` (§16.9); внешние
+> сервисы подключаются через `env/.env` (см. §16.2).
+
+### 3.19. Redis/Valkey не стартует: `Can't handle RDB format version 12`
+
+**Симптом:** `redis` в цикле `Restarting (1)`, `make up` падает с
+`dependency failed to start: container … redis is unhealthy`, остальные сервисы живы.
+
+**Причина:** том `palatium_ai_palatium_redis` остался от **Redis 7.4**. Valkey — форк
+Redis 7.2.4 и **не читает RDB версии 12** (её пишет Redis 7.4+). При старте Valkey
+разбирает AOF-base именно как RDB, не может и отказывается подниматься:
+
+```text
+* Reading RDB base file on AOF loading...
+# Can't handle RDB format version 12
+# Error reading the RDB base file appendonly.aof.1.base.rdb, AOF loading aborted
+```
+
+**Это не потеря данных.** В Redis лежит только эфемерное состояние: checkpoint'ы LangGraph
+(TTL сессии, `session_ttl_seconds`), флаг kill-switch и состояние HITL-карточек. Содержимое
+тома нечитаемо в любом случае, поэтому единственный корректный шаг — удалить несовместимый AOF.
+
+**Фикс (одноразовый, при переходе Redis 7.4 → Valkey 8.x):**
+
+```powershell
+# Остановить только redis и снести несовместимый том
+docker compose --env-file env/.env stop redis
+docker rm -f palatium-ai-redis-1
+docker volume rm palatium-ai_palatium_redis
+
+# Поднять заново — Valkey создаст совместимый AOF
+docker compose --env-file env/.env up -d redis
+
+# Проверка: и healthy, и fail-closed политика на месте
+docker inspect palatium-ai-redis-1 --format '{{.State.Health.Status}}'
+docker exec palatium-ai-redis-1 valkey-cli config get maxmemory-policy   # → noeviction
+```
+
+> `maxmemory-policy noeviction` — не тюнинг, а часть контракта: при `allkeys-lru` ключ
+> `palatium:kill_switch:engaged` может быть вытеснен под давлением, и аварийная остановка
+> молча перестанет действовать (020, fail-closed). Не менять на `allkeys-*`.
 
 ---
 
@@ -628,6 +890,27 @@ docker compose exec postgres psql -U postgres -c "CREATE DATABASE langfuse;"
 > Init-скрипт `deploy/postgres/init/01-create-databases.sql` выполняется
 > **только** при пустом `PGDATA`. Если том уже был — БД `langfuse` создаётся
 > вручную (команда выше). См. [`docker.md`](docker.md) §9.
+
+### 6.1. Изоляция БД LiteLLM (отдельная БД, не `POSTGRES_DB`)
+
+`litellm` пишет свои таблицы Prisma-migrations и держит собственный `alembic`-head.
+Если он смотрит в основную БД приложения, его миграции конфликтуют с нашими: обе
+системы правят одну `alembic_version`. Поэтому у gateway **своя** БД:
+
+| Где | Ключ | Значение |
+|---|---|---|
+| `env/.env` (и профили) | `LITELLM_DB_URL` | `postgresql://<user>:<pw>@<host>:5432/litellm` |
+| `docker-compose.yml` | env `LITELLM_DB_URL` → `deploy/litellm/config.yaml` | `general_settings.database_url: os.environ/LITELLM_DB_URL` |
+
+```powershell
+# БД litellm создаётся init-скриптом; проверить, что gateway смотрит туда
+docker compose exec litellm env | Select-String LITELLM_DB_URL
+docker compose exec postgres psql -U postgres -c "\l" | Select-String litellm
+```
+
+> `LITELLM_DB_URL` **обязателен** и не имеет compose-дефолта намеренно: молчаливый
+> фолбэк на основную БД — это и есть баг, который он предотвращает. Пустое значение
+> в `env/.env` → контейнер `litellm` не стартует (fail-closed), а не пишет в чужую БД.
 
 ---
 
@@ -911,6 +1194,8 @@ Write-Host "Report saved: diag-report.txt" -ForegroundColor Green
 | 6379 | Redis | Docker |
 | 7474 / 7687 | Neo4j | Docker |
 | 3000 | Langfuse | Docker (profile) |
+| 9000 / 9001 | S3-хранилище вложений + консоль | Docker (profile `attachments-s3`, loopback) |
+| 3310 | clamd (AV) для вложений | Docker (profile `attachments`, loopback) |
 
 ---
 
@@ -924,6 +1209,468 @@ Write-Host "Report saved: diag-report.txt" -ForegroundColor Green
 5. **Логи — первое, куда смотреть.** `docker compose logs <service> --tail 50`.
 6. **`poetry check` перед build** — ловит ошибки `pyproject.toml` до Docker.
 7. **`docker compose config --quiet`** — валидация compose без запуска.
+
+---
+
+## 16. Вложения (attachments): storage, AV, TTL retention
+
+Подсистема принимает файлы пользователя (PDF/DOCX/изображения/CSV/текст), сканирует их,
+парсит и отдаёт в диалог **только фенсед-текст**; индексация в базу знаний — через
+HITL-карточку. По умолчанию выключена (`ATTACHMENTS_ENABLED="false"`).
+
+### 16.1. Где что лежит (слои 000)
+
+| Слой | Модуль | Ответственность |
+|---|---|---|
+| domain | `domain/attachments/{models,types,policies,content}.py` | агрегат `Attachment`, статусы, `AttachmentIntakePolicy`, `AttachmentRetentionPolicy` — чистые функции без I/O (055) |
+| ports | `domain/ports/{attachments,blob_store,document_parser,scanner}.py` | контракты репозитория, blob-store, парсера, AV |
+| infrastructure | `infrastructure/blob/` (MinIO / filesystem / in-memory), `infrastructure/scanning/` (ClamAV, disabled), `infrastructure/parsing/document_parser.py`, `infrastructure/database/attachment_repository.py` | адаптеры портов |
+| application | `application/services/attachment_service.py`, `application/services/attachment_pipeline.py` | use-cases + пайплайн scan→parse→injection-gate |
+| presentation | `presentation/api/routers/attachments.py` (mount: `presentation/app.py` → `/api/attachments`) | HTTP |
+
+- DI: `build_attachment_ports` / `build_attachment_limits` / `build_attachment_service`
+  (`application/wiring.py`).
+- БД: таблица `palatium_ai.attachments`, миграция
+  `alembic/versions/a9b8c7d6e5f4_add_attachments_table.py`,
+  `FORCE ROW LEVEL SECURITY` по `user_id` (060): app-роль физически не видит чужие строки.
+- Ключи в хранилище: `attachments/<attachment_id>` (оригинал) и
+  `attachments/<attachment_id>.text.json` (извлечённый текст). Имя файла в ключ не попадает.
+
+### 16.2. Включение
+
+| Переменная | Default | Смысл |
+|---|---|---|
+| `ATTACHMENTS_ENABLED` | `false` | мастер-выключатель; `false` → весь роутер отвечает 503 |
+| `ATTACHMENTS_BLOB_BACKEND` | `memory` | `memory` \| `filesystem` (оба dev/test) \| `minio` |
+| `ATTACHMENTS_FILESYSTEM_ROOT` | `.local/attachments` | корень для `filesystem` (в `.gitignore`) |
+| `ATTACHMENTS_MINIO_ENDPOINT` | `localhost:9000` | адрес S3-совместимого хранилища **для API** |
+| `ATTACHMENTS_MINIO_PUBLIC_ENDPOINT` | = `_ENDPOINT` | адрес, который подписывается в presigned URL для **браузера** (`http(s)://host[:port]` или `host:port`) |
+| `ATTACHMENTS_MINIO_ACCESS_KEY` / `_SECRET_KEY` | — | `[SECRET]`, обязательны для `minio`; те же значения уходят в контейнер как `MINIO_ROOT_USER`/`_PASSWORD` |
+| `ATTACHMENTS_MINIO_BUCKET` | `palatium-attachments` | создаётся на старте, если отсутствует |
+| `ATTACHMENTS_MINIO_SECURE` | `false` | TLS; **обязан** быть `true` вне development |
+| ~~`ATTACHMENTS_MINIO_IMAGE`~~ | — | **удалён**: образ store закреплён по tag+digest в `docker-compose.yml` (Silo). Значение из env молча перебивало бы пин (050); чтобы сменить store, правьте `image` сервиса `minio` |
+| `ATTACHMENTS_MINIO_API_PORT` / `_CONSOLE_PORT` | `9000` / `9001` | публикуемые порты (только loopback) |
+| `ATTACHMENTS_SCANNER_BACKEND` | `disabled` | `disabled` (dev/test) \| `clamav` |
+| `ATTACHMENTS_CLAMAV_HOST` / `_PORT` | `localhost` / `3310` | clamd (INSTREAM) |
+| `ATTACHMENTS_CLAMAV_TIMEOUT_SECONDS` | `30` | таймаут соединения и чтения ответа |
+| `ATTACHMENTS_MAX_SIZE_BYTES` | `52428800` (50 MiB) | лимит размера |
+| `ATTACHMENTS_MAX_PER_TURN` | `5` | лимит файлов на тред/ход **и** in-flight presigned PUT на тред (см. §16.4) |
+| `ATTACHMENTS_MAX_FILENAME_CHARS` | `200` | обрезка имени с сохранением расширения |
+| `ATTACHMENTS_PRESIGNED_TTL_SECONDS` | `900` | TTL presigned PUT |
+| `ATTACHMENTS_ATTACH_TTL_SECONDS` | `604800` (7d) | TTL для `mode=attach`, должен переживать тред |
+| `ATTACHMENTS_INDEX_RETENTION_DAYS` | `365` | TTL для `mode=index` |
+| `ATTACHMENTS_MAX_PARSED_CHARS` / `_PAGES` | `2000000` / `500` | границы парсинга |
+| `ATTACHMENTS_SWEEP_BATCH_SIZE` | `200` | строк за один retention-проход |
+| `ATTACHMENTS_IMAGE_OCR_BACKEND` | `disabled` | `disabled` \| `gateway`; `disabled` не подключает парсер картинок, и приём отклоняет `image/*` сразу (§16.3) |
+| `ATTACHMENTS_IMAGE_OCR_MODEL` | — | алиас vision-модели **в gateway** (напр. `tier-vision`, обязан быть в `model_list`); обязателен при `gateway` — иначе ошибка на старте (020) |
+| `ATTACHMENTS_IMAGE_OCR_MAX_BYTES` | `8388608` (8 MiB) | предел **исходных** байт, уходящих в модель (лимит приёма — 50 MiB) |
+| `ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS` | `120` | таймаут вызова vision-модели |
+
+> Хранилище: `minio` — любой S3-совместимый endpoint. Собственные реестры MinIO
+> **не отдают образы анонимно** — проверено 2026-09: Docker Hub `minio/minio` → denied,
+> Docker Hub `minio/mc` → denied, `quay.io/minio/minio` → no such manifest,
+> `ghcr.io/minio/minio` → 403, `bitnami/minio` → репозиторий пуст. Вдобавок upstream
+> **заархивировал** community-редакцию (репозиторий read-only) и 2026-09-11 удалил
+> `minio/minio` и `minio/mc` из Docker Hub. Прежний дефолт (`bitnamilegacy/minio`) — это
+> замороженное зеркало той же мёртвой линии: он запускается, но уже никогда не получит
+> security-фикс, что для runtime-зависимости запрещено (050). Поэтому профиль
+> `attachments-s3` поднимает **Silo** (`pgsty/silo`) — поддерживаемый форк того же
+> сервера (AGPLv3), с тем же контрактом `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`,
+> `server /data --console-address :9001` и `/minio/health/live` (проверено на
+> закреплённом дайджесте, не на словах). Образ пинится по tag+digest в
+> `docker-compose.yml`; чтобы сменить store на свой реестр — правьте `image` сервиса
+> `minio` там же.
+> Бакет Langfuse (`langfuse`) создаёт one-shot сервис `silo-init`: у API есть
+> `ensure_bucket()` на старте, у Langfuse такого вызова нет, и без бакета v3-инжест
+> падает при зелёных health-эндпоинтах.
+> Тем не менее локальная разработка не требует хранилища-контейнера: `filesystem`
+> переживает рестарт и вторую воркер-процесс, а `memory` оставляйте тестам — он живёт
+> в одном процессе, и при `UVICORN_WORKERS=2` `init` и `complete` попадают в разные
+> процессы, из-за чего загрузка «теряется». Если S3 нужен именно локально — профиль
+> `attachments-s3` и §16.9.
+> AV: `--profile attachments` поднимает clamd локально (§16.8). Адрес хранилища и clamd
+> должен быть доступен **из контейнера** API (§3.18): `host.docker.internal` для сервисов
+> на хосте, имя compose-сервиса для сервисов в той же сети.
+> Presigned PUT выполняет **браузер**, поэтому адрес хранилища задаётся дважды:
+> `ATTACHMENTS_MINIO_ENDPOINT` — как до него дотянуться из API, `_PUBLIC_ENDPOINT` — как
+> из браузера. SigV4 подписывает заголовок `Host`, поэтому готовый URL нельзя переписать
+> с одного имени на другое — API подписывает сразу публичный адрес (§16.4).
+> Для staging/production нужны реальный clamd и S3-совместимое хранилище с TLS (020).
+
+### 16.3. Что принимается (закрытый реестр, 070)
+
+`application/pdf` `.pdf` · `…wordprocessingml.document` `.docx` · `image/jpeg` `.jpg/.jpeg` ·
+`image/png` `.png` · `image/webp` `.webp` · `text/csv` `.csv` · `text/markdown` `.md` ·
+`text/plain` `.txt/.log`.
+
+Расширение обязано совпадать с заявленным MIME. Перечень — доменная константа
+`SUPPORTED_MEDIA_TYPES`; расширение = правка кода + ревью, а не настройка env.
+
+Статусы: `pending → uploaded → scanning → ready` (успех), либо `quarantined`
+(AV / инъекции), `rejected` (политика / парсинг), `expired`, `indexed`.
+
+**Способность, а не разрешение (055).** Intake-политика проверяет не только
+закрытый реестр, но и то, что для MIME реально подключён парсер. Картинки
+(`image/jpeg`, `image/png`, `image/webp`) не имеют текстового слоя, поэтому без
+`ATTACHMENTS_IMAGE_OCR_BACKEND=gateway` они **отвергаются на `init`**
+(`reason="mime_not_allowed"`), а не принимаются и падают позже на парсинге.
+Это осознанный fail-fast: пользователь видит отказ сразу, а не «файл загружен,
+но ничего не прочитано».
+
+### 16.4. Поток загрузки
+
+1. `POST /api/attachments/init` — intake-политика (размер, MIME↔расширение, лимит на тред,
+   санитайзинг имени) → строка + presigned PUT. Audit: `attachment_init`. Отказ политики —
+   400 и `palatium_agent_errors_total{error_type="intake_<reason>"}`.
+
+   Лимит на `init` считает **только in-flight** загрузки треда: `status='pending'` с
+   `created_at > now() - ATTACHMENTS_PRESIGNED_TTL_SECONDS`. Уже загруженные/готовые строки
+   слот не занимают — иначе abandon’нутый presigned PUT блокировал бы тред на весь
+   `ATTACHMENTS_ATTACH_TTL_SECONDS` (7d) с `turn_limit_exceeded`. Проверка и вставка строки
+   выполняются в одной транзакции под `pg_advisory_xact_lock` на `(user_id, thread_id)`,
+   поэтому параллельные `init` не могут проскочить лимит (race на READ COMMITTED).
+   Брошенные (`pending`, тикет уже истёк) строки освобождает retention-sweep, не дожидаясь 7 дней.
+2. Клиент кладёт байты в хранилище. Транспорт выбирается по схеме `upload_url`:
+   - `http(s)://…` — **presigned PUT напрямую** в хранилище (API байты не видит);
+   - другой scheme (`memory://`, `filesystem://`) — у хранилища нет своего HTTP-фасада,
+     поэтому клиент шлёт байты в `PUT /api/attachments/{id}/content`, где API сам пишет
+     объект (та же intake-политика, тот же лимит, тот же пайплайн на шаге 3).
+
+   Прокси-вариант нужен ещё и там, где хранилище недоступно из браузера (внутренняя сеть,
+   отсутствие CORS). Заголовок `Content-Length` не считается доказательством: API режет тело по
+   `ATTACHMENTS_MAX_SIZE_BYTES`, читая поток (превышение → 413).
+
+   **Два адреса хранилища.** Presigned URL подписывается на конкретный `Host` (SigV4), поэтому
+   адрес в URL — это адрес, по которому браузер обязан постучаться, и подменить его
+   reverse-proxy'ем или правкой строки нельзя: подпись перестанет сходиться. В compose-сети API
+   видит хранилище как `minio:9000`, а браузер — как `127.0.0.1:9000`, поэтому одного значения
+   не хватает:
+
+   | Переменная | Кто ходит | Пример |
+   |---|---|---|
+   | `ATTACHMENTS_MINIO_ENDPOINT` | API: `stat`, `read`, `write`, `ensure_bucket` | `minio:9000` (в контейнере) |
+   | `ATTACHMENTS_MINIO_PUBLIC_ENDPOINT` | браузер: presigned PUT/GET | `http://127.0.0.1:9000` |
+
+   `_PUBLIC_ENDPOINT` принимает `http(s)://host[:port]` (схема задаёт TLS для браузера) или
+   `host:port` (схема наследуется от `_SECURE`). Если не задан — оба адреса совпадают, как в
+   однохостовых установках. Подписывает отдельный клиент, который никогда не делает сетевых
+   вызовов: подпись — локальное вычисление, поэтому он может указывать на имя, resolv'ящееся
+   только у пользователя. В логе старта видно `presign_endpoint` — именно он попадает в URL.
+
+3. `POST /api/attachments/{id}/complete` — пайплайн:
+   `stat` объекта (размер и наличие берутся из хранилища, а не из заявленных клиентом) →
+   AV-scan → парсинг → prompt-injection gate (`UntrustedContentPolicy`) → fencing.
+   Audit: `attachment_completed`.
+4. Файл либо участвует в ходе диалога (§16.5), либо его индексация запрашивается через HITL.
+
+Отказы пайплайна:
+
+| `rejection_reason` | Статус | Что случилось |
+|---|---|---|
+| `not_uploaded` | rejected | presigned PUT не состоялся, объекта нет |
+| `size_invalid` / `size_exceeded` | rejected | объект пуст / превышает `ATTACHMENTS_MAX_SIZE_BYTES` |
+| `mime_not_allowed` | rejected | MIME вне реестра или парсер не зарегистрирован |
+| `parse_failed` | rejected | парсер не смог извлечь текст |
+| `malware_detected` | quarantined | сработала сигнатура clamd |
+| `scan_failed` | quarantined | clamd недоступен/не ответил — **не** вирус (§3.18) |
+| `injection_detected` | quarantined / rejected | сигнал prompt-injection (OWASP LLM01) |
+
+На этапе `init` добавляются `filename_invalid`, `extension_mismatch`, `turn_limit_exceeded`.
+
+### 16.5. API `/api/attachments` и инъекция в ход
+
+| Метод и путь | Код | Назначение |
+|---|---|---|
+| `POST /api/attachments/init` | 201 | intake + presigned PUT |
+| `PUT /api/attachments/{id}/content` | 200 | байты через API (когда у хранилища нет HTTP-фасада или оно недоступно из браузера); 413 при превышении лимита |
+| `POST /api/attachments/{id}/complete` | 200 | scan→parse→fence→persist |
+| `GET /api/attachments?thread_id=…` | 200 | вложения треда (перед чтением — ленивый retention) |
+| `GET /api/attachments/{id}` | 200 | одно вложение |
+| `POST /api/attachments/{id}/index` | 200 | одноразовая HITL-карточка; **ничего не пишет** |
+| `POST /api/attachments/sweep` | 200 | retention-проход по строкам вызывающего |
+| `DELETE /api/attachments/{id}` | 204 | строка + оба объекта |
+
+Ошибки: 404 `AttachmentNotFoundError`; 409 `AttachmentModeMismatchError` /
+`AttachmentNotUsableError`; 413 `AttachmentUploadTooLargeError` (прокси-загрузка сверх лимита);
+400 прочие типизированные; 503 подсистема выключена.
+Каждый запрос проверяет владельца треда (`load_session_for_principal`), и каждый запрос
+к репозиторию явно несёт `user_id` (060 — RLS не отменяет явный предикат).
+
+**Фенсинг.** Единственный путь текста вложения в диалог — `AttachmentService.build_turn_context`,
+который вызывается из `application/services/intent_service.py` и кладёт фенсед-блок
+(`<<<UNTRUSTED_TOOL_OUTPUT source=attachment:<filename>>>>` … `<<<END_UNTRUSTED_TOOL_OUTPUT>>>`)
+в state графа (`orchestration/state.py`). Усечение по бюджету сохраняет оба маркера фенса и вставляет
+`… [attachment context truncated N chars] …`, чтобы инструкция не спряталась за обрезкой.
+
+**HITL-индексация.** `POST /{id}/index` лишь создаёт карточку (`HITLCardView.without_secrets()`);
+запись в базу знаний (`platform.ingest_document`) происходит только после approve через
+`/api/hitl` (`execute_after_approval`). Audit: `attachment_index_requested` → `attachment_indexed`.
+
+### 16.6. Retention (TTL) и sweeper
+
+- Момент истечения: `expires_at` = now + `ATTACHMENTS_ATTACH_TTL_SECONDS` для `mode=attach`,
+  + `ATTACHMENTS_INDEX_RETENTION_DAYS` для `mode=index`. `expires_at IS NULL` — строка
+  не purg'ится никогда (ручное удаление владельцем).
+- Ленивая рекламация: `GET /api/attachments?thread_id=…` сначала делает retention-проход для
+  владельца, поэтому просроченное не показывается (и не ломает чтение при сбое — ошибка
+  считается метрикой, не исключением).
+- Явный проход: `POST /api/attachments/sweep` — **всегда per-owner**. Глобального крона нет
+  by design: `FORCE ROW LEVEL SECURITY` не даёт app-роли увидеть чужие строки. Для расписания
+  вызывайте sweep в контексте каждого владельца, а не «одной командой по всей таблице».
+- Один проход ограничен `ATTACHMENTS_SWEEP_BATCH_SIZE` (bounded: один залипший объект не
+  должен превращать запрос в бесконечный цикл удалений).
+- Удаляется: оригинал `attachments/<id>`, производный `attachments/<id>.text.json`, строка БД.
+  Если удаление объекта падает — строка **не** удаляется и попадёт в следующий проход (`failed`),
+  остальные строки прохода продолжают обрабатываться.
+- Отбор детерминирован: все строки прохода сравниваются с одним tz-aware UTC `now`
+  (`AttachmentRetentionPolicy.is_due`), поэтому живая строка не может быть purged из-за
+  пересчёта часов.
+- Audit: `attachment_expired` (reason `retention_expired`); метрика `retention_sweep_failed`.
+
+### 16.7. Наблюдаемость и проверка
+
+| Audit-событие | Когда |
+|---|---|
+| `attachment_init` | выдан presigned URL |
+| `attachment_received` | байты приняты через `PUT /{id}/content` (прокси-загрузка) |
+| `attachment_completed` | пайплайн завершён |
+| `attachment_deleted` | удаление владельцем |
+| `attachment_expired` | TTL-purge |
+| `attachment_index_requested` | создана HITL-карточка |
+| `attachment_indexed` | запись в базу знаний после approve |
+
+Метрики: `palatium_agent_errors_total{agent_type="attachments", error_type=…}`, где
+`error_type` ∈ `intake_<reason>` · `pipeline_<reason>` · `retention_sweep_failed` ·
+`retention_sweep_read_path_failed`.
+
+```powershell
+# Распределение статусов и причин отказов
+docker compose exec postgres psql -U postgres -d postgres -c "SELECT status, rejection_reason, count(*) FROM palatium_ai.attachments GROUP BY 1, 2 ORDER BY 3 DESC;"
+
+# Кандидаты на retention (UTC)
+docker compose exec postgres psql -U postgres -d postgres -c "SELECT id, mode, status, expires_at FROM palatium_ai.attachments WHERE expires_at IS NOT NULL AND expires_at <= now() ORDER BY expires_at LIMIT 20;"
+
+# Хвост решений пайплайна
+docker compose --env-file env/.env --profile docker-mcp --profile docker-api logs api --tail 200 |
+    Select-String "attachment refused|attachment.retention_sweep|AttachmentService wired"
+```
+
+Smoke-сценарий: `init` → `PUT` байтов по `upload_url` (или `PUT /{id}/content`, если схема
+не `http(s)`) → `complete` (ждём `status="ready"`) → `sweep`. Все вызовы — с JWT вызывающего
+и его собственным `thread_id`.
+
+### 16.8. Локальный запуск, веб-интерфейс и терминальные примеры
+
+Минимум для локальной проверки (host-профиль Poetry, `START.md` §4): в `env/.env`
+поставить `ATTACHMENTS_ENABLED="true"` и `ATTACHMENTS_BLOB_BACKEND="filesystem"`
+(каталог `ATTACHMENTS_FILESYSTEM_ROOT`, по умолчанию `.local/attachments`, в `.gitignore`).
+`memory` для этого сценария не годится при `UVICORN_WORKERS=2` — см. врезку в §16.2.
+
+AV локально поднимается отдельным профилем (в обычном `up` clamd не стартует):
+
+```powershell
+make attach-up                       # = --profile attachments up -d clamav
+# затем в env/.env: ATTACHMENTS_SCANNER_BACKEND="clamav", ATTACHMENTS_CLAMAV_HOST="localhost"
+docker compose --env-file env/.env --profile attachments up -d clamav   # то же самое вручную
+```
+
+**Одна команда на ядро + вложения:** `make up` (в меню — STACK → *Start stack*).
+Он поднимает базовый стек вместе с профилем `attachments`, а `attachments-s3` добавляет
+**только если образ хранилища доступен** (preflight, §16.9) — недоступный S3 не должен
+ронять уже работающий AV-путь. Профиль решает, какие контейнеры *запустить*, но не чем
+пользуется API: поэтому запуск идёт с оверлеями `docker-compose.attachments-av.yml` /
+`docker-compose.attachments-s3.yml`, чей `environment:` перебивает `env_file: env/.env` и
+переключает `ATTACHMENTS_SCANNER_BACKEND`/`ATTACHMENTS_BLOB_BACKEND` на clamav/minio.
+Набор флагов (профили **и** `-f`-оверлеи) целиком вычисляет
+`attachments_probe.py --compose-args` — та же функция, что печатает режим
+(`--mode --full`), поэтому «что подняли» и «чем пользуемся» не разъезжаются.
+Для S3 оверлей и профиль включаются/выключаются только вместе: API не может быть
+переключён на контейнер, который не стартовал. Если образ хранилища недоступен,
+оверлей S3 не грузится, и `--mode --full` печатает `blob_backend=filesystem` плюс причину.
+
+`make up` (и `make attach-*`) эти оверлеи **не** грузят: обычный dev остаётся на
+`filesystem`/`disabled` из `env/.env`, а CLI/SDK-путь Poetry — на тех же значениях.
+
+S3-хранилище локально не нужно вовсе; если оно всё же требуется — отдельный профиль
+`attachments-s3` и обязательный preflight образа (`make attach-s3-up`, §16.9).
+Проверить, что из трёх компонентов живо: `make attach-probe` (§16.9).
+
+Первый старт clamd занимает минуты (загрузка сигнатур в volume `palatium_clamav_db`).
+До готовности движка сканы падают fail-closed: `rejection_reason="scan_failed"`,
+статус `quarantined` — это **не** вирус (§3.18). Порт публикуется только на loopback
+(`127.0.0.1:${ATTACHMENTS_CLAMAV_PORT}`): у INSTREAM нет аутентификации, поэтому наружу
+его выставлять нельзя. API-контейнер получает `ATTACHMENTS_CLAMAV_HOST=clamav`
+(compose DNS), host-профиль — `localhost` из `env/.env`.
+
+Полный цикл руками (PowerShell, dev-JWT):
+
+```powershell
+$base  = "http://127.0.0.1:8000/api"
+$token = (Invoke-RestMethod -Method Post "$base/auth/dev-token" -ContentType application/json `
+    -Body '{"user_id":"user-dev","org_id":"org-default"}').access_token
+$h = @{ Authorization = "Bearer $token" }
+
+# 1) intake: политика + presigned URL
+$file = Get-Item .\docs\runbook.md
+$init = Invoke-RestMethod -Method Post "$base/attachments/init" -Headers $h -ContentType application/json `
+    -Body (@{
+        thread_id  = "thread-dev-1"
+        filename   = $file.Name
+        mime_type  = "text/markdown"
+        size_bytes = $file.Length
+        mode       = "attach"
+    } | ConvertTo-Json)
+
+# 2) байты: напрямую в хранилище либо прокси через API (по схеме upload_url)
+if ($init.upload_url -match '^https?://') {
+    Invoke-RestMethod -Method Put $init.upload_url -InFile $file.FullName `
+        -Headers @{ "Content-Type" = "text/markdown" }   # без Authorization: подпись уже в URL
+} else {
+    Invoke-RestMethod -Method Put "$base/attachments/$($init.attachment_id)/content" `
+        -Headers $h -InFile $file.FullName -ContentType "text/markdown"
+}
+
+# 3) пайплайн: ждём status="ready"
+Invoke-RestMethod -Method Post "$base/attachments/$($init.attachment_id)/complete" -Headers $h
+
+# 4) ход диалога с вложением
+Invoke-RestMethod -Method Post "$base/intents/process" -Headers $h -ContentType application/json `
+    -Body (@{
+        text           = "О чём этот файл?"
+        thread_id      = "thread-dev-1"
+        attachment_ids = @($init.attachment_id)
+    } | ConvertTo-Json)
+```
+
+Отказы видны сразу и типом, и текстом:
+
+```powershell
+# чужой/несуществующий id в ходу -> 404, а не тихое игнорирование
+Invoke-RestMethod -Method Post "$base/intents/process" -Headers $h -ContentType application/json `
+    -Body '{"text":"summary","thread_id":"thread-dev-1","attachment_ids":["11111111-2222-3333-4444-555555555555"]}'
+# недопустимый MIME на intake -> 400 intake_mime_not_allowed
+# тело больше ATTACHMENTS_MAX_SIZE_BYTES -> 413 (режется на чтении тела)
+```
+
+Веб-интерфейс: `npm run dev` в `web/` (Vite на `:5173`, `/api` проксируется на `:8000`).
+В композере есть скрепка и drag&drop; чипы показывают путь `uploading → ready`, а отказ —
+с причиной (`blocked: malware detected`, `blocked: antivirus unavailable`,
+`file type is not accepted`, …). Файл, прошедший пайплайн, остаётся привязанным к треду и
+уезжает в `attachment_ids` каждого хода, пока пользователь не снимет чип: `mode=attach`
+живёт `ATTACHMENTS_ATTACH_TTL_SECONDS` и переживает тред, иначе follow-up вопросы по файлу
+ломались бы на живом диалоге (§16.6).
+
+### 16.9. Локальное S3-хранилище (профиль `attachments-s3`)
+
+Локально хранилище-контейнер **не обязателен**: `ATTACHMENTS_BLOB_BACKEND="filesystem"`
+переживает рестарт и вторую воркер-процесс (§16.2) и не требует ни реестра, ни кредов.
+Профиль нужен, когда проверяется именно S3-путь: presigned PUT из браузера, поведение
+`ensure_bucket`, TTL объектов.
+
+**Состояние реестров (перепроверено 2026-09, `docker manifest inspect`).**
+Официальные образы MinIO не отдаются анонимно ни из одного своего реестра:
+
+| Ссылка | Ответ |
+|---|---|
+| `minio/minio` (Docker Hub) | denied — требуется аутентификация |
+| `minio/mc` (Docker Hub) | denied |
+| `quay.io/minio/minio` | no such manifest (любой тег, включая `:latest`) |
+| `quay.io/minio/mc` | no such manifest |
+| `ghcr.io/minio/minio` | 403 |
+| `bitnami/minio` | репозиторий пуст (0 тегов) |
+| `bitnamilegacy/minio:2024.12.18-debian-12-r0` | OK — но это зеркало мёртвой линии (upstream архивирован), security-фиксов не будет |
+| **`pgsty/silo:RELEASE.2026-09-16T00-00-00Z`** | **OK — текущий дефолт профиля (поддерживаемый форк)** |
+
+Контрольная проверка метода: на тех же запросах `clamav/clamav:1.5.4-debian` отдаётся
+анонимно, то есть отказы выше — именно ограничение доступа, а не блокировка клиента.
+Практический вывод: **образ MinIO надо брать из maintained-источника** — поэтому `image`
+сервиса `minio` закреплён в `docker-compose.yml` на Silo по tag+digest (050). Профиль
+`attachments-s3` по-прежнему отделён от `attachments`: недоступный образ не должен ломать
+уже работающий AV-путь, поэтому подъём идёт через preflight:
+
+```powershell
+# 1. Свой реестр: правка `image` сервиса `minio` в docker-compose.yml (tag + digest).
+make attach-s3-up     # preflight образа (image читается из compose) -> up -d minio
+# либо из меню: ATTACHMENTS -> Start S3 store (preflight встроен)
+#
+# Сразу с ядром стека: make up / меню STACK -> Start stack —
+# они добавляют attachments-s3 ровно тогда, когда preflight образа прошёл,
+# и вместе с ним грузят docker-compose.attachments-s3.yml, который и переключает
+# API на minio (иначе контейнер поднят, но «вхолостую», §16.8).
+```
+
+Если preflight вернул FAIL — это проблема доступа к реестру, а не compose; локально
+разумнее не тратить на неё время и остаться на `filesystem`.
+
+**Что не нужно делать.** Бакет создавать руками не надо: `build_attachment_ports` вызывает
+`ensure_bucket()` на старте и создаёт его при отсутствии. Неверный адрес или креды роняют
+`api` на boot, а не первый upload (020). Соответственно нет и шага «зайти в консоль и создать
+bucket» — если `api` поднялся, бакет уже есть. Единственное исключение — бакет Langfuse
+(`langfuse`): он нужен профилю `observability`, у Langfuse своего `ensure_bucket` нет,
+поэтому его создаёт one-shot сервис `silo-init` (у него в образе есть `mc`). Конкуренция за создание безопасна: воркеры
+поднимаются одновременно, и проигравший гонку получает `BucketAlreadyOwnedByYou`, что
+трактуется как успех (иначе процесс падал бы на штатной гонке — см. регрессионный тест
+`test_minio_ensure_bucket_tolerates_the_startup_create_race`).
+
+Что `silo-init` отработал, проверяет `attachments_probe.py` (проба `silo-init`): успех —
+`Exited (0)`, то есть «контейнер не запущен» здесь штатно, а провал bootstrap'а иначе
+незаметен — см. «Единая диагностика» ниже.
+
+**Про `exec` в контейнере.** Дефолтный образ — Debian-based Bitnami-сборка, поэтому шелл в
+нём **есть**, и листинг бакета работает без отдельного контейнера:
+
+```powershell
+docker exec palatium-ai-minio-1 mc ls local/
+```
+
+**Два адреса — обязательное условие.** Контейнеру API хранилище видно как `minio:9000`
+(compose переопределяет `ATTACHMENTS_MINIO_ENDPOINT`), а браузеру — как `127.0.0.1:9000`
+(опубликованный loopback-порт). `ATTACHMENTS_MINIO_PUBLIC_ENDPOINT` должен указывать на
+второй адрес, и именно **литералом `127.0.0.1`**, а не `localhost`: порт опубликован только
+на IPv4-loopback (020 — наружу не смотрит), а Windows резолвит `localhost` в `::1` первым
+и тратит ~2 с на фолбэк в IPv4 — то есть на каждом presigned PUT. Измерено на этом стенде:
+`localhost:9000` → 2072 мс, `127.0.0.1:9000` → 2 мс на коннект (типичный presigned PUT:
+2.07 с → 0.01 с). Иначе presigned PUT подписывается на недостижимый `Host`
+(например `minio:9000`), браузер такой хост не резолвит, и строка навсегда остаётся
+в `pending`. Переписать URL после подписи нельзя — SigV4 покрывает заголовок `Host`
+(§16.4). Проверить, что подставилось:
+
+```powershell
+docker compose --env-file env/.env --profile docker-api --profile attachments-s3 config `
+  | Select-String "ATTACHMENTS_MINIO"
+# ожидается: ENDPOINT=minio:9000, PUBLIC_ENDPOINT=http://127.0.0.1:9000
+# при старте api в логе: BlobStorePort: MinIO … presign_endpoint=http://127.0.0.1:9000
+```
+
+**Креды.** Значения `ATTACHMENTS_MINIO_ACCESS_KEY` / `_SECRET_KEY` уходят в контейнер как
+`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` — один источник истины вместо дублирующей пары
+переменных. Пароль короче 8 символов MinIO не примет; `make attach-s3-up` проверяет это до
+`up`, чтобы не поднимать контейнер с нерабочими кредами. Порт консоли опубликован только на
+loopback: своей авторизации, кроме root-кредов, у неё нет, а они кластерные (020).
+
+**Единая диагностика.** `make attach-probe` (или пункт `Probe attachments` в меню) проверяет
+компоненты по отдельности и печатает, что именно лежит:
+
+```powershell
+python scripts/attachments_probe.py            # API /health, clamd zPING, S3 /minio/health/live, silo-init
+python scripts/attachments_probe.py --preflight-image   # только проверка образа
+```
+
+Проверка clamd — не TCP-connect, а `zPING` с ожиданием `PONG`: clamd принимает соединение
+до загрузки сигнатур, и «порт открыт» не значит, что скан пройдёт (§16.4, `scan_failed`).
+
+**Проверка `silo-init`.** One-shot bootstrap обязан завершиться с кодом 0, и probe это
+проверяет отдельной пробой. Ломается он незаметно: `api` создаёт свой бакет сам, поэтому
+упавший bootstrap выглядит здоровым стеком, а `langfuse`-бакета при этом нет — и v3-инжест
+уходит в пустоту при зелёных health-эндпоинтах. Что важно при чтении статуса:
+
+- «не запущен» / `Exited (0)` у `silo-init` — **штатное** конечное состояние, а не сбой
+  (поэтому же readiness живёт в probe, а не в `docker compose up --wait`);
+- разовые контейнеры от `docker compose run silo-init` в вердикт не берутся: probe
+  отбирает только управляемый контейнер (`com.docker.compose.oneoff=False`), иначе ручной
+  прогон с ненулевым кодом заваливал бы `make up`;
+- при `--skip-s3` проба пропускается вместе с остальными проверками store — этот флаг
+  помечает прогон, который init-контейнер не пересоздаёт (`make rebuild-app`).
 
 ---
 

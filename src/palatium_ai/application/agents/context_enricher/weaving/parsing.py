@@ -15,8 +15,8 @@ def decode_context_weaver_input(input_context: dict[str, str], *, instruction: s
     return ContextWeaverInput(
         task_id=input_context["_task_id"],
         user_text=instruction,
-        task_kind=input_context["task_kind"],  # type: ignore[arg-type]
-        route=input_context["route"],  # type: ignore[arg-type]
+        task_kind=input_context["task_kind"],  # type: ignore[arg-type]  # context собран из Literal-реестра (017)
+        route=input_context["route"],  # type: ignore[arg-type]  # context собран из Literal-реестра (017)
         route_plan=input_context["route_plan"],
         requires_mcp=input_context.get("requires_mcp", "false").lower() == "true",
         candidate_capabilities=capabilities,

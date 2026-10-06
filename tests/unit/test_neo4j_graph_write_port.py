@@ -24,7 +24,7 @@ class _FakeWriteTransport:
         return None
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_upsert_fact_uses_parameterized_merge() -> None:
     transport = _FakeWriteTransport()
     port = Neo4jGraphWritePort(transport)
@@ -42,7 +42,8 @@ async def test_upsert_fact_uses_parameterized_merge() -> None:
     assert len(transport.calls) == 1
     cypher, params = transport.calls[0]
     assert "MERGE (f:MemoryFact" in cypher
-    assert "$user_id" in cypher and "$text" in cypher
+    assert "$user_id" in cypher
+    assert "$text" in cypher
     assert "alice" not in cypher  # no string concat of user data
     assert params["user_id"] == "alice"
     assert params["entry_key"] == "pref-duck"
@@ -52,7 +53,7 @@ async def test_upsert_fact_uses_parameterized_merge() -> None:
     assert params["source_namespace"] == "user/alice"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_upsert_fact_idempotent_stable_id() -> None:
     transport = _FakeWriteTransport()
     port = Neo4jGraphWritePort(transport)

@@ -19,7 +19,7 @@ from palatium_ai.domain.sla.gates import SlaGateResult, evaluate_p95_latency_ms,
 
 def _http_url(url: str) -> str:
     cleaned = url.strip()
-    if not (cleaned.startswith("http://") or cleaned.startswith("https://")):
+    if not cleaned.startswith(("http://", "https://")):
         raise ValueError(f"only http(s) URLs allowed, got: {url!r}")
     return cleaned.rstrip("/")
 

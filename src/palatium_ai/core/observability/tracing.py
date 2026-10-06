@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import inspect
 
 from collections.abc import Awaitable, Callable
 from functools import wraps
@@ -40,8 +40,10 @@ def traceable(*, name: str | None = None) -> Callable[[Callable[P, R]], Callable
                 logger.warning("trace.error", run_name=span_name, error=str(exc))
                 raise
 
-        if asyncio.iscoroutinefunction(func):
-            return async_wrapper  # type: ignore[return-value]
+        # ``asyncio.iscoroutinefunction`` is deprecated since 3.14 and removed in
+        # 3.16; ``inspect`` is the supported equivalent for plain async defs (050).
+        if inspect.iscoroutinefunction(func):
+            return async_wrapper  # type: ignore[return-value]  # overload декоратора; mypy не сводит (017)
 
         @wraps(func)
         def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:

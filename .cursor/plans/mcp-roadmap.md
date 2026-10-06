@@ -8,7 +8,7 @@ EDMS-адаптер Канцлера — отдельный трек: скилл
 
 ```
 Host (main.py :8000) = MCP client only
-  FastAPI · LangGraph · Harness · ToolRegistry · HITL · pins · audit
+  FastAPI · LangGraph · Harness · ToolExecutor · HITL · pins · audit
   MCPRegistry
     ├── platform  → discovery: static pins (SoT) · execute: PlatformToolHandler
     ├── edms      → HTTP FastMCP :8080 (discovery + execute)

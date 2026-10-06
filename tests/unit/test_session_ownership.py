@@ -93,7 +93,7 @@ def test_widget_href_rejects_javascript_and_relative() -> None:
         WidgetBlock(kind="edms_doc", ref_id="1", href="data:text/html,x")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_intent_process_rejects_foreign_thread_before_graph() -> None:
     session_service = SimpleNamespace(
         get_session=AsyncMock(

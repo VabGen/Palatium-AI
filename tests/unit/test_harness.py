@@ -46,7 +46,7 @@ _CONFIG = AgentConfig(
 )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_harness_execute_with_guardrails_success() -> None:
     harness = Harness()
     agent = _DomainAgent(harness, _CONFIG)
@@ -62,7 +62,7 @@ async def test_harness_execute_with_guardrails_success() -> None:
     assert output.confidence == 0.95
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_harness_execute_with_guardrails_blocks_secrets() -> None:
     harness = Harness()
     agent = _DomainAgent(harness, _CONFIG)

@@ -18,5 +18,12 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "tests",
+    "packages/contract/src",
+    "e2e",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ]
 }

@@ -103,7 +103,8 @@ docker compose up -d postgres redis neo4j litellm
 - MCP EDMS :8080 — Poetry
 - MCP Analytics :8081 — Poetry
 
-**Остановка:** `.\scripts\dev-down.ps1 -Force`
+**Остановка:** `.\scripts\dev-down.ps1 -Force` — только host-процессы; занятые Docker-ом
+8080/8081 скрипт не тронет (детали: [`START.md`](../START.md) §7).
 
 ---
 
@@ -428,14 +429,51 @@ TIER_FRONTIER_API_BASE: ${ANTHROPIC_BASE_URL}
 
 ### Langfuse (observability)
 
+Профиль `observability` поднимает Langfuse v3 = `clickhouse` + `langfuse-web` +
+`langfuse-worker` (+ `minio`/`silo-init` как хранилище трасс).
+
+**Память — главное ограничение.** Заявленные лимиты: core ~6016 MiB (postgres, redis,
+neo4j, litellm, api, minio, MCP) и observability ещё ~3328 MiB. Вместе ~9.1 GiB, поэтому
+`make up-full` требует VM не меньше ~9.1 GiB: поднимите `memory=12GB` в
+`%USERPROFILE%\.wslconfig` и перезапустите Docker Desktop. На дефолтной VM (~7.7 GiB)
+сработает VM-wide OOM killer — и первым он снимет самый крупный RSS (postgres уйдёт в
+crash-recovery). Именно поэтому профиль не входит в `make up`, а не «для чистоты».
+Этот бюджет закреплён тестом `tests/unit/test_container_hardening.py`.
+
+### Ожидание готовности в `make up` / `make up-full` / `make rebuild-app`
+
+Эти цели не просто делают `up -d`: следом они запускают
+`python scripts/attachments_probe.py --wait …` и падают с ненулевым кодом, если
+S3-хранилище, clamd или API не ответили за отведённое время (420 s для `up`/`up-full`,
+120 s для `rebuild-app`). До этого `make up` печатал «FAIL clamav» на исправно
+поднятом стеке: clamd грузит базу сигнатур до 5 минут (`start_period`), а проба
+выполнялась сразу после `up -d`.
+
+`docker compose up --wait` для этой роли не годится: у стека есть one-shot контейнер
+`silo-init` (создаёт бакеты и выходит с кодом 0), и compose считает любой вышедший
+контейнер провалом — на нём `--wait` отклонял полностью healthy запуск. Поэтому
+готовность определяют сами проверки, и повторно выполняются только те, что ещё не
+прошли (в `--wait 0`, т.е. у `make attach-probe`, поведение прежнее — один проход).
+
+Тот же one-shot проверяется отдельной пробой `silo-init`: она требует код выхода 0,
+потому что `api` создаёт свой бакет сам и упавший bootstrap иначе выглядел бы здоровым
+стеком без бакета `langfuse`. Статус `Exited (0)` (контейнер «не запущен») — ожидаемый
+конечный результат; разовые контейнеры `docker compose run silo-init` в вердикт не
+берутся.
+
 ```powershell
 # БД langfuse создаётся init-скриптом Postgres (см. §2.2).
 # Если том уже существовал — создайте вручную:
 docker compose exec postgres psql -U postgres -c "CREATE DATABASE langfuse;"
 
-# Поднять с профилем
-docker compose --env-file env/.env --profile observability up -d langfuse
+# Поднять только observability (поверх уже работающего стека)
+make obs-up
+# или вручную
+docker compose --env-file env/.env --profile observability up -d minio silo-init clickhouse langfuse-web langfuse-worker
 # UI: http://localhost:3000
+
+# Остановить (тома Langfuse/ClickHouse сохраняются; minio не трогаем — он общий с вложениями)
+make obs-down
 ```
 
 ### MCP Gateways (Docker-версия)

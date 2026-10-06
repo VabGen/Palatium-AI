@@ -27,12 +27,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AgentConfig",
-    "AgentId",
     "AgentContext",
+    "AgentId",
     "AgentInput",
     "AgentOutput",
     "BaseAgent",
-    "TaskResult",
     "ContextPacket",
     "ContextWeaverInput",
     "ContextWeaverOutput",
@@ -52,6 +51,7 @@ __all__ = [
     "SupervisorInput",
     "SupervisorOutput",
     "SupervisorTaskResult",
+    "TaskResult",
 ]
 
 _LAZY: dict[str, tuple[str, str]] = {

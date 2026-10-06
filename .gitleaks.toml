@@ -9,6 +9,28 @@ useDefault = true
 [allowlist]
 description = "Reviewed non-secret locations. Narrow on purpose — see comments."
 
+# Literal regexes for known-safe dummy strings that appear in docs, Makefile,
+# and shell scripts. These are NOT credentials: they are defaults from
+# env/.env.example, and any real deployment overrides them via env/.env.
+#
+# Rule: if a NEW dummy literal is added to docs/scripts, add it here with a
+# comment explaining its provenance. Never allowlist a value that could be a
+# real credential in any environment.
+regexTarget = "match"
+regexes = [
+  # LiteLLM master key default (env/.env.example → LITELLM_MASTER_KEY).
+  # Used in Makefile verify/test-tier targets and docs examples.
+  '''sk-palatium-master''',
+  # LiteLLM virtual key default for the app (env/.env.example → PALATIUM_GATEWAY_KEY).
+  '''sk-palatium-app''',
+  # Local MCP stub bearer token (env/.env.example → MCP_AUTH_TOKEN).
+  # Only valid for 127.0.0.1 stubs; never accepted by any real gateway.
+  '''dev-mcp-local-token''',
+  # Local MCP JWT secret placeholder (env/.env.example → MCP_JWT_SECRET).
+  # Fails the ≥32-char requirement check in prod; dev-only.
+  '''dev-mcp-jwt-secret-min-32-chars''',
+]
+
 # Path allowlist. Every entry is a place where a "secret-looking" literal is
 # structurally guaranteed to be a placeholder, never a credential.
 paths = [
@@ -21,4 +43,18 @@ paths = [
   '''tests/.*\.py$''',
   # Docs quote header/pattern names and sample shapes, not live values.
   '''docs/.*\.md$''',
+
+  # ↓ НОВЫЕ ENTRIES — добавлены после CI-находок 2026-09-25.
+  # Root-level docs that duplicate docs/ content (START.md, README.md).
+  # Same rationale as docs/: they quote curl examples with the dev default key.
+  '''^START\.md$''',
+  '''^README\.md$''',
+  # Makefile verify/test-tier targets and shell menu use the dev default key
+  # via a variable with fallback (LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-...}").
+  # The fallback is the same dummy as in env/.env.example.
+  '''^Makefile$''',
+  '''^scripts/menu\.sh$''',
+  # deploy/litellm/config.yaml contains a commented-out curl example that quotes
+  # the dev default key. Not a live value.
+  '''^deploy/litellm/config\.yaml$''',
 ]

@@ -64,7 +64,7 @@ description: >-
 2. **Одна ось — один владелец** — политики в `domain/policies/` (055), оси не смешивать.
 3. **Brain ≠ hands ≠ session** — `execute_with_guardrails` — единая точка (065); creds вне runtime (020).
 4. **Context budget** — smallest high-signal set; workers return condensed; JIT-ключи (065).
-5. **Tools/MCP** — >5 tools → обоснование в config.py (050); `ToolDefinition` (070); progressive disclosure; ACI = HCI.
+5. **Tools/MCP** — >5 tools → обоснование в config.py (050); контракт — frozen схема + `PlatformToolPin` (070); progressive disclosure; ACI = HCI.
 6. **Containment + HITL** — sandbox/RBAC (020, 070); карточки, не approve-fatigue; никогда не пропускать критичный HITL.
 7. **Incremental harness** — одна волна; clean handoff; «done» только с grader/E2E (075).
 8. **Лаконичность** — меньше веток/дублей; мёртвый код вон; имена слоёв выразительные.

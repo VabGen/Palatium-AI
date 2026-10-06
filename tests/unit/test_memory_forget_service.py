@@ -19,7 +19,7 @@ from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from tests.conftest import make_platform_mcp_registry
 
 
-@pytest.fixture
+@pytest.fixture()
 def memory_forget_stack() -> tuple[MemoryForgetService, InMemoryMemoryPort, HitlService]:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
@@ -28,7 +28,7 @@ def memory_forget_stack() -> tuple[MemoryForgetService, InMemoryMemoryPort, Hitl
     return service, port, hitl
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_forget_requires_hitl_before_delete(
     memory_forget_stack: tuple[MemoryForgetService, InMemoryMemoryPort, HitlService],
 ) -> None:
@@ -60,7 +60,7 @@ async def test_memory_forget_requires_hitl_before_delete(
     assert hits_after == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_forget_reject_discards_pending(
     memory_forget_stack: tuple[MemoryForgetService, InMemoryMemoryPort, HitlService],
 ) -> None:
@@ -85,7 +85,7 @@ async def test_memory_forget_reject_discards_pending(
     assert hits
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_hitl_respond_facade_runs_memory_forget_on_approve(
     memory_forget_stack: tuple[MemoryForgetService, InMemoryMemoryPort, HitlService],
 ) -> None:
@@ -126,7 +126,7 @@ async def test_hitl_respond_facade_runs_memory_forget_on_approve(
     assert hits == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_forget_rejects_foreign_user_scope(
     memory_forget_stack: tuple[MemoryForgetService, InMemoryMemoryPort, HitlService],
 ) -> None:

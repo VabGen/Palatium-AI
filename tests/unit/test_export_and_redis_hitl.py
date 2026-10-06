@@ -87,7 +87,7 @@ class _FakeRedis:
         return self.data.get(key)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_redis_hitl_store_roundtrip() -> None:
     fake = _FakeRedis()
     store = RedisHitlCardStore(fake)  # type: ignore[arg-type]

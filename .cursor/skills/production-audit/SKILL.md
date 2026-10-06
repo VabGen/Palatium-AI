@@ -47,7 +47,7 @@ description: >-
 ## RBAC / HITL
 
 ```
-[ ] RBAC allow-list проверяется в ToolRegistry/harness на каждый tool call,
+[ ] RBAC allow-list проверяется в ToolExecutor на каждый tool call,
     не дублируется в узлах (020, 070)
 [ ] HITL реализован: email / db-write / EDMS-write / графовые мутации /
     финансы / PII / code-exec / confidence < порога (020)

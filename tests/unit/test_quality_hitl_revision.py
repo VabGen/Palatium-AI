@@ -32,7 +32,7 @@ def test_quality_reject_option_is_revise_labeled() -> None:
     assert "revise" in reject.label.lower()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_revise_after_quality_reject_passes_feedback_to_graph() -> None:
     captured: dict[str, Any] = {}
 
@@ -89,7 +89,7 @@ async def test_revise_after_quality_reject_passes_feedback_to_graph() -> None:
     assert graph_input["user_text"] == "analyze the claim"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_revise_prefers_dialog_turn_over_context_preview() -> None:
     """Full utterance lives in DialogTurnStore; session.context may hold only a preview."""
     from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
@@ -155,7 +155,7 @@ async def test_revise_prefers_dialog_turn_over_context_preview() -> None:
     assert graph_input["user_text"] == full
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_revise_after_quality_reject_respects_limit() -> None:
     graph = MagicMock()
     graph.ainvoke = AsyncMock()

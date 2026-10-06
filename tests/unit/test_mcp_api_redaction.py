@@ -17,7 +17,7 @@ def test_redact_mcp_arguments_strips_secrets_and_truncates() -> None:
     )
     assert redacted["query"] == "договор"
     assert redacted["api_key"] == "[REDACTED]"
-    assert redacted["nested"]["access_token"] == "[REDACTED]"  # noqa: S105
+    assert redacted["nested"]["access_token"] == "[REDACTED]"
     assert isinstance(redacted["nested"]["note"], str)
     assert redacted["nested"]["note"].endswith("…[truncated]")
     assert "sk-should-not-leak" not in str(redacted)
@@ -30,7 +30,7 @@ def test_redact_mcp_content_truncates_text_blocks() -> None:
     assert out[0]["type"] == "text"
     assert out[0]["text"].endswith("…[truncated]")
     assert len(out[0]["text"]) < 600
-    assert out[0]["token"] == "[REDACTED]"  # noqa: S105
+    assert out[0]["token"] == "[REDACTED]"
 
 
 def test_unowned_session_not_claimable() -> None:

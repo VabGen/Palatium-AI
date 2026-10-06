@@ -27,7 +27,7 @@ from tests.conftest import (
     make_weaving_agent,
 )
 
-_HITL_HMAC = "unit-test-hitl-hmac-key-32b"  # noqa: S105
+_HITL_HMAC = "unit-test-hitl-hmac-key-32b"
 
 
 class _FakeSessionService:
@@ -41,7 +41,7 @@ class _FakeSessionService:
 
     async def get_session(self, **_kwargs: object) -> None:
         """Reply-locale lookup (065); no persisted session in unit tests."""
-        return None
+        return
 
 
 def _intent_service(graph: object) -> IntentService:
@@ -95,7 +95,7 @@ def _intent_stack(llm_intent: FakeLLMPort) -> tuple[Harness, IntentClassifierAge
     return harness, IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graph_classifies_intent_end_to_end() -> None:
     llm_intent = FakeLLMPort(
         '{"task_kind": "multi_step_workflow", "requires_mcp": true, "candidate_capabilities": ["orchestrate","tool_call"], "confidence": 0.88, "reasoning": "Requires multiple steps"}',
@@ -138,7 +138,7 @@ async def test_graph_classifies_intent_end_to_end() -> None:
     assert result.task_id == "task-graph-1"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graph_records_node_metrics() -> None:
     llm_intent = FakeLLMPort(
         '{"task_kind": "knowledge_request", "requires_mcp": false, "candidate_capabilities": ["summarize"], "confidence": 0.95, "reasoning": "General chat"}',
@@ -179,7 +179,7 @@ async def test_graph_records_node_metrics() -> None:
     assert agent_metrics.node_execution_count("formatter", "formatter_node") >= 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graph_skips_researcher_for_non_research_route() -> None:
     llm_intent = FakeLLMPort(
         '{"task_kind": "response_formatting", "requires_mcp": false, "candidate_capabilities": ["format"], "confidence": 0.9, "reasoning": "Formatting request"}',
@@ -212,7 +212,7 @@ async def test_graph_skips_researcher_for_non_research_route() -> None:
     assert len(llm_researcher.calls) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graph_social_skips_researcher_and_critic_llm() -> None:
     llm_intent = FakeLLMPort(
         '{"task_kind": "social_conversation", "requires_mcp": false, '
@@ -248,7 +248,7 @@ async def test_graph_social_skips_researcher_and_critic_llm() -> None:
     assert len(llm_formatter.calls) == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_process_returns_formatter_result() -> None:
     harness, intent_agent = _intent_stack(
         FakeLLMPort(
@@ -286,7 +286,7 @@ async def test_process_returns_formatter_result() -> None:
     assert isinstance(result.output.blocks[0], HeadingBlock)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_researcher_uses_mcp_registry_when_required() -> None:
     mcp_registry = FakeMCPRegistry()
     harness, intent_agent = _intent_stack(

@@ -1,29 +1,16 @@
-:root {
-  color-scheme: dark;
-  --bg: #0b0d10;
-  --bg-elevated: #12161c;
-  --bg-soft: #181e27;
-  --stroke: #2a3340;
-  --text: #e8edf4;
-  --text-muted: #93a0b4;
-  --accent: #3dbea0;
-  --accent-soft: rgba(61, 190, 160, 0.14);
-  --danger: #f07178;
-  --warning: #e6b450;
-  --success: #7fd99a;
-  --info: #6cb6ff;
-  --user-bg: #1c2430;
-  --shadow: 0 0 0 1px var(--stroke);
-  --font-sans:
-    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-  --font-display: 'Inter', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
-  --radius: 14px;
-}
+/*
+ * Токены дизайн-системы вынесены в `tokens.css` — он общий для приложения
+ * (`main.tsx`) и для виджета (Shadow DOM, где `:root` не матчится, нужен `:host`).
+ */
 
 * {
   box-sizing: border-box;
 }
+
+/*
+ * `html/body/#root` — только для приложения и стендов: внутри shadow tree этих
+ * элементов нет, виджет задаёт то же самое на `:host` (см. `widget.css`).
+ */
 
 html,
 body,
@@ -137,6 +124,14 @@ textarea {
   line-height: 1.5;
 }
 
+/* Обращение по имени: заметнее основного текста, но не заголовок.
+   Селектор с `p` — чтобы перебить `.empty p` по специфичности, а не `!important`. */
+.empty p.empty-greeting {
+  color: var(--text);
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
 .suggestions {
   display: flex;
   flex-direction: column;
@@ -151,13 +146,17 @@ textarea {
   padding: 12px 14px;
   cursor: pointer;
   transition:
-    border-color 0.15s ease,
-    background 0.15s ease;
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
 }
 
-.suggestion:hover {
-  border-color: var(--accent);
-  background: var(--bg-soft);
+/* Hover только там, где есть настоящий указатель: на тач-экране `:hover`
+   «залипает» после тапа и элемент выглядит активным без причины. */
+@media (hover: hover) and (pointer: fine) {
+  .suggestion:hover {
+    border-color: var(--accent);
+    background: var(--bg-soft);
+  }
 }
 
 /* ---- Сообщения ---- */
@@ -166,7 +165,7 @@ textarea {
   gap: 12px;
   max-width: 100%;
   align-items: flex-start;
-  animation: fadeSlide 0.3s ease forwards;
+  animation: fadeSlide var(--duration-slow) var(--ease-out) forwards;
   opacity: 0;
   transform: translateY(8px);
 }
@@ -259,21 +258,24 @@ textarea {
   padding: 4px 6px;
   border-radius: 6px;
   transition:
-    background 0.2s,
-    color 0.2s,
-    transform 0.1s;
+    background var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out),
+    transform var(--duration-press) var(--ease-out);
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
-.action-btn:hover {
-  background: var(--bg-soft);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .action-btn:hover {
+    background: var(--bg-soft);
+    color: var(--text);
+  }
 }
 
+/* 0.97, а не 0.9: «нажатие» должно читаться как отклик, а не как провал элемента. */
 .action-btn:active {
-  transform: scale(0.9);
+  transform: scale(0.97);
 }
 
 .action-btn.active {
@@ -361,16 +363,21 @@ textarea {
   font-size: 0.78rem;
   color: var(--text-muted);
   cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
 }
 
-.toolbar-btn:hover {
-  color: var(--text);
-  border-color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .toolbar-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+  }
 }
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   gap: 10px;
   align-items: end;
   background: var(--bg-elevated);
@@ -406,15 +413,17 @@ textarea {
   color: var(--text-muted);
   cursor: pointer;
   transition:
-    color 0.15s ease,
-    border-color 0.15s ease,
-    background 0.15s ease;
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
 }
 
-.memory-toggle:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--accent);
-  background: var(--accent-soft);
+@media (hover: hover) and (pointer: fine) {
+  .memory-toggle:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
 }
 
 .memory-toggle:disabled {
@@ -427,7 +436,7 @@ textarea {
 }
 
 .memory-chevron {
-  transition: transform 0.18s ease;
+  transition: transform var(--duration-base) var(--ease-in-out);
 }
 
 .memory-panel {
@@ -538,14 +547,16 @@ textarea {
   place-items: center;
   cursor: pointer;
   transition:
-    background 0.2s,
-    transform 0.1s,
-    opacity 0.2s;
+    background var(--duration-base) var(--ease-out),
+    transform var(--duration-press) var(--ease-out),
+    opacity var(--duration-base) var(--ease-out);
 }
 
-.send-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 80%, #fff);
-  transform: scale(1.02);
+@media (hover: hover) and (pointer: fine) {
+  .send-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 80%, #fff);
+    transform: scale(1.02);
+  }
 }
 
 .send-btn:active:not(:disabled) {
@@ -562,6 +573,142 @@ textarea {
   background: var(--bg-soft);
   color: var(--text-muted);
   pointer-events: none;
+}
+
+/* ---- Вложения (файл попадает в ход только после scan/parse, 020) ---- */
+.composer-stack.is-dragover .composer {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elevated));
+}
+
+.attach-btn {
+  border: 1px solid var(--stroke);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 12px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .attach-btn:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--stroke));
+  }
+}
+
+.attach-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.attachment-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid var(--stroke);
+  background: var(--bg-soft);
+  border-radius: 999px;
+  padding: 4px 6px 4px 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.attachment-chip.is-ready {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--stroke));
+  color: var(--text);
+}
+
+.attachment-chip.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--stroke));
+  color: color-mix(in srgb, var(--danger) 75%, var(--text));
+}
+
+.attachment-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.attachment-reason {
+  opacity: 0.85;
+}
+
+.attachment-remove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 2px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .attachment-remove:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+  }
+}
+
+.bubble-attachments {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bubble-attachments li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 240px;
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.bubble-attachments li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty-hint {
+  font-size: 0.82rem;
+  color: var(--text-muted);
 }
 
 /* ---- Стили блоков контента ---- */
@@ -878,6 +1025,27 @@ textarea {
   border-color: color-mix(in srgb, var(--danger) 50%, var(--stroke));
   color: var(--danger);
 }
+.composer-counter {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+  padding: 4px 12px 0;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.composer-counter--warn {
+  color: var(--warning);
+}
+
+.composer-counter--over {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.composer-textarea--over {
+  outline: 1px solid var(--danger);
+}
 
 /* ---- HITL карточки ---- */
 .hitl-stack {
@@ -885,6 +1053,21 @@ textarea {
   flex-direction: column;
   gap: 10px;
   margin-top: 14px;
+}
+/* Каскад появления: карточки «втекают» по очереди, а не появляются залпом.
+   Задержка нарастает с шагом 40 ms и не превышает 3-ю карточку — длинная
+   лестница заставила бы ждать последнюю. */
+.hitl-stack > .hitl-card {
+  animation: fadeSlide var(--duration-base) var(--ease-out) backwards;
+}
+.hitl-stack > .hitl-card:nth-child(2) {
+  animation-delay: 40ms;
+}
+.hitl-stack > .hitl-card:nth-child(3) {
+  animation-delay: 80ms;
+}
+.hitl-stack > .hitl-card:nth-child(n + 4) {
+  animation-delay: 120ms;
 }
 .hitl-card {
   border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--stroke));
@@ -1008,14 +1191,19 @@ textarea {
   background: color-mix(in srgb, var(--accent) 10%, var(--bg));
   color: var(--text);
   transition:
-    border-color 0.15s ease,
-    background 0.15s ease,
-    transform 0.12s ease;
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    transform var(--duration-press) var(--ease-out);
 }
-.action-card.action-choice:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
-  transform: translateY(-1px);
+@media (hover: hover) and (pointer: fine) {
+  .action-card.action-choice:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+    transform: translateY(-1px);
+  }
+}
+.action-card.action-choice:active:not(:disabled) {
+  transform: scale(0.99);
 }
 .action-card.action-choice:focus-visible {
   outline: 2px solid var(--accent);
@@ -1057,6 +1245,64 @@ textarea {
   }
 }
 
+/* ---- Лончер виджета ----
+ * База — здесь, а не в `widget.css`: тот загружается только внутри Shadow DOM,
+ * и в app-сборке кнопка осталась бы видимой без стилей. Показ в свёрнутом
+ * состоянии включает `widget.css` (о свёрнутости знает только виджет).
+ * `position: fixed` — поверх страницы-хоста, но координаты задаёт CSS СЭД
+ * через `::part(launcher)`: место в UI навязывает не виджет.
+ */
+.launcher {
+  display: none;
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2147483000;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 35%);
+  cursor: pointer;
+  transition:
+    transform var(--duration-press) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.launcher:active {
+  transform: scale(0.97);
+}
+
+.launcher:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .launcher:hover {
+    border-color: var(--accent);
+  }
+}
+
+/* ---- Индикатор фокуса (a11y) ----
+ * Один явный стиль на все интерактивные элементы вместо UA-дефолта: внутри
+ * Shadow DOM платформенный `-webkit-focus-ring-color` на тёмном фоне читается
+ * плохо, а в E2E «есть ли фокус» проверяется по конкретному `outline`, а не по
+ * цвету, который зависит от темы хост-страницы.
+ * `:where()` держит специфичность нулевой — собственные правила
+ * (`.action-card.action-choice`, `.launcher`) остаются приоритетнее.
+ * Только `:focus-visible`: мышь рамку не получает.
+ */
+:where(#palatium-root) :is(button, textarea, input, a[href], [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* ---- Адаптивность ---- */
 @media (max-width: 640px) {
   .shell {
@@ -1083,4 +1329,40 @@ textarea {
   .hitl-options-choice {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---- prefers-reduced-motion (скопированно, НЕ глобальный kill-switch) ---- */
+/*
+ * Популярный сниппет `* { animation-duration: 0.01ms !important }` ломает
+ * статус-индикаторы: спиннер замирает, и «работаю» становится неотличимо от
+ * «зависло». Поэтому гасим только ДВИЖЕНИЕ (transform/анимации появления),
+ * сохраняя прозрачность, цвет и индикаторы прогресса.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .msg,
+  .hitl-stack > .hitl-card {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .icon-animated {
+    animation: none;
+  }
+
+  /* Отклик на нажатие — тоже движение: убираем сдвиг, оставляя смену цвета. */
+  .action-btn:active,
+  .send-btn:active:not(:disabled),
+  .action-card.action-choice:active:not(:disabled),
+  .launcher:active {
+    transform: none;
+  }
+
+  .attachment-remove,
+  .memory-chevron {
+    transition: none;
+  }
+
+  /* СОХРАНЯЮТСЯ намеренно: `.spin` (индикатор загрузки) и `.typing-dots span`
+     (dotPulse) — без них пропадает единственный сигнал, что запрос выполняется. */
 }

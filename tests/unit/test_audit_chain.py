@@ -46,7 +46,7 @@ def test_missing_current_hash_raises(tmp_path: Path) -> None:
 
 def test_hmac_mac_when_secret_set(tmp_path: Path) -> None:
     path = tmp_path / "audit.log"
-    logger = AuditChainLogger(file_path=path, hmac_secret="unit-test-audit-hmac")  # noqa: S106
+    logger = AuditChainLogger(file_path=path, hmac_secret="unit-test-audit-hmac")
     record = logger.append(timestamp="t", conversation_id="c", event="e")
     assert record.integrity_mac is not None
     assert len(record.integrity_mac) == 64

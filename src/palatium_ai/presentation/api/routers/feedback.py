@@ -35,5 +35,7 @@ async def submit_feedback(
         feedback=req.feedback,
         org=req.org_id or principal.org_id,
     )
-    # TODO: Save feedback to database
+    # Feedback is logged but not persisted: like/dislike stops at the log line, so nothing
+    # can be aggregated, replayed into evals or attached to a turn by message_id later.
+    # TODO(platform/backend, plans/web-embed-assistant §5 п.17, 2026-09-30): store feedback in a table.
     return {"status": "ok"}

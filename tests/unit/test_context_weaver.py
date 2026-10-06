@@ -10,7 +10,7 @@ from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from tests.conftest import FakeMCPRegistry, run_context_weaver
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_context_weaver_returns_context_packet_and_execution_bundle() -> None:
     """ContextWeaver должен отдавать нормализованный packet и bundle."""
     task_input = ContextWeaverInput(

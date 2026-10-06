@@ -78,7 +78,7 @@ def test_effective_importance_treats_naive_timestamp_as_utc() -> None:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_recall_bumps_access_frequency() -> None:
     port = InMemoryMemoryPort()
     ns = thread_namespace("promo-t1")
@@ -94,7 +94,7 @@ async def test_recall_bumps_access_frequency() -> None:
     assert await port.bump_access(namespace=ns, key="duck") == 2  # recall bumped once → next is 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_promotion_batch_upserts_graph_and_marks() -> None:
     port = InMemoryMemoryPort()
     graph = InMemoryGraphWritePort()

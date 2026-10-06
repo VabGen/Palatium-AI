@@ -140,8 +140,7 @@ class ReplyLocalePolicy:
         """Drop code fences and URLs before script detection."""
         _ = cls
         cleaned = _CODE_FENCE.sub(" ", text)
-        cleaned = _URL.sub(" ", cleaned)
-        return cleaned
+        return _URL.sub(" ", cleaned)
 
     @classmethod
     def script_family(cls, text: str) -> ScriptFamily:
@@ -246,6 +245,5 @@ class ReplyLocalePolicy:
             parts.append(document.title)
         for block in document.blocks:
             parts.extend(_block_prose_parts(block))
-        for action in document.actions:
-            parts.append(action.label)
+        parts.extend(action.label for action in document.actions)
         return "\n".join(parts)

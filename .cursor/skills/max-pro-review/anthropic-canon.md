@@ -33,7 +33,7 @@ https://www.anthropic.com/engineering/multi-agent-research-system
 |---------|----------|
 | Lead планирует → spawn workers с чётким brief | Supervisor → researcher/coder/analyst |
 | Subagent returns **condensed** summary (1–2k tokens), не сырой dump | JIT `get_required_context_keys`, ContextBuilder (065) |
-| Heuristics: examine tools first; match intent; prefer specialized over generic | ToolRegistry allow-list, RBAC (070/020) |
+| Heuristics: examine tools first; match intent; prefer specialized over generic | `allowed_tools` + RBAC в `ToolExecutor` (070/020) |
 | Parallel when independent | Orchestration parallel edges (LangGraph) |
 | Coord complexity grows fast → prompt + eval | Continuity/Intent оси не смешивать (055) |
 
@@ -46,7 +46,7 @@ https://www.anthropic.com/engineering/managed-agents
 |------------|----------|----------|
 | **Session** | Durable append-only event log *outside* context window | LangGraph checkpointer / Redis (060 short-term) |
 | **Harness** | Loop: call model → route tools; cattle, `wake(sessionId)` | `execute_with_guardrails` (065) |
-| **Sandbox / hands** | `execute(name,input)→string`; credentials **never** in sandbox | MCP-инструменты через ToolRegistry (070), песочница для code-exec |
+| **Sandbox / hands** | `execute(name,input)→string`; credentials **never** in sandbox | MCP-инструменты через `ToolExecutor`/pins (070), песочница для code-exec |
 | Many brains / many hands | Provision hands only when needed (TTFT) | Progressive disclosure MCP/skills (065) |
 | Harness assumptions go stale | Interfaces outlast implementations | Порты в `domain/ports`, адаптеры в `infrastructure/` (000) |
 
@@ -125,7 +125,7 @@ https://www.anthropic.com/engineering/code-execution-with-mcp
 - PII вне модели → маскирование на выходе инструмента, secret scanner (020/070)
 - Персистентность рабочих паттернов → skills, не ad-hoc промпты
 
-→ ToolRegistry с discovery, а не preload-all; MCP через harness, не напрямую.
+→ Discovery через `MCPToolSummary` (без полной схемы), а не preload-all; MCP через harness, не напрямую.
 
 ### Advanced tool use (Nov 2025)
 https://www.anthropic.com/engineering/advanced-tool-use

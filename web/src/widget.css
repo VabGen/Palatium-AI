@@ -1,0 +1,65 @@
+/*
+ * Стили Shadow DOM-обёртки.
+ *
+ * Внутри shadow tree селекторы `html` и `body` не матчатся — всё, что в
+ * приложении задавалось на них (фон, типографика, градиенты), повторяем на `:host`.
+ * Значения токенов приходят из `tokens.css` (`:root, :host`).
+ */
+
+:host {
+  display: block;
+  height: 100%;
+  min-height: 420px;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  /* Виджет не должен зависеть от font-size и выравнивания страницы-хоста. */
+  font-size: 16px;
+  line-height: 1.6;
+  letter-spacing: normal;
+  text-align: start;
+  color: var(--text);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(61, 190, 160, 0.08), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(108, 182, 255, 0.06), transparent 50%), var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Свёрнутый вид: панель остаётся в DOM, но скрыта, а на её месте — кнопка-лончер. */
+:host([collapsed]) {
+  min-height: 0;
+}
+
+#palatium-root {
+  display: block;
+  height: 100%;
+}
+
+#palatium-root .widget-root {
+  height: 100%;
+}
+
+#palatium-root .shell {
+  height: 100%;
+}
+
+/*
+ * Лончер: базовые стили в `styles.css` (общие с приложением, где он всегда
+ * скрыт — сворачивать там нечего), условие показа — здесь, потому что о
+ * свёрнутом состоянии знает только виджет. Источник истины один — состояние
+ * панели в runtime-store (`.is-collapsed` на React-обёртке); атрибут
+ * `[collapsed]` на хосте — зеркало для CSS хоста, не второй переключатель.
+ */
+#palatium-root .widget-root.is-collapsed .launcher {
+  display: inline-flex;
+}
+
+/* Панель скрыта: `.is-collapsed` живёт на React-обёртке (источник истины —
+   runtime-состояние, а не атрибут), атрибут `[collapsed]` на хосте —
+   зеркало для CSS хоста и внешнего кода. */
+#palatium-root .widget-root.is-collapsed .shell {
+  display: none;
+}
+
+#palatium-root .widget-root.is-collapsed {
+  height: auto;
+}

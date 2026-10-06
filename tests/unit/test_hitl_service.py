@@ -17,7 +17,7 @@ from palatium_ai.domain.hitl.cards import HITLResolveRequest, clamp_ttl_seconds
 from palatium_ai.domain.hitl.risk_policy import HitlRiskPolicy
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 
-HITL_TEST_HMAC = "unit-test-hitl-hmac-key-32bytes!!"  # noqa: S105
+HITL_TEST_HMAC = "unit-test-hitl-hmac-key-32bytes!!"
 ACTOR = "user-owner"
 
 
@@ -53,7 +53,7 @@ async def _do_resolve(service: HitlService, card, body: HITLResolveRequest, *, a
     return await service.resolve(card.card_id, body, actor_subject=actor)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_create_and_resolve_card() -> None:
     service = _service()
     card = await service.create_review_card(
@@ -78,7 +78,7 @@ async def test_create_and_resolve_card() -> None:
     assert all(opt.action_token == "" for opt in result.card.options)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_idempotent_replay() -> None:
     service = _service()
     card = await service.create_review_card(
@@ -96,7 +96,7 @@ async def test_idempotent_replay() -> None:
     assert second.card.resolved_action_id == "reject"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_one_time_token_consume_rejects_replay_with_old_token() -> None:
     service = _service()
     card = await service.create_review_card(
@@ -120,7 +120,7 @@ async def test_one_time_token_consume_rejects_replay_with_old_token() -> None:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_subject_mismatch_rejected() -> None:
     service = _service()
     card = await service.create_review_card(
@@ -134,7 +134,7 @@ async def test_subject_mismatch_rejected() -> None:
         await service.resolve(card.card_id, _resolve(card), actor_subject="user-attacker")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_concurrent_resolve_second_loses_cas() -> None:
     store = InMemoryHitlCardStore()
     service = _service(store)
@@ -156,7 +156,7 @@ async def test_concurrent_resolve_second_loses_cas() -> None:
     assert stored.resolved_action_id == "approve"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_invalid_action_rejected() -> None:
     service = _service()
     card = await service.create_review_card(
@@ -178,7 +178,7 @@ async def test_invalid_action_rejected() -> None:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_forged_action_token_rejected() -> None:
     service = _service()
     card = await service.create_review_card(
@@ -200,7 +200,7 @@ async def test_forged_action_token_rejected() -> None:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_expired_high_risk_escalates() -> None:
     store = InMemoryHitlCardStore()
     service = _service(store)
@@ -226,7 +226,7 @@ async def test_expired_high_risk_escalates() -> None:
     assert all(len(opt.action_token) >= 32 for opt in closed.options)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_sweep_expired_escalates_high_risk_tenant_queue() -> None:
     store = InMemoryHitlCardStore()
     service = _service(store)
@@ -262,7 +262,7 @@ async def test_sweep_expired_escalates_high_risk_tenant_queue() -> None:
     assert scoped[0].org_id == "org-a"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_sweep_dead_letters_expired_escalated() -> None:
     store = InMemoryHitlCardStore()
     service = _service(store)
@@ -294,7 +294,7 @@ async def test_sweep_dead_letters_expired_escalated() -> None:
     assert await service.list_escalated(org_id="org-1") == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_get_card_lazily_dead_letters_expired_escalated() -> None:
     store = InMemoryHitlCardStore()
     service = _service(store)
@@ -312,7 +312,8 @@ async def test_get_card_lazily_dead_letters_expired_escalated() -> None:
     await store.save(card.model_copy(update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}))
     await service.sweep_expired()
     escalated = await store.get(card.card_id)
-    assert escalated is not None and escalated.status == "escalated"
+    assert escalated is not None
+    assert escalated.status == "escalated"
     await store.save(escalated.model_copy(update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}))
     viewed = await service.get_card(card.card_id)
     assert viewed is not None
@@ -320,7 +321,7 @@ async def test_get_card_lazily_dead_letters_expired_escalated() -> None:
     assert await service.list_escalated(org_id="org-1") == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_expire_cas_does_not_overwrite_resolved() -> None:
     """Sweep must not flip a card that resolved between read and expire write."""
     store = InMemoryHitlCardStore()
@@ -342,7 +343,7 @@ async def test_expire_cas_does_not_overwrite_resolved() -> None:
     assert stored.status == "resolved"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_manager_resolve_escalated_mcp_card() -> None:
     store = InMemoryHitlCardStore()
     service = _service(store)
@@ -378,7 +379,7 @@ async def test_manager_resolve_escalated_mcp_card() -> None:
     assert result.card.resolved_action_id == "approve"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_create_choice_card_stamps_tokens_and_risk_floor() -> None:
     service = _service()
     card = await service.create_choice_card(
@@ -408,7 +409,7 @@ def test_risk_policy_confirm_floor() -> None:
     assert HitlRiskPolicy.for_choice(actions) == pytest.approx(HitlRiskPolicy.CONFIRM_FLOOR)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_quality_review_stores_content_sha256() -> None:
     service = _service()
     card = await service.create_review_card(
@@ -422,7 +423,7 @@ async def test_quality_review_stores_content_sha256() -> None:
     assert len(card.content_sha256) == 64
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_forge_records_deny_metric() -> None:
     from palatium_ai.core.observability.metrics import agent_metrics
 
@@ -448,7 +449,7 @@ async def test_forge_records_deny_metric() -> None:
     assert agent_metrics.hitl_deny_count("forge") == before + 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_step_up_challenge_issues_assertion_when_enforced() -> None:
     service = HitlService(
         InMemoryHitlCardStore(),
@@ -492,7 +493,7 @@ async def test_step_up_challenge_issues_assertion_when_enforced() -> None:
     assert none_needed.method == "none"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_step_up_required_for_high_risk_mcp() -> None:
     from palatium_ai.domain.hitl.step_up import mint_hmac_step_up_assertion
 
@@ -531,7 +532,7 @@ async def test_step_up_required_for_high_risk_mcp() -> None:
     assert result.card.status == "resolved"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_escalate_notifies_oob_once() -> None:
     notices: list[object] = []
 
@@ -567,7 +568,7 @@ async def test_escalate_notifies_oob_once() -> None:
     assert len(notices) == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_chaos_concurrent_respond_and_sweep() -> None:
     """Owner resolve and sweep race: exactly one terminal writer wins."""
     import asyncio
@@ -612,7 +613,7 @@ def test_mcp_write_floor_applied() -> None:
     assert HitlRiskPolicy.for_mcp_tool(0.1) == pytest.approx(HitlRiskPolicy.MCP_WRITE_FLOOR)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_write_tool_approval_requires_org_id() -> None:
     service = _service()
     with pytest.raises(HitlInvalidActionError, match="org_id"):

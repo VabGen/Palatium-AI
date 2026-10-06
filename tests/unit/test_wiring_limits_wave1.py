@@ -51,7 +51,7 @@ def test_database_config_rejects_invalid_pool_size() -> None:
         _db_config(DB_POOL_SIZE="0")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_redis_client_applies_pool_and_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -81,7 +81,7 @@ async def test_redis_client_applies_pool_and_timeouts(monkeypatch: pytest.Monkey
     assert captured["socket_keepalive"] is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_llm_generate_forwards_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """OPENAI_TIMEOUT must reach acompletion; previously the field was dead config."""
     captured: dict[str, object] = {}

@@ -18,10 +18,15 @@ alwaysApply: true
    → вызывает `run()`. Агент НЕ дособирает контекст внутри `run()` (030.2).
    Расширение ключей «на всякий случай» — нарушение JIT; нехватка ключа →
    ошибка сборки, не тихий пропуск.
-2. Прогрессивное раскрытие: скиллы отдаются как метаданные (заголовок SKILL.md);
-   `reference.md` — только через tool call `skill_reference(name)` из ToolRegistry
-   (проходит RBAC и трассировку как обычный tool call). Side-channels мимо
-   Harness запрещены.
+2. Прогрессивное раскрытие для инструментов — реализовано:
+   `MCPToolSummary` (`domain/mcp/models.py`, `to_summary()`) отдаёт имя,
+   описание и имена свойств БЕЗ полной схемы; полная схема не греется при
+   discovery. Метаданные сервера в summary недоверенны: `side_effect` /
+   `risk_tier` берутся из платформенного пина (070), а не из самозаявления.
+   **Roadmap (не контракт):** прогрессивное раскрытие скиллов (заголовок
+   `SKILL.md` + `reference.md` через tool call `skill_reference(name)`) — не
+   реализовано: загрузки скиллов в `src/` нет. Side-channels мимо
+   Harness запрещены и для будущей реализации.
 3. Компакция: `ContextBuilder.compact()` при достижении 80% лимита.
    Лимит контекста — из реестра `core/types/model_registry.py`
    (`model_tier → context_limit_tokens`), не хардкод (050).
@@ -59,7 +64,7 @@ async def execute_with_guardrails(
     """Единая точка запуска агента из узла графа.
     Внутри (последовательность, НЕ дублировать по узлам):
     1. span узла (040)  2. сборка JIT-контекста  3. RBAC-фильтр инструментов
-    (020, ToolRegistry)  4. secret scan входа (020)
+    (020, ToolExecutor)  4. secret scan входа (020)
     5. agent.run() с timeout из AgentConfig  6. agent.verify()
     7. confidence gate (030.7)  8. метрики + лог.
     """

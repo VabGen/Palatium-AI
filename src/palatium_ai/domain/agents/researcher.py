@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from ..memory import DialogTurnWindow
+from palatium_ai.domain.memory import DialogTurnWindow
+
 from .context_packet import ContextPacket
 from .contracts import TaskResult
 

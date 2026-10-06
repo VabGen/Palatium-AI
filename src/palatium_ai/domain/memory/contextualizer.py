@@ -13,10 +13,10 @@ from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.types import ContinuationKind
 
 __all__ = [
-    "ContinuationKind",
     "ContextualizerInput",
     "ContextualizerOutput",
     "ContextualizerTaskResult",
+    "ContinuationKind",
 ]
 
 

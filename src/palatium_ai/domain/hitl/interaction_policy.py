@@ -33,11 +33,13 @@ PromotedFrom = Literal["actions", "list", "steps", "callouts", "none"]
 
 
 def _strategy_value(selected_strategy: ExecutionStrategy | str | None) -> str | None:
-    if selected_strategy is None:
-        return None
-    if isinstance(selected_strategy, str):
-        return selected_strategy
-    return selected_strategy.value
+    """Normalise a strategy to its raw string value.
+
+    ``ExecutionStrategy`` is a ``Literal[str, ...]`` alias, not an enum, so there is
+    no ``.value`` to unwrap — the parameter exists for callers that hold the alias
+    and for those that already carry a plain ``str`` (050: one honest shape).
+    """
+    return selected_strategy
 
 
 class HitlCardPlan(BaseModel):

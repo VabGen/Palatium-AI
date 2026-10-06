@@ -8,6 +8,8 @@ import os
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -126,10 +128,5 @@ def test_rs_auth_requires_hitl_signing_secret() -> None:
         jwks_url="https://example.com/.well-known/jwks.json",
         cors_origins="http://127.0.0.1:8000",
     )
-    try:
+    with pytest.raises(RuntimeError, match="HITL_SIGNING_SECRET"):
         security.require_auth_material()
-        raised = False
-    except RuntimeError as exc:
-        raised = True
-        assert "HITL_SIGNING_SECRET" in str(exc)
-    assert raised

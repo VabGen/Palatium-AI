@@ -43,8 +43,8 @@ def _action_request(card: object, *, action_id: str, idempotency_key: str) -> HI
     )
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_memory_consolidate_approve_runs_worker_then_search() -> None:
     consolidate, consolidation, _port, hitl, handler, _dialog = make_memory_consolidate_hitl_stack(
         llm_content=_KEEPER_PAYLOAD,
@@ -95,15 +95,16 @@ async def test_memory_consolidate_approve_runs_worker_then_search() -> None:
 
         assert int(payload["hit_count"]) >= 1
         hits = payload["hits"]
-        assert isinstance(hits, list) and hits
+        assert isinstance(hits, list)
+        assert hits
         assert "tables" in str(hits[0]["text"]).lower()
     finally:
         await consolidation.stop()  # type: ignore[attr-defined]
         await worker
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_memory_consolidate_reject_skips_worker() -> None:
     consolidate, consolidation, _port, hitl, handler, _dialog = make_memory_consolidate_hitl_stack(
         llm_content=_KEEPER_PAYLOAD,

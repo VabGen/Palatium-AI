@@ -49,6 +49,14 @@ repos:
 
   - repo: local
     hooks:
+      # Rule 086 — debt markers must carry owner/ticket/date. Fast, repo-wide, same script
+      # as CI: a bare note is cheapest to fix while it is being written.
+      - id: check-debt-markers
+        name: debt markers (086)
+        entry: python scripts/check_todos.py
+        language: system
+        pass_filenames: false
+
       # Rule 000 hexagonal contract — same checker CI runs, no extra dependency
       # (import-linter cannot currently be installed; see the script docstring).
       - id: check-import-layers

@@ -1,4 +1,5 @@
-import { fetchHitlCard } from '../api/client';
+import { ApiError, fetchHitlCard } from '../api/client';
+import { t } from '../i18n';
 import type { FormatterTaskResult, HITLCardView } from '../types/contentDocument';
 
 export function pendingHitlCards(cards: HITLCardView[] | null | undefined): HITLCardView[] {
@@ -29,11 +30,28 @@ export async function hydratePendingHitlCards(
   return cards.map(card => byId.get(card.card_id) ?? card);
 }
 
+/**
+ * Human-readable HITL failure.
+ *
+ * Решение принимается по СТАТУСУ (`ApiError`), а не по подстроке в тексте: сервер
+ * вправе вернуть `detail: "card expired"` без кода внутри, и тогда разбор по «410»
+ * молча перестаёт работать. Отдельный текст на каждый код нужен потому, что
+ * последствия у них разные: карточка уже отвечена, истекла или недоступна роли.
+ */
 export function formatHitlError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.status) {
+      case 403:
+        return t('hitl.error.forbidden');
+      case 409:
+        return t('hitl.error.alreadyAnswered');
+      case 410:
+        return t('hitl.error.expired');
+      default:
+        return err.message.slice(0, 400);
+    }
+  }
   const message = err instanceof Error ? err.message : String(err);
-  if (message.includes('409')) return 'This card was already answered.';
-  if (message.includes('410')) return 'This card has expired.';
-  if (message.includes('403')) return 'You are not allowed to act on this card.';
   return message.slice(0, 400);
 }
 
@@ -58,7 +76,9 @@ export function fieldsFromFormatterResult(result: FormatterTaskResult): Assistan
     _requiresReview: requiresReview,
     // Never a contentless "moderator" wait: HITL is cards on a draft, else it's a failure.
     _pendingReview: false,
-    error: emptyFailure ? result.error?.trim() || 'Empty response' : (result.error ?? undefined),
+    error: emptyFailure
+      ? result.error?.trim() || t('msg.emptyResponse')
+      : (result.error ?? undefined),
     status: emptyFailure ? 'failure' : result.status,
   };
 }

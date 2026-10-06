@@ -31,7 +31,7 @@ class BaseAgent(ABC):
 
     @abstractmethod
     def get_available_tools(self) -> list[str]:
-        """Имена инструментов; фильтруются RBAC в ToolRegistry (070)."""
+        """Имена инструментов; RBAC применяет ToolExecutor по allowed_tools (070)."""
 
     async def verify(self, output: AgentOutput) -> bool:
         """Семантическая самопроверка; False → partial + эскалация (030.7)."""

@@ -16,9 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.14"
 
@@ -28,14 +28,15 @@ jobs:
       - name: Install dependencies
         run: poetry install --with dev
 
-      # ruff + mypy --strict + full tests/ suite + coverage gates + SLA/evals.
+      # ruff + mypy --strict + tests/ suite (live/slow excluded: 075/080) + coverage gates + SLA/evals.
+      # Slow load tests live in perf-nightly.yml; `make perf` runs the same selection locally.
       # Coverage numbers surface in the job summary even when the gate is not pinned.
       - name: Quality baseline
         run: poetry run python scripts/ci_quality.py
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage
           path: artifacts/coverage.json
@@ -43,7 +44,7 @@ jobs:
 
       - name: Upload agent eval report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: agent-evals
           path: artifacts/agent_evals.json
@@ -53,12 +54,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history so the secret scan covers every commit, not just the tip.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.14"
 
@@ -74,6 +75,100 @@ jobs:
 
       # Secret scan: history-wide, blocking. Suppressions live in .gitleaks.toml.
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Конфигурация доставки (`082`): compose-файл — такой же артефакт, как образ, и его поломка
+  # (битый якорь, ссылка на несуществующий сервис, дрейф обязательной переменной между
+  # базовым файлом и оверлеями вложений) до сих пор обнаруживалась человеком на `make up`.
+  # Подставные значения секретов намеренно: проверяется интерполяция и структура, а не запуск
+  # стека — «прод-значений по умолчанию» здесь не появляется, они живут только в этом шаге.
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Validate compose files
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          CLICKHOUSE_PASSWORD: ci-placeholder
+          LANGFUSE_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+        run: |
+          cp env/.env.example env/.env
+          docker compose --env-file env/.env \
+            --profile docker-mcp --profile docker-api \
+            -f docker-compose.yml \
+            -f docker-compose.attachments-av.yml \
+            -f docker-compose.attachments-s3.yml \
+            config --quiet
+
+  # Frontend виджета (`web/`): сборка обязана быть воспроизводимой из CI, а не
+  # «у меня локально собирается». Гейты: типы, ESLint/Prettier, unit-тесты (Vitest),
+  # актуальность CEM, бюджет gzip, SRI-дайджест, E2E + a11y (Playwright/axe на
+  # `standalone.html`). Артефакт — то, что команда СЭД забирает в свой стенд.
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Быстрый слой (084): типы (widget + contract), ESLint (в т.ч. правила
+      # react-hooks, `--max-warnings 0`), проверка форматирования Prettier и
+      # unit/component/integration-тесты (Vitest + RTL + MSW на jsdom).
+      # Один скрипт `verify` — чтобы список команд CI и локальной проверки не разъезжался.
+      - name: Static analysis and unit tests
+        run: npm run verify
+
+      # CEM — публичный контракт элемента: расхождение с исходником = дрейф манифеста.
+      - name: Custom elements manifest is up to date
+        run: npm run cem:check
+
+      # Сборка падает сама, если пробит бюджет gzip или CEM невалиден.
+      - name: Build widget
+        run: npm run build:widget
+
+      - name: Verify SRI matches the artifact
+        run: npm run verify:widget
+
+      # Chromium ставится явно: в образе ubuntu-latest его нет, а E2E идёт против
+      # настоящего браузера (Shadow DOM, focus, axe внутри shadow root), не jsdom.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # E2E + a11y (axe, WCAG A/AA) на `standalone.html`: матрица состояний,
+      # проводной контракт, клавиатура и focus внутри Shadow DOM, reduced motion.
+      # Backend не нужен — `/api/**` и `/ws/**` перехватываются моками.
+      - name: E2E and accessibility gates
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report/
+            web/test-results/
+          if-no-files-found: ignore
+
+      - name: Upload widget artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: palatium-assistant-widget
+          # Бандл + release.json (SRI, размеры) + custom-elements.json — самодостаточный набор.
+          path: web/dist-widget/
+          if-no-files-found: error

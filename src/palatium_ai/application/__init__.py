@@ -6,4 +6,4 @@ from .bootstrap import AppResources, shutdown, startup
 from .services.intent_service import IntentService
 from .wiring import build_intent_service
 
-__all__ = ["AppResources", "startup", "shutdown", "IntentService", "build_intent_service"]
+__all__ = ["AppResources", "IntentService", "build_intent_service", "shutdown", "startup"]

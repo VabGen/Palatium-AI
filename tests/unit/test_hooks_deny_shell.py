@@ -16,7 +16,8 @@ _HOOK_PATH = _REPO_ROOT / ".cursor" / "hooks" / "deny-dangerous-shell.py"
 
 def _load_hook_module():
     spec = importlib.util.spec_from_file_location("deny_dangerous_shell", _HOOK_PATH)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["deny_dangerous_shell"] = module
     spec.loader.exec_module(module)

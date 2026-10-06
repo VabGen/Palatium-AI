@@ -61,7 +61,7 @@ def _security(*, auth_enabled: bool) -> SecurityConfig:
     )
 
 
-@pytest.fixture
+@pytest.fixture()
 def ws_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     security = _security(auth_enabled=True)
     app = FastAPI()

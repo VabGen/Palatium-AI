@@ -12,8 +12,8 @@ from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHan
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_postgres_search_memory_after_save(requires_database: str) -> None:
     engine = create_async_engine(requires_database)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

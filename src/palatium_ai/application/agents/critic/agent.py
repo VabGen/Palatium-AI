@@ -99,6 +99,7 @@ class CriticAgent(BaseAgent):
                         "selected_strategy": task_input.selected_strategy,
                         "continuation_kind": task_input.continuation_kind,
                         "context_summary": task_input.context_packet.context_summary,
+                        "attachment_context": task_input.context_packet.untrusted_context,
                         "classification_confidence": task_input.classification_confidence,
                         "classification_reasoning": task_input.classification_reasoning,
                         "route_plan": task_input.context_packet.route_plan,

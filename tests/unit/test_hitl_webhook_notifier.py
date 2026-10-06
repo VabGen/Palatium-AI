@@ -28,7 +28,7 @@ def _notice() -> HitlEscalationNotice:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_webhook_notifier_posts_json(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -61,7 +61,7 @@ async def test_webhook_notifier_posts_json(monkeypatch: pytest.MonkeyPatch) -> N
     assert calls[0]["json"]["event"] == "hitl_card_escalated"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_composite_continues_after_one_failure() -> None:
     ok_calls = 0
 

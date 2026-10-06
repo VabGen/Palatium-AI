@@ -1,0 +1,84 @@
+/**
+ * Токены дизайн-системы — единственный источник значений.
+ *
+ * `:root` — приложение (документ), `:host` — виджет внутри Shadow DOM.
+ * Внутри shadow tree `:root` не матчится, поэтому токены обязаны быть на `:host`,
+ * иначе виджет в СЭД останется без переменных (страница-хост их не определяет).
+ *
+ * Хост может переопределить любой токен снаружи: `palatium-assistant { --accent: … }` —
+ * правила внешнего документа имеют приоритет над `:host`.
+ */
+:root,
+:host {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --bg-elevated: #12161c;
+  --bg-soft: #181e27;
+  --stroke: #2a3340;
+  --text: #e8edf4;
+  --text-muted: #93a0b4;
+  --accent: #3dbea0;
+  --accent-soft: rgba(61, 190, 160, 0.14);
+  --danger: #f07178;
+  --warning: #e6b450;
+  --success: #7fd99a;
+  --info: #6cb6ff;
+  --user-bg: #1c2430;
+  --shadow: 0 0 0 1px var(--stroke);
+  /*
+   * Системный стек (план 2.6): Google Fonts не подключаем — виджет не должен
+   * ходить во внешнюю сеть. `Inter` остаётся первым: если хост его загрузил
+   * сам (СЭД), типографика подхватится без наших запросов.
+   */
+  --font-sans:
+    'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+    sans-serif;
+  --font-display: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 14px;
+
+  /* Motion: единая шкала длительностей и кривых (план 2.7).
+     `ease-out` для появления/исчезновения, `ease-in-out` для перемещения,
+     `ease-drawer` для панелей. `ease-in` на UI запрещён — старт кажется вялым. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-press: 120ms;
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+  --duration-drawer: 400ms;
+}
+
+/*
+ * Светлая тема — ТОЛЬКО явный opt-in, а не `prefers-color-scheme`.
+ *
+ * `prefers-color-scheme` описывает настройку ОС пользователя, а не тему
+ * приложения-хоста. Виджет живёт внутри СЭД (светлый Bootstrap): при тёмной ОС
+ * авто-переключение дало бы тёмный виджет в светлом интерфейсе. Правильный
+ * сигнал — тема хоста, поэтому её объявляет сам хост:
+ *
+ *   document.documentElement.dataset.theme = 'light'   → приложение
+ *   <palatium-assistant data-theme="light">            → виджет
+ *
+ * ⚠️ Палитра светлой темы требует визуальной проверки (гейт W8) — здесь она
+ * задана расчётно, без скриншотной сверки.
+ */
+:root[data-theme='light'],
+:host([data-theme='light']) {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --bg-elevated: #ffffff;
+  --bg-soft: #eef1f5;
+  --stroke: #d7dde5;
+  --text: #1a2029;
+  --text-muted: #5d6b7d;
+  --accent: #17866f;
+  --accent-soft: rgba(23, 134, 111, 0.1);
+  --danger: #c0392b;
+  --warning: #a86a00;
+  --success: #1f7a3f;
+  --info: #1f6fd0;
+  --user-bg: #e7ecf3;
+  --shadow: 0 0 0 1px var(--stroke);
+}

@@ -26,7 +26,7 @@ def test_mask_memory_value_redacts_flagged_text_fields() -> None:
     assert masked["kind"] == "fact"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_in_memory_search_masks_pii_hits() -> None:
     port = InMemoryMemoryPort()
     await port.put(

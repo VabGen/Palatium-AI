@@ -26,7 +26,7 @@ def test_chunk_text_paragraph_strategy() -> None:
     assert len(chunks) == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_text_ingestor_agent_via_harness() -> None:
     harness = Harness(llm=StaticLLMPort("{}"))
     agent = TextIngestorAgent(harness, TEXT_INGESTOR_CONFIG)
@@ -50,7 +50,7 @@ async def test_text_ingestor_agent_via_harness() -> None:
     assert output.output.chunking_strategy == "paragraph"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_text_ingestor_context_prefix_via_harness() -> None:
     llm = StaticLLMPort('{"prefixes": ["From policy section A.", "From policy section B."]}')
     harness = Harness(llm=llm)

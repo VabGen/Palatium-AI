@@ -1,15 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Palatium Chat</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <!--
+      Веб-шрифты здесь намеренно НЕ подключаются (план 2.6): виджет обязан
+      работать без внешних сетевых запросов — страница-хост СЭД сама решает,
+      какие шрифты загружать. Используется системный стек из `tokens.css`;
+      self-hosted `@font-face` — отдельная задача (нужны файлы и лицензия).
+    -->
   </head>
   <body>
     <div id="root"></div>

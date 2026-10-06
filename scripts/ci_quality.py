@@ -4,13 +4,14 @@
 Gates (in order):
   1. ruff        — lint + security selectors (``S``), whole repo (matches ``tox -e lint``).
   2. ruff format — formatting drift check (pyproject: ``ruff format .``).
-  3. layers      — hexagonal import contract from rule 000 (``scripts/check_import_layers.py``).
-  4. mypy        — ``--strict`` on the platform package.
-  5. pytest      — FULL ``tests/`` suite (not a hand-maintained file list) + coverage.
-  6. coverage    — ``domain/policies`` >= 90% (docs/max-pro-level-tz.md §13/§15).
-  7. SLA math    — budget gate arithmetic.
-  8. agent evals — deterministic baseline.
-  9. PyJWT       — conflict guard (``jwt`` must not shadow ``PyJWT``).
+  3. markers     — debt markers must be ``<MARKER>(owner, ticket, date): …`` (rule 086).
+  4. layers      — hexagonal import contract from rule 000 (``scripts/check_import_layers.py``).
+  5. mypy        — ``--strict`` on the platform package.
+  6. pytest      — ``tests/`` suite (``slow`` load tests deselected — 080/075) + coverage.
+  7. coverage    — ``domain/policies`` >= 90% (docs/max-pro-level-tz.md §13/§15).
+  8. SLA math    — budget gate arithmetic.
+  9. agent evals — deterministic baseline.
+  10. PyJWT      — conflict guard (``jwt`` must not shadow ``PyJWT``).
 
 SCA (pip-audit) lives in ``scripts/ci_security.py`` — separate CI job, separate concern.
 """
@@ -35,7 +36,9 @@ _POLICIES_COVERAGE_TARGET = float(os.environ.get("PALATIUM_COV_MIN_POLICIES", "9
 _GLOBAL_COVERAGE_TARGET = os.environ.get("PALATIUM_COV_MIN_GLOBAL", "").strip()
 _POLICIES_PATH_FRAGMENT = "/domain/policies/"
 # An async test without @pytest.mark.asyncio would be silently not-run under strict mode.
-_PYTEST_MARKER_EXPR = "not live and not llm_live"
+# `slow` is excluded on purpose (080, 075): load/scaling tests measure the *machine*, so
+# they belong to `make perf` / the nightly workflow, not the pull-request path.
+_PYTEST_MARKER_EXPR = "not live and not llm_live and not slow"
 
 
 def _run(title: str, argv: list[str]) -> None:
@@ -121,6 +124,9 @@ def main() -> int:
     # Formatting is part of the standard (pyproject: "poetry run ruff format .").
     # Enforced so it cannot silently drift between waves.
     _run("ruff format --check", ["poetry", "run", "ruff", "format", "--check", "."])
+    # Rule 086: a debt marker without owner/ticket/date is not a record. Cheap, whole-repo,
+    # and it fails only on malformed markers — age is reported, not gated (see the script).
+    _run("debt markers (086)", ["poetry", "run", "python", "scripts/check_todos.py"])
     # Rule 000: application/ must not import infrastructure/, core/ imports nothing, etc.
     # Standalone checker instead of import-linter — see scripts/check_import_layers.py.
     _run("import layers (000)", ["poetry", "run", "python", "scripts/check_import_layers.py"])
@@ -138,7 +144,7 @@ def main() -> int:
     _ARTIFACTS.mkdir(parents=True, exist_ok=True)
     coverage_report = _COVERAGE_JSON.relative_to(_ROOT).as_posix()
     _run(
-        "pytest (full tests/ + coverage)",
+        "pytest (tests/ minus live/slow + coverage)",
         [
             "poetry",
             "run",

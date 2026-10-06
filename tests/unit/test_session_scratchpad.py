@@ -136,7 +136,7 @@ def test_scratchpad_policy_slot_key_falls_back_to_digest_for_unsluggable_text() 
     assert SessionScratchpadPolicy.slot_key("??? !!!") == key
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_scratchpad_survives_anaphoric_recall_without_durable_hit() -> None:
     """Race regression: preference visible on next turn before MemoryKeeper persists."""
     port = InMemoryMemoryPort()
@@ -184,7 +184,7 @@ async def test_scratchpad_survives_anaphoric_recall_without_durable_hit() -> Non
     assert any("утк" in t.lower() for t in recall.hint_texts)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_recall_pins_scratchpad_ahead_of_durable() -> None:
     port = InMemoryMemoryPort()
     await port.put(

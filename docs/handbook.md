@@ -218,7 +218,10 @@ docker compose up -d postgres redis neo4j litellm
 - MCP EDMS :8080 — Poetry
 - MCP Analytics :8081 — Poetry
 
-**Остановка:** `.\scripts\dev-down.ps1 -Force`
+**Остановка:** `.\scripts\dev-down.ps1 -Force` — снимает только host-процессы. Если
+8080/8081 держат контейнеры (видно по `[skip] ... not a repo process`), Docker не
+трогается; `-Force` **не** отменяет эту защиту, для осознанного добивания чужого —
+`-AllowForeign` (подробно: [`../START.md`](../START.md) §7).
 
 ### 6.2. Docker-профиль
 

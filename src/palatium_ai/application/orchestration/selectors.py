@@ -13,7 +13,7 @@ from palatium_ai.domain.agents.supervisor import SupervisorTaskResult, WorkerRou
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
 from palatium_ai.domain.memory.tool_output import compress_worker_context
-from palatium_ai.domain.policies import ContinuityPolicy, EffectiveRoutingIntent
+from palatium_ai.domain.policies import ContinuityPolicy, EffectiveRoutingIntent, budget_untrusted_text
 
 _CONTEXT_PACKET_FACTORY = ContextPacketFactory()
 
@@ -229,21 +229,37 @@ def resolved_context_packet(
     """Возвращает ContextPacket из context bundle или синтезирует fallback."""
     context_bundle = state.get("context_bundle")
     if context_bundle is not None and context_bundle.output is not None:
-        return context_bundle.output.context_packet
+        packet = context_bundle.output.context_packet
+    else:
+        classification = classification_result(state)
+        effective = ensure_routing_intent(state)
+        packet = _CONTEXT_PACKET_FACTORY.from_state(
+            task_id=classification.task_id,
+            user_text=resolved_user_text(state),
+            classification=classification,
+            routing=routing_result(state),
+            fallback_strategy=fallback_strategy,
+            fallback_rationale=fallback_rationale,
+            effective_task_kind=effective.task_kind,
+            effective_requires_mcp=effective.requires_mcp,
+            effective_capabilities=effective.candidate_capabilities,
+        )
+    return _with_untrusted_context(packet, state)
 
-    classification = classification_result(state)
-    effective = ensure_routing_intent(state)
-    return _CONTEXT_PACKET_FACTORY.from_state(
-        task_id=classification.task_id,
-        user_text=resolved_user_text(state),
-        classification=classification,
-        routing=routing_result(state),
-        fallback_strategy=fallback_strategy,
-        fallback_rationale=fallback_rationale,
-        effective_task_kind=effective.task_kind,
-        effective_requires_mcp=effective.requires_mcp,
-        effective_capabilities=effective.candidate_capabilities,
-    )
+
+def _with_untrusted_context(packet: ContextPacket, state: AgentGraphState) -> ContextPacket:
+    """Attach this turn's fenced attachment text to the packet.
+
+    The ContextWeaver builds the packet before attachments are resolved, so the
+    block is merged here — the single place every consumer (researcher, critic,
+    formatter) reads the packet from. Text arrives already fenced by
+    AttachmentService; it is only budgeted, never re-wrapped or unwrapped (020).
+    """
+    untrusted = (state.get("untrusted_context") or "").strip()
+    if not untrusted:
+        return packet
+    budgeted = budget_untrusted_text(untrusted, max_chars=_prompt_budget(state).untrusted_context_max_chars)
+    return packet.model_copy(update={"untrusted_context": budgeted})
 
 
 def selected_strategy(state: AgentGraphState) -> ExecutionStrategy:

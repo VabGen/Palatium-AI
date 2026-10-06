@@ -25,8 +25,8 @@ def _approve_request(card: object) -> HITLResolveRequest:
     )
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_document_ingest_hitl_approve_then_search_knowledge() -> None:
     ingest, knowledge, hitl, _handler = make_document_ingest_stack()
     intent = AsyncMock()
@@ -77,8 +77,8 @@ async def test_document_ingest_hitl_approve_then_search_knowledge() -> None:
     assert search.hits[0].document_title == "Security Handbook"
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_document_ingest_hitl_reject_skips_knowledge_write() -> None:
     ingest, knowledge, hitl, _handler = make_document_ingest_stack()
     intent = AsyncMock()

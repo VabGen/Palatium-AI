@@ -22,7 +22,7 @@ from palatium_ai.presentation.api.routers import hitl as hitl_router
 from palatium_ai.presentation.middleware.auth import AuthMiddleware
 from palatium_ai.presentation.security.jwt import JwtTokenService
 
-HITL_HMAC = "unit-test-hitl-hmac-key-32bytes!!"  # noqa: S105
+HITL_HMAC = "unit-test-hitl-hmac-key-32bytes!!"
 
 
 def _doc(*, title: str = "Revised answer") -> ContentDocument:
@@ -50,7 +50,7 @@ def _security() -> SecurityConfig:
     )
 
 
-@pytest.fixture
+@pytest.fixture()
 def hitl_api_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, HitlService, AsyncMock, AsyncMock]:
@@ -92,7 +92,7 @@ def hitl_api_client(
     return TestClient(app), hitl_service, revise, acknowledge
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_quality_reject_respond_returns_resumed(
     hitl_api_client: tuple[TestClient, HitlService, AsyncMock, AsyncMock],
 ) -> None:
@@ -123,7 +123,7 @@ async def test_quality_reject_respond_returns_resumed(
     acknowledge.assert_not_awaited()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_quality_approve_respond_acks_without_resumed(
     hitl_api_client: tuple[TestClient, HitlService, AsyncMock, AsyncMock],
 ) -> None:

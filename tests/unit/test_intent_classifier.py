@@ -29,7 +29,7 @@ async def _classify(llm: FakeLLMPort, task_input: IntentClassifierInput):
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_intent_classifier_success() -> None:
     llm = FakeLLMPort(
         '{"task_kind": "knowledge_request", "requires_mcp": true, "candidate_capabilities": ["search","retrieve"], "confidence": 0.92, "reasoning": "User asks to find data"}',
@@ -46,7 +46,7 @@ async def test_intent_classifier_success() -> None:
     assert result.confidence == pytest.approx(0.92)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_intent_classifier_low_confidence_partial() -> None:
     llm = FakeLLMPort(
         '{"task_kind": "clarification_needed", "requires_mcp": false, "candidate_capabilities": [], "confidence": 0.4, "reasoning": "Ambiguous request"}',
@@ -61,7 +61,7 @@ async def test_intent_classifier_low_confidence_partial() -> None:
     assert result.output.task_kind == "clarification_needed"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_intent_classifier_invalid_json_failure() -> None:
     llm = FakeLLMPort("not json at all")
     result = await _classify(
@@ -74,7 +74,7 @@ async def test_intent_classifier_invalid_json_failure() -> None:
     assert result.error is not None
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_intent_classifier_user_choice_cap_owned_by_policy() -> None:
     llm = FakeLLMPort(
         '{"task_kind":"knowledge_request","requires_mcp":false,"requires_user_choice":false,'

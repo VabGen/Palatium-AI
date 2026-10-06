@@ -90,7 +90,7 @@ def test_builder_takes_roster_not_per_agent_arguments() -> None:
     """`build_agent_graph` accepts the registry, not one argument per agent (OCP guard)."""
     parameters = inspect.signature(build_agent_graph).parameters
 
-    assert list(parameters)[0] == "agents"
+    assert next(iter(parameters)) == "agents"
     assert set(list(parameters)[1:]) == {"harness", "checkpointer"}
     assert not any(name.endswith("_agent") for name in parameters), (
         "per-agent builder arguments are back — new agents would again require editing graph.py"

@@ -28,7 +28,7 @@ def _notice() -> HitlEscalationNotice:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_email_notifier_sends_via_smtp() -> None:
     notifier = EmailHitlNotifier(
         host="smtp.example",
@@ -36,7 +36,7 @@ async def test_email_notifier_sends_via_smtp() -> None:
         mail_from="hitl@example.com",
         mail_to=("ops@example.com",),
         username="u",
-        password="p",  # noqa: S106 — test fixture
+        password="p",
         use_tls=True,
     )
     smtp = MagicMock()
@@ -50,7 +50,7 @@ async def test_email_notifier_sends_via_smtp() -> None:
     smtp.send_message.assert_called_once()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_slack_notifier_posts_message(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
@@ -78,7 +78,7 @@ async def test_slack_notifier_posts_message(monkeypatch: pytest.MonkeyPatch) -> 
             return _Resp()
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
-    notifier = SlackHitlNotifier(bot_token="xoxb-test", channel="#hitl")  # noqa: S106
+    notifier = SlackHitlNotifier(bot_token="xoxb-test", channel="#hitl")
     await notifier.notify_escalation(_notice())
     assert captured["url"].endswith("chat.postMessage")
     assert captured["json"]["channel"] == "#hitl"

@@ -30,7 +30,7 @@ def coerce_bool(value: object) -> bool:
 
 def coerce_confidence(value: object, default: float) -> float:
     try:
-        confidence = float(value)  # type: ignore[arg-type]
+        confidence = float(value)  # type: ignore[arg-type]  # duck-typed coercion; isinstance сузил бы контракт (017)
     except TypeError, ValueError:
         return default
     if not math.isfinite(confidence):

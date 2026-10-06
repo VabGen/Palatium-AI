@@ -1,65 +1,61 @@
+# Packaging & dependency manifest.
+#   * runtime deps        -> [project].dependencies
+#   * optional feature sets -> [project.optional-dependencies] (published PEP 621 extras)
+#   * developer tooling     -> [dependency-groups] (PEP 735)
+# Environment management is Poetry; the resolved graph lives in `poetry.lock`.
+
 [project]
 name = "palatium-ai"
 version = "0.1.0"
 description = "Intellectual office assistant"
 readme = "README.md"
-# dynamic = ["classifiers"]
+requires-python = ">=3.14,<3.15"
 license = "MIT"
-# license-files = [
-#     "*-LICENSE",
-#     "CONTRIBUTORS",
-#     "MY-SPECIAL-LICENSE-DIR/**/*"
-# ]
-authors = [ {name = "VabGen",email = "VabGen@gmail.com"} ]
-# maintainers = [
-#     { name = "John Smith", email = "johnsmith@example.org" },
-#     { name = "Jane Smith", email = "janesmith@example.org" },
-# ]
-keywords = [ "ai", "edms", "automation", "assistant" ]
+license-files = ["LICENSE"]
+authors = [{ name = "VabGen", email = "VabGen@gmail.com" }]
+keywords = ["ai", "edms", "automation", "assistant"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Build Tools",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
-# requires-python = "~=3.14"
-requires-python = ">=3.14,<3.15"
-# === === === === === === === === === === === === === === === === === === === === === === === === === === === === poetry remove
-# === === === === === === A B C D E F G H I J K L M N O P Q R S T U V W X Y Z === === === === === === === === === poetry add
-# === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
-# ===============================================================================================================
+
 dependencies = [
     "alembic (>=1.19.1,<2.0.0)",
     "asyncpg (>=0.30.0,<0.40.0)",
-    "colorama (>=0.4.6,<0.5.0)",
     # Security floor: pip-audit flags cryptography <48 (PYSEC-2026-3552/3553/3554,
     # GHSA-537c-gmf6-5ccf) — the old `<47` bound pinned the project onto vulnerable
-    # releases with no way to raise it, so `scripts/ci_security.py` could never pass.
+    # releases, so `scripts/ci_security.py` could never pass.
     "cryptography (>=50.0.0,<51.0.0)",
     "fastapi (>=0.140.0,<0.150.0)",
+    # Exact pin on purpose: the MCP stubs and gateway subclass fastmcp internals
+    # (`build_http_app`, `PinAllowlistMiddleware`) and 4.x ships breaking changes.
+    "fastmcp (==4.0.0)",
     "fpdf2 (>=2.8.8,<3.0.0)",
     "httpx (>=0.28.0,<0.29.0)",
-    "jsonschema (>=4.25.0,<5.0.0)",
     "json-repair (>=0.63.4,<0.64.0)",
+    "jsonschema (>=4.25.0,<5.0.0)",
+    # Imported directly by `application/orchestration/run_config.py`.
+    "langchain-core (>=1.6.4,<2.0.0)",
+    "langfuse (>=3.0.0,<4.0.0)",
     "langgraph (>=1.2.10,<2.0.0)",
     "langgraph-checkpoint-postgres (>=2.0.0,<4.0.0)",
     "litellm (>=1.97.0,<2.0.0)",
-    "langfuse (>=3.0.0,<4.0.0)",
     # litellm >=1.97 requires openai>=2.20, so the old `openai (<2.0.0)` bound made the
     # whole project unresolvable: `poetry lock` / `poetry install` failed with
     # "version solving failed", i.e. the CI install step could never succeed.
-    # Widened to match what litellm actually requires (and what runs in the env).
     "openai (>=2.20.0,<3.0.0)",
     "opentelemetry-api (>=1.29.0,<2.0.0)",
     "opentelemetry-exporter-otlp-proto-http (>=1.29.0,<2.0.0)",
     "opentelemetry-sdk (>=1.29.0,<2.0.0)",
     "pgvector (>=0.3.6,<0.4.0)",
-    "prometheus_client (>=0.21.0,<1.0.0)",
+    "prometheus-client (>=0.21.0,<1.0.0)",
     "psycopg[binary,pool] (>=3.2.0,<4.0.0)",
     "py-consul (>=1.7.1,<2.0.0)",
     "pydantic (>=2.13.0,<3.0.0)",
@@ -67,18 +63,34 @@ dependencies = [
     "pyjwt (>=2.9.0,<3.0.0)",
     "redis (>=8.0.0,<9.0.0)",
     "sqlalchemy[asyncio] (>=2.0.50,<3.0.0)",
+    # Imported directly by `presentation/middleware/*` (was transitive via fastapi).
+    "starlette (>=1.7.0,<2.0.0)",
     "structlog (>=26.1.0,<27.0.0)",
     "tenacity (>=9.0.0,<10.0.0)",
-#    "typing (>=3.10.0.0,<4.0.0.0)",
     "uvicorn[standard] (>=0.50.0,<0.60.0)",
-    "fastmcp (==4.0.0)",
 ]
 
+# Optional feature sets (PEP 621 extras, published for `pip install palatium-ai[...]`).
+# `graph` / `attachments` are mirrored in [dependency-groups] because the tooling
+# invokes them as Poetry groups (`poetry install --with attachments`) — keep both
+# copies in sync when editing.
 [project.optional-dependencies]
-mysql = ["mysqlclient>=2.2.0,<3.0.0"]
-pgsql = ["psycopg2>=2.9,<3.0"]
-databases = ["mysqlclient>=2.2.0,<3.0.0", "psycopg2>=2.9,<3.0"]
+mysql = ["mysqlclient (>=2.2.0,<3.0.0)"]
+pgsql = ["psycopg2 (>=2.9,<3.0)"]
 graph = ["neo4j (>=5.28.0,<6.0.0)"]
+graphiti = ["graphiti-core (>=0.11.0,<1.0.0)"]
+# Attachment pipeline: object storage + local text extraction. Optional so the
+# core install stays lean.
+attachments = [
+    # Explicit pins of the extra's native transitive deps (python-docx -> lxml;
+    # minio -> argon2-cffi, pycryptodome) so `pip-audit` audits fixed versions.
+    "argon2-cffi (>=25.1.0,<26.0.0)",
+    "lxml (>=6.1.3,<7.0.0)",
+    "minio (>=7.2.0,<8.0.0)",
+    "pycryptodome (>=3.23.0,<4.0.0)",
+    "pypdf (>=6.0.0,<7.0.0)",
+    "python-docx (>=1.1.0,<2.0.0)",
+]
 
 [dependency-groups]
 test = [
@@ -89,40 +101,40 @@ test = [
     "pytest-cov (>=6.0.0,<9.0.0)",
     "pyyaml (>=6.0.0,<7.0.0)",
 ]
-lint = [
-    "ruff (>=0.16.0,<0.17.0)",
-]
+lint = ["ruff (>=0.16.0,<0.17.0)"]
 type-check = [
     "mypy (>=2.0.0,<3.0.0)",
-    "types-requests (>=2.32.0,<3.0.0)",
     "types-PyYAML (>=6.0.0,<7.0.0)",
-    "types-toml (>=0.10.0,<0.11.0)",
+    "types-requests (>=2.32.0,<3.0.0)",
 ]
-security = [
-    "pip-audit (>=2.7.0,<4.0.0)",
-]
+security = ["pip-audit (>=2.7.0,<4.0.0)"]
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
     { include-group = "type-check" },
     { include-group = "security" },
     # Upper bound kept below 4.60: tox >=4.60 requires `packaging>=26`, while
-    # `langfuse` (runtime dep, optional observability) caps `packaging<26` — the two
-    # together made `poetry lock` unsolvable. tox is local-only tooling (CI uses
-    # scripts/ci_quality.py), so the dev tool yields the bound.
+    # `langfuse` caps `packaging<26` — together they made `poetry lock` unsolvable.
+    # tox is local-only tooling (CI uses `scripts/ci_quality.py`), so it yields.
     "tox (>=4.20.0,<4.60.0)",
     # Mirrors the fast CI gates (.pre-commit-config.yaml).
     "pre-commit (>=3.5.0,<5.0.0)",
 ]
-graph = [
-    "neo4j (>=5.28.0,<6.0.0)",
+# Mirrors of the published extras — the tooling/docker invoke `--with graph|attachments`.
+graph = ["neo4j (>=5.28.0,<6.0.0)"]
+attachments = [
+    "argon2-cffi (>=25.1.0,<26.0.0)",
+    "lxml (>=6.1.3,<7.0.0)",
+    "minio (>=7.2.0,<8.0.0)",
+    "pycryptodome (>=3.23.0,<4.0.0)",
+    "pypdf (>=6.0.0,<7.0.0)",
+    "python-docx (>=1.1.0,<2.0.0)",
 ]
 
+# src-layout package. `mcp_servers/` is intentionally NOT packaged: the stubs ship
+# as separate images (mcp_servers/Dockerfile, PYTHONPATH=/app) — see docs/runbook.md.
 [tool.poetry]
-packages = [
-    { include = "palatium_ai", from = "src" },
-#    { include = "mcp_servers" },
-]
+packages = [{ include = "palatium_ai", from = "src" }]
 
 [project.urls]
 homepage = "https://github.com/your-org/palatium-ai"
@@ -130,82 +142,95 @@ repository = "https://github.com/your-org/palatium-ai"
 documentation = "https://github.com/your-org/palatium-ai/docs/"
 "Bug Tracker" = "https://github.com/your-org/palatium-ai/issues"
 
-# [project.scripts]
-# my_package_cli = 'my_package.console:run'
-
-# [project.gui-scripts]
-# my_package_gui = 'my_package.gui:run'
-
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
+requires = ["poetry-core>=2.2.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-# ===============================================================================================================
-
+# ── Ruff ────────────────────────────────────────────────────────────────────────
 [tool.ruff]
 line-length = 120
 target-version = "py314"
 
 [tool.ruff.lint]
 select = [
-    "E", "F", "W", "C90",                                           # базовые ошибки и сложность
-    "I",                                                            # сортировка импортов
-    "UP",                                                           # pyupgrade
-    "B", "SIM", "S",                                                # bugbear, simplify, безопасность
-    "D",                                                            # pydocstyle
-    "N",                                                            # именование
-    "TCH",                                                          # typing
+    "E", "F", "W", "C90",
+    "I", "UP", "B", "SIM", "S",
+    "D", "N", "TC", "DTZ", "T20", "BLE", "ASYNC",
+    "PT", "RUF", "RET", "PIE", "FURB", "PERF", "ERA", "PTH", "TID",
 ]
 ignore = [
-    "D100",  # missing docstring in public module
-    "D101",  # missing docstring in public class
-    "D102",  # missing docstring in public method
-    "D103",  # missing docstring in public function
-    "D104",  # missing docstring in public package
-    "D107",  # missing docstring in __init__
-    "D203",  # incompatible with D211
-    "D211",  # incompatible with D203
-    "D212",  # incompatible with D213
-    "D213",  # incompatible with D212
-    "D401",  # imperative mood (RU/EN mix in codebase)
-    "TC001",
-    "TC003",
+    "D100", "D101", "D102", "D103", "D104", "D107",
+    "D203", "D211", "D212", "D213", "D401",
+    "TC001", "TC003",
+    "PTH123",
 ]
 fixable = ["ALL"]
 
+# RUF001/002/003 flag characters that are visually confusable with ASCII. The
+# repo is RU/EN mixed, so Cyrillic letters inside Russian docstrings, prompts and
+# test fixtures are legitimate — but only for the specific homoglyphs below.
+# Allowlisting exactly those keeps the rule armed for everything else (Greek,
+# fullwidth, other look-alikes) instead of muting it repo-wide with `ignore` (050).
+#
+# The second line is empirical: ruff's confusable table also maps б→6, г→r, З→3,
+# so ordinary Russian words trip the rule with the "canonical" Cyrillic subset
+# alone. `–` (EN DASH) and `×` are Russian typography, not smuggling attempts.
+allowed-confusables = [
+    "А", "В", "Е", "К", "М", "Н", "О", "Р", "С", "Т", "У", "Х",
+    "а", "е", "о", "р", "с", "у", "х",
+    "б", "г", "З", "і", "–", "×",
+]
+
 [tool.ruff.lint.mccabe]
-# Explicit ratchet for `C90`: ruff's implicit default is 10, but an unpinned value
-# can drift with a tool upgrade and silently loosen the gate (050: no implicit config).
-# Lowering this is a deliberate, separate refactoring wave — at 8 the repo currently
-# reports 29 offenders, so 10 is the enforced baseline for this wave.
 max-complexity = 10
 
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = true
+mark-parentheses = true
+parametrize-names-type = "csv"
+parametrize-values-type = "tuple"
+raises-require-match-for = ["ValueError", "RuntimeError", "ValidationError"]
+
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106", "D", "E501", "TC001"]
+"tests/**/*.py" = [
+    "S101", "S105", "S106", "D", "E501", "TC001", "DTZ",
+    "PT011", "RUF012",
+]
 "alembic/**/*.py" = ["S608", "E501"]
 "mcp_servers/**/*.py" = ["C901"]
-"scripts/**/*.py" = ["C901"]
+"scripts/**/*.py" = ["C901", "T20", "BLE", "PTH"]
+".cursor/hooks/**/*.py" = ["T20", "BLE"]
+"src/palatium_ai/application/**/*.py" = ["BLE"]
+"src/palatium_ai/infrastructure/**/*.py" = ["BLE"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
 docstring-code-format = true
+docstring-code-line-length = "dynamic"
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
 force-wrap-aliases = true
 lines-between-types = 1
 
-# ===============================================================================================================
-
+# ── mypy ────────────────────────────────────────────────────────────────────────
+# The redundant flags of old configs (warn_return_any, disallow_untyped_defs,
+# disallow_any_generics, warn_unused_configs) are implied by `strict = true`.
 [tool.mypy]
 python_version = "3.14"
 strict = true
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-exclude = ["tests/", "build/", "dist/", ".venv/","mcp_servers/"]
+warn_unreachable = true
+show_error_codes = true
+show_column_numbers = true
+exclude = ["tests/", "build/", "dist/", ".venv/", "mcp_servers/"]
+# Required: the CI gate invokes `mypy --strict src/palatium_ai`, and without the
+# source root on the search path the same file resolves twice (`src.palatium_ai.…`
+# and `palatium_ai.…`) → "Source file found twice under different module names".
 mypy_path = ["src"]
 explicit_package_bases = true
 ignore_missing_imports = true
@@ -216,32 +241,55 @@ init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
 
-[tool.basedpyright]
-pythonVersion = "3.14"
-extraPaths = ["src", ".cursor/hooks"]
-
+# ── Pyright (read by Pylance / pyright; basedpyright reads its own table) ───────
 [tool.pyright]
 pythonVersion = "3.14"
 extraPaths = ["src", ".cursor/hooks"]
+include = ["src", "tests", "scripts"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "mcp_servers"]
+typeCheckingMode = "standard"
 
+# ── pytest ──────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:pkg_resources",
+    "ignore:^.*litellm.*:DeprecationWarning",
+]
 markers = [
     "live: hits a real LLM / network; opt-in via PALATIUM_LIVE_EVAL=1",
     "llm_live: live llm_judge evals; opt-in via PALATIUM_EVAL_LIVE_JUDGE=1",
     "integration: graph/service integration tests (fake LLM; no DATABASE_URL required)",
 ]
+log_cli = false
+log_cli_level = "INFO"
 
+# ── Coverage ────────────────────────────────────────────────────────────────────
 [tool.coverage.run]
 source = ["palatium_ai"]
-branch = false
+# Branch coverage on: a line that runs but takes only one side of an `if` is not
+# covered. Measured impact is ~3.8pp (line 79.9% -> combined 76.1%), and the
+# `fail_under` gate still has ~6pp headroom.
+branch = true
 omit = [
     "*/migrations/*",
     "*/alembic/*",
 ]
 
+[tool.coverage.paths]
+source = ["src/", "*/site-packages/"]
+
 [tool.coverage.report]
+fail_under = 70
 show_missing = true
 skip_covered = false
 exclude_lines = [
@@ -249,33 +297,9 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
+    # Protocol/ABC stub bodies are not executable statements: a bare `...` never
+    # fires a line event, so without this every port file reports phantom misses
+    # (`domain/ports/context_compact.py` at 0%). Behaviour is asserted by the
+    # adapters' tests, so excluding the stub keeps the report honest (050).
+    '^\s*\.\.\.\s*$',
 ]
-
-# [[tool.mypy.overrides]]
-# module = "langgraph"
-# ignore_missing_imports = true
-#
-# [[tool.mypy.overrides]]
-# module = "fastapi.*"
-# ignore_missing_imports = true
-
-# ===================================================================================================================
-
-# === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
-# === Линтинг и проверка форматирования - poetry run ruff check .                                              ~~ ===
-# === Автоисправление линтинга - poetry run ruff check --fix .                                                 ~~ ===
-# === Форматирование кода - poetry run ruff format .                                                           ~~ ===
-# === Проверка типов - poetry run mypy .                                                                       ~~ ===
-# === Запуск тестов - poetry run pytest . || poetry run pytest --cov=palatium_ai --cov-report=term-missing     ~~ ===
-# === poetry.lock & poetry install --with dev || poetry sync                                                   ~~ ===
-# === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
-
-# === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
-# === Установка Python - uv python install 3.14                                                                ~~ ===
-# === Синхронизация окружения - uv sync                                                                        ~~ ===
-# === Установка всех зависимостей  - uv sync --all-extras --all-groups || uv sync --group type-check           ~~ ===
-# === Обновит uv.lock до последних совместимых версий - uv lock --upgrade || uv lock --upgrade-package httpx   ~~ ===
-# === Сборка пакета: Создаст source и wheel дистрибутивы в папке dist/. - uv tree                              ~~ ===
-# === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
-
-# ===================================================================================================================

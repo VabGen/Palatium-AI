@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
+  ChevronDown,
   Copy,
   Download,
+  FileText,
   LoaderCircle,
+  Paperclip,
   RotateCw,
   SendHorizontal,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  X,
 } from 'lucide-react';
 import {
+  INTENT_TEXT_LIMIT,
+  deleteAttachment,
   downloadDocumentPdf,
   ensureAccessToken,
   fetchDialogTurns,
@@ -21,13 +27,27 @@ import type { ContentDocument, FormatterTaskResult, HITLCardView } from '../type
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
 import { connectSessionSocket, startSessionSocketPing } from '../lib/sessionSocket';
+import { formatNumber, t } from '../i18n';
+import { setPanelOpen, startNewThread as startNewThreadInRuntime } from '../runtime/store';
+import { useAssistantRuntime } from '../runtime/useRuntime';
+import {
+  ATTACHMENT_ACCEPT,
+  MAX_ATTACHMENTS_PER_TURN,
+  MAX_ATTACHMENT_LABEL,
+  attachmentRefusalReason,
+  formatAttachmentSize,
+  refusalLabel,
+  uploadAttachment,
+} from '../lib/attachments';
+import type { AttachmentDraft } from '../lib/attachments';
 import { BlockRenderer } from './BlockRenderer';
 import { HitlCards } from './HitlCards';
 import { MemoryActions } from './MemoryActions';
 
-const THREAD_STORAGE_KEY = 'palatium.thread_id';
-const USER_STORAGE_KEY = 'palatium.user_id';
-const ORG_STORAGE_KEY = 'palatium.org_id';
+/**
+ * Порог, за которым счётчик символов начинает подсвечиваться предупреждающе.
+ */
+const COUNTER_WARN_THRESHOLD = 2_000;
 
 type AssistantChatMessage = {
   id: string;
@@ -44,43 +64,16 @@ type AssistantChatMessage = {
   status?: string;
 };
 
-type ChatMessage = { id: string; role: 'user'; text: string } | AssistantChatMessage;
-
-function newThreadId(): string {
-  return `thread-${crypto.randomUUID()}`;
-}
-
-function resolveThreadId(): string {
-  try {
-    const stored = window.localStorage.getItem(THREAD_STORAGE_KEY);
-    if (stored && stored.startsWith('thread-')) return stored;
-  } catch {}
-  const created = newThreadId();
-  try {
-    window.localStorage.setItem(THREAD_STORAGE_KEY, created);
-  } catch {}
-  return created;
-}
-
-function resolveUserId(): string {
-  try {
-    const stored = window.localStorage.getItem(USER_STORAGE_KEY);
-    if (stored && stored.startsWith('user-')) return stored;
-  } catch {}
-  const created = `user-${crypto.randomUUID()}`;
-  try {
-    window.localStorage.setItem(USER_STORAGE_KEY, created);
-  } catch {}
-  return created;
-}
-
-function resolveOrgId(): string {
-  try {
-    const stored = window.localStorage.getItem(ORG_STORAGE_KEY);
-    if (stored && stored.startsWith('org-')) return stored;
-  } catch {}
-  return 'org-default';
-}
+type ChatMessage =
+  | {
+      id: string;
+      role: 'user';
+      text: string;
+      /** Ids actually injected into that turn, so a regenerate repeats the same context. */
+      attachmentIds?: string[];
+      attachmentNames?: string[];
+    }
+  | AssistantChatMessage;
 
 function isContentDocument(value: unknown): value is ContentDocument {
   return (
@@ -198,18 +191,111 @@ function buildAssistantMessage(result: FormatterTaskResult, id?: string): Assist
 }
 
 export function ChatShell() {
-  const [threadId] = useState(resolveThreadId);
-  const [userId] = useState(resolveUserId);
-  const [orgId] = useState(resolveOrgId);
+  // Идентификаторы приходят из runtime: в embed — из SedContext (`user.id`,
+  // `scope.tenantId`), автономно — из in-memory значений сессии. Storage запрещён.
+  const { userId, orgId, threadId, hostStatus, userName } = useAssistantRuntime();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [devMode, setDevMode] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
+  const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
+  const [dragActive, setDragActive] = useState(false);
   const messageEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const canSend = useMemo(() => input.trim().length > 0 && !busy, [input, busy]);
+  const uploading = attachments.some(chip => chip.status === 'uploading');
+
+  // ── Лимит символов ───────────────────────────────────────────────────────
+  const inputLength = input.length;
+  const inputRemaining = INTENT_TEXT_LIMIT - inputLength;
+  const overLimit = inputRemaining < 0;
+  const nearLimit = !overLimit && inputRemaining <= COUNTER_WARN_THRESHOLD;
+
+  const canSend = useMemo(
+    () => input.trim().length > 0 && !busy && !uploading && !overLimit,
+    [input, busy, uploading, overLimit]
+  );
+
+  const addFiles = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      const slots = MAX_ATTACHMENTS_PER_TURN - attachments.length;
+      if (slots <= 0) {
+        toast.error(t('toast.tooManyFiles', { count: MAX_ATTACHMENTS_PER_TURN }));
+        return;
+      }
+      if (files.length > slots) {
+        toast.error(t('toast.tooManyFiles', { count: MAX_ATTACHMENTS_PER_TURN }));
+      }
+
+      for (const file of files.slice(0, slots)) {
+        const refusal = attachmentRefusalReason(file);
+        if (refusal) {
+          toast.error(`${file.name}: ${refusal}`);
+          continue;
+        }
+
+        const localId = crypto.randomUUID();
+        setAttachments(prev => [
+          ...prev,
+          {
+            localId,
+            filename: file.name,
+            sizeBytes: file.size,
+            status: 'uploading',
+          },
+        ]);
+
+        void (async () => {
+          try {
+            const stored = await uploadAttachment(file, { threadId, userId, orgId });
+            // A refused file still exists as a row: it is shown with its reason
+            // instead of vanishing, so the user learns *why* it never reached a turn.
+            const failure = refusalLabel(stored);
+            setAttachments(prev =>
+              prev.map(chip =>
+                chip.localId === localId
+                  ? {
+                      ...chip,
+                      serverId: stored.attachment_id,
+                      status: failure ? 'failed' : 'ready',
+                      error: failure ?? undefined,
+                    }
+                  : chip
+              )
+            );
+            if (failure) toast.error(`${stored.filename}: ${failure}`);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : t('toast.uploadFailed');
+            setAttachments(prev =>
+              prev.map(chip =>
+                chip.localId === localId ? { ...chip, status: 'failed', error: message } : chip
+              )
+            );
+            toast.error(`${file.name}: ${message.slice(0, 160)}`);
+          }
+        })();
+      }
+    },
+    [attachments.length, threadId, userId, orgId]
+  );
+
+  const removeAttachment = useCallback(
+    (localId: string) => {
+      const chip = attachments.find(item => item.localId === localId);
+      if (chip?.serverId) {
+        // Best effort: rows carry a TTL and a sweep reclaims them, so a failed
+        // delete must never block the composer (060).
+        void deleteAttachment(chip.serverId, userId, orgId).catch(() => {
+          toast.error(t('toast.deleteFailed'));
+        });
+      }
+      setAttachments(prev => prev.filter(item => item.localId !== localId));
+    },
+    [attachments, userId, orgId]
+  );
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -331,7 +417,7 @@ export function ChatShell() {
         })
       );
       if (resumed?.output) {
-        toast.success('Продолжаем после вашего выбора');
+        toast.success(t('toast.resuming'));
       }
     },
     []
@@ -360,14 +446,36 @@ export function ChatShell() {
 
   async function send() {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || uploading) return;
+
+    // Дублируем клиентскую валидацию из `processIntent` — здесь она защищает
+    // от случайного сабмита по Enter при вставке слишком длинного текста.
+    if (input.length > INTENT_TEXT_LIMIT) {
+      toast.error(
+        t('error.messageTooLong', {
+          used: formatNumber(input.length),
+          limit: formatNumber(INTENT_TEXT_LIMIT),
+        })
+      );
+      return;
+    }
+
+    const outgoing = attachments.filter(chip => chip.status === 'ready' && chip.serverId);
+    const attachmentIds = outgoing.map(chip => chip.serverId as string);
+    const attachmentNames = outgoing.map(chip => chip.filename);
     setInput('');
     setBusy(true);
+    // Файлы уже уехали в этот ход: снимаем чипы, иначе тот же файл молча ушёл бы
+    // ещё раз со следующим сообщением. Неудачные оставляем — их причину надо видеть.
+    setAttachments(prev => prev.filter(chip => chip.status !== 'ready'));
     const userMsgId = crypto.randomUUID();
-    setMessages(prev => [...prev, { id: userMsgId, role: 'user', text }]);
+    setMessages(prev => [
+      ...prev,
+      { id: userMsgId, role: 'user', text, attachmentIds, attachmentNames },
+    ]);
 
     try {
-      const result = await processIntent(text, threadId, userId, orgId);
+      const result = await processIntent(text, threadId, userId, orgId, attachmentIds);
       const hydratedCards = await hydratePendingHitlCards(
         fieldsFromFormatterResult(result).hitlCards,
         userId,
@@ -376,6 +484,8 @@ export function ChatShell() {
       const assistant = buildAssistantMessage({ ...result, hitl_cards: hydratedCards });
       setMessages(prev => [...prev, assistant]);
     } catch (err) {
+      // Сообщение уже humanized в `errorDetail` (см. client.ts).
+      const message = err instanceof Error ? err.message : t('error.requestFailed');
       setMessages(prev => [
         ...prev,
         {
@@ -385,7 +495,7 @@ export function ChatShell() {
           hitlCards: [],
           _requiresReview: false,
           _pendingReview: false,
-          error: err instanceof Error ? err.message : 'Request failed',
+          error: message,
           status: 'failure',
         },
       ]);
@@ -412,7 +522,13 @@ export function ChatShell() {
       );
       setBusy(true);
       try {
-        const result = await processIntent(userMsg.text, threadId, userId, orgId);
+        const result = await processIntent(
+          userMsg.text,
+          threadId,
+          userId,
+          orgId,
+          userMsg.attachmentIds ?? []
+        );
         const hydratedCards = await hydratePendingHitlCards(
           fieldsFromFormatterResult(result).hitlCards,
           userId,
@@ -425,20 +541,20 @@ export function ChatShell() {
         setMessages(prev =>
           prev.map(msg => (msg.id === messageId && msg.role === 'assistant' ? assistant : msg))
         );
-        toast.success('Ответ обновлён');
+        toast.success(t('toast.regenerated'));
       } catch (err) {
         setMessages(prev =>
           prev.map(msg =>
             msg.id === messageId && msg.role === 'assistant'
               ? {
                   ...msg,
-                  error: err instanceof Error ? err.message : 'Ошибка при регенерации',
+                  error: err instanceof Error ? err.message : t('toast.regenerateFailed'),
                   _regenerating: false,
                 }
               : msg
           )
         );
-        toast.error('Не удалось обновить ответ');
+        toast.error(t('toast.regenerateFailed'));
       } finally {
         setBusy(false);
       }
@@ -484,7 +600,7 @@ export function ChatShell() {
             return { ...msg, _feedbackSending: false };
           })
         );
-        toast.error('Не удалось отправить отзыв на сервер, но он сохранён локально');
+        toast.error(t('toast.feedbackFailed'));
       }
     },
     [messages, userId, orgId]
@@ -498,41 +614,71 @@ export function ChatShell() {
     }
   }, []);
 
-  const startNewThread = useCallback(() => {
-    const next = newThreadId();
-    try {
-      window.localStorage.setItem(THREAD_STORAGE_KEY, next);
-    } catch {}
-    window.location.reload();
+  // Никакого `window.location.reload()`: виджет встроен в страницу СЭД и не имеет
+  // права её перезагружать. Новый тред = сброс состояния в памяти + новый threadId.
+  const handleNewThread = useCallback(() => {
+    startNewThreadInRuntime();
+    setMessages([]);
+    setAttachments([]);
+    setHydrated(false);
   }, []);
 
+  // ── Counter class (для CSS) ──────────────────────────────────────────────
+  const counterClass = overLimit
+    ? 'composer-counter composer-counter--over'
+    : nearLimit
+      ? 'composer-counter composer-counter--warn'
+      : 'composer-counter';
+
+  // Screen readers announce only at warn/over thresholds, not on every keystroke.
+  const counterLive: 'polite' | 'off' = overLimit || nearLimit ? 'polite' : 'off';
+
   return (
-    <div className="shell">
-      <header className="shell-header">
+    <div className="shell" part="shell">
+      <header className="shell-header" part="header">
         <div className="brand">
           <Sparkles size={18} className="brand-mark" />
           <div>
-            <h1>Palatium</h1>
-            <p>Structured agent replies</p>
-            {devMode && <span className="dev-badge">🔧 DEV</span>}
-            {wsConnected && <span className="dev-badge">WS</span>}
+            <h1>{t('app.title')}</h1>
+            <p>{t('app.tagline')}</p>
+            {devMode && <span className="dev-badge">🔧 {t('badge.dev')}</span>}
+            {wsConnected && <span className="dev-badge">{t('badge.ws')}</span>}
+            {hostStatus === 'standalone' && (
+              <span className="dev-badge">{t('badge.standalone')}</span>
+            )}
           </div>
         </div>
         <div className="header-actions">
-          <button type="button" className="toolbar-btn" onClick={startNewThread}>
-            New chat
+          <button type="button" className="toolbar-btn" onClick={handleNewThread}>
+            {t('header.newChat')}
           </button>
           <span className="thread-pill">{threadId.slice(0, 18)}…</span>
+          <button
+            type="button"
+            className="toolbar-btn"
+            part="close"
+            onClick={() => setPanelOpen(false)}
+            aria-label={t('header.collapse')}
+            title={t('header.collapse')}
+          >
+            <ChevronDown size={16} aria-hidden />
+          </button>
         </div>
       </header>
 
-      <main className="transcript">
+      <main className="transcript" part="transcript">
         {hydrated && messages.length === 0 && (
           <div className="empty">
-            <h2>Ask anything</h2>
-            <p>I'll provide structured answers. You can copy, export, or give feedback.</p>
+            {userName && (
+              <p className="empty-greeting">{t('empty.greeting', { name: userName })}</p>
+            )}
+            <h2>{t('empty.title')}</h2>
+            <p>{t('empty.body')}</p>
+            <p className="empty-hint">
+              {t('empty.attachmentsHint', { size: MAX_ATTACHMENT_LABEL })}
+            </p>
             <div className="suggestions">
-              {['Какие планы на сегодня', 'Составь план встречи на завтра'].map(hint => (
+              {[t('empty.suggestion.0'), t('empty.suggestion.1')].map(hint => (
                 <button
                   key={hint}
                   type="button"
@@ -553,6 +699,16 @@ export function ChatShell() {
                 <div className="avatar">U</div>
                 <div className="bubble">
                   <p>{message.text}</p>
+                  {message.attachmentNames && message.attachmentNames.length > 0 && (
+                    <ul className="bubble-attachments">
+                      {message.attachmentNames.map(name => (
+                        <li key={name}>
+                          <Paperclip size={12} />
+                          <span>{name}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </div>
             );
@@ -580,11 +736,7 @@ export function ChatShell() {
                 ) : message.document ? (
                   <>
                     <BlockRenderer document={message.document} />
-                    {showDevGap && (
-                      <p className="hitl-dev-gap">
-                        DEV: document looks like an exclusive menu but no HITL cards were minted.
-                      </p>
-                    )}
+                    {showDevGap && <p className="hitl-dev-gap">{t('msg.devGap')}</p>}
                     {message.error && <p className="msg-error">{message.error}</p>}
                     <div className="msg-actions">
                       <button
@@ -592,7 +744,7 @@ export function ChatShell() {
                         onClick={() => handleFeedback(message.id, 'like')}
                         disabled={message._feedbackSending || busy}
                         aria-pressed={!!message._feedbackLike}
-                        aria-label="Like this response"
+                        aria-label={t('action.like')}
                       >
                         <ThumbsUp size={16} />
                       </button>
@@ -601,7 +753,7 @@ export function ChatShell() {
                         onClick={() => handleFeedback(message.id, 'dislike')}
                         disabled={message._feedbackSending || busy}
                         aria-pressed={!!message._feedbackDislike}
-                        aria-label="Dislike this response"
+                        aria-label={t('action.dislike')}
                       >
                         <ThumbsDown size={16} />
                       </button>
@@ -609,7 +761,7 @@ export function ChatShell() {
                         className="action-btn"
                         onClick={() => copyMessageContent(message)}
                         disabled={busy}
-                        aria-label="Copy response text"
+                        aria-label={t('action.copy')}
                       >
                         <Copy size={16} />
                       </button>
@@ -619,13 +771,13 @@ export function ChatShell() {
                           if (!message.document) return;
                           void downloadDocumentPdf(message.document, threadId, userId, orgId).catch(
                             (err: unknown) => {
-                              toast.error('PDF export failed');
+                              toast.error(t('toast.pdfFailed'));
                               console.error(err);
                             }
                           );
                         }}
                         disabled={busy}
-                        aria-label="Export as PDF"
+                        aria-label={t('action.exportPdf')}
                       >
                         <Download size={16} />
                       </button>
@@ -633,7 +785,7 @@ export function ChatShell() {
                         className="action-btn"
                         onClick={() => regenerateResponse(message.id)}
                         disabled={busy || message._regenerating}
-                        aria-label="Regenerate response"
+                        aria-label={t('action.regenerate')}
                       >
                         {message._regenerating ? (
                           <LoaderCircle className="spin" size={16} />
@@ -650,7 +802,7 @@ export function ChatShell() {
                     </div>
                   </>
                 ) : (
-                  <p className="msg-error">{message.error ?? 'Empty response'}</p>
+                  <p className="msg-error">{message.error ?? t('msg.emptyResponse')}</p>
                 )}
                 {showHitl && message.document && <BlockRenderer document={message.document} />}
               </div>
@@ -665,13 +817,26 @@ export function ChatShell() {
               <span>.</span>
               <span>.</span>
             </span>
-            <span>Agents working</span>
+            <span>{t('msg.agentsWorking')}</span>
           </div>
         )}
         <div ref={messageEndRef} />
       </main>
 
-      <div className="composer-stack">
+      <div
+        className={`composer-stack${dragActive ? ' is-dragover' : ''}`}
+        part="composer"
+        onDragOver={e => {
+          e.preventDefault();
+          setDragActive(true);
+        }}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={e => {
+          e.preventDefault();
+          setDragActive(false);
+          addFiles(Array.from(e.dataTransfer.files));
+        }}
+      >
         <MemoryActions
           threadId={threadId}
           userId={userId}
@@ -679,6 +844,36 @@ export function ChatShell() {
           disabled={busy}
           onCardCreated={handleMemoryCardCreated}
         />
+        {attachments.length > 0 && (
+          <ul className="attachment-chips" aria-label={t('composer.attachedFiles')}>
+            {attachments.map(chip => (
+              <li
+                key={chip.localId}
+                className={`attachment-chip is-${chip.status}`}
+                title={chip.error ?? `${chip.filename} (${formatAttachmentSize(chip.sizeBytes)})`}
+              >
+                {chip.status === 'uploading' ? (
+                  <LoaderCircle className="spin" size={13} />
+                ) : (
+                  <FileText size={13} />
+                )}
+                <span className="attachment-name">{chip.filename}</span>
+                <span className="attachment-size">{formatAttachmentSize(chip.sizeBytes)}</span>
+                {chip.status === 'failed' && chip.error && (
+                  <span className="attachment-reason">{chip.error}</span>
+                )}
+                <button
+                  type="button"
+                  className="attachment-remove"
+                  onClick={() => removeAttachment(chip.localId)}
+                  aria-label={t('composer.removeAttachment', { name: chip.filename })}
+                >
+                  <X size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <form
           className="composer"
           onSubmit={e => {
@@ -686,10 +881,32 @@ export function ChatShell() {
             void send();
           }}
         >
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            accept={ATTACHMENT_ACCEPT}
+            onChange={e => {
+              addFiles(Array.from(e.target.files ?? []));
+              // Reset so picking the same file twice still fires a change event.
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            className="attach-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+            aria-label={t('composer.attach')}
+            title={t('composer.attachTitle', { size: MAX_ATTACHMENT_LABEL })}
+          >
+            <Paperclip size={18} />
+          </button>
           <textarea
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder="Message Palatium…"
+            placeholder={t('composer.placeholder')}
             rows={2}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -697,16 +914,45 @@ export function ChatShell() {
                 void send();
               }
             }}
+            aria-describedby="composer-counter"
+            className={
+              overLimit ? 'composer-textarea composer-textarea--over' : 'composer-textarea'
+            }
           />
           <button
             type="submit"
             disabled={!canSend}
             className={`send-btn ${busy ? 'sending' : ''}`}
-            aria-label="Send message"
+            aria-label={t('composer.send')}
+            title={
+              overLimit
+                ? t('composer.overLimitTitle', {
+                    used: formatNumber(inputLength),
+                    limit: formatNumber(INTENT_TEXT_LIMIT),
+                  })
+                : undefined
+            }
           >
             {busy ? <LoaderCircle className="spin" size={18} /> : <SendHorizontal size={18} />}
           </button>
         </form>
+
+        {/* Счётчик символов: показывается всегда, когда есть ввод или близко к лимиту */}
+        {(inputLength > 0 || nearLimit || overLimit) && (
+          <div
+            id="composer-counter"
+            className={counterClass}
+            aria-live={counterLive}
+            aria-atomic="true"
+          >
+            {t('composer.counter', {
+              used: formatNumber(inputLength),
+              limit: formatNumber(INTENT_TEXT_LIMIT),
+            })}
+            {overLimit && t('composer.overLimit')}
+            {!overLimit && nearLimit && t('composer.nearLimit')}
+          </div>
+        )}
       </div>
     </div>
   );

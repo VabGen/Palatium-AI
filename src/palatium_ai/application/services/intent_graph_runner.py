@@ -107,6 +107,7 @@ class IntentGraphRunner:
         org_id: str | None = None,
         tenant_key: str | None = None,
         revision_feedback: str | None = None,
+        untrusted_context: str = "",
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AgentGraphState:
@@ -170,6 +171,7 @@ class IntentGraphRunner:
                 "prompt_budget": prompt_budget,
                 "revisions_count": 0,
                 "response_locale": response_locale,
+                "untrusted_context": untrusted_context,
             }
             if revision_feedback and revision_feedback.strip():
                 graph_input["revision_feedback"] = revision_feedback.strip()[:4_000]

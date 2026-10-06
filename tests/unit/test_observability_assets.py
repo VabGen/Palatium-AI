@@ -79,8 +79,7 @@ def _iter_rules() -> list[tuple[str, dict[str, Any]]]:
         document = _load_yaml(path)
         for group in document.get("groups", []):
             group_name = group.get("name", "<unnamed>")
-            for rule in group.get("rules", []):
-                rules.append((f"{path.name}:{group_name}", rule))
+            rules.extend((f"{path.name}:{group_name}", rule) for rule in group.get("rules", []))
     return rules
 
 
@@ -109,9 +108,11 @@ def test_every_promql_app_metric_exists_in_registry() -> None:
 
     missing: list[str] = []
     for source, rule in _iter_rules():
-        for name in _app_metrics_in(str(rule.get("expr", ""))):
-            if not _is_registered(name, registered):
-                missing.append(f"{source}: {name}")
+        missing.extend(
+            f"{source}: {name}"
+            for name in _app_metrics_in(str(rule.get("expr", "")))
+            if not _is_registered(name, registered)
+        )
     assert not missing, "alert rules reference unknown app metrics:\n" + "\n".join(missing)
 
 
@@ -119,9 +120,7 @@ def test_dashboard_panels_reference_known_app_metrics() -> None:
     registered = _registered_metric_names()
     missing: list[str] = []
     for title, expr in _dashboard_panel_exprs():
-        for name in _app_metrics_in(expr):
-            if not _is_registered(name, registered):
-                missing.append(f"{title}: {name}")
+        missing.extend(f"{title}: {name}" for name in _app_metrics_in(expr) if not _is_registered(name, registered))
     assert not missing, "dashboard panels reference unknown app metrics:\n" + "\n".join(missing)
 
 
@@ -177,7 +176,7 @@ def test_prometheus_loads_alert_rules_from_mounted_dir() -> None:
     assert any("alerts" in str(entry) for entry in rule_files), f"rule_files does not include alerts dir: {rule_files}"
 
 
-@pytest.mark.parametrize("path", [*sorted(_ALERTS_DIR.glob("*.yml")), _PROMETHEUS_CONFIG, _ALERTMANAGER_CONFIG])
+@pytest.mark.parametrize("path", (*sorted(_ALERTS_DIR.glob("*.yml")), _PROMETHEUS_CONFIG, _ALERTMANAGER_CONFIG))
 def test_yaml_assets_parse(path: Path) -> None:
     assert _load_yaml(path)
 
@@ -187,7 +186,7 @@ def test_compose_overlay_binds_loopback_only() -> None:
     overlay = _load_yaml(_OBSERVABILITY_DIR / "compose.observability.yml")
     offenders: list[str] = []
     for name, service in overlay.get("services", {}).items():
-        for mapping in service.get("ports", []):
-            if not str(mapping).startswith("127.0.0.1:"):
-                offenders.append(f"{name}: {mapping}")
+        offenders.extend(
+            f"{name}: {mapping}" for mapping in service.get("ports", []) if not str(mapping).startswith("127.0.0.1:")
+        )
     assert not offenders, "observability ports must bind 127.0.0.1:\n" + "\n".join(offenders)

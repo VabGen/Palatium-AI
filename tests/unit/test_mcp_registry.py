@@ -27,7 +27,7 @@ def _settings() -> Any:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_list_tools_returns_empty_when_server_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unreachable MCP servers must not crash discovery."""
     registry = MCPRegistry(settings=_settings())
@@ -48,7 +48,7 @@ async def test_list_tools_returns_empty_when_server_unreachable(monkeypatch: pyt
     assert calls["n"] == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_list_tools_opens_circuit_after_three_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     """Circuit opens after 3 consecutive failures (platform breaker)."""
     registry = MCPRegistry(settings=_settings())
@@ -70,7 +70,7 @@ async def test_list_tools_opens_circuit_after_three_failures(monkeypatch: pytest
     assert calls["n"] == before
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_list_tools_still_returns_tools_from_available_server(monkeypatch: pytest.MonkeyPatch) -> None:
     """Other servers should keep working when one server is down."""
     from palatium_ai.domain.mcp.models import MCPToolDescriptor

@@ -29,8 +29,8 @@ def _action_request(card: object, *, action_id: str, idempotency_key: str) -> HI
     )
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_memory_save_approve_search_then_forget_approve() -> None:
     save, forget, _port, hitl, handler = make_memory_hitl_stack()
     intent = AsyncMock()
@@ -111,8 +111,8 @@ async def test_memory_save_approve_search_then_forget_approve() -> None:
     assert json.loads(after_forget.content[0]["text"])["hit_count"] == 0
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_memory_save_reject_skips_write() -> None:
     save, _forget, _port, hitl, handler = make_memory_hitl_stack()
     intent = AsyncMock()

@@ -1,3 +1,5 @@
+import { sessionSocketUrl } from '../runtime/endpoints';
+
 export type SessionSocketMessage =
   | { type: 'session.subscribed'; thread_id: string; trace_id: string }
   | { type: 'pong'; trace_id?: string }
@@ -14,10 +16,10 @@ export function connectSessionSocket(
   token: string,
   handlers: SessionSocketHandlers
 ): WebSocket {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(
-    `${proto}//${window.location.host}/ws/sessions/${encodeURIComponent(threadId)}?token=${encodeURIComponent(token)}`
-  );
+  // Адрес — из той же базы, что и REST (`runtime/endpoints`): иначе абсолютная
+  // база развела бы запросы и сокет на разные origin, и это не всплыло бы, пока
+  // сокет возит только подписку на тред.
+  const ws = new WebSocket(sessionSocketUrl(threadId, token));
 
   ws.onmessage = event => {
     try {

@@ -1,4 +1,4 @@
-import { LottieSvg } from 'lottie-react';
+import { LottieLight } from 'lottie-react';
 import type { LucideIcon } from 'lucide-react';
 import {
   AlertTriangle,
@@ -73,7 +73,13 @@ export function TokenIcon({ token, className, size = 18, animated = false }: Tok
         style={{ width: size, height: size, display: 'inline-flex' }}
         aria-hidden
       >
-        <LottieSvg src={lottieData} loop style={{ width: size, height: size }} />
+        {/*
+          LottieLight, а не полный/LottieSvg: анимации статусов (info/success/
+          warning/danger) не используют expression-движок (проверено: 0 маркеров
+          `x` в JSON), а light-сборка меньше на ~30% и не тянет `eval` — важно для
+          бюджета виджета и CSP страницы-хоста.
+        */}
+        <LottieLight src={lottieData} loop style={{ width: size, height: size }} />
       </span>
     );
   }

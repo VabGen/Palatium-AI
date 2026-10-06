@@ -10,7 +10,7 @@ from palatium_ai.domain.agents.supervisor import SupervisorInput
 from tests.conftest import run_supervisor
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_supervisor_routes_social_to_formatter() -> None:
     result = await run_supervisor(
         SupervisorInput(
@@ -27,7 +27,7 @@ async def test_supervisor_routes_social_to_formatter() -> None:
     assert result.output.target_agent == "formatter"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_supervisor_social_with_mcp_goes_researcher() -> None:
     result = await run_supervisor(
         SupervisorInput(
@@ -43,7 +43,7 @@ async def test_supervisor_social_with_mcp_goes_researcher() -> None:
     assert result.output.route == "researcher"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_planner_ack_only_for_social_formatter_route() -> None:
     bundle = await ExecutionPlanner().build(
         ContextWeaverInput(
@@ -60,7 +60,7 @@ async def test_planner_ack_only_for_social_formatter_route() -> None:
     assert bundle.requires_tool_call is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_planner_skips_mcp_discovery_on_formatter_route() -> None:
     """Even with requires_mcp=True, formatter route must not fan-out tools/list."""
     bundle = await ExecutionPlanner().build(
@@ -78,7 +78,7 @@ async def test_planner_skips_mcp_discovery_on_formatter_route() -> None:
     assert bundle.requires_tool_call is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_supervisor_multi_step_routes_researcher_with_honest_plan() -> None:
     result = await run_supervisor(
         SupervisorInput(
@@ -96,7 +96,7 @@ async def test_supervisor_multi_step_routes_researcher_with_honest_plan() -> Non
     assert "нескольких шагов" not in result.output.plan
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_planner_multi_step_is_single_retrieve_pass() -> None:
     bundle = await ExecutionPlanner(capability_index=None).build(
         ContextWeaverInput(
@@ -114,7 +114,7 @@ async def test_planner_multi_step_is_single_retrieve_pass() -> None:
     assert bundle.requires_tool_call is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_planner_requires_mcp_without_tool_fails_closed_strategy() -> None:
     """requires_mcp without a resolved tool must not invent retrieve_then_reason drafts."""
     bundle = await ExecutionPlanner(capability_index=None).build(

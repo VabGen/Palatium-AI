@@ -44,7 +44,7 @@ def test_tool_timeouts_accept_dict_env() -> None:
     assert config.resolve_tool_timeout("edms", "search_documents") == 15
 
 
-@pytest.mark.parametrize("raw", ['{"edms.search_documents": 0}', '{"edms.search_documents": -1}'])
+@pytest.mark.parametrize("raw", ('{"edms.search_documents": 0}', '{"edms.search_documents": -1}'))
 def test_tool_timeouts_reject_non_positive(raw: str) -> None:
     with pytest.raises(ValueError):
         _config(MCP_TOOL_TIMEOUT_SECONDS=raw)
@@ -94,7 +94,7 @@ def _settings(tool_timeouts: dict[str, int], *, timeout_seconds: float = 5.0) ->
     return SimpleNamespace(mcp=mcp)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_call_tool_uses_per_tool_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """A slow tool must honour its own (tight) timeout, not the global one."""
     monkeypatch.setattr("fastmcp.Client", _SlowCallClient)
@@ -131,7 +131,7 @@ def test_budget_invariant_accepts_current_defaults() -> None:
 
 def test_budget_invariant_rejects_tool_exceeding_calling_agent() -> None:
     budgets = (McpAgentBudget("researcher", 90, frozenset({"edms.search_documents"})),)
-    with pytest.raises(McpTimeoutBudgetError, match="edms.search_documents"):
+    with pytest.raises(McpTimeoutBudgetError, match=r"edms\.search_documents"):
         assert_tool_timeouts_within_agent_budget(
             default_timeout_seconds=30,
             tool_timeouts={"edms.search_documents": 90},
@@ -185,7 +185,7 @@ def test_wiring_guard_rejects_timeout_above_calling_agent() -> None:
         MCP_TIMEOUT_SECONDS="30",
         MCP_TOOL_TIMEOUT_SECONDS='{"edms.search_documents": 120}',
     )
-    with pytest.raises(McpTimeoutBudgetError, match="edms.search_documents"):
+    with pytest.raises(McpTimeoutBudgetError, match=r"edms\.search_documents"):
         _assert_mcp_timeout_budget(SimpleNamespace(mcp=config))
 
 

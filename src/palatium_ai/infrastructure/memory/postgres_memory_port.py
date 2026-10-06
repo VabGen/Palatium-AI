@@ -48,7 +48,7 @@ def normalize_memory_type(value: dict[str, object]) -> MemoryType:
     """Map stored value kind to canonical MemoryType."""
     raw = str(value.get("kind", "fact")).strip().lower()
     if raw in _VALID_MEMORY_TYPES:
-        return raw  # type: ignore[return-value]
+        return raw  # type: ignore[return-value]  # membership не сужает str→MemoryType (017)
     return "fact"
 
 

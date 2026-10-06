@@ -93,7 +93,7 @@ def _factory_with_ports(
     return factory
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_primary_is_skipped_without_calling_it_once_circuit_opens() -> None:
     """The whole point: after the breaker opens, the dead provider is not called."""
     primary = _RecordingPort(fail=True)
@@ -113,7 +113,7 @@ async def test_primary_is_skipped_without_calling_it_once_circuit_opens() -> Non
     assert primary.calls == 2, "open circuit must not be called again"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_successful_provider_resets_failure_counter() -> None:
     """A transient blip must not accumulate toward the threshold."""
     flaky = _RecordingPort(fail=True)
@@ -139,7 +139,7 @@ async def test_successful_provider_resets_failure_counter() -> None:
     assert flaky.calls == 4
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_all_circuits_open_raises_circuit_open_error() -> None:
     """Every provider down must produce a fast, typed failure — not a generic one."""
     factory = _factory_with_ports(
@@ -158,7 +158,7 @@ async def test_all_circuits_open_raises_circuit_open_error() -> None:
     assert excinfo.value.retry_after_seconds > 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_half_open_probe_recovers_provider() -> None:
     """open → half_open → closed: a recovered provider must be used again."""
     primary = _RecordingPort(fail=True)
@@ -182,7 +182,7 @@ async def test_half_open_probe_recovers_provider() -> None:
     assert circuit.state == "closed"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_streaming_path_records_circuit_failures() -> None:
     primary = _RecordingStreamPort(fail=True)
     secondary = _RecordingStreamPort(content="streamed")

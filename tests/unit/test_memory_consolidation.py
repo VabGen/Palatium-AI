@@ -60,7 +60,7 @@ class _FakeDialogTurnStore:
         return DialogTurnWindow(thread_id=thread_id, turns=turns, limit=limit)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_in_memory_port_put_get_search() -> None:
     port = InMemoryMemoryPort()
     ns = thread_namespace("t1")
@@ -71,7 +71,7 @@ async def test_in_memory_port_put_get_search() -> None:
     assert "таблицы" in str(hits[0]["text"])
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_sleep_time_consolidation_stores_add_only_facts() -> None:
     port = InMemoryMemoryPort()
     payload = {
@@ -106,7 +106,7 @@ async def test_sleep_time_consolidation_stores_add_only_facts() -> None:
     assert hits[0]["kind"] == "preference"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_sleep_time_routes_preference_user_and_entity_org() -> None:
     port = InMemoryMemoryPort()
     payload = {
@@ -155,6 +155,9 @@ async def test_sleep_time_routes_preference_user_and_entity_org() -> None:
     user_hits = await port.search(namespace=user_namespace("user-42"), query="tables", limit=4)
     org_hits = await port.search(namespace=org_namespace("org-acme"), query="Ivanova", limit=4)
     thread_hits = await port.search(namespace=thread_namespace("thread-b"), query="Friday", limit=4)
-    assert user_hits and user_hits[0]["kind"] == "preference"
-    assert org_hits and org_hits[0]["kind"] == "entity"
-    assert thread_hits and thread_hits[0]["kind"] == "fact"
+    assert user_hits
+    assert user_hits[0]["kind"] == "preference"
+    assert org_hits
+    assert org_hits[0]["kind"] == "entity"
+    assert thread_hits
+    assert thread_hits[0]["kind"] == "fact"

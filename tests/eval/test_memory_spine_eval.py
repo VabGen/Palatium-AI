@@ -21,7 +21,7 @@ from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from tests.conftest import FakeLLMPort, run_contextualizer
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_eval_noise_memory_worse_than_none() -> None:
     """Low-confidence hits must not enter the hot path."""
     port = InMemoryMemoryPort()
@@ -41,7 +41,7 @@ async def test_eval_noise_memory_worse_than_none() -> None:
     assert bundle.as_prompt_block() == "(no durable memory)"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_eval_recall_char_budget_gate() -> None:
     port = InMemoryMemoryPort()
     for idx in range(6):
@@ -93,7 +93,7 @@ def test_eval_clip_memory_hints_respects_budget() -> None:
     assert sum(len(h) for h in clipped) <= 280
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_eval_format_followup_rewritten_with_budget() -> None:
     """Canonical bug: 'дай таблицей' must become a format continuation."""
     llm = FakeLLMPort(
@@ -156,7 +156,7 @@ def test_eval_hint_texts_align_with_prompt_block() -> None:
     assert len(block) <= 250
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_eval_org_memory_requires_org_id() -> None:
     """Org ACL: shared entities are invisible without org_id (no cross-tenant leak)."""
     port = InMemoryMemoryPort()
@@ -179,7 +179,7 @@ async def test_eval_org_memory_requires_org_id() -> None:
     assert "ivanova" in allowed.hits[0].text.lower() or "acme" in allowed.hits[0].text.lower()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_eval_multi_hop_anaphora_fixture_shape() -> None:
     """Offline fixture: two-hop follow-up must keep prior entity in rewritten query."""
     llm = FakeLLMPort(
@@ -229,7 +229,7 @@ async def test_eval_multi_hop_anaphora_fixture_shape() -> None:
     assert any(token in rewritten for token in ("иванов", "acme", "email", "почт"))
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_eval_topic_switch_user_anaphora_fixture_shape() -> None:
     """Offline fixture: anaphora to earlier user fact after intervening code dump."""
     llm = FakeLLMPort(

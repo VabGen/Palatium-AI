@@ -19,7 +19,7 @@ from uuid import uuid4
 def _http_url(url: str) -> str:
     """Reject non-http(s) schemes (ruff S310)."""
     cleaned = url.strip()
-    if not (cleaned.startswith("http://") or cleaned.startswith("https://")):
+    if not cleaned.startswith(("http://", "https://")):
         raise ValueError(f"only http(s) URLs allowed, got: {url!r}")
     return cleaned
 

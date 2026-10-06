@@ -1,16 +1,21 @@
 ---
-description: Строгая типизация всего Python-кода (Python 3.12+ / mypy --strict)
+description: Строгая типизация всего Python-кода (Python 3.14 / mypy --strict)
 globs: ["**/*.py"]
 alwaysApply: false
 ---
 
-# Типобезопасность (Python 3.12+ / mypy --strict)
+# Типобезопасность (Python 3.14 / mypy --strict)
+
+Версия зафиксирована `pyproject.toml` (`requires-python = ">=3.14,<3.15"`,
+`target-version = "py314"`). Проверка типов — **`mypy --strict`** (hook + CI).
+`ty` (Astral) в проекте **не** используется как гейт: на 2026-09 он в статусе
+0.0.x beta без стабильного API (см. план `cursor-rules-hardening`, §1).
 
 ## Базовые запреты
 
 - Запрещены: `Any` (см. исключения ниже), непараметризованные `dict`, `list`, `tuple`.
 - Запрещён legacy-синтаксис typing: `Optional[X]` → `X | None`, `List[str]` → `list[str]`,
-  `Dict` → `dict`, `Union` → `|`. Только современный синтаксис Python 3.12.
+  `Dict` → `dict`, `Union` → `|`. Только современный синтаксис Python 3.14.
 - Запрещена утинная типизация на границах слоёв — только объявленные
   `typing.Protocol` (или ABC для BaseAgent).
 - Запрещён злоупотребление `cast()` — как `# type: ignore`, только с обоснованием
@@ -40,6 +45,7 @@ alwaysApply: false
 - `# type: ignore` — только с конкретным кодом ошибки и обоснованием на той же строке:
   `x = call()  # type: ignore[no-untyped-call]  # lib X не имеет py.typed, обёрнуто в адаптере`.
   Голый `# type: ignore` без кода — ошибка ревью.
+  Классификация «реальный баг / предел тула / не наш код» — **017**.
 - Код обязан проходить `mypy --strict` (конфиг в `pyproject.toml`,
   проверка в `.cursor/hooks/python-quality-gate.sh` и CI).
 

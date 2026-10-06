@@ -30,7 +30,7 @@ from tests.conftest import (
     make_weaving_agent,
 )
 
-_HITL_HMAC = "integration-test-hitl-hmac-key-32b"  # noqa: S105
+_HITL_HMAC = "integration-test-hitl-hmac-key-32b"
 
 
 class _FakeSessionService:
@@ -42,7 +42,7 @@ class _FakeSessionService:
 
     async def get_session(self, **_kwargs: object) -> None:
         """Reply-locale lookup (065); no persisted session in integration tests."""
-        return None
+        return
 
 
 def _formatter_json(title: str, *, locale: str = "en-US") -> str:
@@ -60,8 +60,8 @@ def _formatter_json(title: str, *, locale: str = "en-US") -> str:
     )
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_graph_intent_classifier_via_harness_guardrails() -> None:
     """End-to-end classify path: contextualizer pass-through → intent BaseAgent."""
     intent_json = (
@@ -102,8 +102,8 @@ async def test_graph_intent_classifier_via_harness_guardrails() -> None:
     assert result.output.task_kind == "knowledge_request"
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_graph_process_full_pipeline_fake_llm() -> None:
     """Integration smoke: full graph process() with migrated guardrail nodes."""
     intent_json = (
@@ -145,8 +145,8 @@ async def test_graph_process_full_pipeline_fake_llm() -> None:
     assert result.output.title == "Palatium overview"
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_graph_social_phatic_skips_researcher() -> None:
     """Social greeting: ack_only route → critic passthrough → formatter (no researcher LLM)."""
     intent_json = (
@@ -186,8 +186,8 @@ async def test_graph_social_phatic_skips_researcher() -> None:
     assert len(unused_researcher.calls) == 0
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_graph_format_followup_with_dialog_memory() -> None:
     """Format follow-up rewrites via continuation + routes to formatter without researcher."""
     dialog = FakeDialogTurnStore()

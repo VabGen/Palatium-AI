@@ -31,13 +31,13 @@ def test_cypher_rejects_string_interpolation() -> None:
 
 @pytest.mark.parametrize(
     "cypher",
-    [
-        "MATCH (n) WHERE n.id = %s RETURN n",  # noqa: UP031 - % formatting is the thing under test
+    (
+        "MATCH (n) WHERE n.id = %s RETURN n",
         'MATCH (n) WHERE n.id = f"{uid}" RETURN n',
         "MATCH (n {user_id}) RETURN n",  # f-string placeholder left in the text
         "MATCH (n {kind: 'fact'}) RETURN n",  # inlined literal instead of $param
         "MATCH (n {user_id: $user_id, kind: 'fact'}) RETURN n",  # mixed: literal still inlined
-    ],
+    ),
 )
 def test_cypher_rejects_values_embedded_in_query_text(cypher: str) -> None:
     """Rule 070: values must be bound, so any embedded value is refused."""
@@ -47,11 +47,11 @@ def test_cypher_rejects_values_embedded_in_query_text(cypher: str) -> None:
 
 @pytest.mark.parametrize(
     "cypher",
-    [
+    (
         "MATCH (f:Fact {user_id: $user_id}) RETURN f.text AS fact LIMIT $lim",
         "MATCH (n {}) RETURN n",
         "MATCH (n {user_id: $user_id, org_id: $org_id}) RETURN n",
-    ],
+    ),
 )
 def test_cypher_allows_property_maps_bound_to_params(cypher: str) -> None:
     """Regression: the property-map form is the canonical pattern, not interpolation."""
@@ -72,7 +72,7 @@ def test_graph_query_requires_tenant_scope() -> None:
         assert_graph_query_safe("MATCH (n) RETURN n", {"user_id": "u1"})
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graph_query_handler_returns_row() -> None:
     handler = PlatformToolHandler(
         knowledge_port=InMemoryKnowledgePort(),
@@ -96,7 +96,7 @@ async def test_graph_query_handler_returns_row() -> None:
     assert payload["rows"][0]["user_id"] == "user-1"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graph_query_handler_rejects_unscoped_cypher() -> None:
     """070: handler must surface tenant-scope violations as a structured MCP error, not rows."""
     handler = PlatformToolHandler(
@@ -117,7 +117,7 @@ async def test_graph_query_handler_rejects_unscoped_cypher() -> None:
     assert "tenant" in result.content[0]["text"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graph_query_overwrites_params_user_id() -> None:
     """Defense-in-depth: params_json.user_id must not stick to a foreign tenant."""
 
@@ -142,7 +142,7 @@ async def test_graph_query_overwrites_params_user_id() -> None:
     assert payload["rows"][0]["user_id"] == "user-actor"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_graph_query_rejects_merge() -> None:
     handler = PlatformToolHandler(
         knowledge_port=InMemoryKnowledgePort(),
@@ -161,7 +161,7 @@ async def test_graph_query_rejects_merge() -> None:
     assert result.is_error is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_web_fallback_tags_source() -> None:
     handler = PlatformToolHandler(
         knowledge_port=InMemoryKnowledgePort(),

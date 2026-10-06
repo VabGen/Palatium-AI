@@ -6,7 +6,7 @@ must not echo secrets or unbounded tool dumps to the client.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from palatium_ai.domain.mcp.argument_policy import contains_secret_value, is_sensitive_argument_key
 
@@ -28,8 +28,14 @@ def redact_mcp_arguments(arguments: Mapping[str, object] | None) -> JsonObject:
     return redacted if isinstance(redacted, dict) else {}
 
 
-def redact_mcp_content(content: list[Mapping[str, object]] | None) -> list[JsonObject]:
-    """Return a client-safe copy of MCP content blocks."""
+def redact_mcp_content(content: Sequence[object] | None) -> list[JsonObject]:
+    """Return a client-safe copy of MCP content blocks.
+
+    ``content`` is wire data decoded from JSON-RPC, so the element type is honestly
+    ``object``: a server is free to return a bare string or number in the array, and
+    the per-item check below is what drops it rather than a type that only holds on
+    the happy path (020: validate the boundary, do not assume it).
+    """
     if not content:
         return []
     out: list[JsonObject] = []

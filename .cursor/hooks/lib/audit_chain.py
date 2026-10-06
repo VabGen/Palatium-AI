@@ -92,7 +92,7 @@ class _FileLock:
             return
         if self._excl_path is not None:
             with contextlib.suppress(FileNotFoundError):
-                os.remove(self._excl_path)
+                Path(self._excl_path).unlink()
 
 
 def _canonical_json(payload: dict[str, object]) -> str:
@@ -120,7 +120,7 @@ def append_event(event_type: str, extra: dict[str, object] | None = None) -> Non
                 last_line = lines[-1]
                 try:
                     prev_hash = json.loads(last_line)["current_hash"]
-                except Exception:  # noqa: BLE001 — повреждённая строка, не genesis
+                except Exception:
                     prev_hash = "CHAIN-CORRUPTED-" + _sha256(last_line)
                     print(
                         f"🚨 audit-chain: последняя запись в {_LOG_FILE} не парсится — "
@@ -137,7 +137,7 @@ def append_event(event_type: str, extra: dict[str, object] | None = None) -> Non
             record = {**payload, "previous_hash": prev_hash, "current_hash": current_hash}
             with _LOG_FILE.open("a", encoding="utf-8") as f:
                 f.write(_canonical_json(record) + "\n")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         import sys
 
         print(f"⚠️  audit-chain: событие {event_type} НЕ записано ({type(exc).__name__}: {exc})", file=sys.stderr)

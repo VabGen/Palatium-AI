@@ -63,7 +63,7 @@ def _formatter_result() -> FormatterTaskResult:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_respond_skips_resume_when_replayed() -> None:
     card = _card()
     hitl = AsyncMock()
@@ -87,7 +87,7 @@ async def test_respond_skips_resume_when_replayed() -> None:
     intent.resume_after_tool_approval.assert_not_awaited()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_respond_doc_ingest_skips_graph_resume() -> None:
     card = _card(purpose="mcp_tool_approval")
     card = card.model_copy(update={"task_id": "doc-ingest-abc123"})
@@ -118,7 +118,7 @@ async def test_respond_doc_ingest_skips_graph_resume() -> None:
     document_ingest.execute_after_approval.assert_awaited_once_with(task_id="doc-ingest-abc123")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_respond_mem_save_skips_graph_resume() -> None:
     card = _card(purpose="mcp_tool_approval")
     card = card.model_copy(update={"task_id": "mem-save-abc123"})
@@ -149,7 +149,7 @@ async def test_respond_mem_save_skips_graph_resume() -> None:
     memory_save.execute_after_approval.assert_awaited_once_with(task_id="mem-save-abc123")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_respond_mem_forget_skips_graph_resume() -> None:
     card = _card(purpose="mcp_tool_approval")
     card = card.model_copy(update={"task_id": "mem-forget-abc123"})
@@ -180,7 +180,7 @@ async def test_respond_mem_forget_skips_graph_resume() -> None:
     memory_forget.execute_after_approval.assert_awaited_once_with(task_id="mem-forget-abc123")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_respond_mem_consolidate_skips_graph_resume() -> None:
     card = _card(purpose="mcp_tool_approval")
     card = card.model_copy(update={"task_id": "mem-consolidate-abc123"})
@@ -211,7 +211,75 @@ async def test_respond_mem_consolidate_skips_graph_resume() -> None:
     memory_consolidate.execute_after_approval.assert_awaited_once_with(task_id="mem-consolidate-abc123")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
+async def test_respond_attachment_index_approve_skips_graph_resume() -> None:
+    """Approving an attachment index card performs the write off-graph (020)."""
+    card = _card(purpose="mcp_tool_approval")
+    card = card.model_copy(update={"task_id": "att-index-abc123"})
+    hitl = AsyncMock()
+    hitl.resolve.return_value = _resolve_result(card, replayed=False)
+    hitl.get_card.return_value = card
+    intent = AsyncMock()
+    intent.resume_after_tool_approval = AsyncMock()
+    attachment_index = AsyncMock()
+    attachment_index.execute_after_approval = AsyncMock()
+    attachment_index.discard_pending = AsyncMock()
+    facade = HitlRespondFacade(
+        hitl_service=hitl,
+        intent_service=intent,
+        attachment_index_service=attachment_index,
+    )
+
+    body = HITLResolveRequest(action_id="approve", action_token="t" * 32, idempotency_key="idem-att-index")
+    outcome = await facade.respond(
+        "card-1",
+        body,
+        actor_subject="user-1",
+        actor_org_id="org-1",
+        is_admin=False,
+    )
+
+    assert outcome.resumed is None
+    intent.resume_after_tool_approval.assert_not_awaited()
+    attachment_index.execute_after_approval.assert_awaited_once_with(task_id="att-index-abc123")
+    attachment_index.discard_pending.assert_not_awaited()
+
+
+@pytest.mark.asyncio()
+async def test_respond_attachment_index_reject_discards_without_writing() -> None:
+    """Rejecting must drop the parked chunks and never touch the knowledge base."""
+    card = _card(purpose="mcp_tool_approval")
+    card = card.model_copy(update={"task_id": "att-index-abc123"})
+    hitl = AsyncMock()
+    hitl.resolve.return_value = _resolve_result(card, replayed=False)
+    hitl.get_card.return_value = card
+    intent = AsyncMock()
+    intent.resume_after_tool_approval = AsyncMock()
+    attachment_index = AsyncMock()
+    attachment_index.execute_after_approval = AsyncMock()
+    attachment_index.discard_pending = AsyncMock()
+    facade = HitlRespondFacade(
+        hitl_service=hitl,
+        intent_service=intent,
+        attachment_index_service=attachment_index,
+    )
+
+    body = HITLResolveRequest(action_id="reject", action_token="t" * 32, idempotency_key="idem-att-index-rej")
+    outcome = await facade.respond(
+        "card-1",
+        body,
+        actor_subject="user-1",
+        actor_org_id="org-1",
+        is_admin=False,
+    )
+
+    assert outcome.resumed is None
+    intent.resume_after_tool_approval.assert_not_awaited()
+    attachment_index.execute_after_approval.assert_not_awaited()
+    attachment_index.discard_pending.assert_awaited_once_with(task_id="att-index-abc123")
+
+
+@pytest.mark.asyncio()
 async def test_respond_resumes_mcp_tool_approval() -> None:
     card = _card()
     hitl = AsyncMock()

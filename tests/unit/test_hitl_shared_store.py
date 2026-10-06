@@ -6,7 +6,7 @@ import pytest
 
 from palatium_ai.application.wiring import build_hitl_service
 
-_HMAC = "unit-test-hitl-hmac-key-32bytes!!"  # noqa: S105
+_HMAC = "unit-test-hitl-hmac-key-32bytes!!"
 
 
 def test_require_shared_store_refuses_in_memory() -> None:

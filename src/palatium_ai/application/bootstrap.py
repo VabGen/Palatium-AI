@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from palatium_ai.application.services.attachment_service import AttachmentService
 from palatium_ai.application.services.document_export_service import DocumentExportService
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
@@ -21,7 +22,14 @@ from palatium_ai.application.services.memory_forget_service import MemoryForgetS
 from palatium_ai.application.services.memory_save_service import MemorySaveService
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.application.services.session_timeline_service import SessionTimelineService
-from palatium_ai.application.wiring import build_hitl_service, build_intent_service, warm_mcp_capability_cache
+from palatium_ai.application.wiring import (
+    AttachmentPorts,
+    build_attachment_ports,
+    build_attachment_service,
+    build_hitl_service,
+    build_intent_service,
+    warm_mcp_capability_cache,
+)
 from palatium_ai.core.logging import logger, setup_logging
 from palatium_ai.core.observability import setup_observability
 from palatium_ai.infrastructure.cache.redis import create_redis_client, ensure_redis_connection
@@ -113,6 +121,8 @@ class AppResources:
     graph_write_port: GraphWritePort | None = None
     graph_ports: GraphPorts | None = None
     web_search_port: WebSearchPort | None = None
+    attachment_ports: AttachmentPorts | None = None
+    attachment_service: AttachmentService | None = None
 
     # Legacy aliases (prefer memory_extract*).
     @property
@@ -127,7 +137,9 @@ class AppResources:
 async def load_mcp_servers_from_json_file(file_path: str) -> dict[str, str]:
     """Асинхронно загружает словарь серверов из JSON-файла."""
     path = Path(file_path)
-    if not path.exists():
+    # ASYNC240: Path.exists() — блокирующий stat; не держим event loop (080, 050).
+    exists = await asyncio.to_thread(path.exists)
+    if not exists:
         logger.warning("MCP servers file not found", path=str(path))
         return {}
     try:
@@ -175,7 +187,7 @@ def _build_memory_port(settings: Settings, session_factory: object) -> MemoryPor
             embedding_client = create_embedding_client_for_schema(settings, "memory")
         except _EMBEDDING_WIRING_ERRORS as exc:
             logger.warning("Memory embeddings disabled", error=str(exc))
-        port = PostgresMemoryPort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]
+        port = PostgresMemoryPort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]  # embeddings опционален намеренно (017)
         logger.info(
             "MemoryPort: Postgres memory.entries",
             vector_search=embedding_client is not None,
@@ -202,7 +214,7 @@ def _build_knowledge_port(settings: Settings, session_factory: object) -> Knowle
         embedding_client = create_embedding_client_for_schema(settings, "knowledge")
     except _EMBEDDING_WIRING_ERRORS as exc:
         logger.warning("Knowledge embeddings disabled", error=str(exc))
-    return PostgresKnowledgePort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]
+    return PostgresKnowledgePort(session_factory, embeddings=embedding_client)  # type: ignore[arg-type]  # embeddings опционален намеренно (017)
 
 
 def _wire_platform_handler(
@@ -220,7 +232,7 @@ def _wire_platform_handler(
         PlatformToolHandler(
             knowledge_port=knowledge_port,
             memory_port=memory_port,
-            consolidation=consolidation,  # type: ignore[arg-type]
+            consolidation=consolidation,  # type: ignore[arg-type]  # object|None → Protocol (017)
             graph_port=graph_port,
             web_search_port=web_search_port,
         ),
@@ -295,6 +307,17 @@ async def startup(settings: Settings) -> AppResources:
     memory_port = _build_memory_port(settings, session_factory)
     checkpointer_handle = await create_checkpointer(settings)
     graph_ports = build_graph_ports(settings)
+    attachment_ports = await build_attachment_ports(settings, session_factory)
+    attachment_service: AttachmentService | None = None
+    if attachment_ports is not None:
+        attachment_service = build_attachment_service(
+            settings,
+            attachment_ports,
+            hitl_service=hitl_service,
+            mcp_registry=mcp_registry,
+            redis_client=redis_client,
+            mcp_tool_call_repository=mcp_tool_call_repository,
+        )
     intent_service, memory_extract, capability_index, document_ingest_service = build_intent_service(
         settings,
         mcp_registry,
@@ -308,6 +331,7 @@ async def startup(settings: Settings) -> AppResources:
         memory_port=memory_port,
         checkpointer=checkpointer_handle.saver,
         graph_write=graph_ports.write,
+        attachment_service=attachment_service,
     )
     hitl_service.bind_deny_resume(intent_service)
     graph_port = graph_ports.query
@@ -353,6 +377,7 @@ async def startup(settings: Settings) -> AppResources:
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
         memory_consolidate_service=memory_extract_hitl_service,
+        attachment_index_service=attachment_service,
     )
 
     background_tasks.append(
@@ -406,6 +431,8 @@ async def startup(settings: Settings) -> AppResources:
         graph_write_port=graph_ports.write,
         graph_ports=graph_ports,
         web_search_port=web_search_port,
+        attachment_ports=attachment_ports,
+        attachment_service=attachment_service,
     )
 
 

@@ -14,13 +14,13 @@ from palatium_ai.domain.policies.compact import COMPACT_THRESHOLD_RATIO, Compact
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_build_returns_empty_for_no_keys() -> None:
     builder = ContextBuilder()
     assert await builder.build([], thread_id="t1") == {}
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_build_loads_history_from_dialog_store() -> None:
     dialog_store = AsyncMock()
     dialog_store.list_recent_turns.return_value = DialogTurnWindow(
@@ -36,14 +36,14 @@ async def test_build_loads_history_from_dialog_store() -> None:
     dialog_store.list_recent_turns.assert_awaited_once_with(thread_id="t1", limit=12)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_build_raises_for_unknown_key() -> None:
     builder = ContextBuilder()
     with pytest.raises(KeyError, match="Unknown or unavailable context key"):
         await builder.build(["not_a_real_key"], thread_id="t1")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_build_loads_long_term_memory_when_user_present() -> None:
     memory_port = AsyncMock()
     memory_port.search.return_value = [{"text": "prefers concise answers"}]
@@ -73,7 +73,7 @@ def test_extractive_summary_is_marked_not_silent() -> None:
     assert "middle omitted by compact" in out
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_compact_noop_under_threshold() -> None:
     port = InMemoryMemoryPort()
     builder = ContextBuilder(memory_port=port)
@@ -93,7 +93,7 @@ async def test_compact_noop_under_threshold() -> None:
     assert await port.get(namespace=thread_namespace("t-small"), key="compact_preserve:goal") is None
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_compact_persists_goal_plan_and_marks_dialog() -> None:
     port = InMemoryMemoryPort()
     builder = ContextBuilder(memory_port=port)
@@ -131,7 +131,7 @@ async def test_compact_persists_goal_plan_and_marks_dialog() -> None:
     assert "code" in rebuilt["last_results"].lower()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_compact_uses_llm_summarizer_when_provided() -> None:
     port = InMemoryMemoryPort()
 

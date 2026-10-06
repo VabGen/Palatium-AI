@@ -18,7 +18,7 @@ from palatium_ai.presentation.api.routers import documents
 from palatium_ai.presentation.security.principal import AuthPrincipal
 
 
-@pytest.fixture
+@pytest.fixture()
 def api_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     app = FastAPI()
     app.include_router(documents.router, prefix="/documents")

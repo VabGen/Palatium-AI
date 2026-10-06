@@ -11,6 +11,16 @@
 # With Graphiti SDK in the API image (optional):
 #   docker compose --env-file env/.env build --build-arg WITH_GRAPHITI=1 api
 #
+# With attachment-pipeline deps in the API image (minio/pypdf/python-docx, optional):
+#   docker compose --env-file env/.env build --build-arg WITH_ATTACHMENTS=1 api
+#
+# Optional attachments profile (AV engine for ATTACHMENTS_SCANNER_BACKEND=clamav):
+#   docker compose --env-file env/.env --profile attachments up -d clamav
+#
+# Optional S3 store (profile: attachments-s3; the image is not anonymously pullable,
+# so set ATTACHMENTS_MINIO_IMAGE and prefer `make attach-s3-up`):
+#   docker compose --env-file env/.env --profile attachments-s3 up -d minio
+#
 # Optional observability (Langfuse):
 #   docker compose --env-file env/.env --profile observability up -d langfuse
 #
@@ -373,6 +383,88 @@ services:
         condition: service_healthy
 
   # ============================================================
+  # Optional attachments profile (profile: attachments)
+  #   docker compose --env-file env/.env --profile attachments up -d clamav
+  #
+  # Needed only for ATTACHMENTS_SCANNER_BACKEND=clamav. In dev the scanner defaults
+  # to "disabled"; staging/production refuse to boot without a real engine (020).
+  #
+  # clamd speaks an unauthenticated INSTREAM protocol, so the port is bound to
+  # loopback only: anything that can reach it can scan, and nothing more.
+  # ============================================================
+  clamav:
+    profiles: [ "attachments" ]
+    image: clamav/clamav:1.5.4-debian
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ATTACHMENTS_CLAMAV_PORT:-3310}:3310"
+    volumes:
+      - palatium_clamav_db:/var/lib/clamav
+    healthcheck:
+      # A TCP probe, not a scan: the signature database can take minutes to load on
+      # a cold start, and the app fails closed (scan_failed) until clamd answers.
+      test: [ "CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/3310' || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    security_opt:
+      - no-new-privileges:true
+
+  # ============================================================
+  # Optional S3-compatible store (profile: attachments-s3)
+  #   docker compose --env-file env/.env --profile attachments-s3 up -d minio
+  #
+  # A separate profile on purpose, and NOT a typo: MinIO's container images are no
+  # longer anonymously pullable anywhere (verified 2026-09: Docker Hub `minio/minio`
+  # 404, `quay.io/minio/minio` 401, `ghcr.io/minio/minio` 403, `bitnami/minio`
+  # emptied). Folding this into `--profile attachments` would therefore break the
+  # AV-only flow that works today — one unavailable image must not take down an
+  # unrelated feature.
+  #
+  # Point ATTACHMENTS_MINIO_IMAGE at whatever your registry serves (an internal
+  # mirror, or quay.io after being granted access), then:
+  #   make attach-s3-up     # preflights the image and explains a pull failure
+  # Local dev needs no object store at all: ATTACHMENTS_BLOB_BACKEND=filesystem is
+  # durable across restarts and workers (docs/runbook.md §16.4, §16.9).
+  #
+  # No manual bucket setup: the API calls ensure_bucket() during startup and creates
+  # the bucket when missing (application/wiring.py) — a misconfigured store fails the
+  # boot instead of the first upload (020).
+  #
+  # The console has no auth of its own beyond the root credentials, and those are
+  # cluster-wide, so both ports stay on loopback (020).
+  # ============================================================
+  minio:
+    profiles: [ "attachments-s3" ]
+    image: ${ATTACHMENTS_MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z}
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      # MinIO's own names, fed from the app's single source of truth (010). The
+      # `:-` fallbacks keep `docker compose config` usable without S3 credentials;
+      # `make attach-s3-up` refuses a weak/absent secret before anything starts (020).
+      MINIO_ROOT_USER: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
+      MINIO_ROOT_PASSWORD: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
+    ports:
+      - "127.0.0.1:${ATTACHMENTS_MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${ATTACHMENTS_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - palatium_minio_data:/data
+    healthcheck:
+      # `mc` ships in the image and the `local` alias is preconfigured, so this needs
+      # no shell — the image is ubi-micro based and has none, which also means
+      # `docker compose exec minio sh -c ...` cannot work; use a `minio/mc` image or
+      # the app's own sweep/probe endpoints instead.
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+  # ============================================================
   # Main API
   # ============================================================
   api:
@@ -384,6 +476,7 @@ services:
         APP_VERSION: ${APP_VERSION:-0.1.0}
         UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
         WITH_GRAPHITI: ${WITH_GRAPHITI:-0}
+        WITH_ATTACHMENTS: ${WITH_ATTACHMENTS:-0}
     image: palatium-ai:local
     restart: unless-stopped
     ports:
@@ -401,6 +494,16 @@ services:
         condition: service_started
       litellm:
         condition: service_healthy
+      # Soft dependency: only satisfied with `--profile attachments`, so the API
+      # still starts for the host/MinIO profiles that do not run a scanner (020).
+      clamav:
+        condition: service_healthy
+        required: false
+      # Same for the optional object store (`--profile attachments-s3`); without
+      # `required: false` a plain `up` would abort on "service minio is required".
+      minio:
+        condition: service_healthy
+        required: false
     env_file:
       - ./env/.env
     environment:
@@ -423,6 +526,16 @@ services:
       LANGGRAPH_CHECKPOINT_POSTGRES: ${LANGGRAPH_CHECKPOINT_POSTGRES:-true}
       MEMORY_BACKEND: ${MEMORY_BACKEND:-postgres}
       MEMORY_EMBEDDING_RERANK: ${MEMORY_EMBEDDING_RERANK:-false}
+      # Attachments: Compose DNS differs from the Poetry host default in env/.env, so
+      # the scanner host is overridden here. The filesystem root points at a volume
+      # because the container root is read-only; the minio backend needs no override.
+      ATTACHMENTS_CLAMAV_HOST: ${ATTACHMENTS_CLAMAV_HOST_DOCKER:-clamav}
+      ATTACHMENTS_FILESYSTEM_ROOT: ${ATTACHMENTS_FILESYSTEM_ROOT_DOCKER:-/app/var/attachments}
+      # S3 store: the API reaches it by service name, while the browser must use the
+      # published loopback port. Both are needed — SigV4 signs the Host header, so a
+      # presigned URL cannot be rewritten from one name to the other (020).
+      ATTACHMENTS_MINIO_ENDPOINT: ${ATTACHMENTS_MINIO_ENDPOINT_DOCKER:-minio:9000}
+      ATTACHMENTS_MINIO_PUBLIC_ENDPOINT: ${ATTACHMENTS_MINIO_PUBLIC_ENDPOINT:-http://127.0.0.1:9000}
       GRAPHITI_NEO4J_URI: bolt://neo4j:7687
       GRAPHITI_NEO4J_USER: ${GRAPHITI_NEO4J_USER:-neo4j}
       GRAPHITI_NEO4J_PASSWORD: ${GRAPHITI_NEO4J_PASSWORD:-palatium-neo4j}
@@ -445,6 +558,10 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-}
     read_only: true
+    volumes:
+      # Writable target for ATTACHMENTS_BLOB_BACKEND=filesystem (dev only): the
+      # container root stays read-only, the store still survives a restart.
+      - palatium_attachment_data:/app/var/attachments
     tmpfs:
       - /app/tmp:size=64m,mode=1777
       - /app/logs:size=64m,mode=1777
@@ -470,6 +587,9 @@ volumes:
   palatium_pgdata:
   palatium_redis:
   palatium_neo4j:
+  palatium_clamav_db:
+  palatium_attachment_data:
+  palatium_minio_data:
 
 networks:
   default:

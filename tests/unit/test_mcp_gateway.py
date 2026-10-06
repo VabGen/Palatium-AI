@@ -20,7 +20,8 @@ _GATEWAY = _REPO / "mcp_servers" / "gateway"
 
 def _load(name: str, path: Path) -> object:
     spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
@@ -57,14 +58,14 @@ def test_upstream_policy_accepts_loopback_and_compose_http(upstream_policy: obje
 
 @pytest.mark.parametrize(
     "url",
-    [
+    (
         "file:///etc/passwd",
         "http://evil.example.com:8080",
         "http://169.254.169.254/latest/meta-data",
         "http://metadata.google.internal",
         "http://user:pass@127.0.0.1:8080",
         "ftp://127.0.0.1:8080",
-    ],
+    ),
 )
 def test_upstream_policy_rejects_ssrf_pivots(upstream_policy: object, url: str) -> None:
     assert_fn = upstream_policy.assert_upstream_url_safe  # type: ignore[attr-defined]
@@ -97,7 +98,7 @@ def test_gateway_rejects_platform_server(pin_allowlist: object) -> None:
         pin_allowlist.allowlist_for("platform")  # type: ignore[attr-defined]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_pin_filter_strips_unpinned_tools(pin_filter: object) -> None:
     mw_cls = pin_filter.PinAllowlistMiddleware  # type: ignore[attr-defined]
     mw = mw_cls({"search_documents", "archive_document"})
@@ -115,7 +116,7 @@ async def test_pin_filter_strips_unpinned_tools(pin_filter: object) -> None:
     assert [t.name for t in filtered] == ["search_documents", "archive_document"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_pin_filter_blocks_unpinned_call(pin_filter: object) -> None:
     from fastmcp.exceptions import ToolError
 

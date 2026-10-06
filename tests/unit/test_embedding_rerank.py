@@ -30,7 +30,7 @@ def test_cosine_identical() -> None:
     assert _cosine([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_embedding_rerank_prefers_semantic_match() -> None:
     inner = InMemoryMemoryPort()
     ns = thread_namespace("t-rerank")

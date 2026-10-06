@@ -1,0 +1,102 @@
+---
+description: Supply chain — lockfile, SCA-триаж, образы, Actions, обновления (OWASP A03/A08)
+globs:
+  - "pyproject.toml"
+  - "poetry.lock"
+  - "Dockerfile"
+  - "docker-compose*.yml"
+  - "deploy/**"
+  - "security/**"
+  - ".github/**"
+alwaysApply: false
+---
+
+# Supply chain (OWASP A03 / A08)
+
+Владелец темы «зависимости, lockfile, образы, CI-supply-chain».
+OWASP-карта владельцев — **020**. Docker/CI-механика сборки — `082`.
+Git/PR-процесс — `088`. Секреты и RBAC — **020**; версии Python/Actions, которых ещё
+нет в проекте, здесь не выдумываются.
+
+Внешняя угроза-источник: OWASP Top 10:2025 **A03 Software Supply Chain Failures**
+и **A08 Software or Data Integrity Failures**.
+
+## Lockfile
+
+- `poetry.lock` обязателен, коммитится и **синхронен** `pyproject.toml`.
+  Гейт — `poetry check --lock` (`scripts/ci_security.py`, шаг supply-chain).
+- Расхождение lock и манифеста — блокирующая ошибка, а не «догоним потом»:
+  воспроизводимость сборки держится именно на этой связке.
+- Установка в CI — только из lock (`poetry install --with <group>`), не `poetry add`
+  на лету и не `pip install` версий «по памяти».
+
+## Диапазоны версий
+
+- Обычный вид зависимости — диапазон **с верхней границей** (`>=x.y,<x+1`) или
+  точный пин; открытый вверх диапазон (`>=x`) запрещён: мажорный апгрейд не должен
+  приезжать без ревью.
+- Точный пин (`==`) допустим, но обязан нести **обоснование комментарием** на месте:
+  почему именно эта версия (несовместимость API, зафиксированный поведением тест).
+  Пин без причины — неразличим от «случайно залипло».
+- Понижение/подъём мажора — отдельная задача с прогоном тестов, не побочный эффект
+  другой правки (055).
+
+## SCA (уязвимые зависимости)
+
+- `pip-audit` — **блокирующий** (`scripts/ci_security.py`). Найденная advisory без
+  триажа роняет CI.
+- Единственный путь «принять риск» — строка в `security/pip-audit-ignore.txt`
+  по ID advisory. Формат и обязательные поля (причина, тикет, срок пересмотра) —
+  в шапке этого файла; дублировать их здесь не нужно.
+- Молчаливая правка `select`/тестов, чтобы SCA стал зелёным, — запрещена (050, 075).
+- Статический анализ — ruff-набор `S` в `scripts/ci_quality.py`. Второй анализатор
+  того же класса (bandit) не заводится: дублирующий инструмент (050).
+
+## Образы
+
+- Базовый образ и образы сервисов — пин по **digest** (`@sha256:`), не по mutable-тегу
+  (`:latest`, `main`, `stable`). Тег — подсказка человеку рядом с digest, не ссылка сборки.
+- Runtime-образ — multi-stage, **non-root** (механика — `082`).
+- Секреты — только через env/volume, никогда в слои образа (020).
+
+## GitHub Actions
+
+- Сторонние action — пин по **commit SHA** с комментарием версии:
+  `uses: actions/owner/repo@<40-hex> # vX.Y.Z`. Комментарий обязателен: без него
+  dependabot не может сопоставить пин с релизом и обновление отваливается.
+- Гейт дрейфа — `scripts/ci_security.py`: любая строка `uses:` без 40-символьного
+  SHA (кроме локального `./…`) роняет CI. Так политика не зависит от памяти ревьюера.
+- Обновление пина — только через PR dependabot, не правкой SHA руками.
+
+## Обновления
+
+- покрытие `dependabot.yml`: `pip`, `github-actions`, `npm` (`/web`), `docker` — weekly.
+- Security-обновления приходят независимо от расписания (настройка репозитория),
+  routine-бампы схлопываются в групп-PR, чтобы алерты не терялись в шуме.
+
+## Backlog (осознанно не сделано)
+
+- **SBOM / provenance** (CycloneDX + attestation) — уровень зрелости ниже текущих
+  гейтов; решение 2026-09-30: backlog до релиза, не «тихо забыто».
+
+Базовый образ `Dockerfile` переведён на digest-пин в W5 плана hardening (2026-09-30):
+`python:${PYTHON_VERSION}-slim@sha256:…` в корневом `Dockerfile` и в
+`mcp_servers/Dockerfile`; дрейф роняет CI шагом «base image pin drift».
+
+## Гейты
+
+| Гейт | Где | Что роняет |
+|---|---|---|
+| `poetry check --lock` | `scripts/ci_security.py` | lock рассинхронен манифесту |
+| Pin-drift Actions | `scripts/ci_security.py` | `uses:` без SHA / без версии |
+| Pin-drift base image | `scripts/ci_security.py` | `FROM` без `@sha256:` (нет пина по digest) |
+| `pip-audit` + триаж | `scripts/ci_security.py`, `security/pip-audit-ignore.txt` | нетриаженная advisory |
+| gitleaks (история) | CI-job `security`, `.gitleaks.toml` | утёкший секрет в любом коммите |
+| `docker compose config --quiet` | Makefile `validate`, CI-job `compose` (082) | невалидный compose |
+
+## DoD для изменения supply-chain
+
+- lock обновлён и синхронен; `ci_security.py` локально зелёный;
+- новый пин/образ — с причиной (комментарий или строка триажа);
+- политика зафиксирована **в этом файле**, а не только в тексте PR (иначе следующий
+  ревьюер её не увидит).

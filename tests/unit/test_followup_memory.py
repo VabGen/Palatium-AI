@@ -26,7 +26,7 @@ from tests.conftest import (
     make_weaving_agent,
 )
 
-_HITL_HMAC = "unit-test-hitl-hmac-key-32b"  # noqa: S105
+_HITL_HMAC = "unit-test-hitl-hmac-key-32b"
 
 
 class _FakeSessionService:
@@ -38,7 +38,7 @@ class _FakeSessionService:
 
     async def get_session(self, **_kwargs: object) -> None:
         """Reply-locale lookup (065); no persisted session in unit tests."""
-        return None
+        return
 
 
 def _formatter_json(title: str) -> str:
@@ -62,7 +62,7 @@ def _formatter_json(title: str) -> str:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
     """Bug: 'план → дай таблицей' used to become clarification without rewrite."""
     dialog = FakeDialogTurnStore()
@@ -76,7 +76,7 @@ async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
         content="План встречи:\n1. Цель\n2. Повестка\n3. Участники",
     )
 
-    harness, contextualizer, intent_agent, pipeline_llm = make_dual_agent_stack(
+    harness, contextualizer, intent_agent, _pipeline_llm = make_dual_agent_stack(
         """{
               "rewritten_query": "Представь предыдущий план встречи в виде таблицы",
               "continuation_kind": "format",
@@ -131,7 +131,7 @@ async def test_followup_format_uses_dialog_memory_not_clarification() -> None:
     assert "таблиц" in window.turns[-2].content.lower()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_followup_answer_overrides_false_clarification() -> None:
     """Bug: 'когда завершение встречи' → clarify HITL despite prior schedule in dialog."""
     dialog = FakeDialogTurnStore()
@@ -148,7 +148,7 @@ async def test_followup_answer_overrides_false_clarification() -> None:
         ),
     )
 
-    harness, contextualizer, intent_agent, pipeline_llm = make_dual_agent_stack(
+    harness, contextualizer, intent_agent, _pipeline_llm = make_dual_agent_stack(
         """{
                   "rewritten_query": "Когда завершится встреча?",
                   "continuation_kind": "answer",
@@ -230,7 +230,7 @@ async def test_followup_answer_overrides_false_clarification() -> None:
     assert "15:00" in result.output.plain_text()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_phatic_followup_skips_researcher_and_critic_llm() -> None:
     """Bug: 'привет → как дела' routed to Researcher + Critic HITL."""
     dialog = FakeDialogTurnStore()

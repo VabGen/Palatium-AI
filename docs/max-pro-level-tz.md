@@ -40,7 +40,7 @@
 |---|---|---|
 | **Brain (LLM-цикл)** | Модель, принимающая решения на шаге | Конкретный агент (`BaseAgent.run`) |
 | **Harness** | Цикл «вызвать модель → выполнить инструмент» + guardrails | `execute_with_guardrails` — единственная точка входа (065) |
-| **Hands (sandbox)** | Исполнение эффекта; креды **никогда** не живут здесь | MCP-инструменты через `ToolRegistry` (070); code-exec — отдельная песочница |
+| **Hands (sandbox)** | Исполнение эффекта; креды **никогда** не живут здесь | MCP-инструменты через `ToolExecutor` + платформенные пины (070); code-exec — отдельная песочница |
 | **Session** | Durable append-only лог **вне** окна контекста | LangGraph checkpointer (Redis, short-term) + long-term память (060) |
 
 Следствие для ТЗ: harness — не «сервисный слой для удобства», а контракт с
@@ -114,7 +114,7 @@ state запрещены (050, 065).
 `execute_with_guardrails` (единая точка, `domain/ports/harness.py`; реализация —
 `application/agents/harness.py`, 065) внутри выполняет фиксированную
 последовательность: span узла → JIT-сборка контекста → передача вызова в
-`ToolRegistry` (RBAC при резолве инструмента — **единственная точка**, 020;
+`ToolExecutor` (RBAC по `allowed_tools` — **единственная точка**, 020;
 Harness не дублирует проверку) → secret scan входа → `agent.run()` с таймаутом
 из `AgentConfig` → `agent.verify()` → confidence gate → метрики. Узел не
 повторяет ни один из этих шагов самостоятельно.
@@ -174,7 +174,7 @@ src/palatium_ai/
   реализацию `text_ingestor`.
 - Результат ингеста пишется **только** через `ingest_document` MCP-инструмент
   (070); если целевая система — EDMS, это write-операция → обязателен HITL
-  (020, 070) и `irreversible=True` в `ToolDefinition`.
+  (020, 070) и `irreversible=True` в `PlatformToolPin`.
 
 ---
 
@@ -283,8 +283,8 @@ handoff» — прямое следствие потери state).
 
 ## 8. Harness и Zero Trust
 
-RBAC-проверка — **одна точка**: `ToolRegistry` при резолве инструмента, до
-вызова. Harness не дублирует проверку — только передаёт вызов дальше (020).
+RBAC-проверка — **одна точка**: `ToolExecutor.try_execute` по `allowed_tools`,
+до вызова. Harness не дублирует проверку — только передаёт вызов дальше (020).
 Отказ RBAC — не исключение наружу, а структурированный `AgentOutput(status=
 "failure", error_message=...)` + audit-событие `permission_denied` (020,
 030.8, 070).
@@ -351,9 +351,11 @@ mode*: классификатор промахивается именно на �
 `consolidate_memory`, `ingest_document`, `graph_query`, `web_fallback`.
 Новый инструмент — правка перечня + обсуждение, не ad-hoc регистрация.
 
-- `ToolDefinition` — frozen pydantic input/output схемы + одна метка
-  `ToolPermission` из закрытого перечня (`memory.read`, `memory.write`,
-  `knowledge.read`, `graph.query`, `document.ingest`, `web.access`).
+- Контракт инструмента — frozen pydantic схема входа (`platform_schemas.py` /
+  `external_schemas.py`) + `PlatformToolPin` с закрытыми осями
+  `side_effect ∈ {read, write, unknown}` и `risk_tier ∈ {low, medium, high}`
+  плюс `requires_hitl` / `irreversible` (070). Пин действует только при
+  совпадении fingerprint схемы — самозаявление сервера недоверенно.
 - ≤5 инструментов на агента; больше — обоснование комментарием в
   `config.py` (050, 070). Инструменты — немного, высокоценные, не 1:1
   обёртки над API (canon D, *Writing effective tools*): `search_knowledge`
@@ -534,7 +536,7 @@ skill `agent-refactoring`, не часть этого документа.
 | 7 агентов (Planner, Router, Learning, Graph Traversal) | реестр 000: 12 ролей, см. §2 |
 | Qdrant, ParadeDB/BM25 | pgvector + Postgres FTS, см. §5 |
 | `application/agents/{core/, orchestrator/}` | 5 слоёв, см. §3.2 |
-| RBAC в Harness | ToolRegistry, см. §8 |
+| RBAC в Harness | `ToolExecutor` вне Harness, см. §8 |
 | План 20–22 недели | `waves.md`, см. §16 |
 | Marketing-SLO («67%→8%») | не контракт, см. §15 |
 

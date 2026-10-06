@@ -18,12 +18,12 @@ from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHan
 from tests.conftest import PlatformKnowledgeMcpRegistry, make_document_ingest_stack
 
 
-@pytest.fixture
+@pytest.fixture()
 def knowledge_port() -> InMemoryKnowledgePort:
     return InMemoryKnowledgePort()
 
 
-@pytest.fixture
+@pytest.fixture()
 def ingest_service(knowledge_port: InMemoryKnowledgePort) -> DocumentIngestService:
     llm = StaticLLMPort('{"prefixes": ["Intro section about onboarding.", "Security section about passwords."]}')
     harness = Harness(llm=llm)
@@ -37,7 +37,7 @@ def ingest_service(knowledge_port: InMemoryKnowledgePort) -> DocumentIngestServi
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_document_ingest_service_prepare_chunks(ingest_service: DocumentIngestService) -> None:
     result = await ingest_service.prepare_chunks(
         task_id="ingest-1",
@@ -52,7 +52,7 @@ async def test_document_ingest_service_prepare_chunks(ingest_service: DocumentIn
     assert all(chunk.contextual_prefix for chunk in result.output.chunks)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_document_ingest_request_commit_and_execute(
     knowledge_port: InMemoryKnowledgePort,
 ) -> None:

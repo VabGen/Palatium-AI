@@ -19,6 +19,7 @@ from palatium_ai.core.config import get_settings
 from palatium_ai.presentation.api.routers import (
     admin,
     agents,
+    attachments,
     auth,
     documents,
     feedback,
@@ -102,6 +103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(intents.router, prefix="/api/intents", tags=["intents"])
     application.include_router(hitl.router, prefix="/api/hitl", tags=["hitl"])
     application.include_router(documents.router, prefix="/api/documents", tags=["documents"])
+    application.include_router(attachments.router, prefix="/api/attachments", tags=["attachments"])
     application.include_router(memory.router, prefix="/api/memory", tags=["memory"])
     application.include_router(health.router, tags=["health"])
     application.include_router(metrics.router, tags=["observability"])

@@ -60,7 +60,7 @@ def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
 
     packet = ContextPacket.model_validate_json(input_context["context_packet_json"])
     strategy_raw = input_context.get("selected_strategy", "reason_only")
-    strategy: ExecutionStrategy = strategy_raw  # type: ignore[assignment]
+    strategy: ExecutionStrategy = strategy_raw  # type: ignore[assignment]  # context собран из Literal-реестра (017)
     continuation = input_context.get("continuation_kind") or None
     try:
         user_input_chars = int(input_context.get("user_input_chars", "0"))

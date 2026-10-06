@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 from pydantic import BaseModel
 
@@ -21,6 +21,7 @@ from palatium_ai.domain.hitl.cards import HITLCardView, HITLResolveRequest, HITL
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 
 if TYPE_CHECKING:
+    from palatium_ai.application.services.attachment_service import AttachmentService
     from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.intent_service import IntentService
@@ -33,6 +34,7 @@ _OFF_GRAPH_TOOL_PREFIXES: tuple[str, ...] = (
     "mem-save-",
     "mem-forget-",
     "mem-consolidate-",
+    "att-index-",
 )
 
 
@@ -61,6 +63,7 @@ class HitlRespondFacade:
         memory_save_service: MemorySaveService | None = None,
         memory_forget_service: MemoryForgetService | None = None,
         memory_consolidate_service: MemoryConsolidateService | None = None,
+        attachment_index_service: AttachmentService | None = None,
     ) -> None:
         self._hitl = hitl_service
         self._intent = intent_service
@@ -68,6 +71,7 @@ class HitlRespondFacade:
         self._memory_save = memory_save_service
         self._memory_forget = memory_forget_service
         self._memory_consolidate = memory_consolidate_service
+        self._attachment_index = attachment_index_service
 
     async def respond(
         self,
@@ -179,6 +183,8 @@ class HitlRespondFacade:
             return self._memory_forget
         if task_id.startswith("mem-consolidate-"):
             return self._memory_consolidate
+        if task_id.startswith("att-index-"):
+            return self._attachment_index
         return None
 
     async def _perform_resume(
@@ -223,7 +229,10 @@ class HitlRespondFacade:
                 resume_org_id=resume_org_id,
                 is_admin=is_admin,
             )
-        return None
+        # HITLCardPurpose is a closed Literal: assert_never() is the runtime
+        # fail-closed guard (035) *and* the compile-time exhaustiveness check — a new
+        # purpose without a handler fails the build instead of returning None.
+        assert_never(card.purpose)
 
     async def _resume_quality_review(
         self,

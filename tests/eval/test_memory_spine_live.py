@@ -20,7 +20,7 @@ from tests.eval.live_helpers import dialog_pair, require_live
 pytestmark = [pytest.mark.live, require_live]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_live_format_followup_is_format_kind(live_llm) -> None:
     window = dialog_pair(
         thread_id="live-format",
@@ -43,7 +43,7 @@ async def test_live_format_followup_is_format_kind(live_llm) -> None:
     assert any(token in rewritten for token in ("таблиц", "table", "план", "встреч"))
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_live_anaphora_answer_refers_to_prior(live_llm) -> None:
     window = dialog_pair(
         thread_id="live-anaphora",
@@ -66,7 +66,7 @@ async def test_live_anaphora_answer_refers_to_prior(live_llm) -> None:
     assert any(token in rewritten for token in ("ivanov", "иванов", "acme", "email", "почт"))
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_live_new_topic_does_not_force_prior(live_llm) -> None:
     window = dialog_pair(
         thread_id="live-new",
@@ -87,7 +87,7 @@ async def test_live_new_topic_does_not_force_prior(live_llm) -> None:
     assert "минск" in result.output.rewritten_query.lower() or "погод" in result.output.rewritten_query.lower()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_live_memory_hints_surface_preference(live_llm) -> None:
     result = await run_contextualizer(
         live_llm,
@@ -106,7 +106,7 @@ async def test_live_memory_hints_surface_preference(live_llm) -> None:
     assert result.output.confidence >= 0.5
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_live_memory_keeper_extracts_preference(live_llm) -> None:
     transcript = (
         "user: Я всегда хочу планы встреч в виде таблицы.\n"
@@ -130,7 +130,7 @@ async def test_live_memory_keeper_extracts_preference(live_llm) -> None:
     assert any(token in blob for token in ("таблиц", "table", "prefer"))
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_live_memory_keeper_skips_ephemeral_format(live_llm) -> None:
     transcript = (
         "user: Составь короткий список покупок.\n"
@@ -153,7 +153,7 @@ async def test_live_memory_keeper_skips_ephemeral_format(live_llm) -> None:
     assert not durable
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_live_clarify_when_history_insufficient(live_llm) -> None:
     window = dialog_pair(
         thread_id="live-clarify",

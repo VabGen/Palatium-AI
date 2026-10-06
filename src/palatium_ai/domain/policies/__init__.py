@@ -19,6 +19,7 @@ from .types import (
     RouteStrategy,
     TaskKind,
     UnderspecificationKind,
+    UntrustedContentAction,
 )
 
 if TYPE_CHECKING:
@@ -31,20 +32,28 @@ if TYPE_CHECKING:
     from .promotion import PromotionPolicy
     from .retrieval import LAST_RESORT_PLATFORM_TOOLS, RetrievalBindingDecision, RetrievalPolicy
     from .scratchpad import SessionScratchpadPolicy
+    from .untrusted_content import (
+        DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
+        UntrustedContentPolicy,
+        UntrustedContentResult,
+        UntrustedContentThresholds,
+        budget_untrusted_text,
+    )
 
 __all__ = [
+    "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
+    "LAST_RESORT_PLATFORM_TOOLS",
+    "LOW_RISK_ROUTE_STRATEGIES",
     "AgentRole",
     "CompactPolicy",
-    "ContinuationKind",
-    "ContinuityPolicy",
     "ContextualizerGateDecision",
     "ContextualizerPolicy",
+    "ContinuationKind",
+    "ContinuityPolicy",
     "CriticGateDecision",
     "CriticPolicy",
     "EffectiveRoutingIntent",
     "ExecutionStrategy",
-    "LAST_RESORT_PLATFORM_TOOLS",
-    "LOW_RISK_ROUTE_STRATEGIES",
     "MemoryNamespaceBinding",
     "MemoryNamespacePolicy",
     "ModelTier",
@@ -56,6 +65,11 @@ __all__ = [
     "SessionScratchpadPolicy",
     "TaskKind",
     "UnderspecificationKind",
+    "UntrustedContentAction",
+    "UntrustedContentPolicy",
+    "UntrustedContentResult",
+    "UntrustedContentThresholds",
+    "budget_untrusted_text",
 ]
 
 _LAZY: dict[str, tuple[str, str]] = {
@@ -74,6 +88,14 @@ _LAZY: dict[str, tuple[str, str]] = {
     "RetrievalBindingDecision": (".retrieval", "RetrievalBindingDecision"),
     "RetrievalPolicy": (".retrieval", "RetrievalPolicy"),
     "SessionScratchpadPolicy": (".scratchpad", "SessionScratchpadPolicy"),
+    "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS": (
+        ".untrusted_content",
+        "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
+    ),
+    "UntrustedContentPolicy": (".untrusted_content", "UntrustedContentPolicy"),
+    "UntrustedContentResult": (".untrusted_content", "UntrustedContentResult"),
+    "UntrustedContentThresholds": (".untrusted_content", "UntrustedContentThresholds"),
+    "budget_untrusted_text": (".untrusted_content", "budget_untrusted_text"),
 }
 
 

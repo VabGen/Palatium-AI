@@ -1,2 +1,5 @@
+# Poetry uses the in-project `.venv` (referenced by .vscode/settings.json and the
+# docs). Keep this in sync with `in-project` — the previous `false` made Poetry
+# build a cache-dir venv while the IDE/CI expected `.venv`.
 [virtualenvs]
-in-project = false
+in-project = true

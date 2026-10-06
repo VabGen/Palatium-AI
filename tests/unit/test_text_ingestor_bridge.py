@@ -29,7 +29,7 @@ def test_text_ingestor_to_agent_input_maps_flags() -> None:
     assert agent_input.context["document_title"] == "Policy"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_text_ingestor_output_to_task_result_roundtrip() -> None:
     harness = Harness(llm=StaticLLMPort("{}"))
     agent = TextIngestorAgent(harness, TEXT_INGESTOR_CONFIG)

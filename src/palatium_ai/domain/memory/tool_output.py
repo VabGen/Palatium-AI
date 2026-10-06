@@ -77,7 +77,7 @@ def _normalize_text(text: str) -> str:
 
 
 def _compact_json_if_possible(text: str, *, max_chars: int) -> str | None:
-    if not (text.startswith("{") or text.startswith("[")):
+    if not text.startswith(("{", "[")):
         return None
     try:
         payload = json.loads(text)

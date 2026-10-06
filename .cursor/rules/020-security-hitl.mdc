@@ -12,8 +12,9 @@ alwaysApply: true
 
 - Каждый вызов инструмента агентом проверяется через явный RBAC allow-list
   (`AgentConfig.allowed_tools`). Вызов вне списка → `PermissionError` + событие в audit log.
-- **Единственная точка проверки — ToolRegistry** (при резолве инструмента).
-  Harness НЕ дублирует RBAC-проверку, а передаёт вызов в ToolRegistry.
+- **Единственная точка проверки — `ToolExecutor`** (`application/tools/executor.py`,
+  решение — `is_tool_invocation_allowed`). Harness НЕ дублирует RBAC-проверку,
+  а передаёт вызов в ToolExecutor.
   Дублирующие проверки в коде агентов — ошибка ревью.
 - Guardrails реализуются на уровне кода (pydantic-валидация, regex, allow-list);
   промпт-guard'ы — только дополнительный рубеж, никогда единственный.
@@ -71,3 +72,49 @@ alwaysApply: true
 Если реализация просит пропустить HITL «для скорости» в критичном сценарии
 (деньги, PII, email, произвольный код, write в EDMS) — предупреди о риске
 explicit текстом перед тем как продолжить.
+
+## OWASP Top 10:2025 — карта угроз и владельцев
+
+Внешняя база классификации (подтверждена 2026-09-30). Это **навигация**, а не второй
+список запретов: запрет живёт у одного владельца, здесь — только маршрут (050).
+
+| Категория | Владелец | Где реализовано |
+|---|---|---|
+| A01 Broken Access Control | **020** | RBAC allow-list, `ToolExecutor`, RLS/tenant-scope (060) |
+| A02 Security Misconfiguration | **020** | env/секреты, fail-closed хуки, конфиг из окружения (delivery-механика — `082`) |
+| A03 Software Supply Chain Failures | **025** | lock, `pip-audit`, digest-пины, SHA-пин Actions |
+| A04 Cryptographic Failures | **020** | TLS, JWT-валидация, секреты через env/secret store |
+| A05 Injection | **020**, **070** | параметризованные SQL/Cypher, allow-list, prompt-injection gate |
+| A06 Insecure Design | **000**, **030** | декомпозиция агентов, HITL по классу действия, лимиты |
+| A07 Authentication Failures | **020** | Zero Trust, проверка прав из валидированного токена/principal |
+| A08 Software or Data Integrity Failures | **025**, **040** | SRI бандла, hash-chained audit, provenance — backlog |
+| A09 Security Logging & Alerting Failures | **040** | audit по security-событиям, метрики, алерты |
+| A10 Mishandling of Exceptional Conditions | **035** | классификация ошибок, fail-closed на границе |
+
+Версию «OWASP LLM» в коде и правилах без года не хардкодить: ссылка — без edition
+(`OWASP LLM01`), база — эта таблица.
+
+## Разрешения агента в IDE (Auto-Run) — dev-time, не путать с HITL продукта
+
+Конфиг Cursor-агента (терминал/MCP) — `.cursor/permissions.json`, схема —
+`cursor-always-local/schemas/permissions.schema.json` (лежит в сборке Cursor).
+Допустимы только ключи: `approvalMode`, `terminalAllowlist`, `mcpAllowlist`,
+`autoRun`/`autoReview` (`unevaluatedProperties: false`); комментарии `//` разрешены.
+
+- `approvalMode`: `manual` (Ask Every Time) · `allowlist` (только из списков) ·
+  `unrestricted` (Always Run, без вопросов). Текущее значение — в файле.
+- **Жёсткие запреты — в `.cursor/hooks.json`, а НЕ в approvalMode** (они действуют
+  при любом режиме): `beforeShellExecution` → `deny-dangerous-shell.py` (deny),
+  `beforeMCPExecution` → `mcp-rbac-guard.sh` (ask/deny по перечню 070).
+- **Инвариант:** в `mcpAllowlist` только read-инструменты 070
+  (`search_knowledge`, `search_memory`, `graph_query`, `web_fallback`).
+  Мутации (`save_memory`, `forget_memory`, `consolidate_memory`, `ingest_document`)
+  туда НЕ добавлять — они проходят HITL через `mcp-rbac-guard.sh`.
+- `approvalMode: "unrestricted"` снимает кнопку подтверждения у человека —
+  это ослабление контроля, а не «оптимизация». Переключение в `unrestricted`
+  требует явного подтверждения владельца и фиксируется комментарием в
+  `permissions.json` (кто/когда); помни, что при этом единственной линией
+  защиты остаётся deny-hook + RBAC-guard.
+- `permissions.json` (dev-time авто-запуск) **не отменяет** HITL продукта
+  (`interrupt()`/карточки) — это разные слои: первый про действия агента в IDE,
+  второй про действия системы в runtime.

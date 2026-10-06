@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ListChecks, ShieldAlert } from 'lucide-react';
 import { fetchHitlStepUpChallenge, respondHitlCard } from '../api/client';
 import { formatHitlError } from '../lib/hitl';
+import { formatDateTime, formatNumber, t } from '../i18n';
 import { TokenIcon } from '../icons/TokenIcon';
 import type {
   FormatterTaskResult,
@@ -23,6 +24,9 @@ type PendingStepUp = {
 };
 
 const STEP_UP_MESSAGE_TYPE = 'palatium.hitl.step_up';
+
+/** Claim name the server binds the assertion to when it does not name one itself. */
+const DEFAULT_STEP_UP_CLAIM = 'hitl_card_id';
 
 function authorizeOrigin(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -139,7 +143,7 @@ function HitlCard({
             }
             return;
           } else {
-            throw new Error('Step-up required but no assertion returned');
+            throw new Error(t('hitl.error.stepUpUnavailable'));
           }
         }
       }
@@ -155,7 +159,7 @@ function HitlCard({
     if (!stepUpPending || busyAction) return;
     const token = stepUpAssertion.trim();
     if (!token) {
-      setError('Provide the IdP step-up JWT (paste or IdP postMessage) before confirming.');
+      setError(t('hitl.error.stepUpRequired'));
       return;
     }
     setBusyAction(stepUpPending.actionId);
@@ -192,54 +196,61 @@ function HitlCard({
         <Mark size={18} className="hitl-mark icon-animated" />
         <div>
           <p className="hitl-kicker">
-            {isChoice ? 'Choose one' : isTool ? 'Tool approval' : 'Review required'}
+            {isChoice
+              ? t('hitl.kicker.choice')
+              : isTool
+                ? t('hitl.kicker.tool')
+                : t('hitl.kicker.review')}
           </p>
           <h3>{local.title}</h3>
           {local.body && <p>{local.body}</p>}
-          {isChoice && pending && (
-            <p className="hitl-choice-hint">Click one option card to continue.</p>
-          )}
-          {mayNeedStepUp && (
-            <p className="hitl-step-up-hint">
-              Tool approval may require a server-issued step-up proof before the action runs.
-            </p>
-          )}
+          {isChoice && pending && <p className="hitl-choice-hint">{t('hitl.choiceHint')}</p>}
+          {mayNeedStepUp && <p className="hitl-step-up-hint">{t('hitl.stepUpHint')}</p>}
         </div>
       </header>
 
       <div className="hitl-meta">
         {!isChoice && (
           <span>
-            Risk <span style={{ color: riskColor }}>{local.risk_score.toFixed(2)}</span>
+            {t('hitl.riskLabel')}{' '}
+            <span style={{ color: riskColor }}>
+              {formatNumber(local.risk_score, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </span>
           </span>
         )}
-        <span>Expires {new Date(local.expires_at).toLocaleTimeString()}</span>
+        <span>{t('hitl.expires', { time: formatDateTime(local.expires_at) })}</span>
         <span className="hitl-status">{local.status}</span>
       </div>
 
       {stepUpPending ? (
-        <div className="hitl-step-up-form" role="group" aria-label="IdP step-up assertion">
+        <div className="hitl-step-up-form" role="group" aria-label={t('hitl.stepUpGroup')}>
           <p className="hitl-step-up-hint">
-            Step-up via {stepUpPending.challenge.method}
-            {stepUpPending.challenge.required_acr
-              ? ` (acr=${stepUpPending.challenge.required_acr})`
-              : ''}
-            . Bind claim <code>{stepUpPending.challenge.card_claim ?? 'hitl_card_id'}</code>=
-            <code>{local.card_id}</code>
+            {t('hitl.stepUpVia', {
+              method: stepUpPending.challenge.method,
+              acr: stepUpPending.challenge.required_acr
+                ? ` (acr=${stepUpPending.challenge.required_acr})`
+                : '',
+            })}{' '}
+            {t('hitl.stepUpBind', {
+              claim: stepUpPending.challenge.card_claim ?? DEFAULT_STEP_UP_CLAIM,
+              card: local.card_id,
+            })}
             {stepUpPending.challenge.challenge
-              ? `; challenge nonce ${stepUpPending.challenge.challenge}`
+              ? t('hitl.stepUpNonce', { nonce: stepUpPending.challenge.challenge })
               : ''}
-            .
             {stepUpPending.challenge.authorize_url
-              ? ' IdP window opened when available; it may postMessage the JWT.'
-              : ' Paste the IdP JWT below.'}
+              ? t('hitl.stepUpIdpOpened')
+              : t('hitl.stepUpPaste')}
           </p>
           <textarea
             className="hitl-step-up-input"
             rows={3}
             value={stepUpAssertion}
             onChange={event => setStepUpAssertion(event.target.value)}
-            placeholder="IdP step-up JWT"
+            placeholder={t('hitl.stepUpPlaceholder')}
             disabled={busyAction !== null}
           />
           <div className="hitl-options">
@@ -253,7 +264,7 @@ function HitlCard({
                   if (url) openAuthorizeUrl(url);
                 }}
               >
-                <span>Open IdP</span>
+                <span>{t('hitl.stepUpOpenIdp')}</span>
               </button>
             )}
             <button
@@ -262,7 +273,7 @@ function HitlCard({
               disabled={busyAction !== null}
               onClick={() => void submitIdpAssertion()}
             >
-              <span>{busyAction ? 'Confirming…' : 'Submit step-up'}</span>
+              <span>{busyAction ? t('hitl.stepUpConfirming') : t('hitl.stepUpSubmit')}</span>
             </button>
             <button
               type="button"
@@ -273,7 +284,7 @@ function HitlCard({
                 setStepUpAssertion('');
               }}
             >
-              <span>Cancel</span>
+              <span>{t('hitl.cancel')}</span>
             </button>
           </div>
         </div>
@@ -281,7 +292,7 @@ function HitlCard({
         <div
           className={`hitl-options${isChoice ? ' hitl-options-choice' : ''}`}
           role="group"
-          aria-label={isChoice ? 'Choices' : 'HITL actions'}
+          aria-label={isChoice ? t('hitl.choicesLabel') : t('hitl.actionsLabel')}
         >
           {local.options.map(option => (
             <button
@@ -295,15 +306,17 @@ function HitlCard({
               <span>
                 {busyAction === option.action_id
                   ? mayNeedStepUp
-                    ? 'Confirming…'
-                    : 'Saving…'
+                    ? t('hitl.stepUpConfirming')
+                    : t('hitl.saving')
                   : option.label}
               </span>
             </button>
           ))}
         </div>
       ) : (
-        <p className="hitl-resolved">Resolved: {local.resolved_action_id ?? local.status}</p>
+        <p className="hitl-resolved">
+          {t('hitl.resolved', { action: local.resolved_action_id ?? local.status })}
+        </p>
       )}
       {error && <p className="msg-error">{error}</p>}
     </section>

@@ -164,7 +164,7 @@ def test_valid_table_ok() -> None:
     assert len(doc.blocks[0].rows) == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_formatter_invalid_json_returns_stable_contract_code() -> None:
     """Broken LLM JSON → failure with FORMATTER_OUTPUT_INVALID, never a fake document."""
     from palatium_ai.domain.agents.context_packet import ContextPacket

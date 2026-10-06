@@ -164,7 +164,7 @@ def test_side_effect_fail_closed_and_read_annotation() -> None:
     assert pins["mcp:edms.archive_document"].requires_hitl is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_tool_executor_denies_unlisted_mcp_tool() -> None:
     fake_audit = _FakeAuditLogger()
     executor_module.get_audit_logger = lambda: fake_audit
@@ -196,7 +196,7 @@ async def test_tool_executor_denies_unlisted_mcp_tool() -> None:
     assert ok.value == "search_documents"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_kill_switch_blocks_turns() -> None:
     fake_audit = _FakeAuditLogger()
     import palatium_ai.application.services.kill_switch as ks

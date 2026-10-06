@@ -13,8 +13,8 @@ from palatium_ai.domain.knowledge.types import IngestDocumentCommand, SearchKnow
 from palatium_ai.infrastructure.knowledge.postgres_knowledge_port import PostgresKnowledgePort
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
+@pytest.mark.integration()
+@pytest.mark.asyncio()
 async def test_postgres_knowledge_search_after_ingest(requires_database: str) -> None:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 

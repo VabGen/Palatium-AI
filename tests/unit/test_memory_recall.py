@@ -18,7 +18,7 @@ def test_recall_bundle_respects_char_budget() -> None:
     assert block.startswith("- [fact]")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_recall_for_thread_searches_namespace() -> None:
     port = InMemoryMemoryPort()
     await port.put(
@@ -32,7 +32,7 @@ async def test_recall_for_thread_searches_namespace() -> None:
     assert bundle.hint_texts
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_recall_drops_low_confidence_hits() -> None:
     port = InMemoryMemoryPort()
     await port.put(
@@ -56,7 +56,7 @@ async def test_recall_drops_low_confidence_hits() -> None:
     assert bundle.hits[0].confidence >= 0.7
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_recall_merges_user_namespace_preferences() -> None:
     port = InMemoryMemoryPort()
     await port.put(
@@ -81,7 +81,7 @@ async def test_recall_merges_user_namespace_preferences() -> None:
     assert "preference" in kinds or "tables" in texts
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_recall_merges_org_namespace_entities() -> None:
     port = InMemoryMemoryPort()
     await port.put(

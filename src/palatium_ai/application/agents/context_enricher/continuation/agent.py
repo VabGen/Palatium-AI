@@ -58,7 +58,7 @@ class ContextualizerAgent(BaseAgent):
         memory_hints = tuple(json.loads(input.context["memory_hints_json"]))
         prompt_budget = MemoryPromptBudget.model_validate_json(input.context["prompt_budget_json"])
         task_kind_raw = input.context.get("task_kind") or ""
-        task_kind: TaskKind | None = task_kind_raw if task_kind_raw else None  # type: ignore[assignment]
+        task_kind: TaskKind | None = task_kind_raw or None  # type: ignore[assignment]  # context собран из Literal-реестра (017)
         requires_mcp = input.context.get("requires_mcp", "false").lower() == "true"
 
         # Typed HITL choice resume: never ask LLM — envelope kind=clarify means slot filled.

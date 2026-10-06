@@ -70,10 +70,10 @@ def platform_stub() -> object:
     return _load_stub_server("mcp_servers.platform.platform_mcp_server")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 @pytest.mark.parametrize(
-    ("stub_fixture", "tool_name", "domain_schema"),
-    [
+    "stub_fixture, tool_name, domain_schema",
+    (
         ("edms_stub", "search_documents", EDMS_SEARCH_DOCUMENTS_SCHEMA),
         ("edms_stub", "archive_document", EDMS_ARCHIVE_DOCUMENT_SCHEMA),
         ("analytics_stub", "get_sales_metrics", ANALYTICS_SALES_METRICS_SCHEMA),
@@ -85,7 +85,7 @@ def platform_stub() -> object:
         ("platform_stub", "consolidate_memory", PLATFORM_CONSOLIDATE_MEMORY_SCHEMA),
         ("platform_stub", "graph_query", PLATFORM_GRAPH_QUERY_SCHEMA),
         ("platform_stub", "web_fallback", PLATFORM_WEB_FALLBACK_SCHEMA),
-    ],
+    ),
 )
 async def test_stub_registered_schema_matches_domain_pin(
     stub_fixture: str,
@@ -101,8 +101,8 @@ async def test_stub_registered_schema_matches_domain_pin(
 
 
 @pytest.mark.parametrize(
-    ("server_name", "tool_name", "input_schema", "expected_side_effect"),
-    [
+    "server_name, tool_name, input_schema, expected_side_effect",
+    (
         ("edms", "search_documents", EDMS_SEARCH_DOCUMENTS_SCHEMA, "read"),
         ("edms", "archive_document", EDMS_ARCHIVE_DOCUMENT_SCHEMA, "write"),
         ("analytics", "get_sales_metrics", ANALYTICS_SALES_METRICS_SCHEMA, "read"),
@@ -114,7 +114,7 @@ async def test_stub_registered_schema_matches_domain_pin(
         ("platform", "consolidate_memory", PLATFORM_CONSOLIDATE_MEMORY_SCHEMA, "write"),
         ("platform", "graph_query", PLATFORM_GRAPH_QUERY_SCHEMA, "read"),
         ("platform", "web_fallback", PLATFORM_WEB_FALLBACK_SCHEMA, "read"),
-    ],
+    ),
 )
 def test_stub_schemas_resolve_platform_pins(
     server_name: str,

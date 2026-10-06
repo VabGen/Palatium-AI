@@ -46,5 +46,8 @@ class AgentGraphState(TypedDict, total=False):
     revision_feedback: str
     requires_clarification: bool
     clarification_question: str
+    # Fenced attachment text for this turn (already wrapped by AttachmentService).
+    # Never raw file text: the fence is the contract for the prompt (020, 065).
+    untrusted_context: str
     # BCP-47 pin for user-facing replies (ReplyLocalePolicy); sticky across turns via session.
     response_locale: str

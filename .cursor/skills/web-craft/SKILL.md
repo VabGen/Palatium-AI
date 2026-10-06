@@ -14,11 +14,11 @@ description: >
 
 ## Стек фронтенда
 
-Проект использует React 18 + Vite (SPA) + Tailwind CSS, пакет `web/`. Это накладывает следующие ограничения/особенности:
+Проект использует React 19 + Vite (SPA) + TypeScript, пакет `web/`. Стили — обычный CSS (`web/src/styles.css`); **Tailwind в проекте не подключён**. Это накладывает следующие ограничения/особенности:
 
 - **`animate-expo` НЕ используется** — в проекте нет Expo/React Native.
 - Vite — чистый клиентский рендеринг, без RSC/App Router гидратации → оговорки `emil-design-eng` про `useEffect`+`mounted` вместо `@starting-style` можно применять без поправок на серверный рендеринг.
-- В `pick-ui-library` пункт про `cva` (typed-варианты для Tailwind) — прямое попадание в наш стек.
+- Пункты про Tailwind/CVA в `pick-ui-library` (typed-варианты) в текущий стек **не** попадают: стилизация — plain CSS, без utility-фреймворка.
 
 ## Состояние скиллов
 

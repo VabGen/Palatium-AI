@@ -80,8 +80,9 @@ async def _search_namespaces(
 ) -> list[tuple[tuple[str, ...], dict[str, object]]]:
     raw: list[tuple[tuple[str, ...], dict[str, object]]] = []
     for namespace in namespaces:
-        for item in await memory_port.search(namespace=namespace, query=query, limit=overfetch):
-            raw.append((namespace, item))
+        raw.extend(
+            (namespace, item) for item in await memory_port.search(namespace=namespace, query=query, limit=overfetch)
+        )
     return raw
 
 
@@ -145,7 +146,7 @@ async def _maybe_bump_access(
     if not entry_key or not callable(bump):
         return
     try:
-        await bump(namespace=namespace, key=entry_key)  # type: ignore[misc]
+        await bump(namespace=namespace, key=entry_key)  # type: ignore[misc]  # bump — inspect-вызов, точный тип недоступен (017)
     except Exception as exc:
         logger.warning(
             "memory_recall.bump_access_failed",

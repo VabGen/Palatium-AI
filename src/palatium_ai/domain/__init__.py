@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .ports import EmbeddingPort, LLMPort
 
-__all__ = ["LLMPort", "EmbeddingPort"]
+__all__ = ["EmbeddingPort", "LLMPort"]
 
 
 def __getattr__(name: str) -> Any:

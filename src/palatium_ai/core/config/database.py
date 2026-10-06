@@ -32,14 +32,14 @@ class DatabaseConfig(BaseConfig):
         """DDL names are interpolated (no bind params possible) — validate at load (020)."""
         return assert_safe_sql_identifier(value, kind=str(info.field_name))
 
-    @computed_field  # type: ignore[prop-decorator]
+    @computed_field  # type: ignore[prop-decorator]  # плагин pydantic не моделирует computed_field (017)
     @property
     def async_dsn(self) -> str:
         """Возвращает асинхронный DSN для PostgreSQL."""
         secret = self.password.get_secret_value()
         return f"postgresql+asyncpg://{self.user}:{secret}@{self.host}:{self.port}/{self.db}"
 
-    @computed_field  # type: ignore[prop-decorator]
+    @computed_field  # type: ignore[prop-decorator]  # плагин pydantic не моделирует computed_field (017)
     @property
     def psycopg_dsn(self) -> str:
         """DSN for psycopg / LangGraph AsyncPostgresSaver (not SQLAlchemy)."""
@@ -71,7 +71,7 @@ class RedisConfig(BaseConfig):
             return None
         return value
 
-    @computed_field  # type: ignore[prop-decorator]
+    @computed_field  # type: ignore[prop-decorator]  # плагин pydantic не моделирует computed_field (017)
     @property
     def dsn(self) -> str:
         """Возвращает DSN для Redis."""

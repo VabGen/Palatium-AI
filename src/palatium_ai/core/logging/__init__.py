@@ -8,13 +8,13 @@ from .logger import get_logger, logger
 from .setup import build_uvicorn_log_config, setup_logging
 
 __all__ = [
-    "get_logger",
-    "logger",
-    "log_execution_time",
-    "setup_logging",
     "build_uvicorn_log_config",
-    "trace_id_var",
+    "get_logger",
+    "log_execution_time",
+    "logger",
     "request_id_var",
-    "user_id_var",
     "session_id_var",
+    "setup_logging",
+    "trace_id_var",
+    "user_id_var",
 ]

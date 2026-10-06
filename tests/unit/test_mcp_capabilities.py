@@ -21,7 +21,7 @@ class _PartialFailureRegistry(FakeMCPRegistry):
         return await super().list_tool_summaries(server_name, force_refresh=force_refresh)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_discover_skips_failed_server_and_keeps_available_capabilities() -> None:
     """Capability discovery should continue when one MCP server fails."""
     registry = _PartialFailureRegistry()
@@ -34,7 +34,7 @@ async def test_discover_skips_failed_server_and_keeps_available_capabilities() -
     assert all(binding.server_name != "analytics" for binding in bindings)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_resolve_best_requires_task_text_evidence() -> None:
     """Intent capability tags alone must not bind a tool (false MCP on rewrite/knowledge)."""
     registry = FakeMCPRegistry()

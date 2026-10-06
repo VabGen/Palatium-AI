@@ -40,7 +40,7 @@ class _FakeConsolidation:
         return True
 
 
-@pytest.fixture
+@pytest.fixture()
 def memory_consolidate_stack() -> tuple[MemoryConsolidateService, _FakeConsolidation, HitlService]:
     consolidation = _FakeConsolidation()
     registry = make_platform_mcp_registry(consolidation=consolidation)
@@ -49,7 +49,7 @@ def memory_consolidate_stack() -> tuple[MemoryConsolidateService, _FakeConsolida
     return service, consolidation, hitl
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_consolidate_requires_hitl_before_enqueue(
     memory_consolidate_stack: tuple[MemoryConsolidateService, _FakeConsolidation, HitlService],
 ) -> None:
@@ -73,7 +73,7 @@ async def test_memory_consolidate_requires_hitl_before_enqueue(
     assert consolidation.jobs[0]["org_id"] == "org-1"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_memory_consolidate_reject_discards_pending(
     memory_consolidate_stack: tuple[MemoryConsolidateService, _FakeConsolidation, HitlService],
 ) -> None:
@@ -89,7 +89,7 @@ async def test_memory_consolidate_reject_discards_pending(
     assert consolidation.jobs == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_hitl_respond_facade_runs_memory_consolidate_on_approve(
     memory_consolidate_stack: tuple[MemoryConsolidateService, _FakeConsolidation, HitlService],
 ) -> None:

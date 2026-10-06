@@ -9,6 +9,7 @@ from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 
 from .app import AppConfig
+from .attachments import AttachmentConfig
 from .base import BaseConfig
 from .database import DatabaseConfig, RedisConfig
 from .embeddings import EmbeddingConfig
@@ -35,6 +36,7 @@ class Settings(BaseConfig):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    attachments: AttachmentConfig = Field(default_factory=AttachmentConfig)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(frozen=True)
 

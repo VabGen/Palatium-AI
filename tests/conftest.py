@@ -1,8 +1,48 @@
 # tests/conftest.py
 
+# ruff: noqa: E402 — env defaults MUST be set before the palatium_ai imports below
+# (Settings() reads os.environ at import time; see the block after `import os`).
+
 """Общие фикстуры для тестов."""
 
 from __future__ import annotations
+
+# ────────────────────────────────────────────────────────────────────────────
+# Test env defaults — MUST run before any palatium_ai import.
+# Settings() uses pydantic-settings and pulls POSTGRES_* in DatabaseConfig,
+# which has no defaults for user/password/db. In CI env/.env is absent,
+# so without these defaults test collection itself blows up.
+# ────────────────────────────────────────────────────────────────────────────
+import os
+
+from pathlib import Path
+
+_TEST_ENV_DEFAULTS = {
+    "POSTGRES_USER": "postgres",
+    "POSTGRES_PASSWORD": "test",
+    "POSTGRES_DB": "postgres",
+    "POSTGRES_HOST": "localhost",
+    "POSTGRES_PORT": "5432",
+    "POSTGRES_SCHEMA": "palatium_ai",
+    "LITELLM_MASTER_KEY": "sk-test",
+    "PALATIUM_GATEWAY_URL": "http://localhost:4000",
+}
+
+_env_example = Path(__file__).resolve().parent.parent / "env" / ".env.example"
+if _env_example.exists():
+    # Parse with python-dotenv — the same parser pydantic-settings uses for
+    # env/.env. Naive ``split("=")`` kept inline comments after quoted values
+    # (`KEY="x"  # comment`), so tests asserted on host-specific garbage instead
+    # of the documented defaults.
+    from dotenv import dotenv_values
+
+    for _key, _value in dotenv_values(_env_example).items():
+        if _key and _value is not None:
+            os.environ.setdefault(_key, _value)
+
+for _key, _value in _TEST_ENV_DEFAULTS.items():
+    os.environ.setdefault(_key, _value)
+# ────────────────────────────────────────────────────────────────────────────
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -331,7 +371,7 @@ class FakeMCPRegistry:
         )
 
 
-@pytest.fixture
+@pytest.fixture()
 def sample_agent_config() -> AgentConfig:
     """AgentConfig с одним разрешённым инструментом."""
     return AgentConfig(
@@ -344,6 +384,16 @@ def sample_agent_config() -> AgentConfig:
         max_retries=1,
         confidence_threshold=0.7,
     )
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _reset_settings_cache():
+    """Ensure get_settings() reads current env, not a stale cache."""
+    from palatium_ai.core.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def make_graph_checkpointer():

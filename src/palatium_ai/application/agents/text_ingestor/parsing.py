@@ -54,9 +54,7 @@ def parse_context_prefixes(raw: str, *, expected: int) -> tuple[str, ...]:
     prefixes_raw = payload.get("prefixes", [])
     if not isinstance(prefixes_raw, list):
         raise ValueError("prefixes must be a list")
-    prefixes: list[str] = []
-    for item in prefixes_raw[:expected]:
-        prefixes.append(str(item).strip()[:500])
+    prefixes = [str(item).strip()[:500] for item in prefixes_raw[:expected]]
     while len(prefixes) < expected:
         prefixes.append("")
     return tuple(prefixes)

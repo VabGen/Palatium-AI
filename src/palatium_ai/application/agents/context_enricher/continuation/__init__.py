@@ -8,4 +8,4 @@ from palatium_ai.application.agents.context_enricher.continuation.config import 
     CONTINUATION_CONFIG,
 )
 
-__all__ = ["CONTINUATION_CONFIG", "CONTEXTUALIZER_CONFIG", "ContextualizerAgent"]
+__all__ = ["CONTEXTUALIZER_CONFIG", "CONTINUATION_CONFIG", "ContextualizerAgent"]

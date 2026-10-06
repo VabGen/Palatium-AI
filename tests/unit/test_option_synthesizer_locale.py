@@ -23,7 +23,7 @@ _RUSSIAN = (
 )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_keeps_matching_locale_without_repair() -> None:
     llm = FakeLLMPort(_RUSSIAN)
     synth = OptionSynthesizer(llm)
@@ -38,7 +38,7 @@ async def test_keeps_matching_locale_without_repair() -> None:
     assert len(llm.calls) == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_repairs_english_output_for_russian_turn() -> None:
     llm = SequentialFakeLLMPort([_ENGLISH, _RUSSIAN])
     synth = OptionSynthesizer(llm)
@@ -53,7 +53,7 @@ async def test_repairs_english_output_for_russian_turn() -> None:
     assert len(llm.calls) == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_drops_synthesis_when_repair_stays_english() -> None:
     llm = SequentialFakeLLMPort([_ENGLISH, _ENGLISH])
     synth = OptionSynthesizer(llm)

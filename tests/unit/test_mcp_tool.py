@@ -35,7 +35,7 @@ class _FakeAuditLogger:
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_call_mcp_tool_writes_audit_event() -> None:
     fake_audit = _FakeAuditLogger()
     mcp_module.get_audit_logger = lambda: fake_audit
@@ -73,7 +73,7 @@ class _FakeErrorMCPRegistry(FakeMCPRegistry):
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_call_mcp_tool_writes_audit_event_on_failure() -> None:
     fake_audit = _FakeAuditLogger()
     mcp_module.get_audit_logger = lambda: fake_audit

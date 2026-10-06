@@ -66,7 +66,7 @@ def setup_logging(settings: Settings) -> None:
         )
 
     structlog.configure(
-        processors=base_processors + [renderer],
+        processors=[*base_processors, renderer],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,

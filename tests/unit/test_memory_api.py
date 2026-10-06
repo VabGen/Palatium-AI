@@ -35,7 +35,7 @@ def _card(*, task_id: str, title: str) -> HITLCardView:
     )
 
 
-@pytest.fixture
+@pytest.fixture()
 def api_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     app = FastAPI()
     app.include_router(memory.router, prefix="/api/memory")

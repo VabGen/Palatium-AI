@@ -10,7 +10,7 @@ from palatium_ai.core.config import get_settings
 from palatium_ai.infrastructure.llm.factory import LLMClientFactory
 
 
-@pytest.fixture
+@pytest.fixture()
 def live_llm():
     """LLMPort from project settings (env/.env)."""
     get_settings.cache_clear()

@@ -109,7 +109,7 @@ def test_get_client_for_agent_uses_tier_provider(monkeypatch: pytest.MonkeyPatch
     assert captured == ["ollama"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_get_client_for_agent_applies_tier_model(monkeypatch: pytest.MonkeyPatch) -> None:
     """Tier model becomes default generate() model when agent has no llm_model."""
     factory = LLMClientFactory(
@@ -133,7 +133,7 @@ async def test_get_client_for_agent_applies_tier_model(monkeypatch: pytest.Monke
     assert result.model == "claude-tier"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_get_client_for_agent_applies_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """llm_model on AgentConfig must become the default model for generate()."""
     factory = LLMClientFactory(settings=_settings())  # type: ignore[arg-type]
@@ -146,7 +146,7 @@ async def test_get_client_for_agent_applies_model_override(monkeypatch: pytest.M
     assert result.model == "custom-model"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_agent_provider_wins_over_tier_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Explicit AgentConfig.llm_provider beats tier provider."""
     factory = LLMClientFactory(settings=_settings(tier_binding=TierBinding(provider="ollama", model="tier-model")))  # type: ignore[arg-type]
@@ -167,7 +167,7 @@ async def test_agent_provider_wins_over_tier_provider(monkeypatch: pytest.Monkey
     assert result.model == "agent-model"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_get_client_for_agent_explicit_model_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     """Explicit generate(model=...) must override AgentConfig.llm_model."""
     factory = LLMClientFactory(settings=_settings())  # type: ignore[arg-type]

@@ -113,6 +113,7 @@ def test_assistant_turn_payload_includes_hitl_cards() -> None:
     assert cards[0]["card_id"] == "card-1"
     assert cards[0]["purpose"] == "user_choice"
     options = cards[0]["options"]
-    assert isinstance(options, list) and options
+    assert isinstance(options, list)
+    assert options
     assert options[0]["action_token"] == ""
     assert options[0]["action_id"] == "opt_a"

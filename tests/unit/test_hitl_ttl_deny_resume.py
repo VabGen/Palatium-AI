@@ -14,7 +14,7 @@ from palatium_ai.application.services.intent_hitl_flow import IntentHitlFlow
 from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 
-HITL_HMAC = "unit-test-hitl-hmac-key-32bytes!!"  # noqa: S105
+HITL_HMAC = "unit-test-hitl-hmac-key-32bytes!!"
 
 
 def _doc() -> ContentDocument:
@@ -28,7 +28,7 @@ def _doc() -> ContentDocument:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_auto_reject_invokes_deny_resume_for_tool_approval() -> None:
     deny = AsyncMock()
     service = HitlService(InMemoryHitlCardStore(), signing_secret=HITL_HMAC)
@@ -62,7 +62,7 @@ async def test_auto_reject_invokes_deny_resume_for_tool_approval() -> None:
     assert kwargs["card_id"] == card.card_id
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_dead_letter_invokes_deny_resume_for_tool_approval() -> None:
     deny = AsyncMock()
     service = HitlService(InMemoryHitlCardStore(), signing_secret=HITL_HMAC)
@@ -91,7 +91,7 @@ async def test_dead_letter_invokes_deny_resume_for_tool_approval() -> None:
     deny.deny_tool_interrupt.assert_awaited_once()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_auto_reject_quality_card_skips_deny_resume() -> None:
     deny = AsyncMock()
     service = HitlService(InMemoryHitlCardStore(), signing_secret=HITL_HMAC)
@@ -116,7 +116,7 @@ async def test_auto_reject_quality_card_skips_deny_resume() -> None:
     deny.deny_tool_interrupt.assert_not_awaited()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_system_deny_skips_when_no_interrupt() -> None:
     graph = SimpleNamespace(
         aget_state=AsyncMock(side_effect=ValueError("no checkpoint")),
@@ -139,7 +139,7 @@ async def test_system_deny_skips_when_no_interrupt() -> None:
     graph.ainvoke.assert_not_awaited()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_resume_failure_compensates_with_deny(monkeypatch: pytest.MonkeyPatch) -> None:
     """After resolve, resume failure must call deny_tool_interrupt (fail closed)."""
     from fastapi import FastAPI
@@ -221,5 +221,6 @@ async def test_resume_failure_compensates_with_deny(monkeypatch: pytest.MonkeyPa
     deny.assert_awaited_once()
     assert deny.await_args.kwargs["card_id"] == card.card_id
     stored = await hitl_service.get_card(card.card_id)
-    assert stored is not None and stored.status == "resolved"
+    assert stored is not None
+    assert stored.status == "resolved"
     assert response.status_code == 500
