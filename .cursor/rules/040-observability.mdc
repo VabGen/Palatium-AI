@@ -40,9 +40,13 @@ alwaysApply: false
 | `palatium_rbac_denied_total` | `agent_type`, `tool_name` |
 | `palatium_hitl_card_replay_rejected_total` | — |
 | `palatium_circuit_breaker_state` | `target` (0=closed, 1=half_open, 2=open) |
-| `palatium_memory_recall_at_k` | `k` |
+| `palatium_memory_recall_at_k` | `k` (offline eval / Pushgateway; не runtime hit-rate) |
 | `palatium_memory_query_duration_seconds` | — |
 | `palatium_memory_entry_size_bytes` | `memory_type` |
+| `palatium_memory_extract_queue_depth` | — |
+| `palatium_memory_extract_queue_lag_seconds` | — |
+| `palatium_memory_extract_dead_letter_total` | — |
+| `palatium_memory_promote_errors_total` | `error_type` |
 | `palatium_context_tokens_used` | `agent_type` |
 | `palatium_attachment_parse_total` | `extraction_source`, `media_kind` |
 

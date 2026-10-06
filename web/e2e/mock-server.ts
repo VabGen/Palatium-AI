@@ -61,7 +61,7 @@ const ROUTES: readonly RouteSpec[] = [
   { key: 'hitl.respond', method: 'POST', pattern: /^\/hitl\/[^/]+\/respond$/ },
   { key: 'memory.save', method: 'POST', pattern: /^\/memory\/save$/ },
   { key: 'memory.forget', method: 'POST', pattern: /^\/memory\/forget$/ },
-  { key: 'memory.consolidate', method: 'POST', pattern: /^\/memory\/consolidate$/ },
+  { key: 'memory.extract', method: 'POST', pattern: /^\/memory\/extract$/ },
   { key: 'attachments.init', method: 'POST', pattern: /^\/attachments\/init$/ },
   { key: 'attachments.content', method: 'PUT', pattern: /^\/attachments\/[^/]+\/content$/ },
   { key: 'attachments.complete', method: 'POST', pattern: /^\/attachments\/[^/]+\/complete$/ },

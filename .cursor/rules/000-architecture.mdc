@@ -41,7 +41,7 @@
 | `application/services` | Сервисы-фасады над агентами |
 | `application/tools` | Типизированная обёртка MCP-вызова (`mcp.py`) и RBAC-исполнитель (`executor.py`) |
 | `infrastructure/llm` | Адаптеры LiteLLM/OpenAI, fallback-цепочки |
-| `infrastructure/memory` | Реализация MemoryPort (pgvector + LangMem) |
+| `infrastructure/memory` | MemoryPort SoT: Postgres pgvector+FTS; checkpointer; optional Mem0/Graphiti adapters |
 | `infrastructure/mcp` | FastMCP-сервер и клиент |
 | `infrastructure/database` | SQLAlchemy-модели, миграции (детали — только здесь) |
 | `core/resilience` | Retry, circuit breaker, timeouts — ВСЕ внешние вызовы через него |
@@ -53,8 +53,12 @@
 - `mcp_servers/**` — отдельные процессы (MCP-серверы), НЕ часть пакета
   `palatium_ai`, слои на них не распространяются. Правила — в `090-javaedms-reference`.
 - Точка входа (`main.py`), настройки приложения, DI-сборка — корень композиции, см. выше.
-- Temporal — в стеке НЕ используется (отсутствует). Долгоживущие workflow —
-  только LangGraph + Redis checkpointer. Не добавляй Temporal без явного запроса.
+- Temporal / Celery Beat — в стеке НЕ используются (ADR 0002). Долгоживущие
+  workflow — LangGraph + **Postgres** checkpointer (dual TTL: `session_ttl_seconds`
+  + retention `checkpoint_days`; 060, ADR 0003). Redis/Valkey — HITL / kill-switch /
+  кэш, не checkpointer. Sleep-time extract / promote / retention — out-of-band
+  jobs (SKIP LOCKED / CronJob), не in-process DreamDaemon. Не добавляй Temporal
+  без явного запроса и ADR.
 
 ## Запрещено
 
@@ -78,7 +82,7 @@
 | researcher | exists | Внешний поиск/извлечение через MCP |
 | critic | exists | Quality gate перед передачей дальше/финализацией |
 | formatter | exists | MD/PDF/JSON форматирование |
-| memory_keeper | exists | Semantic + episodic + graph память |
+| memory_keeper | exists | Sleep-time extract: transcript → medium fact candidates (060) |
 | context_enricher | merge | Бывш. context_weaver + contextualizer: сборка/обогащение контекста |
 | text_ingestor | exists | Чанкинг, нормализация текста при ингесте документов |
 | coder | exists | Код только как draft/plan; sandbox exec — HITL (020), по мере готовности песочницы |

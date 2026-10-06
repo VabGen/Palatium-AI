@@ -7,11 +7,24 @@ from unittest.mock import AsyncMock
 import pytest
 
 from palatium_ai.application.services.context_builder import ContextBuilder
+from palatium_ai.application.services.memory_write_service import MemoryWriteService
 from palatium_ai.domain.memory.compact import CompactRequest
 from palatium_ai.domain.memory.namespaces import thread_namespace, user_namespace
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
 from palatium_ai.domain.policies.compact import COMPACT_THRESHOLD_RATIO, CompactPolicy
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
+
+
+def _builder_with_memory(
+    port: InMemoryMemoryPort,
+    *,
+    summarizer: object | None = None,
+) -> ContextBuilder:
+    return ContextBuilder(
+        memory_port=port,
+        memory_writer=MemoryWriteService(port),
+        summarizer=summarizer,  # type: ignore[arg-type]  # test double (017)
+    )
 
 
 @pytest.mark.asyncio()
@@ -76,7 +89,7 @@ def test_extractive_summary_is_marked_not_silent() -> None:
 @pytest.mark.asyncio()
 async def test_compact_noop_under_threshold() -> None:
     port = InMemoryMemoryPort()
-    builder = ContextBuilder(memory_port=port)
+    builder = _builder_with_memory(port)
     result = await builder.compact(
         CompactRequest(
             dialog="user: hi\nassistant: hello",
@@ -96,7 +109,7 @@ async def test_compact_noop_under_threshold() -> None:
 @pytest.mark.asyncio()
 async def test_compact_persists_goal_plan_and_marks_dialog() -> None:
     port = InMemoryMemoryPort()
-    builder = ContextBuilder(memory_port=port)
+    builder = _builder_with_memory(port)
     # ~27k+ tokens on nano (32k limit, 80% ≈ 25.6k) forces compact without LLM summarizer.
     huge_dialog = "user: note\nassistant: " + ("x" * 110_000)
     result = await builder.compact(
@@ -132,6 +145,29 @@ async def test_compact_persists_goal_plan_and_marks_dialog() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_compact_rejects_secret_in_preserved_goal() -> None:
+    port = InMemoryMemoryPort()
+    builder = _builder_with_memory(port)
+    huge_dialog = "user: note\nassistant: " + ("x" * 110_000)
+    result = await builder.compact(
+        CompactRequest(
+            dialog=huge_dialog,
+            goal="continue with sk-abcdefghijklmnopqrstuvwxyz012345",
+            plan="safe plan",
+            last_results="ok",
+            model_tier="nano",
+            thread_id="t-secret",
+            user_id="bob",
+        )
+    )
+    assert result.did_compact is True
+    assert "goal" not in result.persisted_keys
+    assert "plan" in result.persisted_keys
+    assert await port.get(namespace=thread_namespace("t-secret"), key="compact_preserve:goal") is None
+    assert await port.get(namespace=thread_namespace("t-secret"), key="compact_preserve:plan") is not None
+
+
+@pytest.mark.asyncio()
 async def test_compact_uses_llm_summarizer_when_provided() -> None:
     port = InMemoryMemoryPort()
 
@@ -140,7 +176,7 @@ async def test_compact_uses_llm_summarizer_when_provided() -> None:
             assert "x" * 100 in dialog
             return "Summary: long thread about search code and dinner."
 
-    builder = ContextBuilder(memory_port=port, summarizer=_FakeSummarizer())
+    builder = _builder_with_memory(port, summarizer=_FakeSummarizer())
     huge_dialog = "user: note\nassistant: " + ("x" * 110_000)
     result = await builder.compact(
         CompactRequest(

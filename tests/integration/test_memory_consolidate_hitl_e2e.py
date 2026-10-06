@@ -1,4 +1,4 @@
-# tests/integration/test_memory_consolidate_hitl_e2e.py
+# tests/integration/test_memory_extract_hitl_e2e.py
 
 """E2E: consolidate HITL approve → worker → search_memory; reject skips enqueue."""
 
@@ -45,7 +45,7 @@ def _action_request(card: object, *, action_id: str, idempotency_key: str) -> HI
 
 @pytest.mark.integration()
 @pytest.mark.asyncio()
-async def test_memory_consolidate_approve_runs_worker_then_search() -> None:
+async def test_memory_extract_approve_runs_worker_then_search() -> None:
     consolidate, consolidation, _port, hitl, handler, _dialog = make_memory_consolidate_hitl_stack(
         llm_content=_KEEPER_PAYLOAD,
     )
@@ -64,13 +64,13 @@ async def test_memory_consolidate_approve_runs_worker_then_search() -> None:
 
     worker = asyncio.create_task(consolidation.run_worker())  # type: ignore[attr-defined]
     try:
-        card = await consolidate.request_consolidate(  # type: ignore[attr-defined]
+        card = await consolidate.request_extract(  # type: ignore[attr-defined]
             thread_id=_THREAD,
             owner_user_id=_HITL_HMAC_ACTOR,
             org_id=_ORG,
-            consolidate_task_id="job-consol-e2e",
+            extract_task_id="job-consol-e2e",
         )
-        assert card.task_id.startswith("mem-consolidate-")
+        assert card.task_id.startswith("mem-extract-")
 
         outcome = await facade.respond(
             card.card_id,
@@ -105,7 +105,7 @@ async def test_memory_consolidate_approve_runs_worker_then_search() -> None:
 
 @pytest.mark.integration()
 @pytest.mark.asyncio()
-async def test_memory_consolidate_reject_skips_worker() -> None:
+async def test_memory_extract_reject_skips_worker() -> None:
     consolidate, consolidation, _port, hitl, handler, _dialog = make_memory_consolidate_hitl_stack(
         llm_content=_KEEPER_PAYLOAD,
     )
@@ -118,7 +118,7 @@ async def test_memory_consolidate_reject_skips_worker() -> None:
 
     worker = asyncio.create_task(consolidation.run_worker())  # type: ignore[attr-defined]
     try:
-        card = await consolidate.request_consolidate(  # type: ignore[attr-defined]
+        card = await consolidate.request_extract(  # type: ignore[attr-defined]
             thread_id=_THREAD,
             owner_user_id=_HITL_HMAC_ACTOR,
             org_id=_ORG,

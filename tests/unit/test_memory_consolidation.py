@@ -16,6 +16,7 @@ from palatium_ai.application.services.memory_extract import MemoryExtractService
 from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
+from palatium_ai.infrastructure.memory.extract_job_queue import InMemoryExtractJobQueue
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from tests.conftest import FakeLLMPort, make_platform_mcp_registry
 
@@ -26,6 +27,7 @@ def _extract_service(
     keeper: MemoryKeeperAgent,
     port: InMemoryMemoryPort,
     dialog: _FakeDialogTurnStore,
+    job_queue: InMemoryExtractJobQueue | None = None,
 ) -> MemoryExtractService:
     registry = make_platform_mcp_registry(memory_port=port)
     persistence = MemoryFactPersistenceService(registry)
@@ -34,7 +36,9 @@ def _extract_service(
         memory_keeper=keeper,
         memory_port=port,
         memory_persistence=persistence,
+        job_queue=job_queue or InMemoryExtractJobQueue(),
         dialog_turn_store=dialog,  # type: ignore[arg-type]
+        poll_seconds=0.05,
     )
 
 
@@ -96,8 +100,8 @@ async def test_sleep_time_consolidation_stores_add_only_facts() -> None:
     )
     service = _extract_service(harness=harness, keeper=keeper, port=port, dialog=dialog)
     worker = asyncio.create_task(service.run_worker())
-    assert service.enqueue(thread_id="thread-a", task_id="task-1", user_id="user-a")
-    await asyncio.sleep(0.05)
+    assert await service.enqueue(thread_id="thread-a", task_id="task-1", user_id="user-a")
+    await asyncio.sleep(0.15)
     await service.stop()
     await worker
 
@@ -142,13 +146,13 @@ async def test_sleep_time_routes_preference_user_and_entity_org() -> None:
     )
     service = _extract_service(harness=harness, keeper=keeper, port=port, dialog=dialog)
     worker = asyncio.create_task(service.run_worker())
-    assert service.enqueue(
+    assert await service.enqueue(
         thread_id="thread-b",
         task_id="task-2",
         user_id="user-42",
         org_id="org-acme",
     )
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.15)
     await service.stop()
     await worker
 

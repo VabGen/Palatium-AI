@@ -1,6 +1,6 @@
 # src/palatium_ai/presentation/api/routers/memory.py
 
-"""User-initiated memory save/forget/consolidate (HITL-gated, off LangGraph hot path)."""
+"""User-initiated memory save/forget/extract enqueue (HITL-gated, off hot path)."""
 
 from __future__ import annotations
 
@@ -43,16 +43,16 @@ class MemoryForgetRequest(BaseModel):
     scope_id: str = Field(default="", max_length=128)
 
 
-class MemoryConsolidateRequest(BaseModel):
-    """Request to stage sleep-time consolidation pending HITL approval."""
+class MemoryExtractRequest(BaseModel):
+    """Request to stage sleep-time extract enqueue pending HITL approval."""
 
     model_config = {"frozen": True}
 
     thread_id: str = Field(min_length=1, max_length=128)
-    consolidate_task_id: str = Field(
+    extract_task_id: str = Field(
         default="",
         max_length=128,
-        description="Optional job id for the consolidation queue.",
+        description="Optional job id for the extract queue.",
     )
 
 
@@ -130,9 +130,9 @@ async def request_memory_forget(body: MemoryForgetRequest, request: Request) -> 
         raise _http_error_for_memory_validation(exc) from exc
 
 
-@router.post("/consolidate", response_model=HITLCardView)
-async def request_memory_consolidate(body: MemoryConsolidateRequest, request: Request) -> HITLCardView:
-    """HITL card for MCP ``consolidate_memory`` = enqueue sleep-time extract (not promote)."""
+@router.post("/extract", response_model=HITLCardView)
+async def request_memory_extract(body: MemoryExtractRequest, request: Request) -> HITLCardView:
+    """HITL card for MCP ``extract_transcript_memories`` (not promote)."""
     principal = get_principal(request)
     resources = get_app_resources(request.app)
     if resources.memory_consolidate_service is None:
@@ -150,11 +150,11 @@ async def request_memory_consolidate(body: MemoryConsolidateRequest, request: Re
     )
 
     try:
-        return await resources.memory_consolidate_service.request_consolidate(
+        return await resources.memory_consolidate_service.request_extract(
             thread_id=body.thread_id,
             owner_user_id=principal.subject,
             org_id=principal.org_id,
-            consolidate_task_id=body.consolidate_task_id,
+            extract_task_id=body.extract_task_id,
         )
     except (ValueError, HitlInvalidActionError) as exc:
         raise _http_error_for_memory_validation(exc) from exc

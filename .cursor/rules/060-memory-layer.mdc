@@ -1,17 +1,24 @@
 ---
-description: Слой памяти: схемы knowledge/memory, иерархия, стратегии обслуживания
+description: Слой памяти: hybrid cortex, иерархия tier'ов, extract/promote, RLS
 globs:
   - "src/palatium_ai/infrastructure/memory/**/*.py"
   - "src/palatium_ai/domain/memory/**/*.py"
   - "src/palatium_ai/application/agents/memory_keeper/**"
+  - "src/palatium_ai/application/services/memory_*.py"
 alwaysApply: true
 ---
 
 # Слой памяти (ЯДРО системы)
 
+Память — **живая когнитивная инфраструктура** (учится / забывает / консолидируется /
+перестраивается), не свалка чата в vector DB. Эталон 2026: Anthropic (session ≠
+context), Google ADK (durable schemas + dormancy), MS Copilot (scoped ACL memory),
+Zep/Graphiti (bi-temporal long-term). Канон реализации — план
+`.cursor/plans/memory-max-pro.md` + ADR 0003/0004.
+
 ## Физическое разделение — не нарушать
 
-- Схема `knowledge` — статичные знания; схема `memory` — эпизодическая память.
+- Схема `knowledge` — статичные знания; схема `memory` — эпизодическая / medium память.
 - Связка «схема ↔ embedding-модель ↔ размерность» — ТОЛЬКО в `core/types`
   как реестр констант; менять модель эмбеддингов = отдельная миграция с
   reindex ВСЕХ векторов схемы (in-place смена размерности запрещена):
@@ -38,21 +45,38 @@ MEMORY_EMBEDDING_DIM = 4096
   exact cosine без float-HNSW. Опционально позже: `binary_quantize` → `bit(4096)`
   HNSW + cosine rerank (отдельная задача).
 
-## Иерархия памяти
+## Иерархия памяти (hybrid cortex — SoT по tier)
 
 | Уровень | Хранилище | TTL | Наполнение |
 |---|---|---|---|
-| Short-term | checkpointer LangGraph (Redis) | TTL сессии — константа в конфиге (`session_ttl_seconds`, default 1800) | авто |
-| Medium-term | `memory.entries` (pgvector) | 30 дней (константа в конфиге) | MCP `save_memory` + sleep-time **extract** (MemoryKeeper) |
-| Long-term | граф знаний (Neo4j / Cognee) | бессрочно, растёт ТОЛЬКО через **promote** | `MemoryPromotionService` |
+| Short-term | LangGraph **Postgres** checkpointer (`AsyncPostgresSaver`) | **Dual TTL:** hot `session_ttl_seconds` (default 1800) + cold `checkpoint_days` (retention); ADR 0003 | авто |
+| Medium-term | `memory.entries` (pgvector + FTS + FORCE RLS) | окна retention (medium/episode/PII) | MCP `save_memory` + sleep-time **extract** (MemoryKeeper) |
+| Long-term | Neo4j (`MemoryFact` / edges; bi-temporal — план M5) | бессрочно; растёт ТОЛЬКО через **promote** | `MemoryPromotionService` |
 
-Оси (не смешивать имена):
+- Redis/Valkey — HITL, kill-switch, кэш (**не** short-term checkpointer).
+- Отдельный vector DB (Qdrant и т.п.), Cognee как runtime SoT, Neo4j-only medium —
+  запрещены без нового ADR + подтверждения владельца (план памяти, ADR 0004).
+- Default `MEMORY_BACKEND=postgres`; Mem0/Graphiti — optional adapters, не prod SoT.
+
+### Memory OS (Write / Select / Compress / Isolate)
+
+| Операция | Владелец | Инвариант |
+|---|---|---|
+| **Write** | MCP `save_memory` / extract enqueue (+ HITL для user writes) | secret scan + PII classify + audit; агент не зовёт `MemoryPort` напрямую |
+| **Select** | `recall_for_thread` + hybrid search + importance | budget (`recall_max_items` / `recall_max_chars`); не dump истории |
+| **Compress** | `ContextBuilder.compact` (065) | goal/plan/last_results → **medium** через `MemoryWriteService` (scan/PII/audit); не прямой `put` мимо gate |
+| **Isolate** | subagent / worker return | condensed summary, не сырой retrieval dump (065) |
+
+Forgetting — feature: dual TTL + retention + (M5) graph `invalid_at`/`expired_at` fan-out.
+Без forgetting policy — Storage Exhaustion / Silent Memory Death.
+
+Оси (не смешивать имена и jobs):
 
 - **extract** — transcript → medium (`MemoryExtractService`; MCP
-  `consolidate_memory` — legacy name for enqueue extract, 070).
+  `extract_transcript_memories`, 070).
 - **promote** — medium → long-term graph (`PromotionPolicy` +
-  `GraphWritePort` / `Neo4jGraphWritePort` MERGE). Ad-hoc записи в Neo4j
-  мимо promote — запрещены.
+  `GraphWritePort` / `Neo4jGraphWritePort`). Ad-hoc MERGE из агента запрещён.
+  Extract worker **не** вызывает promote (отдельный CronJob / one-shot, ADR 0002).
 
 HITL-карточка user-initiated extract: `MemoryExtractHitlService`
 (бывш. `MemoryConsolidateService`).
@@ -64,30 +88,38 @@ HITL-карточка user-initiated extract: `MemoryExtractHitlService`
    на `memory.entries`, app-роль БД без `BYPASSRLS`. Отсутствие политики
    RLS в миграции — ошибка ревью.
 2. Importance: `recency + relevance + access_frequency` — формула в одном месте
-   (`domain/memory/scoring.py`), не дублируется.
+   (`domain/memory/scoring.py`), не дублируется. Search-time ranking обязан
+   учитывать эту формулу (не только raw vector/FTS score).
 3. Тип записи — Literal из `domain/memory/types.py` (единый источник, 010):
    `Literal["preference", "fact", "incident", "episode"]`.
 4. Суммаризация при ~20 оборотах диалога — константа в конфиге, не в коде.
-5. TTL / forgetting curve / дедупликация — фоновые asyncio-задачи,
-   НЕ блокируют запрос; `datetime.now(UTC)` везде (050).
+5. TTL / retention / extract / promote — **не блокируют** user-request hot-path.
+   Durable disposition и promote — out-of-band (CronJob / compose one-shot,
+   ADR 0002); extract queue — durable (`SKIP LOCKED`, план M3), не голый
+   `asyncio.Queue` в API. `datetime.now(UTC)` везде (050).
 6. Гибридный поиск = pgvector (косинус) + Postgres FTS (`tsvector` + `ts_rank_cd`),
    финальное ранжирование по importance. Назвать это «BM25» в коде/комментариях —
    неверно; сторонние расширения (ParadeDB и т.п.) — только после явного
-   решения в 000. Плоский top-k запрещён.
-7. Мутации памяти (save/forget/consolidate[=extract enqueue]) — ЕДИНЫЙ путь:
-   агенты — только через MCP-инструменты; MCP-инструмент — тонкая обёртка над
-   `MemoryPort` (infrastructure/memory). **Promote** (medium→graph) — отдельный
-   batch (`MemoryPromotionService`), не ad-hoc из агента. Прямой вызов MemoryPort
-   из агента и прямые SQL из агентов запрещены. Каждая мутация — событие в audit
-   (см. 040).
+   решения в 000. Плоский top-k запрещён. Reconsolidation при recall =
+   `bump_access` (не silent no-op).
+7. Мутации памяти (save/forget/`extract_transcript_memories`) — ЕДИНЫЙ путь:
+   агенты — только через MCP-инструменты; MCP — тонкая обёртка над
+   `MemoryPort`. **Promote** — отдельный batch, не из агента и не из extract
+   worker. Прямой `MemoryPort` / SQL из агентов запрещены. Каждая мутация —
+   audit (040).
 8. **Перед записью в medium/long-term — secret scanner (020) + PII-классификация.**
-   PII в long-term память (бессрочное хранение) — только с явной пометкой
-   `contains_pii=true` и правилом забывания; молчаливая запись PII — запрещена.
-9. Перед компакцией контекста (065) цель + план + последние результаты
-   сохраняются в long-term память — НИКОГДА не терять их при компакции.
+   PII в long-term — только с `contains_pii=true` и правилом забывания;
+   молчаливая запись PII запрещена. Compact-persist использует тот же gate.
+9. Перед компакцией контекста (065) goal + plan + последние результаты
+   сохраняются в **medium** (gated Write) — НИКОГДА не терять их при trim.
+   В long-term граф они попадают только через **promote**.
+10. Forget medium должен согласовываться с long-term (M5: fan-out
+    `expired_at` / invalidate linked `MemoryFact`) — иначе «забывает» врёт.
 
 ## Метрики
 
 Метрики памяти — из единого реестра 040 (`palatium_memory_recall_at_k`,
 `palatium_memory_query_duration_seconds`, `palatium_memory_entry_size_bytes`).
 Здесь и где-либо ещё свои имена памяти не вводить (050: рассинхронизация).
+SLO-ориентиры (не хардкод без eval): Recall@k > 0.85; query p95 < 200 ms
+(nightly/perf). Маркетинговые % из внешних бенчмарков — не контракт.

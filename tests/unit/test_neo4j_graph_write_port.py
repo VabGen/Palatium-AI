@@ -1,6 +1,6 @@
 # tests/unit/test_neo4j_graph_write_port.py
 
-"""Neo4j GraphWritePort — parameterized MERGE for promote."""
+"""Neo4j GraphWritePort — bi-temporal FIND/CREATE/SUPERSEDE/EXPIRE (Wave M5)."""
 
 from __future__ import annotations
 
@@ -13,19 +13,27 @@ from palatium_ai.infrastructure.graph.neo4j_graph_write_port import Neo4jGraphWr
 
 
 class _FakeWriteTransport:
-    def __init__(self) -> None:
+    """Records Cypher calls; FIND returns optional active row."""
+
+    def __init__(self, *, find_row: dict[str, object] | None = None) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self._find_row = find_row
 
     async def run_write(self, *, cypher: str, params: dict[str, object]) -> list[dict[str, object]]:
         self.calls.append((cypher, dict(params)))
-        return [{"node_id": params["node_id"]}]
+        if "WHERE f.invalid_at IS NULL AND f.expired_at IS NULL" in cypher:
+            return [self._find_row] if self._find_row is not None else []
+        if "RETURN count(f) AS n" in cypher:
+            return [{"n": 1}]
+        node_id = params.get("node_id") or params.get("old_node_id")
+        return [{"node_id": node_id}]
 
     async def aclose(self) -> None:
         return None
 
 
 @pytest.mark.asyncio()
-async def test_upsert_fact_uses_parameterized_merge() -> None:
+async def test_upsert_fact_find_then_create_parameterized() -> None:
     transport = _FakeWriteTransport()
     port = Neo4jGraphWritePort(transport)
     command = GraphFactUpsert(
@@ -38,24 +46,31 @@ async def test_upsert_fact_uses_parameterized_merge() -> None:
         thread_id="",
     )
     node_id = await port.upsert_fact(command)
-    assert node_id == _stable_node_id("alice", "pref-duck")
-    assert len(transport.calls) == 1
-    cypher, params = transport.calls[0]
-    assert "MERGE (f:MemoryFact" in cypher
-    assert "$user_id" in cypher
-    assert "$text" in cypher
-    assert "alice" not in cypher  # no string concat of user data
-    assert params["user_id"] == "alice"
-    assert params["entry_key"] == "pref-duck"
-    assert params["text"] == "User prefers duck for dinner"
-    assert params["kind"] == "preference"
-    assert params["importance"] == 0.91
-    assert params["source_namespace"] == "user/alice"
+    assert node_id == _stable_node_id("alice", "pref-duck", 1)
+    assert len(transport.calls) == 2
+    find_cypher, find_params = transport.calls[0]
+    create_cypher, create_params = transport.calls[1]
+    assert "MATCH (f:MemoryFact" in find_cypher
+    assert "CREATE (f:MemoryFact" in create_cypher
+    assert "MERGE" not in create_cypher
+    assert "$user_id" in create_cypher
+    assert "$text" in create_cypher
+    assert "alice" not in create_cypher
+    assert find_params["user_id"] == "alice"
+    assert create_params["entry_key"] == "pref-duck"
+    assert create_params["text"] == "User prefers duck for dinner"
+    assert create_params["kind"] == "preference"
+    assert create_params["importance"] == 0.91
+    assert create_params["source_namespace"] == "user/alice"
+    assert create_params["version"] == 1
 
 
 @pytest.mark.asyncio()
-async def test_upsert_fact_idempotent_stable_id() -> None:
-    transport = _FakeWriteTransport()
+async def test_upsert_fact_refresh_same_text() -> None:
+    old_id = _stable_node_id("u1", "k1", 1)
+    transport = _FakeWriteTransport(
+        find_row={"text": "same fact", "node_id": old_id, "version": 1, "contains_pii": False}
+    )
     port = Neo4jGraphWritePort(transport)
     command = GraphFactUpsert(
         user_id="u1",
@@ -64,10 +79,72 @@ async def test_upsert_fact_idempotent_stable_id() -> None:
         kind="fact",
         importance=0.8,
     )
-    first = await port.upsert_fact(command)
-    second = await port.upsert_fact(command)
-    assert first == second
+    node_id = await port.upsert_fact(command)
+    assert node_id == old_id
     assert len(transport.calls) == 2
+    assert "SET f.importance" in transport.calls[1][0]
+    assert "CREATE" not in transport.calls[1][0]
+
+
+@pytest.mark.asyncio()
+async def test_upsert_fact_supersede_different_text() -> None:
+    old_id = _stable_node_id("u1", "k1", 1)
+    transport = _FakeWriteTransport(
+        find_row={"text": "old truth", "node_id": old_id, "version": 1, "contains_pii": False}
+    )
+    port = Neo4jGraphWritePort(transport)
+    command = GraphFactUpsert(
+        user_id="u1",
+        entry_key="k1",
+        text="new truth",
+        kind="fact",
+        importance=0.8,
+    )
+    node_id = await port.upsert_fact(command)
+    assert node_id == _stable_node_id("u1", "k1", 2)
+    assert len(transport.calls) == 2
+    supersede_cypher, params = transport.calls[1]
+    assert "SUPERSEDES" in supersede_cypher
+    assert "invalid_at" in supersede_cypher
+    assert params["old_node_id"] == old_id
+    assert params["text"] == "new truth"
+    assert params["version"] == 2
+
+
+@pytest.mark.asyncio()
+async def test_upsert_fact_blocked_pii_semantic_flip() -> None:
+    old_id = _stable_node_id("u1", "pii-1", 1)
+    transport = _FakeWriteTransport(
+        find_row={
+            "text": "SSN is 123-45-6789",
+            "node_id": old_id,
+            "version": 1,
+            "contains_pii": True,
+        }
+    )
+    port = Neo4jGraphWritePort(transport)
+    node_id = await port.upsert_fact(
+        GraphFactUpsert(
+            user_id="u1",
+            entry_key="pii-1",
+            text="SSN is 999-99-9999",
+            kind="fact",
+            contains_pii=True,
+        )
+    )
+    assert node_id == ""
+    assert len(transport.calls) == 1  # FIND only
+
+
+@pytest.mark.asyncio()
+async def test_expire_fact_sets_expired_at() -> None:
+    transport = _FakeWriteTransport()
+    port = Neo4jGraphWritePort(transport)
+    assert await port.expire_fact(user_id="alice", entry_key="pref-duck") is True
+    cypher, params = transport.calls[0]
+    assert "expired_at" in cypher
+    assert params["user_id"] == "alice"
+    assert params["entry_key"] == "pref-duck"
 
 
 def test_build_graph_write_port_defaults_to_in_memory() -> None:

@@ -1,6 +1,6 @@
 # src/palatium_ai/infrastructure/retention/checkpointer_handler.py
 
-"""Purge LangGraph Postgres checkpoints aligned with session inactivity (ADR 0002)."""
+"""Purge LangGraph Postgres checkpoints (dual TTL; ADR 0002 / 0003)."""
 
 from __future__ import annotations
 
@@ -65,7 +65,12 @@ class CheckpointerRetentionHandler:
             retention_class="checkpointer",
             action=decision.action,
             candidates=len(inactive) + len(orphans),
-            detail=(f"cutoff={cutoff.isoformat()};inactive={len(inactive)};orphans={len(orphans)};batch_cap={limit}"),
+            detail=self._detail(
+                cutoff=cutoff,
+                inactive=len(inactive),
+                orphans=len(orphans),
+                limit=limit,
+            ),
         )
 
     async def execute(self, *, limit: int) -> RetentionClassReport:
@@ -92,8 +97,8 @@ class CheckpointerRetentionHandler:
             candidates=len(inactive) + len(orphans),
             acted=acted,
             detail=(
-                f"cutoff={cutoff.isoformat()};inactive_threads={len(inactive)};"
-                f"orphan_keys={len(orphans)};checkpoint_rows={acted}"
+                f"{self._detail(cutoff=cutoff, inactive=len(inactive), orphans=len(orphans), limit=limit)};"
+                f"checkpoint_rows={acted}"
             ),
         )
 
@@ -101,6 +106,21 @@ class CheckpointerRetentionHandler:
         return RetentionPolicy.checkpoint_inactivity_cutoff(
             now=datetime.now(UTC),
             windows=self._windows,
+        )
+
+    def _detail(
+        self,
+        *,
+        cutoff: datetime,
+        inactive: int,
+        orphans: int,
+        limit: int,
+    ) -> str:
+        return (
+            f"cutoff={cutoff.isoformat()};"
+            f"session_ttl_seconds={self._windows.session_ttl_seconds};"
+            f"checkpoint_days={self._windows.checkpoint_days};"
+            f"inactive={inactive};orphans={orphans};batch_cap={limit}"
         )
 
     async def _tables_ready(self, session: AsyncSession) -> bool:

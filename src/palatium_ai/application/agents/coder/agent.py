@@ -32,7 +32,7 @@ class CoderAgent(BaseAgent):
         return self._config
 
     def get_required_context_keys(self) -> list[str]:
-        return ["context_packet_json", "revision_feedback"]
+        return ["context_packet_json", "revision_feedback", "skill_catalog"]
 
     def get_available_tools(self) -> list[str]:
         return list(self._config.allowed_tools)

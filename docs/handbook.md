@@ -451,7 +451,7 @@ npm run build
 
 Write MCP (EDMS stub): `archive_document` — platform-pinned `write` → HITL interrupt
 до вызова (self-attestation сервера не снижает риск).
-Off-graph memory: `POST /api/memory/save|forget|consolidate` → HITL →
+Off-graph memory: `POST /api/memory/save|forget|extract` → HITL →
 `/api/hitl/{id}/respond` (`scripts/smoke_memory_hitl.py`).
 Хранилище HITL: **Redis** (in-memory запрещён в staging/production).
 Фоновый TTL sweep раз в 60с закрывает просроченные pending-карточки (CAS, не затирает resolve).
@@ -560,8 +560,10 @@ Ops checklist before staging/prod: [`ops-readiness.md`](ops-readiness.md).
 |------|--------|--------|
 | DialogTurn last-K | Postgres `dialog_turns` + `GET .../turns` | — |
 | Contextualizer | rewrite/continuation до Intent + `MemoryPromptBudget` | — |
-| Checkpointer | `MemorySaver` default; `LANGGRAPH_CHECKPOINT_POSTGRES=true` → AsyncPostgresSaver; bake-off `scripts/bakeoff_checkpointer_workers.py` | — |
-| MemoryPort | Postgres `memory_items` + FTS GIN; staging `MEMORY_EMBEDDING_RERANK=true` | — |
+| Checkpointer | Postgres `AsyncPostgresSaver` in staging/prod (or `LANGGRAPH_CHECKPOINT_POSTGRES=true`); `MemorySaver` in development; dual TTL `MEMORY_SESSION_TTL_SECONDS` + `RETENTION_CHECKPOINT_DAYS`; bake-off `scripts/bakeoff_checkpointer_workers.py` | — |
+| MemoryPort | Postgres `memory.entries` + FTS + pgvector; `MEMORY_HYBRID_FUSION`/`MEMORY_RRF_K` + search-time importance; opt-in `MEMORY_EMBEDDING_RERANK` | — |
+| Extract / promote | Durable `memory.extract_jobs` (SKIP LOCKED); promote = `python -m palatium_ai.jobs.memory_promote --user-id …` (not from extract) | — |
+| Procedural skills (L5) | JIT `skill_catalog` + MCP `skill_reference`; roots `SKILLS_ROOTS` (`skills/procedural`); `.agent/MEMORY.md` = Cursor DX only | — |
 | Budgeted recall | ≤4 hits / 800 chars, min confidence 0.7, thread+user+org ns | — |
 | DialogTurn payload | ContentDocument JSON for rich UI hydrate | — |
 | Sleep-time | MemoryKeeper queue (`frontier` / `gpt-oss:120b-cloud`), ADD-only | — |

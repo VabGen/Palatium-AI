@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def retention_windows_from_settings(settings: Settings) -> RetentionWindows:
-    """Build frozen schedule from Settings.retention."""
+    """Build frozen schedule from Settings.retention (+ memory hot TTL for checkpointer)."""
     cfg = settings.retention
     return RetentionWindows(
         session_days=cfg.session_days,
@@ -25,6 +25,7 @@ def retention_windows_from_settings(settings: Settings) -> RetentionWindows:
         graph_pii_days=cfg.graph_pii_days,
         audit_hot_days=cfg.audit_hot_days,
         checkpoint_days=cfg.checkpoint_days,
+        session_ttl_seconds=settings.memory.session_ttl_seconds,
         langfuse_days=cfg.langfuse_days,
         mcp_archive_days=cfg.mcp_archive_days,
         mcp_purge_years=cfg.mcp_purge_years,

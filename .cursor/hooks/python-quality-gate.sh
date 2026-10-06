@@ -41,7 +41,27 @@ elif command -v ruff >/dev/null 2>&1; then
     echo "❌ ruff failed for $FILE_PATH" >&2
     STATUS=1
   fi
-  if command -v mypy >/dev/null 2>&1; then
+  [{
+	"resource": "/d:/project/palatium-ai/src/palatium_ai/domain/attachments/citations.py",
+	"owner": "Ruff",
+	"code": {
+		"value": "I001",
+		"target": {
+			"$mid": 1,
+			"path": "/ruff/rules/unsorted-imports",
+			"scheme": "https",
+			"authority": "docs.astral.sh"
+		}
+	},
+	"severity": 4,
+	"message": "Import block is un-sorted or un-formatted\n\nhelp: Organize imports",
+	"source": "Ruff",
+	"startLineNumber": 11,
+	"startColumn": 1,
+	"endLineNumber": 15,
+	"endColumn": 21,
+	"modelVersionId": 1
+}]if command -v mypy >/dev/null 2>&1; then
     if ! mypy --strict "$FILE_PATH"; then
       echo "❌ mypy --strict failed for $FILE_PATH — см. 010-typing-strict.mdc" >&2
       STATUS=1

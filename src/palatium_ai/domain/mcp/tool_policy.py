@@ -40,13 +40,14 @@ from palatium_ai.domain.mcp.external_schemas import (
 )
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
 from palatium_ai.domain.mcp.platform_schemas import (
-    PLATFORM_CONSOLIDATE_MEMORY_SCHEMA,
+    PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA,
     PLATFORM_FORGET_MEMORY_SCHEMA,
     PLATFORM_GRAPH_QUERY_SCHEMA,
     PLATFORM_INGEST_DOCUMENT_SCHEMA,
     PLATFORM_SAVE_MEMORY_SCHEMA,
     PLATFORM_SEARCH_KNOWLEDGE_SCHEMA,
     PLATFORM_SEARCH_MEMORY_SCHEMA,
+    PLATFORM_SKILL_REFERENCE_SCHEMA,
     PLATFORM_WEB_FALLBACK_SCHEMA,
 )
 
@@ -125,15 +126,21 @@ _PLATFORM_SIDE_EFFECTS: dict[str, PlatformToolPin] = {
         risk_tier="medium",
         requires_hitl=True,
     ),
-    "mcp:platform.consolidate_memory": PlatformToolPin(
+    "mcp:platform.extract_transcript_memories": PlatformToolPin(
         side_effect="write",
-        schema_fingerprint=schema_fingerprint(PLATFORM_CONSOLIDATE_MEMORY_SCHEMA),
+        schema_fingerprint=schema_fingerprint(PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA),
         risk_tier="medium",
         requires_hitl=True,
     ),
     "mcp:platform.graph_query": PlatformToolPin(
         side_effect="read",
         schema_fingerprint=schema_fingerprint(PLATFORM_GRAPH_QUERY_SCHEMA),
+        risk_tier="low",
+        requires_hitl=False,
+    ),
+    "mcp:platform.skill_reference": PlatformToolPin(
+        side_effect="read",
+        schema_fingerprint=schema_fingerprint(PLATFORM_SKILL_REFERENCE_SCHEMA),
         risk_tier="low",
         requires_hitl=False,
     ),
@@ -188,8 +195,9 @@ _PLATFORM_INPUT_SCHEMAS: dict[str, dict[str, object]] = {
     "search_memory": PLATFORM_SEARCH_MEMORY_SCHEMA,
     "save_memory": PLATFORM_SAVE_MEMORY_SCHEMA,
     "forget_memory": PLATFORM_FORGET_MEMORY_SCHEMA,
-    "consolidate_memory": PLATFORM_CONSOLIDATE_MEMORY_SCHEMA,
+    "extract_transcript_memories": PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA,
     "graph_query": PLATFORM_GRAPH_QUERY_SCHEMA,
+    "skill_reference": PLATFORM_SKILL_REFERENCE_SCHEMA,
     "web_fallback": PLATFORM_WEB_FALLBACK_SCHEMA,
 }
 
@@ -199,8 +207,17 @@ _PLATFORM_TOOL_DESCRIPTIONS: dict[str, str] = {
     "search_memory": "Hybrid search over episodic memory entries (read).",
     "save_memory": "Upsert episodic memory entry (write; HITL).",
     "forget_memory": "Delete episodic memory entry by key (write; HITL).",
-    "consolidate_memory": "Enqueue sleep-time memory consolidation (write; HITL).",
-    "graph_query": "Read-only parameterized Cypher against the knowledge graph.",
+    "extract_transcript_memories": (
+        "Enqueue sleep-time extract (transcript → medium via MemoryKeeper; write; HITL)."
+    ),
+    "graph_query": (
+        "Read-only parameterized Cypher against the knowledge graph "
+        "(bi-temporal MemoryFact: bind $as_of / ACTIVE_FACT_AS_OF_PREDICATE)."
+    ),
+    "skill_reference": (
+        "Load procedural skill reference.md (or SKILL body) by name; "
+        "level-1 catalog is in context key skill_catalog (065 progressive disclosure)."
+    ),
     "web_fallback": "External web search fallback after local retrieval empty.",
 }
 

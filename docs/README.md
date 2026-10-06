@@ -14,6 +14,9 @@
 | **[global-retention.md](global-retention.md)** | **Global retention**: env `RETENTION_*`, CLI, классы W0–W3, dry-run→execute, диагностика |
 | **[adr/0002-global-retention-scheduler.md](adr/0002-global-retention-scheduler.md)** | ADR: global retention — out-of-band CronJob + узкая DB-роль |
 | **[../.cursor/plans/global-retention.md](../.cursor/plans/global-retention.md)** | План Global Data Retention W0–W6: политики, scheduler, GDPR/152-ФЗ (актуально на 2026-10-05) |
+| **[../.cursor/plans/memory-max-pro.md](../.cursor/plans/memory-max-pro.md)** | План Memory MAX PRO: hybrid cortex, LOCKED решения, волны M0–M8 (актуально на 2026-10-06) |
+| **[adr/0003-postgres-checkpointer-session-ttl.md](adr/0003-postgres-checkpointer-session-ttl.md)** | ADR: short-term = Postgres checkpointer + retention TTL |
+| **[adr/0004-hybrid-memory-not-neo4j-only.md](adr/0004-hybrid-memory-not-neo4j-only.md)** | ADR: Postgres medium + bi-temporal Neo4j; reject Neo4j-only Cortex |
 | **[audit/latency-audit.md](audit/latency-audit.md)** | Аудит скорости ответа: карта `/intents/process`, узкие места, план P0–P2 (актуально на 2026-10-01) |
 | **[embedded-assistant.md](embedded-assistant.md)** | Embeddable-виджет `<palatium-assistant>`: контракт событий, темизация, доставка, §9 — интеграционный пакет и чек-лист приёмки для команды СЭД |
 | **[../deploy/observability/README.md](../deploy/observability/README.md)** | Observability-стек: Prometheus / Grafana / Loki / Alertmanager + SLO |

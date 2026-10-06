@@ -36,7 +36,7 @@ class MemoryNamespacePolicy:
             "graph_query",
             "web_fallback",
             "ingest_document",
-            "consolidate_memory",
+            "extract_transcript_memories",
         }
     )
 
@@ -192,10 +192,14 @@ class MemoryNamespacePolicy:
         args = dict(arguments)
         args["user_id"] = user_actor
 
-        if tool_name in {"search_memory", "search_knowledge", "ingest_document", "consolidate_memory"} and thread_actor:
+        if (
+            tool_name
+            in {"search_memory", "search_knowledge", "ingest_document", "extract_transcript_memories"}
+            and thread_actor
+        ):
             args["thread_id"] = thread_actor
 
-        if tool_name in {"search_memory", "consolidate_memory"}:
+        if tool_name in {"search_memory", "extract_transcript_memories"}:
             if org_actor:
                 args["org_id"] = org_actor
             else:

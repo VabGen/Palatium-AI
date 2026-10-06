@@ -68,6 +68,7 @@ class RetentionWindows(BaseModel, frozen=True):
     graph_pii_days: int = Field(default=90, ge=1, le=3650)
     audit_hot_days: int = Field(default=90, ge=1, le=3650)
     checkpoint_days: int = Field(default=30, ge=1, le=3650)
+    session_ttl_seconds: int = Field(default=1800, ge=60, le=30 * 24 * 3600)
     langfuse_days: int = Field(default=30, ge=1, le=3650)
     mcp_archive_days: int = Field(default=90, ge=1, le=3650)
     mcp_purge_years: int = Field(default=3, ge=1, le=50)
@@ -177,9 +178,18 @@ class RetentionPolicy:
         now: datetime,
         windows: RetentionWindows = DEFAULT_RETENTION_WINDOWS,
     ) -> datetime:
-        """LangGraph checkpoints for conversations idle before this instant are reclaimable."""
+        """Dual TTL: earlier of hot ``session_ttl_seconds`` and cold ``checkpoint_days``.
+
+        Sessions with ``updated_at`` strictly before this UTC instant are reclaimable
+        (inactive > hot **or** age > cold — equivalent to ``now - min(hot, cold)``).
+
+        Reclaim runs on the retention CronJob cadence (ADR 0002), not as a native
+        EXPIRE at ``T+session_ttl``; document ops accordingly (ADR 0003).
+        """
         _require_aware(now)
-        return now - timedelta(days=windows.checkpoint_days)
+        hot = timedelta(seconds=windows.session_ttl_seconds)
+        cold = timedelta(days=windows.checkpoint_days)
+        return now - min(hot, cold)
 
     @staticmethod
     def decide(

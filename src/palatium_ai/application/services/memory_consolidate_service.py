@@ -6,8 +6,14 @@ from __future__ import annotations
 
 from palatium_ai.application.services.memory_extract_hitl_service import (
     MEM_CONSOLIDATE_TASK_PREFIX,
+    MEM_EXTRACT_TASK_PREFIX,
     MemoryConsolidateService,
     MemoryExtractHitlService,
 )
 
-__all__ = ["MEM_CONSOLIDATE_TASK_PREFIX", "MemoryConsolidateService", "MemoryExtractHitlService"]
+__all__ = [
+    "MEM_CONSOLIDATE_TASK_PREFIX",
+    "MEM_EXTRACT_TASK_PREFIX",
+    "MemoryConsolidateService",
+    "MemoryExtractHitlService",
+]

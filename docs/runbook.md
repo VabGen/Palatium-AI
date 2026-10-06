@@ -739,9 +739,11 @@ Redis 7.2.4 и **не читает RDB версии 12** (её пишет Redis 
 # Error reading the RDB base file appendonly.aof.1.base.rdb, AOF loading aborted
 ```
 
-**Это не потеря данных.** В Redis лежит только эфемерное состояние: checkpoint'ы LangGraph
-(TTL сессии, `session_ttl_seconds`), флаг kill-switch и состояние HITL-карточек. Содержимое
-тома нечитаемо в любом случае, поэтому единственный корректный шаг — удалить несовместимый AOF.
+**Это не потеря данных.** В Redis/Valkey лежит только эфемерное состояние: флаг
+kill-switch, HITL-карточки и кэш — **не** LangGraph checkpoints (те в Postgres,
+dual TTL `MEMORY_SESSION_TTL_SECONDS` + `RETENTION_CHECKPOINT_DAYS`, ADR 0003).
+Содержимое тома нечитаемо в любом случае, поэтому единственный корректный шаг —
+удалить несовместимый AOF.
 
 **Фикс (одноразовый, при переходе Redis 7.4 → Valkey 8.x):**
 

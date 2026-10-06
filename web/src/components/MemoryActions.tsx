@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Brain, ChevronDown, LoaderCircle } from 'lucide-react';
-import { requestMemoryConsolidate, requestMemoryForget, requestMemorySave } from '../api/client';
+import { requestMemoryExtract, requestMemoryForget, requestMemorySave } from '../api/client';
 import { t } from '../i18n';
 import type { HITLCardView } from '../types/contentDocument';
 
@@ -13,7 +13,7 @@ type MemoryActionsProps = {
   onCardCreated: (card: HITLCardView, label: string) => void;
 };
 
-type MemoryMode = 'save' | 'forget' | 'consolidate';
+type MemoryMode = 'save' | 'forget' | 'extract';
 
 export function MemoryActions({
   threadId,
@@ -72,12 +72,12 @@ export function MemoryActions({
         );
         label = t('memory.label.forget');
       } else {
-        card = await requestMemoryConsolidate({ thread_id: threadId }, userId, orgId);
+        card = await requestMemoryExtract({ thread_id: threadId }, userId, orgId);
         label = t('memory.label.extract');
       }
       onCardCreated(card, label);
       setText('');
-      if (mode !== 'consolidate') setEntryKey('');
+      if (mode !== 'extract') setEntryKey('');
       toast.success(t('memory.toast.cardCreated'));
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -108,7 +108,7 @@ export function MemoryActions({
               [
                 ['save', t('memory.mode.save')],
                 ['forget', t('memory.mode.forget')],
-                ['consolidate', t('memory.mode.extract')],
+                ['extract', t('memory.mode.extract')],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -125,7 +125,7 @@ export function MemoryActions({
             ))}
           </div>
 
-          {mode !== 'consolidate' && (
+          {mode !== 'extract' && (
             <input
               className="memory-input"
               value={entryKey}
@@ -146,7 +146,7 @@ export function MemoryActions({
               maxLength={2000}
             />
           )}
-          {mode === 'consolidate' && <p className="memory-hint">{t('memory.extractHint')}</p>}
+          {mode === 'extract' && <p className="memory-hint">{t('memory.extractHint')}</p>}
 
           <button
             type="button"

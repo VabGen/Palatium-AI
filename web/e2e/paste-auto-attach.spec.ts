@@ -100,6 +100,9 @@ test.describe('paste auto-attach', () => {
     await pasteIntoComposer(page, restorable);
     await expect(page.locator('.attachment-chip.is-paste.is-ready')).toBeVisible();
 
+    // Paste chip is text, not a table — analyze action must not appear.
+    await expect(page.getByRole('button', { name: ru['attach.analyze'] })).toHaveCount(0);
+
     await page.getByRole('button', { name: ru['composer.showInField'] }).click();
 
     await expect(page.locator('.attachment-chip')).toHaveCount(0);

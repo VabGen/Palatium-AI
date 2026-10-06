@@ -63,7 +63,7 @@ def _memory_saver() -> MemorySaver:
 async def create_checkpointer(settings: Settings) -> CheckpointerHandle:
     """Build checkpointer; fall back to MemorySaver if Postgres saver unavailable."""
     serde = build_checkpoint_serde()
-    if not settings.memory.use_postgres_checkpointer:
+    if not settings.postgres_checkpointer_enabled:
         logger.info("LangGraph checkpointer: MemorySaver (process-local)")
         return CheckpointerHandle(saver=_memory_saver())
 

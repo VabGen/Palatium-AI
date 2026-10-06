@@ -13,17 +13,20 @@ from palatium_ai.domain.knowledge.types import IngestDocumentCommand, SearchKnow
 from palatium_ai.domain.mcp.models import MCPToolResult
 from palatium_ai.infrastructure.mcp.graph_web_tool_ops import graph_query, web_fallback
 from palatium_ai.infrastructure.mcp.memory_tool_ops import (
-    consolidate_memory,
+    extract_transcript_memories,
     forget_memory,
     save_memory,
     search_memory,
 )
+from palatium_ai.infrastructure.mcp.skill_tool_ops import skill_reference
 
 if TYPE_CHECKING:
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.domain.graph.port import GraphPort
+    from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.knowledge.port import KnowledgePort
     from palatium_ai.domain.memory.ports import MemoryPort
+    from palatium_ai.domain.skills.port import SkillCatalogPort
     from palatium_ai.domain.web.port import WebSearchPort
 
 
@@ -43,13 +46,17 @@ class PlatformToolHandler:
         memory_port: MemoryPort | None = None,
         consolidation: MemoryExtractService | None = None,
         graph_port: GraphPort | None = None,
+        graph_write: GraphWritePort | None = None,
         web_search_port: WebSearchPort | None = None,
+        skill_catalog: SkillCatalogPort | None = None,
     ) -> None:
         self._knowledge = knowledge_port
         self._memory = memory_port
         self._consolidation = consolidation
         self._graph = graph_port
+        self._graph_write = graph_write
         self._web_search = web_search_port
+        self._skills = skill_catalog
 
     async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> MCPToolResult:
         if tool_name == "ingest_document":
@@ -62,10 +69,12 @@ class PlatformToolHandler:
             return await self._save_memory(arguments)
         if tool_name == "forget_memory":
             return await self._forget_memory(arguments)
-        if tool_name == "consolidate_memory":
-            return await consolidate_memory(self._consolidation, arguments)
+        if tool_name == "extract_transcript_memories":
+            return await extract_transcript_memories(self._consolidation, arguments)
         if tool_name == "graph_query":
             return await graph_query(self._graph, arguments)
+        if tool_name == "skill_reference":
+            return await skill_reference(self._skills, arguments)
         if tool_name == "web_fallback":
             return await web_fallback(self._web_search, arguments)
         msg = f"unsupported platform tool: {tool_name}"
@@ -84,7 +93,7 @@ class PlatformToolHandler:
     async def _forget_memory(self, arguments: dict[str, object]) -> MCPToolResult:
         if self._memory is None:
             return _error_result("forget_memory unavailable: memory port not configured")
-        return await forget_memory(self._memory, arguments)
+        return await forget_memory(self._memory, arguments, graph_write=self._graph_write)
 
     async def _ingest_document(self, arguments: dict[str, object]) -> MCPToolResult:
         user_id = arguments.get("user_id")

@@ -73,10 +73,55 @@ export type UploadTarget = {
   projectId?: string;
 };
 
-/** Tabular files eligible for local ADA HITL analysis (G15). */
+/** Tabular files eligible for local ADA HITL analysis (G15).
+ *
+ * Paste-origin ``pasted-text_*.txt`` is NOT tabular — do not offer «Анализ таблицы».
+ */
 export function isTabularAttachmentFilename(filename: string): boolean {
   const lower = filename.toLowerCase();
-  return lower.endsWith('.csv') || lower.endsWith('.xlsx') || lower.endsWith('.txt');
+  if (lower.startsWith('pasted-text_') || lower.startsWith('pasted_text_')) {
+    return false;
+  }
+  return lower.endsWith('.csv') || lower.endsWith('.xlsx') || lower.endsWith('.tsv');
+}
+
+/** Mirror of domain ``sanitize_source_refs`` — hide ``file#id8#pN`` noise in chips. */
+const SOURCE_REF_PARTS =
+  /^(?<name>.+?)(?:#(?<id>[0-9a-fA-F]{8}))?(?:#p(?<page>\d+))?$/i;
+const BARE_UUID =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Collapse LLM filenames + internal citation ids/pages into unique user-facing chips.
+ * Keeps ``name#id8`` only when the same filename appears with different ids.
+ */
+export function displaySourceRefs(refs: readonly string[]): string[] {
+  const parsed: Array<{ name: string; id: string }> = [];
+  for (const raw of refs) {
+    const label = raw.trim();
+    if (!label || BARE_UUID.test(label)) continue;
+    const match = SOURCE_REF_PARTS.exec(label);
+    const name = match?.groups?.name?.trim();
+    if (!name) continue;
+    parsed.push({ name, id: (match?.groups?.id ?? '').toLowerCase() });
+  }
+  const idsByName = new Map<string, Set<string>>();
+  for (const item of parsed) {
+    if (!item.id) continue;
+    const bucket = idsByName.get(item.name) ?? new Set<string>();
+    bucket.add(item.id);
+    idsByName.set(item.name, bucket);
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of parsed) {
+    const needsId = (idsByName.get(item.name)?.size ?? 0) > 1;
+    const display = needsId && item.id ? `${item.name}#${item.id}` : item.name;
+    if (seen.has(display)) continue;
+    seen.add(display);
+    out.push(display);
+  }
+  return out;
 }
 
 export type AttachmentDraft = {

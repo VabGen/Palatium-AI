@@ -29,8 +29,14 @@ def test_session_inactivity_cutoff() -> None:
     assert cutoff == _NOW - timedelta(days=30)
 
 
-def test_checkpoint_inactivity_cutoff() -> None:
-    windows = RetentionWindows(checkpoint_days=14)
+def test_checkpoint_inactivity_cutoff_hot_wins() -> None:
+    windows = RetentionWindows(checkpoint_days=14, session_ttl_seconds=1800)
+    cutoff = RetentionPolicy.checkpoint_inactivity_cutoff(now=_NOW, windows=windows)
+    assert cutoff == _NOW - timedelta(seconds=1800)
+
+
+def test_checkpoint_inactivity_cutoff_cold_wins_when_hot_longer() -> None:
+    windows = RetentionWindows(checkpoint_days=14, session_ttl_seconds=20 * 24 * 3600)
     cutoff = RetentionPolicy.checkpoint_inactivity_cutoff(now=_NOW, windows=windows)
     assert cutoff == _NOW - timedelta(days=14)
 

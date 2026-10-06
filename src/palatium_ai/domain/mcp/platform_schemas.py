@@ -128,11 +128,10 @@ class PlatformForgetMemoryInput(BaseModel):
     )
 
 
-class PlatformConsolidateMemoryInput(BaseModel):
-    """Input for ``mcp:platform.consolidate_memory``.
+class PlatformExtractTranscriptMemoriesInput(BaseModel):
+    """Input for ``mcp:platform.extract_transcript_memories``.
 
-    Legacy name: enqueues sleep-time **extract** (MemoryKeeper → medium),
-    not graph promote. Rename to extract_* = 070 discussion.
+    Enqueues sleep-time **extract** (MemoryKeeper → medium), not graph promote.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -146,7 +145,9 @@ class PlatformConsolidateMemoryInput(BaseModel):
 PLATFORM_SEARCH_MEMORY_SCHEMA = pinned_input_schema(PlatformSearchMemoryInput)
 PLATFORM_SAVE_MEMORY_SCHEMA = pinned_input_schema(PlatformSaveMemoryInput)
 PLATFORM_FORGET_MEMORY_SCHEMA = pinned_input_schema(PlatformForgetMemoryInput)
-PLATFORM_CONSOLIDATE_MEMORY_SCHEMA = pinned_input_schema(PlatformConsolidateMemoryInput)
+PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA = pinned_input_schema(
+    PlatformExtractTranscriptMemoriesInput
+)
 
 
 class PlatformGraphQueryInput(BaseModel):
@@ -158,12 +159,20 @@ class PlatformGraphQueryInput(BaseModel):
     cypher: str = Field(
         min_length=1,
         max_length=8_000,
-        description="Read-only Cypher with $param placeholders (no string concat).",
+        description=(
+            "Read-only Cypher with $param placeholders (no string concat). "
+            "For bi-temporal MemoryFact reads use $as_of with ACTIVE_FACT_AS_OF_PREDICATE."
+        ),
     )
     params_json: str = Field(
         default="{}",
         max_length=50_000,
         description="JSON object of Cypher $params.",
+    )
+    as_of: str = Field(
+        default="",
+        max_length=40,
+        description="ISO-8601 UTC moment for temporal reads; empty → now. Injected as $as_of.",
     )
     limit: str = Field(default="25", max_length=3, description="Max rows (1-100) as string.")
 
@@ -178,24 +187,39 @@ class PlatformWebFallbackInput(BaseModel):
     max_results: str = Field(default="5", max_length=2, description="Max hits (1-10) as string.")
 
 
+class PlatformSkillReferenceInput(BaseModel):
+    """Input for ``mcp:platform.skill_reference`` (read; progressive disclosure)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(
+        min_length=1,
+        max_length=64,
+        description="Skill id from skill_catalog (SKILL.md frontmatter.name).",
+    )
+
+
 PLATFORM_GRAPH_QUERY_SCHEMA = pinned_input_schema(PlatformGraphQueryInput)
 PLATFORM_WEB_FALLBACK_SCHEMA = pinned_input_schema(PlatformWebFallbackInput)
+PLATFORM_SKILL_REFERENCE_SCHEMA = pinned_input_schema(PlatformSkillReferenceInput)
 
 __all__ = [
-    "PLATFORM_CONSOLIDATE_MEMORY_SCHEMA",
+    "PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA",
     "PLATFORM_FORGET_MEMORY_SCHEMA",
     "PLATFORM_GRAPH_QUERY_SCHEMA",
     "PLATFORM_INGEST_DOCUMENT_SCHEMA",
     "PLATFORM_SAVE_MEMORY_SCHEMA",
     "PLATFORM_SEARCH_KNOWLEDGE_SCHEMA",
     "PLATFORM_SEARCH_MEMORY_SCHEMA",
+    "PLATFORM_SKILL_REFERENCE_SCHEMA",
     "PLATFORM_WEB_FALLBACK_SCHEMA",
-    "PlatformConsolidateMemoryInput",
+    "PlatformExtractTranscriptMemoriesInput",
     "PlatformForgetMemoryInput",
     "PlatformGraphQueryInput",
     "PlatformIngestDocumentInput",
     "PlatformSaveMemoryInput",
     "PlatformSearchKnowledgeInput",
     "PlatformSearchMemoryInput",
+    "PlatformSkillReferenceInput",
     "PlatformWebFallbackInput",
 ]

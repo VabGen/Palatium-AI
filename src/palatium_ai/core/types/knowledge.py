@@ -4,11 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from palatium_ai.core.types.retrieval import DEFAULT_RRF_K, HybridFusion
 
-KnowledgeHybridFusion = Literal["weighted", "rrf"]
-
-# Default RRF constant from Cormack/Clarke/Buettcher; KnowledgeConfig.rrf_k default.
-DEFAULT_RRF_K = 60
+# Alias kept for existing KnowledgeConfig / domain imports (010: one constant).
+KnowledgeHybridFusion = HybridFusion
 
 __all__ = ["DEFAULT_RRF_K", "KnowledgeHybridFusion"]

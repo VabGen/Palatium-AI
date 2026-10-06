@@ -6,9 +6,15 @@ alwaysApply: true
 
 # Карта проекта
 
-- Стек: Python 3.14, FastAPI, LangGraph, LangMem, Cognee, FastMCP, PostgreSQL
-  (pgvector; FTS через tsvector/ts_rank_cd — 060), Neo4j, Redis, LiteLLM,
+- Стек: Python 3.14, FastAPI, LangGraph, FastMCP, PostgreSQL
+  (pgvector; FTS через tsvector/ts_rank_cd — 060), Neo4j (long-term promote),
+  Redis/Valkey (HITL/kill-switch/кэш; **не** LangGraph checkpointer), LiteLLM,
   structlog, OpenTelemetry.
+- **Память (hybrid cortex, 060):** short-term = Postgres LangGraph checkpointer
+  (dual TTL, ADR 0003); medium = `memory.entries`; long-term = Neo4j **только
+  через promote**. Extract ⊥ promote (отдельные jobs). План —
+  `.cursor/plans/memory-max-pro.md`, ADR 0004. Cognee / Qdrant / Neo4j-only
+  medium — не runtime SoT без нового ADR.
 - **Индекс правил:** 001-рабочее соглашение · 005-spec-driven · 000-архитектура · 010-типизация ·
   015-качество кода · 017-триаж находок · 020-безопасность · 025-supply-chain ·
   030-контракты ·
@@ -58,8 +64,8 @@ alwaysApply: true
   `platform.ingest_document`. Таблица `palatium_ai.attachments` под `FORCE RLS` (060),
   retention — per-owner sweep. Эксплуатация и env — `docs/runbook.md` §16.
 - Скиллы: `.cursor/skills/<name>/SKILL.md`. Загрузка `reference.md` через tool
-  call `skill_reference` **не реализована** (roadmap, 065) — сегодня скиллы
-  читаются файлами, runtime-механизма нет.
+  call `skill_reference` + JIT `skill_catalog` (M6, 065) — product skills в
+  `skills/procedural/`; `.agent/MEMORY.md` только DX Cursor.
 - Фронтенд: React 19 + Vite + TypeScript (SPA, без SSR/RSC — гидратационные
   оговорки из apple-design/animate тут неприменимы). Стили — обычный CSS
   (`web/src/styles.css`), **Tailwind НЕ используется**. Пакет — `web/`.

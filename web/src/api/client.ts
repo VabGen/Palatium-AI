@@ -877,9 +877,9 @@ export type MemoryForgetRequest = {
   scope_id?: string;
 };
 
-export type MemoryConsolidateRequest = {
+export type MemoryExtractRequest = {
   thread_id: string;
-  consolidate_task_id?: string;
+  extract_task_id?: string;
 };
 
 export async function requestMemorySave(
@@ -912,13 +912,13 @@ export async function requestMemoryForget(
   return res.json();
 }
 
-export async function requestMemoryConsolidate(
-  body: MemoryConsolidateRequest,
+export async function requestMemoryExtract(
+  body: MemoryExtractRequest,
   userId?: string | null,
   orgId?: string | null
 ): Promise<HITLCardView> {
   const res = await fetchWithAuth(
-    '/memory/consolidate',
+    '/memory/extract',
     { method: 'POST', body: JSON.stringify(body) },
     userId,
     orgId

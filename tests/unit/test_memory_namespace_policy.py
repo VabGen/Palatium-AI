@@ -114,7 +114,7 @@ def test_bind_mcp_memory_arguments_requires_actor_for_org() -> None:
 
 def test_bind_mcp_consolidate_forces_user_and_strips_unowned_org() -> None:
     bound = MemoryNamespacePolicy.bind_mcp_memory_arguments(
-        tool_name="consolidate_memory",
+        tool_name="extract_transcript_memories",
         arguments={
             "user_id": "victim",
             "thread_id": "thread-victim",
@@ -132,7 +132,7 @@ def test_bind_mcp_consolidate_forces_user_and_strips_unowned_org() -> None:
 def test_bind_mcp_consolidate_requires_actor_user() -> None:
     with pytest.raises(ValueError, match="actor_user_id"):
         MemoryNamespacePolicy.bind_mcp_memory_arguments(
-            tool_name="consolidate_memory",
+            tool_name="extract_transcript_memories",
             arguments={"user_id": "u1", "thread_id": "t1"},
             actor_user_id="",
         )

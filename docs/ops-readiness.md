@@ -125,7 +125,7 @@ poetry run python scripts/run_agent_evals_nightly.py
 | Audit chain daily | `scripts/verify_audit_chain.py` · `.github/workflows/audit-chain-daily.yml` |
 | MAX_QUALITY_REVISIONS / CIRCUIT_* | `ObservabilityConfig` → HITL revise + node circuits |
 | Live judge smoke | `scripts/run_agent_evals_judge_smoke.py` (staging, `PALATIUM_EVAL_LIVE_JUDGE=1`) |
-| Memory HITL (save/forget/consolidate) | `memory.py` router, `MemoryNamespacePolicy`, `test_memory_*`, adversarial drills MEM-HITL |
+| Memory HITL (save/forget/extract) | `memory.py` router, `MemoryNamespacePolicy`, `test_memory_*`, adversarial drills MEM-HITL |
 | Platform MCP (knowledge/memory/graph/web) | `platform_tool_handler.py`, `RetrievalPolicy`, `test_retrieval_policy.py` |
 | `web_fallback` circuit/retry | `HttpWebSearchPort`, `WEB_FALLBACK_*`, `test_web_search_port.py` |
 | Graph query backends | `GRAPH_QUERY_BACKEND`, `test_neo4j_graph_port.py` |
@@ -156,13 +156,13 @@ poetry run python scripts/run_agent_evals_nightly.py
 | Knob | Default | Notes |
 |------|---------|--------|
 | `MEMORY_BACKEND` | (см. env) | postgres / mem0 / … — medium-term `MemoryPort` |
-| Sleep-time consolidation | on when wiring enables it | auto-enqueue after turns **без** interactive HITL; writes via MCP + secret/PII scan + scope invariants; user `POST /api/memory/consolidate` — **с** HITL |
+| Sleep-time extract | on when wiring enables it | auto-enqueue after turns **без** interactive HITL; writes via MCP + secret/PII scan + scope invariants; user `POST /api/memory/extract` — **с** HITL |
 | `POST /api/memory/save` | — | HITL card `mem-save-*` → MCP `save_memory` |
 | `POST /api/memory/forget` | — | HITL `mem-forget-*` (TTL 5m) → MCP `forget_memory` |
-| Org / tenant MCP | — | **actor_*** from JWT/job/graph state via `call_mcp_tool` overwrites `user_id`/`org_id`/`thread_id` for save/forget/consolidate/ingest + search_memory/search_knowledge/graph_query/web_fallback |
+| Org / tenant MCP | — | **actor_*** from JWT/job/graph state via `call_mcp_tool` overwrites `user_id`/`org_id`/`thread_id` for save/forget/extract/ingest + search_memory/search_knowledge/graph_query/web_fallback |
 | RLS `memory.entries` / `knowledge.*` | — | policy + `FORCE`; session `set_config('palatium.user_id')` via `set_rls_user_scope` (fail-closed); role `palatium_app` **NOBYPASSRLS** (migration `b3c4d5e6f7a8`) |
 | Direct `PlatformToolHandler.call_tool` | — | bypasses actor bind (tests/local only); production path goes through `call_mcp_tool` |
-| `POST /api/memory/consolidate` | — | HITL `mem-consolidate-*`; **503** если sleep-time worker выключен |
+| `POST /api/memory/extract` | — | HITL `mem-extract-*`; **503** если sleep-time worker выключен |
 | `GRAPH_QUERY_BACKEND` | `in_memory` | `neo4j` opt-in |
 | `WEB_FALLBACK_BACKEND` | `stub` | `http` + `WEB_FALLBACK_PROVIDER` (`ddg`/`brave`) |
 | `WEB_FALLBACK_RETRY_*` / `WEB_FALLBACK_CIRCUIT_*` | 3 / 30s | fail-closed empty hits + note |

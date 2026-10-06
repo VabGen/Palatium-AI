@@ -11,13 +11,14 @@ from __future__ import annotations
 
 from mcp_servers.mcp_stub_runtime import build_http_app, create_stub_mcp, register_pinned_tool
 from palatium_ai.domain.mcp.platform_schemas import (
-    PLATFORM_CONSOLIDATE_MEMORY_SCHEMA,
+    PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA,
     PLATFORM_FORGET_MEMORY_SCHEMA,
     PLATFORM_GRAPH_QUERY_SCHEMA,
     PLATFORM_INGEST_DOCUMENT_SCHEMA,
     PLATFORM_SAVE_MEMORY_SCHEMA,
     PLATFORM_SEARCH_KNOWLEDGE_SCHEMA,
     PLATFORM_SEARCH_MEMORY_SCHEMA,
+    PLATFORM_SKILL_REFERENCE_SCHEMA,
     PLATFORM_WEB_FALLBACK_SCHEMA,
 )
 
@@ -123,7 +124,7 @@ def forget_memory(
     )
 
 
-def consolidate_memory(
+def extract_transcript_memories(
     user_id: str,
     thread_id: str,
     task_id: str = "",
@@ -141,14 +142,20 @@ def graph_query(
     user_id: str,
     cypher: str,
     params_json: str = "{}",
+    as_of: str = "",
     limit: str = "25",
 ) -> dict[str, object]:
     return _refuse_execution(
         user_id=user_id,
         cypher=cypher,
         params_json=params_json,
+        as_of=as_of,
         limit=limit,
     )
+
+
+def skill_reference(name: str) -> dict[str, object]:
+    return _refuse_execution(name=name)
 
 
 def web_fallback(user_id: str, query: str, max_results: str = "5") -> dict[str, object]:
@@ -203,18 +210,33 @@ register_pinned_tool(
 )
 register_pinned_tool(
     mcp,
-    fn=consolidate_memory,
-    name="consolidate_memory",
-    description="Enqueue sleep-time memory consolidation for a thread (write; HITL required).",
-    input_schema=PLATFORM_CONSOLIDATE_MEMORY_SCHEMA,
+    fn=extract_transcript_memories,
+    name="extract_transcript_memories",
+    description=(
+        "Enqueue sleep-time extract (transcript → medium via MemoryKeeper; write; HITL)."
+    ),
+    input_schema=PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA,
     read_only=False,
 )
 register_pinned_tool(
     mcp,
     fn=graph_query,
     name="graph_query",
-    description="Read-only parameterized Cypher against the knowledge graph ($params only).",
+    description=(
+        "Read-only parameterized Cypher against the knowledge graph "
+        "($params only; bi-temporal MemoryFact via $as_of)."
+    ),
     input_schema=PLATFORM_GRAPH_QUERY_SCHEMA,
+    read_only=True,
+)
+register_pinned_tool(
+    mcp,
+    fn=skill_reference,
+    name="skill_reference",
+    description=(
+        "Load procedural skill reference.md (or SKILL body) by catalog name (read)."
+    ),
+    input_schema=PLATFORM_SKILL_REFERENCE_SCHEMA,
     read_only=True,
 )
 register_pinned_tool(

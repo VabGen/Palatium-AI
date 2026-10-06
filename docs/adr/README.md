@@ -64,3 +64,5 @@ ADR — не бюрократия, а страховка от повторног
 |---|---|---|
 | [0001](0001-inference-gateway-latency.md) | Inference latency на corporate gateway | accepted |
 | [0002](0002-global-retention-scheduler.md) | Global retention: CronJob + retention DB role | accepted |
+| [0003](0003-postgres-checkpointer-session-ttl.md) | Short-term: Postgres checkpointer + retention TTL | accepted |
+| [0004](0004-hybrid-memory-not-neo4j-only.md) | Hybrid memory SoT; reject Neo4j-only Cortex | accepted |

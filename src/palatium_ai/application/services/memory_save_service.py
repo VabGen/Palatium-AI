@@ -103,6 +103,9 @@ class MemorySaveService:
             "thread_id": thread_id.strip(),
             "contains_pii": pii_flag,
             "kind": mem_type,
+            # User-approved HITL write — trusted for Select min_confidence gate.
+            "confidence": 1.0,
+            "importance": 1.0,
         }
         task_id = f"{MEM_SAVE_TASK_PREFIX}{uuid4().hex[:12]}"
         payload = MemorySavePayload(

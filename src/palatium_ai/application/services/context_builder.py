@@ -14,13 +14,17 @@ from palatium_ai.domain.memory.namespaces import thread_namespace, user_namespac
 from palatium_ai.domain.policies.compact import CompactPolicy
 
 if TYPE_CHECKING:
+    from palatium_ai.application.services.memory_write_service import MemoryWriteService
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.domain.ports.context_compact import DialogSummarizerPort
+    from palatium_ai.domain.skills.port import SkillCatalogPort
 
 logger = get_logger(__name__)
 
 _PRESERVE_KEYS = ("goal", "plan", "last_results")
 _PRESERVE_PREFIX = "compact_preserve:"
+_COMPACT_SOURCE = "context_compact"
+_DEFAULT_SKILL_CATALOG_MAX_CHARS = 4_000
 
 
 class ContextSourcePort(Protocol):
@@ -37,11 +41,17 @@ class ContextBuilder:
         *,
         dialog_store: DialogTurnStore | None = None,
         memory_port: MemoryPort | None = None,
+        memory_writer: MemoryWriteService | None = None,
         summarizer: DialogSummarizerPort | None = None,
+        skill_catalog: SkillCatalogPort | None = None,
+        skill_catalog_max_chars: int = _DEFAULT_SKILL_CATALOG_MAX_CHARS,
     ) -> None:
         self._dialog_store = dialog_store
         self._memory_port = memory_port
+        self._memory_writer = memory_writer
         self._summarizer = summarizer
+        self._skill_catalog = skill_catalog
+        self._skill_catalog_max_chars = max(200, int(skill_catalog_max_chars))
 
     async def build(
         self,
@@ -159,47 +169,54 @@ class ContextBuilder:
         plan: str,
         last_results: str,
     ) -> tuple[str, ...]:
-        """Write goal/plan/last_results to memory before dialog is compacted (060)."""
-        if self._memory_port is None:
+        """Gated write of goal/plan/last_results before dialog compact (060.9 / M4)."""
+        if self._memory_writer is None:
             logger.warning(
                 "context_builder.compact_persist_skipped",
                 thread_id=thread_id,
-                reason="memory_port_unavailable",
+                reason="memory_writer_unavailable",
             )
             return ()
 
         values = {"goal": goal, "plan": plan, "last_results": last_results}
         persisted: list[str] = []
-        ns = thread_namespace(thread_id)
         for key, text in values.items():
             if not text:
                 continue
-            await self._memory_port.put(
-                namespace=ns,
-                key=f"{_PRESERVE_PREFIX}{key}",
-                value={
-                    "text": text[:2000],
-                    "kind": "fact",
-                    "confidence": 1.0,
-                    "source": "context_compact",
-                    "thread_id": thread_id,
-                    "user_id": (user_id or "").strip(),
-                },
+            ok = await self._memory_writer.put_system(
+                namespace_kind="thread",
+                scope_id=thread_id,
+                entry_key=f"{_PRESERVE_PREFIX}{key}",
+                text=text,
+                source=_COMPACT_SOURCE,
+                thread_id=thread_id,
+                user_id=user_id,
+                kind="fact",
+                confidence=1.0,
+                scan_field="context_compact_preserve",
             )
-            persisted.append(key)
+            if ok:
+                persisted.append(key)
+            else:
+                logger.warning(
+                    "context_builder.compact_persist_rejected",
+                    thread_id=thread_id,
+                    key=key,
+                )
 
         # Cross-session durability for goal when user is known (preference-like anchor).
         if goal and user_id and user_id.strip():
-            await self._memory_port.put(
-                namespace=user_namespace(user_id.strip()),
-                key=f"{_PRESERVE_PREFIX}goal",
-                value={
-                    "text": goal[:2000],
-                    "kind": "fact",
-                    "confidence": 1.0,
-                    "source": "context_compact",
-                    "thread_id": thread_id,
-                },
+            await self._memory_writer.put_system(
+                namespace_kind="user",
+                scope_id=user_id.strip(),
+                entry_key=f"{_PRESERVE_PREFIX}goal",
+                text=goal,
+                source=_COMPACT_SOURCE,
+                thread_id=thread_id,
+                user_id=user_id.strip(),
+                kind="fact",
+                confidence=1.0,
+                scan_field="context_compact_preserve",
             )
         return tuple(persisted)
 
@@ -226,6 +243,11 @@ class ContextBuilder:
             if not hits:
                 return ""
             return "\n".join(str(h.get("text", h)) for h in hits)
+        if key == "skill_catalog":
+            # Unwired catalog → empty card (tests / minimal harness); production wires FilesystemSkillCatalog.
+            if self._skill_catalog is None:
+                return "(no procedural skills)"
+            return self._skill_catalog.format_catalog(max_chars=self._skill_catalog_max_chars)
         msg = f"Unknown or unavailable context key: {key}"
         raise KeyError(msg)
 

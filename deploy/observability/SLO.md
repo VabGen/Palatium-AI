@@ -32,6 +32,8 @@ treating "no series" as breach — pages on a quiet system.
 | Cost budget | `palatium:llm_cost_usd_per_hour:1h > 1` | `PalatiumLlmCostBurnHigh` | warning |
 | Context discipline (065) | `sum(rate(palatium_context_tokens_used[15m])) > 20000` | `PalatiumContextTokensHigh` | warning |
 | Memory entry hygiene (060) | `histogram_quantile(0.95, …palatium_memory_entry_size_bytes_bucket…) > 16384` | `PalatiumMemoryEntryOversized` | info |
+| Extract DLQ (060 / M3) | `palatium_memory_extract_dead_letter_total > 0` | `PalatiumMemoryExtractDeadLetter` | warning |
+| Promote batch errors (060 / M7) | `sum(rate(palatium_memory_promote_errors_total[15m])) > 0` | `PalatiumMemoryPromoteErrors` | warning |
 
 ## NOT monitored in Prometheus — and why
 
@@ -40,22 +42,14 @@ them has an alert, and adding a fake one would be worse than the gap.
 
 | SLO | Where it is actually enforced | Note |
 |---|---|---|
-| Memory Recall@k > 85% | Offline eval — `tests/eval/test_memory_spine_eval.py`, `tests/eval/test_memory_spine_live.py` | Ground truth is required, so it cannot be computed from production traffic. ⚠️ 040 lists `palatium_memory_recall_at_k` in the registry, but **no such metric exists in `metrics.py`**. See "Open question" below. |
+| Memory Recall@k > 85% | Offline eval — `tests/eval/test_memory_failure_modes_m7.py` (+ spine/live) | Ground truth required; metric `palatium_memory_recall_at_k{k}` is **offline-eval only** (Pushgateway / test publish). No Prom alert — alert would page on missing push, not on real IR degradation. |
 | Coverage `domain/policies` ≥ 90% | CI gate — `scripts/ci_quality.py` | Build-time, not runtime. |
 | Benchmark success rate > 85% | Offline eval — `scripts/run_agent_evals.py` (`artifacts/agent_evals.json`, nightly workflow) | Deterministic in PR, LLM-judge nightly. |
 | Audit chain verification 100% daily | Cron — `.github/workflows/audit-chain-daily.yml` | Prometheus only sees write failures (#4); the daily re-hash of the whole chain lives in that job. A `pushgateway` metric would be the way to surface it here. |
 
-## Open question (needs a decision, not a guess)
+## Decision (M7, 2026-10-06)
 
-`040-observability.mdc` mandates `palatium_memory_recall_at_k` with label `k`, and
-§15 sets a Recall@k SLO. Two readings, with different semantics:
-
-1. **Offline eval metric** published to Prometheus by the nightly eval job (via
-   Pushgateway) — matches how recall is actually measured today.
-2. **Runtime hit-rate at k** — e.g. share of `recall_for_thread` calls that
-   returned ≥1 durable hit above the confidence gate. Cheap, but it is *not*
-   Recall@k in the information-retrieval sense and would misrepresent the SLO if
-   labelled that way.
-
-Until this is decided (rule 055: no invented contracts), no alert is attached and
-the metric is not registered.
+`palatium_memory_recall_at_k{k}` is an **offline eval Gauge** (option 1):
+published from eval jobs / Pushgateway via `AgentMetrics.record_memory_recall_at_k`.
+Runtime hot-path must **not** write this metric as a hit-rate proxy (would
+mislabel the SLO). No Prometheus alert on the Gauge — CI/nightly eval is the gate.

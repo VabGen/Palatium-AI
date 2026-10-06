@@ -33,6 +33,26 @@ async def test_recall_for_thread_searches_namespace() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_recall_uses_search_score_when_confidence_omitted() -> None:
+    """Legacy / MCP rows without confidence still pass Select via `_score`."""
+    port = InMemoryMemoryPort()
+    await port.put(
+        namespace=thread_namespace("t-score"),
+        key="legacy",
+        value={"text": "User preferred language is Belarusian", "kind": "preference"},
+    )
+    bundle = await recall_for_thread(
+        port,
+        thread_id="t-score",
+        query="preferred language",
+        limit=4,
+        min_confidence=0.7,
+    )
+    assert bundle.hits
+    assert "belarusian" in bundle.hits[0].text.lower() or "language" in bundle.hits[0].text.lower()
+
+
+@pytest.mark.asyncio()
 async def test_recall_drops_low_confidence_hits() -> None:
     port = InMemoryMemoryPort()
     await port.put(

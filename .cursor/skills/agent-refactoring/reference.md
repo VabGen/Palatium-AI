@@ -67,7 +67,7 @@ low-risk стратегии проходят без судьи (CriticPolicy, 05
 
 | Черновик | Финальное решение | Источник |
 |---|---|---|
-| LangMem + Cognee | Принято, уже в стеке | 099 |
+| LangMem + Cognee | **Отклонено как runtime SoT.** Hybrid cortex: Postgres medium + Neo4j promote (060, ADR 0003/0004); Cognee — только после отдельного ADR | 060, 099, план memory-max-pro |
 | Qdrant / pgvector (альтернативы) | pgvector — единственный векторный слой (`knowledge`/`memory` схемы) | 060, 099 |
 | BM25 через ParadeDB (`pg_search`) | **Отклонено.** Гибридный поиск = pgvector (cosine) + Postgres FTS (`tsvector`/`ts_rank_cd`). Называть это «BM25» — ошибка; сторонние расширения — только после отдельного решения в 000 | 060.6 |
 | Reasoning LLM (o1/o3-mini, DeepSeek-R1) для Planner/Critic | Конкретная модель — не хардкод в правилах; задаётся `model_tier` (`frontier`/`standard`/`fast`) в `AgentConfig` + LiteLLM fallback-цепочка ≥2 провайдера | 030, 020 |

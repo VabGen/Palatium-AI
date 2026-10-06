@@ -68,7 +68,11 @@ async def _worker_write(*, label: str, thread_id: str, step: int, payload: str) 
         meta,
         {},
     )
-    checkpoint_id = str(saved["configurable"]["checkpoint_id"])
+    configurable = saved.get("configurable")
+    if configurable is None or "checkpoint_id" not in configurable:
+        msg = "aput did not return configurable.checkpoint_id"
+        raise RuntimeError(msg)
+    checkpoint_id = str(configurable["checkpoint_id"])
     own = await saver.aget_tuple(base)
     own_values: dict[str, Any] = {}
     if own is not None:
@@ -102,7 +106,7 @@ async def main() -> int:
     """Two sequential workers sharing Postgres checkpointer state."""
     ensure_psycopg_compatible_loop()
     settings = get_settings()
-    if not settings.memory.use_postgres_checkpointer:
+    if not settings.postgres_checkpointer_enabled:
         print("LANGGRAPH_CHECKPOINT_POSTGRES is false — enable it for bake-off", file=sys.stderr)
         return 2
 

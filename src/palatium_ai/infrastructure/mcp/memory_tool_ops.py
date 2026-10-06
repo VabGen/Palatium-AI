@@ -8,15 +8,21 @@ import json
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.core.logging import get_logger
 from palatium_ai.core.security.secret_scanner import scan_text
+from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.domain.mcp.models import MCPToolResult
+from palatium_ai.domain.memory.emotional import parse_optional_emotional_valence
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 from palatium_ai.domain.memory.pii import resolve_contains_pii
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
     from palatium_ai.application.services.memory_extract import MemoryExtractService
+    from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import MemoryPort
+
+logger = get_logger(__name__)
 
 _VALID_NAMESPACE_KINDS = frozenset({"thread", "user", "org"})
 _VALID_MEMORY_TYPES: frozenset[str] = frozenset({"preference", "fact", "incident", "episode"})
@@ -203,10 +209,23 @@ async def save_memory(
     client_pii = bool(value.get("contains_pii", False))
     pii_flag = resolve_contains_pii(text=text_value, client_flag=client_pii)
 
+    try:
+        valence = parse_optional_emotional_valence(value.get("emotional_valence"))
+    except ValueError as exc:
+        return _error_result(f"Invalid params: {exc}")
+
     stored = dict(value)
     stored.setdefault("user_id", user_id)
+    # HITL/MCP write: default trust so Select gate (recall min_confidence) is not
+    # silently empty when callers omit confidence/importance (Memory OS Write).
+    stored.setdefault("confidence", 1.0)
+    stored.setdefault("importance", coerce_float(stored.get("confidence", 1.0)))
     stored["memory_type"] = memory_type
     stored["contains_pii"] = pii_flag
+    if valence is not None:
+        stored["emotional_valence"] = valence
+    else:
+        stored.pop("emotional_valence", None)
 
     try:
         namespace = resolve_memory_namespace(
@@ -233,6 +252,8 @@ async def save_memory(
 async def forget_memory(
     memory_port: MemoryPort,
     arguments: dict[str, object],
+    *,
+    graph_write: GraphWritePort | None = None,
 ) -> MCPToolResult:
     user_id = arguments.get("user_id")
     namespace_kind = arguments.get("namespace_kind")
@@ -273,11 +294,27 @@ async def forget_memory(
         return _error_result(f"Invalid params: {exc}")
 
     forgotten = await memory_port.forget(namespace=namespace, key=entry_key.strip())
+    graph_expired = False
+    if forgotten and graph_write is not None:
+        # Fan-out: medium forget must not leave live long-term MemoryFact (060 / M5).
+        try:
+            graph_expired = await graph_write.expire_fact(
+                user_id=user_id.strip(),
+                entry_key=entry_key.strip(),
+            )
+        except Exception as exc:
+            logger.warning(
+                "forget_memory.graph_expire_failed",
+                entry_key=entry_key.strip()[:128],
+                error=str(exc),
+            )
+            graph_expired = False
     payload = {
         "tool": "forget_memory",
         "namespace": "/".join(namespace),
         "entry_key": entry_key.strip(),
         "forgotten": forgotten,
+        "graph_expired": graph_expired,
     }
     return MCPToolResult(
         content=[{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
@@ -285,14 +322,11 @@ async def forget_memory(
     )
 
 
-async def consolidate_memory(
+async def extract_transcript_memories(
     consolidation: MemoryExtractService | None,
     arguments: dict[str, object],
 ) -> MCPToolResult:
-    """Enqueue sleep-time extract (legacy MCP name ``consolidate_memory``).
-
-    Does not promote medium→graph; that is ``MemoryPromotionService``.
-    """
+    """Enqueue sleep-time extract (transcript → medium). Not graph promote."""
     user_id = arguments.get("user_id")
     thread_id = arguments.get("thread_id")
     if not isinstance(user_id, str) or not user_id.strip():
@@ -300,7 +334,9 @@ async def consolidate_memory(
     if not isinstance(thread_id, str) or not thread_id.strip():
         return _error_result("Invalid params: thread_id is required")
     if consolidation is None:
-        return _error_result("consolidate_memory unavailable: extract worker not configured")
+        return _error_result(
+            "extract_transcript_memories unavailable: extract worker not configured"
+        )
 
     task_id_raw = arguments.get("task_id", "")
     task_id = (
@@ -310,14 +346,14 @@ async def consolidate_memory(
     )
     org_id_raw = arguments.get("org_id", "")
     org_id = org_id_raw.strip() if isinstance(org_id_raw, str) and org_id_raw.strip() else None
-    queued = consolidation.enqueue(
+    queued = await consolidation.enqueue(
         thread_id=thread_id.strip(),
         task_id=task_id,
         user_id=user_id.strip(),
         org_id=org_id,
     )
     payload = {
-        "tool": "consolidate_memory",
+        "tool": "extract_transcript_memories",
         "axis": "extract",
         "thread_id": thread_id.strip(),
         "task_id": task_id,

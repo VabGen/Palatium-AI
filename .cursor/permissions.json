@@ -60,13 +60,14 @@
   ],
 
   // Только read-инструменты из закрытого перечня 070.
-  // Мутации памяти/EDMS (save_memory, forget_memory, consolidate_memory,
+  // Мутации памяти/EDMS (save_memory, forget_memory, extract_transcript_memories,
   // ingest_document) сюда НЕ добавлять — они обязаны проходить HITL (020)
   // через mcp-rbac-guard.sh.
   "mcpAllowlist": [
     "*:search_knowledge",
     "*:search_memory",
     "*:graph_query",
+    "*:skill_reference",
     "*:web_fallback"
   ],
 

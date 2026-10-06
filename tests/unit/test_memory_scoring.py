@@ -1,6 +1,6 @@
 # tests/unit/test_memory_scoring.py
 
-"""Unit tests for domain/memory/scoring.py (060)."""
+"""Unit tests for domain/memory/scoring.py (060 / Wave M2)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from palatium_ai.domain.memory.scoring import (
     ImportanceInputs,
     compute_importance,
     frequency_score,
+    merge_hybrid_memory_hits,
+    rank_by_search_importance,
     recency_score,
 )
 
@@ -48,3 +50,39 @@ def test_compute_importance_weighted_sum() -> None:
     score = compute_importance(inputs)
     assert 0.0 < score < 1.0
     assert score > 0.5
+
+
+def test_merge_hybrid_rrf_prefers_overlap_over_raw_score() -> None:
+    """RRF ranks by position, not raw retrieval scores (same contract as knowledge)."""
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    fts = [
+        ("only_fts", 0.99, {"_entry_key": "only_fts", "confidence": 0.9, "_access_frequency": 0}),
+        ("both", 0.1, {"_entry_key": "both", "confidence": 0.9, "_access_frequency": 0}),
+    ]
+    vector = [
+        ("only_vec", 0.99, {"_entry_key": "only_vec", "confidence": 0.9, "_access_frequency": 0}),
+        ("both", 0.1, {"_entry_key": "both", "confidence": 0.9, "_access_frequency": 0}),
+    ]
+    merged = merge_hybrid_memory_hits(fts, vector, limit=3, fusion="rrf", rrf_k=60, now=now)
+    assert merged[0]["_entry_key"] == "both"
+
+
+def test_search_time_importance_boosts_frequent_fresh_hits() -> None:
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    hits = [
+        {
+            "_entry_key": "stale",
+            "_score": 1.0,
+            "_access_frequency": 0,
+            "_last_accessed": (now - timedelta(days=30)).isoformat(),
+        },
+        {
+            "_entry_key": "hot",
+            "_score": 0.5,
+            "_access_frequency": 10,
+            "_last_accessed": (now - timedelta(hours=1)).isoformat(),
+        },
+    ]
+    ranked = rank_by_search_importance(hits, limit=2, now=now)
+    assert ranked[0]["_entry_key"] == "hot"
+    assert ranked[0]["_score"] > ranked[1]["_score"]

@@ -28,6 +28,7 @@ READ_TOOLS=(
   "search_knowledge"
   "search_memory"
   "graph_query"
+  "skill_reference"
   "web_fallback"
 )
 
@@ -36,7 +37,7 @@ READ_TOOLS=(
 ASK_TOOLS=(
   "save_memory"
   "forget_memory"
-  "consolidate_memory"
+  "extract_transcript_memories"
   "ingest_document"
 )
 

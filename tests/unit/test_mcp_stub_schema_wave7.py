@@ -18,13 +18,14 @@ from palatium_ai.domain.mcp.external_schemas import (
 )
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
 from palatium_ai.domain.mcp.platform_schemas import (
-    PLATFORM_CONSOLIDATE_MEMORY_SCHEMA,
+    PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA,
     PLATFORM_FORGET_MEMORY_SCHEMA,
     PLATFORM_GRAPH_QUERY_SCHEMA,
     PLATFORM_INGEST_DOCUMENT_SCHEMA,
     PLATFORM_SAVE_MEMORY_SCHEMA,
     PLATFORM_SEARCH_KNOWLEDGE_SCHEMA,
     PLATFORM_SEARCH_MEMORY_SCHEMA,
+    PLATFORM_SKILL_REFERENCE_SCHEMA,
     PLATFORM_WEB_FALLBACK_SCHEMA,
 )
 from palatium_ai.domain.mcp.tool_policy import (
@@ -82,8 +83,9 @@ def platform_stub() -> object:
         ("platform_stub", "search_memory", PLATFORM_SEARCH_MEMORY_SCHEMA),
         ("platform_stub", "save_memory", PLATFORM_SAVE_MEMORY_SCHEMA),
         ("platform_stub", "forget_memory", PLATFORM_FORGET_MEMORY_SCHEMA),
-        ("platform_stub", "consolidate_memory", PLATFORM_CONSOLIDATE_MEMORY_SCHEMA),
+        ("platform_stub", "extract_transcript_memories", PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA),
         ("platform_stub", "graph_query", PLATFORM_GRAPH_QUERY_SCHEMA),
+        ("platform_stub", "skill_reference", PLATFORM_SKILL_REFERENCE_SCHEMA),
         ("platform_stub", "web_fallback", PLATFORM_WEB_FALLBACK_SCHEMA),
     ),
 )
@@ -111,8 +113,9 @@ async def test_stub_registered_schema_matches_domain_pin(
         ("platform", "search_memory", PLATFORM_SEARCH_MEMORY_SCHEMA, "read"),
         ("platform", "save_memory", PLATFORM_SAVE_MEMORY_SCHEMA, "write"),
         ("platform", "forget_memory", PLATFORM_FORGET_MEMORY_SCHEMA, "write"),
-        ("platform", "consolidate_memory", PLATFORM_CONSOLIDATE_MEMORY_SCHEMA, "write"),
+        ("platform", "extract_transcript_memories", PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA, "write"),
         ("platform", "graph_query", PLATFORM_GRAPH_QUERY_SCHEMA, "read"),
+        ("platform", "skill_reference", PLATFORM_SKILL_REFERENCE_SCHEMA, "read"),
         ("platform", "web_fallback", PLATFORM_WEB_FALLBACK_SCHEMA, "read"),
     ),
 )

@@ -31,5 +31,6 @@ class PromotionCandidate(BaseModel):
     access_frequency: int = Field(default=0, ge=0)
     user_id: str = Field(min_length=1, max_length=128)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    contains_pii: bool = False
     last_accessed: datetime | None = None
     promoted_at: datetime | None = None

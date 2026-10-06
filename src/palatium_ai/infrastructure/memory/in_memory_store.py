@@ -133,6 +133,7 @@ class InMemoryMemoryPort:
                         access_frequency=meta.access_frequency,
                         user_id=owner,
                         confidence=max(0.0, min(1.0, coerce_float(value.get("confidence", 0.0)))),
+                        contains_pii=bool(value.get("contains_pii", False)),
                         last_accessed=meta.last_accessed,
                         promoted_at=meta.promoted_at,
                     )

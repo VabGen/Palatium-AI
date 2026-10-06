@@ -195,6 +195,9 @@ def _build_memory_port(settings: Settings, session_factory: async_sessionmaker[A
             session_factory,
             embeddings=embedding_client,
             retention_windows=retention_windows_from_settings(settings),
+            hybrid_fusion=settings.memory.hybrid_fusion,
+            rrf_k=settings.memory.rrf_k,
+            half_life_days=settings.memory.importance_half_life_days,
         )
         logger.info(
             "MemoryPort: Postgres memory.entries",
@@ -212,6 +215,19 @@ def _build_memory_port(settings: Settings, session_factory: async_sessionmaker[A
             logger.warning("Memory embedding rerank disabled", error=str(exc))
     elif settings.memory.embedding_rerank:
         logger.info("MEMORY_EMBEDDING_RERANK ignored for non-postgres backend", backend=backend)
+
+    if settings.memory.cross_encoder_rerank:
+        from palatium_ai.infrastructure.memory.cross_encoder_rerank import CrossEncoderRerankMemoryPort
+        from palatium_ai.infrastructure.memory.stub_cross_encoder import TokenOverlapCrossEncoder
+
+        port = CrossEncoderRerankMemoryPort(port, TokenOverlapCrossEncoder())
+        logger.info("MemoryPort: cross-encoder rerank enabled (M8)")
+    if settings.memory.binary_quantize_rerank:
+        # Helpers live in domain.memory.binary_quantize; bit(4096) column + HNSW
+        # is a separate migration (060). Flag is parsed so ops can flip without code churn.
+        logger.info(
+            "MEMORY_BINARY_QUANTIZE_RERANK set (Hamming helpers ready; ANN column not migrated)"
+        )
     return port
 
 
@@ -252,7 +268,9 @@ def _wire_platform_handler(
     consolidation: object | None = None,
     *,
     graph_port: GraphPort,
+    graph_write: GraphWritePort | None = None,
     web_search_port: WebSearchPort,
+    skill_catalog: object | None = None,
 ) -> None:
     """Wire the platform handler."""
     # Track B: platform is always-on Host-local capability (no MCP_SERVERS URL required).
@@ -263,10 +281,12 @@ def _wire_platform_handler(
             memory_port=memory_port,
             consolidation=consolidation,  # type: ignore[arg-type]  # object|None → Protocol (017)
             graph_port=graph_port,
+            graph_write=graph_write,
             web_search_port=web_search_port,
+            skill_catalog=skill_catalog,  # type: ignore[arg-type]  # object|None → Protocol (017)
         ),
     )
-    logger.info("Platform MCP: local knowledge+memory+graph+web handler registered")
+    logger.info("Platform MCP: local knowledge+memory+graph+web+skills handler registered")
 
 
 def _resolve_mcp_source(
@@ -378,13 +398,21 @@ async def startup(settings: Settings) -> AppResources:
     hitl_service.bind_deny_resume(intent_service)
     graph_port = graph_ports.query
     web_search_port = build_web_search_port(settings)
+    from palatium_ai.infrastructure.skills.filesystem_skill_catalog import FilesystemSkillCatalog
+
+    skill_catalog = FilesystemSkillCatalog(
+        settings.skills.roots,
+        reference_max_chars=settings.skills.reference_max_chars,
+    )
     _wire_platform_handler(
         mcp_registry,
         knowledge_port,
         memory_port,
         memory_extract,
         graph_port=graph_port,
+        graph_write=graph_ports.write,
         web_search_port=web_search_port,
+        skill_catalog=skill_catalog,
     )
     mcp_registry.assert_local_handlers_wired()
 

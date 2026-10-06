@@ -316,10 +316,10 @@ export const STATE_MATRIX: readonly WidgetState[] = [
   {
     id: 'memory.extract',
     title: 'Память: извлечение из диалога',
-    proves: 'consolidate = extract (transcript → medium) и назван так, чтобы не путать с promote.',
+    proves: 'extract = transcript → medium (не путать с promote).',
     api: [
       {
-        key: 'memory.consolidate',
+        key: 'memory.extract',
         replies: [
           {
             json: {

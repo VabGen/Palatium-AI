@@ -57,10 +57,10 @@ def api_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         )
     )
     consolidate_service = SimpleNamespace(
-        request_consolidate=AsyncMock(
+        request_extract=AsyncMock(
             return_value=_card(
-                task_id="mem-consolidate-q1",
-                title="Approve MCP tool: platform.consolidate_memory",
+                task_id="mem-extract-q1",
+                title="Approve MCP tool: platform.extract_transcript_memories",
             )
         )
     )
@@ -113,15 +113,15 @@ def test_memory_forget_returns_hitl_card(api_client: TestClient) -> None:
     assert payload["task_id"].startswith("mem-forget-")
 
 
-def test_memory_consolidate_returns_hitl_card(api_client: TestClient) -> None:
+def test_memory_extract_returns_hitl_card(api_client: TestClient) -> None:
     response = api_client.post(
-        "/api/memory/consolidate",
-        json={"thread_id": "thread-1", "consolidate_task_id": "job-1"},
+        "/api/memory/extract",
+        json={"thread_id": "thread-1", "extract_task_id": "job-1"},
     )
     assert response.status_code == 200
     payload = response.json()
     assert payload["purpose"] == "mcp_tool_approval"
-    assert payload["task_id"].startswith("mem-consolidate-")
+    assert payload["task_id"].startswith("mem-extract-")
 
 
 def test_memory_save_ownership_error_maps_to_403(api_client: TestClient) -> None:

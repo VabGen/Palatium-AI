@@ -200,14 +200,18 @@ def make_memory_consolidate_hitl_stack(
             ("user", "Дай в виде таблицы"),
         ]
     )
+    from palatium_ai.infrastructure.memory.extract_job_queue import InMemoryExtractJobQueue
+
     consolidation = MemoryExtractService(
         harness=harness,
         memory_keeper=keeper,
         memory_port=port,
         memory_persistence=MemoryFactPersistenceService(registry),
+        job_queue=InMemoryExtractJobQueue(),
         dialog_turn_store=dialog,  # type: ignore[arg-type]
+        poll_seconds=0.05,
     )
-    handler._consolidation = consolidation  # late-bind for MCP consolidate_memory
+    handler._consolidation = consolidation  # late-bind for MCP extract_transcript_memories
     hitl = HitlService(InMemoryHitlCardStore(), signing_secret="unit-test-hitl-hmac-key-32bytes!!")
     consolidate = MemoryConsolidateService(hitl_service=hitl, mcp_registry=registry)
     return consolidate, consolidation, port, hitl, handler, dialog

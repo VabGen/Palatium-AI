@@ -44,6 +44,7 @@ import {
   attachmentRefusalReason,
   canRequestChipQuarantineRestore,
   createPastedTextFile,
+  displaySourceRefs,
   formatAttachmentSize,
   isTabularAttachmentFilename,
   refusalLabel,
@@ -217,6 +218,7 @@ export function ChatShell() {
   const [dragActive, setDragActive] = useState(false);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
 
   const uploading = attachments.some(
     chip => chip.status === 'uploading' || chip.status === 'scanning'
@@ -395,13 +397,22 @@ export function ChatShell() {
     (localId: string) => {
       const chip = attachments.find(item => item.localId === localId);
       const text = chip?.sourceText;
-      if (!chip || text === undefined) return;
+      if (!chip || text === undefined) {
+        toast.error(t('composer.showInFieldUnavailable'));
+        return;
+      }
       if (text.length > INTENT_TEXT_LIMIT) {
         toast.error(t('composer.showInFieldTooLong', { limit: formatNumber(INTENT_TEXT_LIMIT) }));
         return;
       }
       setInput(text);
       removeAttachment(localId);
+      toast.success(t('composer.showInFieldDone'));
+      requestAnimationFrame(() => {
+        const el = composerInputRef.current;
+        el?.focus();
+        el?.setSelectionRange(text.length, text.length);
+      });
     },
     [attachments, removeAttachment]
   );
@@ -834,6 +845,9 @@ export function ChatShell() {
             !showHitl &&
             looksLikeExclusiveMenu(message.document) &&
             message._requiresReview;
+          const sourceChips = message.document
+            ? displaySourceRefs(message.document.meta.source_refs)
+            : [];
 
           return (
             <div key={message.id} className="msg assistant fade-in">
@@ -849,9 +863,9 @@ export function ChatShell() {
                 ) : message.document ? (
                   <>
                     <BlockRenderer document={message.document} />
-                    {message.document.meta.source_refs.length > 0 && (
+                    {sourceChips.length > 0 && (
                       <ul className="source-ref-chips" aria-label={t('attach.sources')}>
-                        {message.document.meta.source_refs.map(ref => (
+                        {sourceChips.map(ref => (
                           <li key={ref} className="source-ref-chip">
                             {ref}
                           </li>
@@ -1014,12 +1028,18 @@ export function ChatShell() {
                 )}
                 <span className="attachment-name">{chip.filename}</span>
                 {chip.origin === 'paste' && (
-                  <span className="attachment-badge">{t('composer.asDocument')}</span>
+                  <span className="attachment-badge" aria-hidden="true">
+                    {t('composer.asDocument')}
+                  </span>
                 )}
                 {chip.containsPii && chip.status === 'ready' && (
-                  <span className="attachment-badge is-pii">{t('attach.containsPii')}</span>
+                  <span className="attachment-badge is-pii" aria-hidden="true">
+                    {t('attach.containsPii')}
+                  </span>
                 )}
-                <span className="attachment-size">{formatAttachmentSize(chip.sizeBytes)}</span>
+                <span className="attachment-size" aria-hidden="true">
+                  {formatAttachmentSize(chip.sizeBytes)}
+                </span>
                 {chip.status === 'scanning' && (
                   <span className="attachment-reason">{t('attach.scanning')}</span>
                 )}
@@ -1197,6 +1217,7 @@ export function ChatShell() {
             <Paperclip size={18} />
           </button>
           <textarea
+            ref={composerInputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onPaste={handleComposerPaste}

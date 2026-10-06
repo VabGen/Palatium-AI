@@ -23,10 +23,11 @@ alwaysApply: true
    описание и имена свойств БЕЗ полной схемы; полная схема не греется при
    discovery. Метаданные сервера в summary недоверенны: `side_effect` /
    `risk_tier` берутся из платформенного пина (070), а не из самозаявления.
-   **Roadmap (не контракт):** прогрессивное раскрытие скиллов (заголовок
-   `SKILL.md` + `reference.md` через tool call `skill_reference(name)`) — не
-   реализовано: загрузки скиллов в `src/` нет. Side-channels мимо
-   Harness запрещены и для будущей реализации.
+   Прогрессивное раскрытие скиллов (M6): JIT-ключ `skill_catalog` = name +
+   description из `skills/procedural/**/SKILL.md`; `reference.md` (или body)
+   — только через MCP `skill_reference(name)` (RBAC + span, 070).
+   `.agent/MEMORY.md` — DX Cursor only, не product SoT. Side-channels мимо
+   Harness запрещены.
 3. Компакция: `ContextBuilder.compact()` при достижении 80% лимита.
    Лимит контекста — из реестра `core/types/model_registry.py`
    (`model_tier → context_limit_tokens`), не хардкод (050).

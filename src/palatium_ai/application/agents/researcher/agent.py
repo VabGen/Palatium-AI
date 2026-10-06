@@ -103,6 +103,7 @@ class ResearcherAgent(BaseAgent):
             "prior_context",
             "mcp_tool_output_max_chars",
             "revision_feedback",
+            "skill_catalog",
         ]
 
     def get_available_tools(self) -> list[str]:

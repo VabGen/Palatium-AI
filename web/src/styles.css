@@ -744,8 +744,11 @@ textarea {
   flex-shrink: 0;
   font-size: 0.65rem;
   letter-spacing: 0.02em;
-  color: var(--accent);
+  color: var(--text-muted);
   text-transform: lowercase;
+  pointer-events: none;
+  user-select: none;
+  cursor: default;
 }
 
 .attachment-badge.is-pii {
@@ -762,6 +765,9 @@ textarea {
 .attachment-size {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+  cursor: default;
 }
 
 .attachment-reason {

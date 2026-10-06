@@ -17,8 +17,10 @@ from sqlalchemy.dialects.postgresql import insert
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.core.types.embeddings import assert_vector_dim
+from palatium_ai.core.types.retrieval import DEFAULT_RRF_K, HybridFusion
 from palatium_ai.domain.memory.pii import mask_memory_value
 from palatium_ai.domain.memory.promotion import PromotionCandidate
+from palatium_ai.domain.memory.scoring import merge_hybrid_memory_hits, rank_by_search_importance
 from palatium_ai.domain.memory.types import MemoryType
 from palatium_ai.domain.policies.retention import DEFAULT_RETENTION_WINDOWS, RetentionPolicy, RetentionWindows
 from palatium_ai.infrastructure.database.models.memory_entry import MemoryEntryORM
@@ -31,6 +33,26 @@ if TYPE_CHECKING:
     from palatium_ai.domain.ports.embeddings import EmbeddingPort
 
 _VALID_MEMORY_TYPES: frozenset[str] = frozenset({"preference", "fact", "incident", "episode"})
+
+
+def merge_hybrid_scores(
+    fts_hits: list[tuple[str, float, dict[str, object]]],
+    vector_hits: list[tuple[str, float, dict[str, object]]],
+    *,
+    limit: int,
+    fusion: HybridFusion = "rrf",
+    rrf_k: int = DEFAULT_RRF_K,
+    now: datetime | None = None,
+) -> list[dict[str, object]]:
+    """Adapter for tests/perf — domain merge + search-time importance (M2)."""
+    return merge_hybrid_memory_hits(
+        fts_hits,
+        vector_hits,
+        limit=limit,
+        fusion=fusion,
+        rrf_k=rrf_k,
+        now=now,
+    )
 
 
 def encode_namespace(namespace: tuple[str, ...]) -> str:
@@ -58,25 +80,6 @@ def _active_memory_clause(*, now: datetime) -> Any:
     return or_(MemoryEntryORM.expires_at.is_(None), MemoryEntryORM.expires_at > now)
 
 
-def merge_hybrid_scores(
-    fts_hits: list[tuple[str, float, dict[str, object]]],
-    vector_hits: list[tuple[str, float, dict[str, object]]],
-    *,
-    limit: int,
-) -> list[dict[str, object]]:
-    """Merge FTS and vector hits by entry key; keep max blended score."""
-    merged: dict[str, tuple[float, dict[str, object]]] = {}
-    for entry_key, score, payload in fts_hits + vector_hits:
-        current = merged.get(entry_key)
-        blended = score * (0.5 + 0.5 * _value_confidence(payload))
-        if current is None or blended > current[0]:
-            merged[entry_key] = (blended, payload)
-    ranked = sorted(merged.values(), key=lambda item: item[0], reverse=True)
-    return [
-        _with_score(payload, score, entry_key=str(payload.get("_entry_key", ""))) for score, payload in ranked[:limit]
-    ]
-
-
 class PostgresMemoryPort:
     """Implements MemoryPort against ``memory.entries`` with user_id scope + hybrid search."""
 
@@ -86,10 +89,16 @@ class PostgresMemoryPort:
         *,
         embeddings: EmbeddingPort | None = None,
         retention_windows: RetentionWindows | None = None,
+        hybrid_fusion: HybridFusion = "rrf",
+        rrf_k: int = DEFAULT_RRF_K,
+        half_life_days: float = 7.0,
     ) -> None:
         self._session_factory = session_factory
         self._embeddings = embeddings
         self._windows = retention_windows or DEFAULT_RETENTION_WINDOWS
+        self._hybrid_fusion: HybridFusion = hybrid_fusion
+        self._rrf_k = rrf_k
+        self._half_life_days = float(half_life_days)
 
     async def put(self, *, namespace: tuple[str, ...], key: str, value: dict[str, object]) -> None:
         """Upsert a memory item under namespace/key."""
@@ -177,7 +186,7 @@ class PostgresMemoryPort:
         query: str,
         limit: int = 8,
     ) -> list[dict[str, object]]:
-        """Hybrid retrieve: pgvector cosine + Postgres FTS, ranked by importance."""
+        """Hybrid retrieve: pgvector + FTS → fusion → search-time importance (060.2)."""
         user_id = resolve_user_id(namespace)
         ns = encode_namespace(namespace)
         safe_limit = max(1, min(limit, 32))
@@ -187,6 +196,7 @@ class PostgresMemoryPort:
 
         started = time.perf_counter()
         try:
+            now = datetime.now(UTC)
             fts_hits = await self._search_fts(user_id=user_id, namespace=ns, query=cleaned, limit=safe_limit)
             vector_hits: list[tuple[str, float, dict[str, object]]] = []
             if self._embeddings is not None:
@@ -197,12 +207,26 @@ class PostgresMemoryPort:
                     limit=safe_limit,
                 )
             if fts_hits or vector_hits:
-                return merge_hybrid_scores(fts_hits, vector_hits, limit=safe_limit)
-            return await self._search_token_overlap(
+                return merge_hybrid_memory_hits(
+                    fts_hits,
+                    vector_hits,
+                    limit=safe_limit,
+                    fusion=self._hybrid_fusion,
+                    rrf_k=self._rrf_k,
+                    now=now,
+                    half_life_days=self._half_life_days,
+                )
+            token_hits = await self._search_token_overlap(
                 user_id=user_id,
                 namespace=ns,
                 query=cleaned,
+                limit=max(safe_limit * 2, safe_limit),
+            )
+            return rank_by_search_importance(
+                token_hits,
                 limit=safe_limit,
+                now=now,
+                half_life_days=self._half_life_days,
             )
         finally:
             agent_metrics.record_memory_query_duration(time.perf_counter() - started)
@@ -283,6 +307,8 @@ class PostgresMemoryPort:
             if not text:
                 continue
             confidence = _value_confidence(row.value if isinstance(row.value, dict) else {})
+            value_dict = row.value if isinstance(row.value, dict) else {}
+            contains_pii = bool(row.contains_pii or value_dict.get("contains_pii", False))
             candidates.append(
                 PromotionCandidate(
                     namespace=decode_namespace(row.namespace),
@@ -293,6 +319,7 @@ class PostgresMemoryPort:
                     access_frequency=int(row.access_frequency or 0),
                     user_id=row.user_id,
                     confidence=confidence,
+                    contains_pii=contains_pii,
                     last_accessed=row.last_accessed,
                     promoted_at=row.promoted_at,
                 )
@@ -488,7 +515,13 @@ def _value_confidence(value: dict[str, Any]) -> float:
 
 def _payload_from_row(row: MemoryEntryORM, score: float) -> dict[str, object]:
     payload = mask_memory_value(dict(row.value), contains_pii=row.contains_pii)
-    return _with_score(payload, score, entry_key=row.entry_key)
+    enriched = _with_score(payload, score, entry_key=row.entry_key)
+    enriched["_access_frequency"] = int(row.access_frequency or 0)
+    if row.last_accessed is not None:
+        enriched["_last_accessed"] = row.last_accessed.isoformat()
+    if row.created_at is not None:
+        enriched["_created_at"] = row.created_at.isoformat()
+    return enriched
 
 
 def _with_score(value: dict[str, object], score: float, *, entry_key: str = "") -> dict[str, object]:

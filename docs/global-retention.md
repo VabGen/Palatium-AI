@@ -67,7 +67,8 @@ Env: скопируйте блок **§10b** из [`env/.env.example`](../env/.e
 | `ATTACHMENTS_PRESIGNED_TTL_SECONDS` | Stale-`pending` reclaim (тикет истёк) |
 | `ATTACHMENTS_SWEEP_BATCH_SIZE` | Только per-owner lazy / `POST /sweep` |
 | `MCP_RETENTION_*` | Отдельные offline-скрипты MCP tool calls ([`handbook.md`](handbook.md) §15) |
-| `LANGGRAPH_CHECKPOINT_POSTGRES` | Если `false` — class `checkpointer` no-op (`tables_absent`) |
+| `LANGGRAPH_CHECKPOINT_POSTGRES` | Если `false` — class `checkpointer` no-op (`tables_absent`); unset → on в staging/prod |
+| `MEMORY_SESSION_TTL_SECONDS` | Hot dual-TTL для `checkpointer` (default 1800); cold = `RETENTION_CHECKPOINT_DAYS` |
 
 ## 4. RetentionClass и статус реализации
 

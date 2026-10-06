@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from palatium_ai.core.observability.audit import get_audit_logger
@@ -45,9 +46,15 @@ async def graph_query(graph_port: GraphPort | None, arguments: dict[str, object]
     except ValueError:
         return _error_result("Invalid params: limit must be an integer between 1 and 100")
 
+    as_of_iso = _resolve_as_of(arguments.get("as_of", ""))
+    if as_of_iso is None:
+        return _error_result("Invalid params: as_of must be ISO-8601 datetime or empty")
+
     params = {str(key): value for key, value in raw_params.items()}
     # Always overwrite tenant scope — client params_json must not win.
     params["user_id"] = user_id.strip()
+    # Bi-temporal reads (M5): $as_of always bound; client cannot override via params_json.
+    params["as_of"] = as_of_iso
 
     try:
         assert_graph_query_safe(cypher, params)
@@ -64,6 +71,7 @@ async def graph_query(graph_port: GraphPort | None, arguments: dict[str, object]
 
     payload = {
         "tool": "graph_query",
+        "as_of": as_of_iso,
         "row_count": result.row_count,
         "rows": [dict(row.values) for row in result.rows[:limit]],
     }
@@ -71,6 +79,25 @@ async def graph_query(graph_port: GraphPort | None, arguments: dict[str, object]
         content=[{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
         is_error=False,
     )
+
+
+def _resolve_as_of(raw: object) -> str | None:
+    """Return UTC ISO-8601 Z string, or None when the client value is malformed."""
+    if raw is None or raw == "":
+        return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if not text:
+        return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
 
 
 async def web_fallback(

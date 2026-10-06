@@ -148,9 +148,9 @@ async def test_save_memory_sets_pii_from_text(handler: PlatformToolHandler) -> N
 
 
 @pytest.mark.asyncio()
-async def test_consolidate_memory_without_worker_returns_error(handler: PlatformToolHandler) -> None:
+async def test_extract_transcript_memories_without_worker_returns_error(handler: PlatformToolHandler) -> None:
     result = await handler.call_tool(
-        "consolidate_memory",
+        "extract_transcript_memories",
         {"user_id": "user-3", "thread_id": "thread-3"},
     )
     assert result.is_error is True

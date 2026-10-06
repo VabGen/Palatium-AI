@@ -495,7 +495,7 @@ class IntentGraphRunner:
             )
             if self._consolidation is not None and formatted.status == "success":
                 # Memory write path ≠ answer path: still enqueue when HITL review is pending.
-                self._consolidation.enqueue(
+                await self._consolidation.enqueue(
                     thread_id=thread_id,
                     task_id=task_id,
                     user_id=user_id,

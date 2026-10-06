@@ -83,6 +83,11 @@ def test_graph_query_allowed() -> None:
     assert result["permission"] == "allow"
 
 
+def test_skill_reference_allowed() -> None:
+    result = _run_guard({"tool_name": "skill_reference", "server_name": "platform"})
+    assert result["permission"] == "allow"
+
+
 def test_web_fallback_allowed() -> None:
     result = _run_guard({"tool_name": "web_fallback", "server_name": "platform"})
     assert result["permission"] == "allow"

@@ -17,7 +17,15 @@ from .ports import DialogTurnStore, MemoryPort
 from .promotion import PromotionCandidate, PromotionThresholds
 from .promotion_port import MemoryPromotionPort
 from .recall import MemoryHit, MemoryRecallBundle
-from .scoring import ImportanceInputs, compute_importance, frequency_score, recency_score
+from .extract_queue import ExtractJobQueuePort, ExtractJobRecord, ExtractQueueStats
+from .scoring import (
+    ImportanceInputs,
+    compute_importance,
+    frequency_score,
+    merge_hybrid_memory_hits,
+    rank_by_search_importance,
+    recency_score,
+)
 from .scratchpad import ScratchpadSlot, ScratchpadSlotKind, SessionScratchpad
 from .turns import DialogRole, DialogTurn, DialogTurnWindow
 from .types import MemoryType
@@ -37,6 +45,9 @@ __all__ = [
     "DialogTurnStore",
     "DialogTurnWindow",
     "EffectiveRoutingIntent",
+    "ExtractJobQueuePort",
+    "ExtractJobRecord",
+    "ExtractQueueStats",
     "ImportanceInputs",
     "MemoryHit",
     "MemoryPort",
@@ -52,7 +63,9 @@ __all__ = [
     "clip_memory_hints",
     "compute_importance",
     "frequency_score",
+    "merge_hybrid_memory_hits",
     "org_namespace",
+    "rank_by_search_importance",
     "recency_score",
     "thread_namespace",
     "user_namespace",

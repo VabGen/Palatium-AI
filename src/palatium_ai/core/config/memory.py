@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 
+from palatium_ai.core.types.retrieval import DEFAULT_RRF_K, HybridFusion
+
 from .base import BaseConfig
 
 
@@ -15,6 +17,16 @@ class MemoryConfig(BaseConfig):
     backend: Literal["postgres", "mem0", "graphiti"] = Field(
         default="postgres",
         validation_alias="MEMORY_BACKEND",
+    )
+    hybrid_fusion: HybridFusion = Field(
+        default="rrf",
+        validation_alias="MEMORY_HYBRID_FUSION",
+    )
+    rrf_k: int = Field(
+        default=DEFAULT_RRF_K,
+        ge=1,
+        le=200,
+        validation_alias="MEMORY_RRF_K",
     )
     recall_min_confidence: float = Field(
         default=0.7,
@@ -52,13 +64,54 @@ class MemoryConfig(BaseConfig):
         le=16_000,
         validation_alias="MCP_TOOL_OUTPUT_MAX_CHARS",
     )
-    use_postgres_checkpointer: bool = Field(
-        default=False,
+    session_ttl_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=30 * 24 * 3600,
+        validation_alias="MEMORY_SESSION_TTL_SECONDS",
+        description="Hot inactivity window for short-term checkpoints (ADR 0003).",
+    )
+    # None → resolve from ENVIRONMENT (staging/production on; development off).
+    use_postgres_checkpointer: bool | None = Field(
+        default=None,
         validation_alias="LANGGRAPH_CHECKPOINT_POSTGRES",
     )
     embedding_rerank: bool = Field(
         default=False,
         validation_alias="MEMORY_EMBEDDING_RERANK",
+    )
+    # --- Wave M8: eval-gated advanced (OFF by default; enable only when evals justify) ---
+    importance_half_life_days: float = Field(
+        default=7.0,
+        gt=0.0,
+        le=3650.0,
+        validation_alias="MEMORY_IMPORTANCE_HALF_LIFE_DAYS",
+        description="τ-decay half-life for search-time recency (days).",
+    )
+    cross_encoder_rerank: bool = Field(
+        default=False,
+        validation_alias="MEMORY_CROSS_ENCODER_RERANK",
+        description="Opt-in cross-encoder rerank after hybrid retrieval (needs CrossEncoderPort).",
+    )
+    binary_quantize_rerank: bool = Field(
+        default=False,
+        validation_alias="MEMORY_BINARY_QUANTIZE_RERANK",
+        description="Opt-in bit(4096) Hamming prefilter before float cosine (060 ANN path).",
+    )
+    bayesian_trust: bool = Field(
+        default=False,
+        validation_alias="MEMORY_BAYESIAN_TRUST",
+        description="Opt-in Beta-Bernoulli trust updates on promote refresh/supersede.",
+    )
+    xmemory_decouple: bool = Field(
+        default=False,
+        validation_alias="MEMORY_XMEMORY_DECOUPLE",
+        description="Opt-in decouple-before-aggregate near-dup collapse in promote batch.",
+    )
+    hebbian_edge_bump: bool = Field(
+        default=False,
+        validation_alias="MEMORY_HEBBIAN_EDGE_BUMP",
+        description="Opt-in Hebbian weight bump on SUPERSEDES edges during promote.",
     )
     mem0_api_key: SecretStr | None = Field(default=None, validation_alias="MEM0_API_KEY")
     mem0_host: str = Field(default="https://api.mem0.ai", validation_alias="MEM0_HOST")

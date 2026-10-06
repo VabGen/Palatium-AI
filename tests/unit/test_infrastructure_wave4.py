@@ -30,9 +30,15 @@ def test_normalize_memory_type_maps_unknown_to_fact() -> None:
 
 
 def test_merge_hybrid_scores_prefers_higher_blended_score() -> None:
-    fts = [("a", 0.4, {"confidence": 0.5})]
-    vector = [("a", 0.9, {"confidence": 0.5}), ("b", 0.2, {"confidence": 0.9})]
-    merged = merge_hybrid_scores(fts, vector, limit=2)
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    fts = [("a", 0.4, {"confidence": 0.5, "_entry_key": "a", "_access_frequency": 0})]
+    vector = [
+        ("a", 0.9, {"confidence": 0.5, "_entry_key": "a", "_access_frequency": 0}),
+        ("b", 0.2, {"confidence": 0.9, "_entry_key": "b", "_access_frequency": 0}),
+    ]
+    merged = merge_hybrid_scores(fts, vector, limit=2, fusion="weighted", now=now)
     assert len(merged) == 2
     assert merged[0]["_score"] >= merged[1]["_score"]
 

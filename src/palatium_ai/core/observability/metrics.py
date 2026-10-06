@@ -89,6 +89,28 @@ try:  # pragma: no cover - optional dependency
         "Memory entry size in bytes.",
         ["memory_type"],
     )
+    _palatium_memory_extract_queue_depth: _PromGauge | _NoopMetric = _PromGauge(
+        "palatium_memory_extract_queue_depth",
+        "Pending+running durable extract jobs.",
+    )
+    _palatium_memory_extract_queue_lag_seconds: _PromGauge | _NoopMetric = _PromGauge(
+        "palatium_memory_extract_queue_lag_seconds",
+        "Age of oldest pending extract job (seconds).",
+    )
+    _palatium_memory_extract_dead_letter_total: _PromGauge | _NoopMetric = _PromGauge(
+        "palatium_memory_extract_dead_letter_total",
+        "Extract jobs in dead-letter status.",
+    )
+    _palatium_memory_recall_at_k: _PromGauge | _NoopMetric = _PromGauge(
+        "palatium_memory_recall_at_k",
+        "Offline eval Recall@k (Pushgateway / nightly); not runtime hit-rate (040 / M7).",
+        ["k"],
+    )
+    _palatium_memory_promote_errors_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_memory_promote_errors_total",
+        "Medium→graph promote batch failures.",
+        ["error_type"],
+    )
     _palatium_context_tokens_used: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_context_tokens_used",
         "Context tokens delivered to agents.",
@@ -140,6 +162,11 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_circuit_breaker_state = _NoopMetric()
     _palatium_memory_query_duration_seconds = _NoopMetric()
     _palatium_memory_entry_size_bytes = _NoopMetric()
+    _palatium_memory_extract_queue_depth = _NoopMetric()
+    _palatium_memory_extract_queue_lag_seconds = _NoopMetric()
+    _palatium_memory_extract_dead_letter_total = _NoopMetric()
+    _palatium_memory_recall_at_k = _NoopMetric()
+    _palatium_memory_promote_errors_total = _NoopMetric()
     _palatium_context_tokens_used = _NoopMetric()
     _palatium_audit_write_failures_total = _NoopMetric()
     _palatium_secret_redactions_total = _NoopMetric()
@@ -285,6 +312,23 @@ class AgentMetrics:
     def record_memory_entry_size(self, *, memory_type: str, size_bytes: int) -> None:
         safe_type = (memory_type or "unknown").strip()[:32] or "unknown"
         _palatium_memory_entry_size_bytes.labels(memory_type=safe_type).observe(max(0, size_bytes))
+
+    def record_memory_extract_queue(self, *, depth: int, lag_seconds: float, dead: int = 0) -> None:
+        """Publish durable extract queue depth / lag / DLQ size (Wave M3)."""
+        _palatium_memory_extract_queue_depth.set(max(0, int(depth)))
+        _palatium_memory_extract_queue_lag_seconds.set(max(0.0, float(lag_seconds)))
+        _palatium_memory_extract_dead_letter_total.set(max(0, int(dead)))
+
+    def record_memory_recall_at_k(self, *, k: int, value: float) -> None:
+        """Publish offline-eval Recall@k (0..1). Runtime traffic must not call this."""
+        safe_k = str(max(1, min(int(k), 50)))
+        clamped = max(0.0, min(1.0, float(value)))
+        _palatium_memory_recall_at_k.labels(k=safe_k).set(clamped)
+
+    def record_memory_promote_error(self, *, error_type: str = "runtime") -> None:
+        """Count a promote-batch failure (job / GraphWritePort)."""
+        safe = (error_type or "runtime").strip()[:64] or "runtime"
+        _palatium_memory_promote_errors_total.labels(error_type=safe).inc()
 
     def record_turn_duration(
         self,

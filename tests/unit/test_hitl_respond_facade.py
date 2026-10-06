@@ -144,7 +144,9 @@ async def test_respond_mem_save_skips_graph_resume() -> None:
         is_admin=False,
     )
 
-    assert outcome.resumed is None
+    assert outcome.resumed is not None
+    assert outcome.resumed.output is not None
+    assert "память" in outcome.resumed.output.preview_text().lower()
     intent.resume_after_tool_approval.assert_not_awaited()
     memory_save.execute_after_approval.assert_awaited_once_with(task_id="mem-save-abc123")
 
@@ -175,15 +177,17 @@ async def test_respond_mem_forget_skips_graph_resume() -> None:
         is_admin=False,
     )
 
-    assert outcome.resumed is None
+    assert outcome.resumed is not None
+    assert outcome.resumed.output is not None
+    assert "удалена" in outcome.resumed.output.preview_text().lower()
     intent.resume_after_tool_approval.assert_not_awaited()
     memory_forget.execute_after_approval.assert_awaited_once_with(task_id="mem-forget-abc123")
 
 
 @pytest.mark.asyncio()
-async def test_respond_mem_consolidate_skips_graph_resume() -> None:
+async def test_respond_mem_extract_skips_graph_resume() -> None:
     card = _card(purpose="mcp_tool_approval")
-    card = card.model_copy(update={"task_id": "mem-consolidate-abc123"})
+    card = card.model_copy(update={"task_id": "mem-extract-abc123"})
     hitl = AsyncMock()
     hitl.resolve.return_value = _resolve_result(card, replayed=False)
     hitl.get_card.return_value = card
@@ -197,7 +201,7 @@ async def test_respond_mem_consolidate_skips_graph_resume() -> None:
         memory_consolidate_service=memory_consolidate,
     )
 
-    body = HITLResolveRequest(action_id="approve", action_token="t" * 32, idempotency_key="idem-mem-consolidate")
+    body = HITLResolveRequest(action_id="approve", action_token="t" * 32, idempotency_key="idem-mem-extract")
     outcome = await facade.respond(
         "card-1",
         body,
@@ -206,9 +210,11 @@ async def test_respond_mem_consolidate_skips_graph_resume() -> None:
         is_admin=False,
     )
 
-    assert outcome.resumed is None
+    assert outcome.resumed is not None
+    assert outcome.resumed.output is not None
+    assert "очередь" in outcome.resumed.output.preview_text().lower()
     intent.resume_after_tool_approval.assert_not_awaited()
-    memory_consolidate.execute_after_approval.assert_awaited_once_with(task_id="mem-consolidate-abc123")
+    memory_consolidate.execute_after_approval.assert_awaited_once_with(task_id="mem-extract-abc123")
 
 
 @pytest.mark.asyncio()
@@ -277,6 +283,42 @@ async def test_respond_attachment_index_reject_discards_without_writing() -> Non
     intent.resume_after_tool_approval.assert_not_awaited()
     attachment_index.execute_after_approval.assert_not_awaited()
     attachment_index.discard_pending.assert_awaited_once_with(task_id="att-index-abc123")
+
+
+@pytest.mark.asyncio()
+async def test_respond_attachment_analyze_approve_returns_summary_document() -> None:
+    """Off-graph analyze must surface summary in chat after HITL approve."""
+    card = _card(purpose="mcp_tool_approval")
+    card = card.model_copy(update={"task_id": "att-analyze-abc123"})
+    hitl = AsyncMock()
+    hitl.resolve.return_value = _resolve_result(card, replayed=False)
+    hitl.get_card.return_value = card
+    intent = AsyncMock()
+    intent.resume_after_tool_approval = AsyncMock()
+    attachment = AsyncMock()
+    attachment.execute_after_approval = AsyncMock(
+        return_value={"summary": "Строк: 12; столбцов: 3", "tables_json": "[]"}
+    )
+    facade = HitlRespondFacade(
+        hitl_service=hitl,
+        intent_service=intent,
+        attachment_index_service=attachment,
+    )
+
+    body = HITLResolveRequest(action_id="approve", action_token="t" * 32, idempotency_key="idem-att-analyze")
+    outcome = await facade.respond(
+        "card-1",
+        body,
+        actor_subject="user-1",
+        actor_org_id="org-1",
+        is_admin=False,
+    )
+
+    assert outcome.resumed is not None
+    assert outcome.resumed.output is not None
+    assert "Строк: 12" in outcome.resumed.output.preview_text()
+    intent.resume_after_tool_approval.assert_not_awaited()
+    attachment.execute_after_approval.assert_awaited_once_with(task_id="att-analyze-abc123")
 
 
 @pytest.mark.asyncio()

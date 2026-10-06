@@ -107,9 +107,10 @@ explicit текстом перед тем как продолжить.
   при любом режиме): `beforeShellExecution` → `deny-dangerous-shell.py` (deny),
   `beforeMCPExecution` → `mcp-rbac-guard.sh` (ask/deny по перечню 070).
 - **Инвариант:** в `mcpAllowlist` только read-инструменты 070
-  (`search_knowledge`, `search_memory`, `graph_query`, `web_fallback`).
-  Мутации (`save_memory`, `forget_memory`, `consolidate_memory`, `ingest_document`)
-  туда НЕ добавлять — они проходят HITL через `mcp-rbac-guard.sh`.
+  (`search_knowledge`, `search_memory`, `graph_query`, `skill_reference`,
+  `web_fallback`). Мутации (`save_memory`, `forget_memory`,
+  `extract_transcript_memories`, `ingest_document`) туда НЕ добавлять — они
+  проходят HITL через `mcp-rbac-guard.sh`.
 - `approvalMode: "unrestricted"` снимает кнопку подтверждения у человека —
   это ослабление контроля, а не «оптимизация». Переключение в `unrestricted`
   требует явного подтверждения владельца и фиксируется комментарием в

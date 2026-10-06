@@ -38,6 +38,7 @@ from palatium_ai.application.services.intent_service import IntentService
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.application.services.memory_extract import MemoryExtractService
 from palatium_ai.application.services.memory_fact_persistence import MemoryFactPersistenceService
+from palatium_ai.application.services.memory_write_service import MemoryWriteService
 from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
 from palatium_ai.application.services.response_cache_service import ResponseCacheService
 from palatium_ai.application.services.retention import retention_windows_from_settings
@@ -65,6 +66,7 @@ from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
 from palatium_ai.infrastructure.parsing.factory import build_document_parser
 from palatium_ai.infrastructure.scanning.factory import build_malware_scanner
+from palatium_ai.infrastructure.skills.filesystem_skill_catalog import FilesystemSkillCatalog
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -280,6 +282,9 @@ def build_intent_service(
             session_factory,
             embeddings=embedding_client,
             retention_windows=retention_windows_from_settings(settings),
+            hybrid_fusion=settings.memory.hybrid_fusion,
+            rrf_k=settings.memory.rrf_k,
+            half_life_days=settings.memory.importance_half_life_days,
         )
         logger.info(
             "MemoryPort: Postgres memory.entries",
@@ -300,10 +305,18 @@ def build_intent_service(
         llm_factory.get_client_for_agent(CONTEXTUALIZER_CONFIG),
         model=CONTEXTUALIZER_CONFIG.llm_model,
     )
+    memory_writer = MemoryWriteService(resolved_memory)
+    skill_catalog = FilesystemSkillCatalog(
+        settings.skills.roots,
+        reference_max_chars=settings.skills.reference_max_chars,
+    )
     context_builder = ContextBuilder(
         dialog_store=resolved_dialog_store,
         memory_port=resolved_memory,
+        memory_writer=memory_writer,
         summarizer=compact_summarizer,
+        skill_catalog=skill_catalog,
+        skill_catalog_max_chars=settings.skills.catalog_max_chars,
     )
     harness = Harness(
         context_builder=context_builder,
@@ -353,43 +366,38 @@ def build_intent_service(
 
     memory_extract: MemoryExtractService | None = None
     if enable_sleep_time:
+        from palatium_ai.infrastructure.memory.extract_job_queue import (
+            InMemoryExtractJobQueue,
+            PostgresExtractJobQueue,
+        )
+
         memory_keeper = MemoryKeeperAgent(harness, MEMORY_KEEPER_CONFIG)
         memory_persistence = MemoryFactPersistenceService(
             mcp_registry=mcp_registry,
             mcp_tool_call_repository=mcp_tool_call_repository,
         )
-        promotion = None
+        # Promote is out-of-band only: ``python -m palatium_ai.jobs.memory_promote`` (M3).
         if settings.memory.promote_enabled and hasattr(resolved_memory, "bump_access"):
-            from palatium_ai.application.services.memory_promotion import MemoryPromotionService
-            from palatium_ai.domain.memory.promotion import PromotionThresholds
-            from palatium_ai.infrastructure.graph.factory import build_graph_write_port
-
-            # EXCEPTION (020): sleep-time promote batch; prefer shared GraphWritePort from bootstrap.
-            resolved_write = graph_write if graph_write is not None else build_graph_write_port(settings)
-            promotion = MemoryPromotionService(
-                memory=resolved_memory,  # type: ignore[arg-type]  # hasattr-guard не сужает Protocol (017)
-                graph_write=resolved_write,
-                thresholds=PromotionThresholds(
-                    min_access_frequency=settings.memory.promote_min_access_frequency,
-                    min_importance=settings.memory.promote_min_importance,
-                ),
-            )
             logger.info(
-                "Memory promotion: after-extract batch enabled",
+                "Memory promotion: CronJob/one-shot only (decoupled from extract)",
                 min_access_frequency=settings.memory.promote_min_access_frequency,
                 min_importance=settings.memory.promote_min_importance,
-                graph_write=type(resolved_write).__name__,
             )
+        extract_queue = (
+            PostgresExtractJobQueue(session_factory) if session_factory is not None else InMemoryExtractJobQueue()
+        )
         memory_extract = MemoryExtractService(
             harness=harness,
             memory_keeper=memory_keeper,
             memory_port=resolved_memory,
             memory_persistence=memory_persistence,
+            job_queue=extract_queue,
             dialog_turn_store=resolved_dialog_store,
-            promotion=promotion,
-            promote_batch_limit=settings.memory.promote_batch_limit,
         )
-        logger.info("Memory extract: sleep-time queue enabled (save_memory MCP)")
+        logger.info(
+            "Memory extract: durable SKIP LOCKED queue enabled",
+            queue=type(extract_queue).__name__,
+        )
 
     text_ingestor = TextIngestorAgent(harness, TEXT_INGESTOR_CONFIG)
     document_ingest = DocumentIngestService(

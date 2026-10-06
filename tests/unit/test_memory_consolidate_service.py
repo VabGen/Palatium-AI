@@ -1,4 +1,4 @@
-"""MemoryExtractHitlService — HITL-gated user-initiated consolidate_memory (= extract enqueue)."""
+"""MemoryExtractHitlService — HITL-gated user-initiated extract_transcript_memories (= extract enqueue)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.memory_consolidate_service import (
-    MEM_CONSOLIDATE_TASK_PREFIX,
+    MEM_EXTRACT_TASK_PREFIX,
     MemoryConsolidateService,
 )
 from palatium_ai.domain.hitl.cards import HITLCardView, HITLResolveRequest
@@ -21,7 +21,7 @@ class _FakeConsolidation:
     def __init__(self) -> None:
         self.jobs: list[dict[str, object]] = []
 
-    def enqueue(
+    async def enqueue(
         self,
         *,
         thread_id: str,
@@ -50,19 +50,19 @@ def memory_consolidate_stack() -> tuple[MemoryConsolidateService, _FakeConsolida
 
 
 @pytest.mark.asyncio()
-async def test_memory_consolidate_requires_hitl_before_enqueue(
+async def test_memory_extract_requires_hitl_before_enqueue(
     memory_consolidate_stack: tuple[MemoryConsolidateService, _FakeConsolidation, HitlService],
 ) -> None:
     service, consolidation, _hitl = memory_consolidate_stack
-    card = await service.request_consolidate(
+    card = await service.request_extract(
         thread_id="thread-1",
         owner_user_id="user-1",
         org_id="org-1",
-        consolidate_task_id="job-explicit-1",
+        extract_task_id="job-explicit-1",
     )
     assert isinstance(card, HITLCardView)
-    assert card.task_id.startswith(MEM_CONSOLIDATE_TASK_PREFIX)
-    assert "consolidate_memory" in card.title
+    assert card.task_id.startswith(MEM_EXTRACT_TASK_PREFIX)
+    assert "extract_transcript_memories" in card.title
     assert consolidation.jobs == []
 
     outcome = await service.execute_after_approval(task_id=card.task_id)
@@ -74,11 +74,11 @@ async def test_memory_consolidate_requires_hitl_before_enqueue(
 
 
 @pytest.mark.asyncio()
-async def test_memory_consolidate_reject_discards_pending(
+async def test_memory_extract_reject_discards_pending(
     memory_consolidate_stack: tuple[MemoryConsolidateService, _FakeConsolidation, HitlService],
 ) -> None:
     service, consolidation, _hitl = memory_consolidate_stack
-    card = await service.request_consolidate(
+    card = await service.request_extract(
         thread_id="thread-2",
         owner_user_id="user-2",
         org_id="org-2",
@@ -94,7 +94,7 @@ async def test_hitl_respond_facade_runs_memory_consolidate_on_approve(
     memory_consolidate_stack: tuple[MemoryConsolidateService, _FakeConsolidation, HitlService],
 ) -> None:
     service, consolidation, hitl = memory_consolidate_stack
-    card = await service.request_consolidate(
+    card = await service.request_extract(
         thread_id="thread-3",
         owner_user_id="user-3",
         org_id="org-3",

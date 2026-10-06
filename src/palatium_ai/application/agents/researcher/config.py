@@ -5,7 +5,7 @@
 from palatium_ai.domain.agents.agent_config import AgentConfig
 
 # >5 tools: Researcher is the sole MCP worker for EDMS + platform retrieval
-# (knowledge/memory/graph/web). Supervisor never gets execution tools (030).
+# (knowledge/memory/graph/web/skills). Supervisor never gets execution tools (030).
 RESEARCHER_CONFIG = AgentConfig(
     name="researcher",
     role="researcher",
@@ -18,6 +18,7 @@ RESEARCHER_CONFIG = AgentConfig(
         "mcp:platform.search_knowledge",
         "mcp:platform.search_memory",
         "mcp:platform.graph_query",
+        "mcp:platform.skill_reference",
         "mcp:platform.web_fallback",
     ),
     timeout_seconds=90,

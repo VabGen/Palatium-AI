@@ -68,10 +68,15 @@ description: >-
 [ ] Секреты не встречаются в коде/логах/git-истории/промптах;
     secret scanner подключён перед логированием и записью в память (020, 040, 060)
 [ ] PII в long-term память — только с contains_pii=true и правилом забывания,
-    молчаливой записи PII нет (060)
-[ ] Мутации памяти (save/forget/consolidate) идут только через MCP-инструменты
+    молчаливой записи PII нет (060); PII semantic flip на графе → blocked_pii / HITL (M5)
+[ ] Мутации памяти (save/forget/extract_transcript_memories) идут только через MCP-инструменты
     поверх MemoryPort, не прямым SQL из агента (060, 070)
+[ ] Long-term Neo4j растёт только через promote; extract ⊥ promote (060, ADR 0004)
+[ ] Forget medium fan-out → GraphWritePort.expire_fact (bi-temporal expired_at) (060 / M5)
+[ ] Promote supersede (не silent SET text); temporal graph_query через $as_of (M5)
 [ ] Параметризованные SQL/Cypher везде; конкатенация строк запроса отсутствует (070)
+[ ] Recall@k offline ≥ 0.85; faithfulness/context_precision deterministic gates;
+    extract DLQ + promote errors алерты (M7, deploy/observability)
 ```
 
 ## Observability

@@ -97,3 +97,21 @@ groups:
         annotations:
           summary: "Memory entries above 16 KiB at p95"
           description: "Oversized memory entries inflate recall cost and hurt precision (060). Inspect p95/p99 rather than the mean."
+
+      - alert: PalatiumMemoryExtractDeadLetter
+        expr: palatium_memory_extract_dead_letter_total > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory extract jobs in dead-letter"
+          description: "Durable extract queue has dead jobs (M3/M7). Inspect SKIP LOCKED workers and DLQ reclaim."
+
+      - alert: PalatiumMemoryPromoteErrors
+        expr: sum(rate(palatium_memory_promote_errors_total[15m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory promote batch errors"
+          description: "medium→graph promote is failing (060/M7). Check Neo4j GraphWritePort and jobs.memory_promote."

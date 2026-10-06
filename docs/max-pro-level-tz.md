@@ -41,7 +41,7 @@
 | **Brain (LLM-цикл)** | Модель, принимающая решения на шаге | Конкретный агент (`BaseAgent.run`) |
 | **Harness** | Цикл «вызвать модель → выполнить инструмент» + guardrails | `execute_with_guardrails` — единственная точка входа (065) |
 | **Hands (sandbox)** | Исполнение эффекта; креды **никогда** не живут здесь | MCP-инструменты через `ToolExecutor` + платформенные пины (070); code-exec — отдельная песочница |
-| **Session** | Durable append-only лог **вне** окна контекста | LangGraph checkpointer (Redis, short-term) + long-term память (060) |
+| **Session** | Durable append-only лог **вне** окна контекста | LangGraph Postgres checkpointer (short-term, dual TTL) + medium/long-term память (060, ADR 0003) |
 
 Следствие для ТЗ: harness — не «сервисный слой для удобства», а контракт с
 чёткой ответственностью за RBAC, трассировку, guardrails и confidence gate.
@@ -202,29 +202,27 @@ importance. Называть это «BM25» в коде — ошибка; Parad
 
 ## 6. Память — иерархия и обслуживание
 
-### 6.1 Физическое разделение — целевое состояние (gap в коде, см. §20)
+### 6.1 Физическое разделение — целевое состояние
 
 **Цель (060):** схема `knowledge` (эмбеддинг 1536d) — статичные знания; схема
-`memory` (эмбеддинг 4096d native) — эпизодическая память (`memory.entries` с RLS по
-`user_id`). Связка «схема ↔ embedding-модель ↔ размерность» — единственный
-источник `core/types/embeddings.py` (060). Смена модели = миграция с reindex,
-не in-place.
+`memory` (эмбеддинг 4096d native) — medium/эпизодическая память (`memory.entries`
+с FORCE RLS по `user_id`). Связка «схема ↔ embedding-модель ↔ размерность» —
+`core/types/embeddings.py` (060). Смена модели = миграция с reindex, не in-place.
 
-**Сейчас в репозитории:** одна схема `palatium_ai`, таблица `memory_items`
-(FTS, без pgvector), миграции `infrastructure/database/migrations/` — в работе.
-До закрытия Wave 4 не считать слой памяти production-ready.
+**Актуально на 2026-10-06:** spine medium (`memory.entries` + pgvector + FTS + RLS)
+и promote → Neo4j реализованы; gaps и волны — `.cursor/plans/memory-max-pro.md`
+(не считать «memory_items-only» baseline).
 
-### 6.2 Иерархия
+### 6.2 Иерархия (hybrid cortex)
 
 | Уровень | Хранилище | TTL | Управляется |
 |---|---|---|---|
-| Short-term | LangGraph checkpointer (Redis) | `session_ttl_seconds` (конфиг) | авто |
-| Medium-term | `memory.entries` (pgvector) | 30 дней (конфиг) | MCP `save_memory` |
-| Long-term | граф знаний (Neo4j/Cognee) | бессрочно, растёт только через consolidate | consolidation |
+| Short-term | LangGraph **Postgres** checkpointer | dual TTL: `session_ttl_seconds` + `checkpoint_days` (ADR 0003) | авто + retention |
+| Medium-term | `memory.entries` (pgvector + FTS + RLS) | retention medium/episode/PII | MCP `save_memory` + sleep-time **extract** |
+| Long-term | Neo4j `MemoryFact` (bi-temporal — план M5) | бессрочно; только через **promote** | `MemoryPromotionService` (CronJob) |
 
-Стек памяти — **LangMem (эпизодическая) + Cognee (графовая long-term)**,
-уже принят в `099-project-map.mdc`; черновик совпадает с финальным решением,
-изменений не требуется.
+Стек: **Postgres medium + Neo4j long-term** (099, ADR 0004). Cognee / Qdrant /
+Neo4j-only medium — вне scope без нового ADR. Оси extract ≠ promote не смешивать.
 
 ### 6.3 Обслуживание
 
@@ -241,11 +239,9 @@ forgetting curve, приоритизация по `recency + relevance + access_
 `access_frequency ≥ N` и `importance ≥ M` конвертируется в узел графа).
 
 **Рекомендация:** не реализовывать как отдельный алгоритм в первой волне.
-Текущая consolidation-схема проще и достаточна для старта; xMemory-паттерн
-стоит вернуть как оптимизацию, когда появятся метрики (`palatium_memory_*`,
-040), показывающие избыточность/шум в извлекаемом контексте. Если решаете
-внедрять раньше — это правка `domain/memory/consolidation` с отдельным
-ревью, не тихое добавление в существующий пайплайн.
+Текущая схема extract → medium → promote проще и достаточна для старта;
+xMemory — оптимизация при метриках шума (`palatium_memory_*`, 040); отдельное
+ревью / план M8, не тихое добавление в пайплайн.
 
 ### 6.5 Безопасность памяти
 
@@ -348,7 +344,7 @@ mode*: классификатор промахивается именно на �
 
 Канонический закрытый перечень (070) покрывает всё, что нужно черновику:
 `search_knowledge`, `search_memory`, `save_memory`, `forget_memory`,
-`consolidate_memory`, `ingest_document`, `graph_query`, `web_fallback`.
+`extract_transcript_memories`, `ingest_document`, `graph_query`, `web_fallback`.
 Новый инструмент — правка перечня + обсуждение, не ad-hoc регистрация.
 
 - Контракт инструмента — frozen pydantic схема входа (`platform_schemas.py` /
@@ -419,7 +415,7 @@ harness'а не должна маскироваться под «модель п
 | Компонент | Технология | Статус |
 |---|---|---|
 | Оркестрация | LangGraph | принято |
-| Память | LangMem (episodic) + Cognee (graph long-term) | принято |
+| Память | Hybrid cortex: Postgres medium + Neo4j promote (060, ADR 0003/0004) | принято |
 | MCP-фреймворк | FastMCP | принято |
 | Векторный + лексический поиск | pgvector + Postgres FTS | принято, ParadeDB отклонён |
 | Графовая БД | Neo4j | принято |

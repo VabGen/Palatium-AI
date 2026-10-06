@@ -12,16 +12,18 @@ alwaysApply: true
 ## Канонический набор инструментов (закрытый перечень)
 
 `search_knowledge`, `search_memory`, `save_memory`, `forget_memory`,
-`consolidate_memory`, `ingest_document`, `graph_query`, `web_fallback`
+`extract_transcript_memories`, `ingest_document`, `graph_query`,
+`skill_reference`, `web_fallback`
 
 Новый инструмент = правка этого перечня + отдельное обсуждение, не ad-hoc регистрация.
 Канонический набор мутаций памяти из 060 покрыт: `save_memory` / `forget_memory` /
-`consolidate_memory` — тонкие обёртки над `MemoryPort`.
+`extract_transcript_memories` (enqueue extract) — тонкие обёртки над `MemoryPort`
+ / extract queue.
 
-**Семантика `consolidate_memory` (legacy name):** enqueue sleep-time **extract**
+**Семантика `extract_transcript_memories`:** enqueue sleep-time **extract**
 (transcript → medium via MemoryKeeper). Это **не** medium→graph promote
-(`MemoryPromotionService`). Переименование в `extract_transcript_memories` /
-добавление `promote_memory` — только правкой этого перечня + обсуждение.
+(`MemoryPromotionService`). Добавление `promote_memory` — только правкой этого
+перечня + обсуждение.
 
 ## Контракт инструмента (domain/mcp/ — единственный источник)
 
@@ -77,7 +79,7 @@ class PlatformToolPin(BaseModel, frozen=True):
    Legacy-метод `execute()` бросает `ToolNotAllowedError` и остался только для
    обратной совместимости: production-код (Researcher) зовёт `try_execute`.
 4. Audit-события на каждый вызов чувствительных инструментов:
-   `save_memory`, `forget_memory`, `consolidate_memory`, `ingest_document`,
+   `save_memory`, `forget_memory`, `extract_transcript_memories`, `ingest_document`,
    `web_fallback` (что вызывалось, кем, task — без payload-содержимого).
 5. Выход инструмента проходит secret scanner (020); записи с `contains_pii=true`
    из памяти (060) отдаются агенту только в замаскированном виде, если

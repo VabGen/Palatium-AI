@@ -17,6 +17,7 @@ from palatium_ai.application.services.hitl_service import (
 from palatium_ai.application.services.kill_switch import KillSwitchEngagedError
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
+from palatium_ai.domain.content import ContentDocument, DocumentMeta, ParagraphBlock
 from palatium_ai.domain.hitl.cards import HITLCardView, HITLResolveRequest, HITLResolveResult
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 
@@ -33,7 +34,7 @@ _OFF_GRAPH_TOOL_PREFIXES: tuple[str, ...] = (
     "doc-ingest-",
     "mem-save-",
     "mem-forget-",
-    "mem-consolidate-",
+    "mem-extract-",
     "att-index-",
     "att-restore-",
     "att-analyze-",
@@ -42,6 +43,49 @@ _OFF_GRAPH_TOOL_PREFIXES: tuple[str, ...] = (
 
 def _is_off_graph_tool_task(task_id: str) -> bool:
     return any(task_id.startswith(prefix) for prefix in _OFF_GRAPH_TOOL_PREFIXES)
+
+
+def _formatter_from_off_graph_payload(
+    *,
+    task_id: str,
+    payload: dict[str, object] | None,
+) -> FormatterTaskResult | None:
+    """Map off-graph mutation payload into a chat document (analyze summary, etc.)."""
+    if not payload:
+        return None
+    summary = str(payload.get("summary", "")).strip()
+    if not summary:
+        if task_id.startswith("att-analyze-"):
+            summary = "Анализ вложения завершён (пустой summary)."
+        elif task_id.startswith("att-index-"):
+            summary = "Вложение проиндексировано в базу знаний."
+        elif task_id.startswith("att-restore-"):
+            summary = "Вложение восстановлено из карантина."
+        elif task_id.startswith("mem-save-"):
+            summary = "Запись сохранена в память."
+        elif task_id.startswith("mem-forget-"):
+            summary = "Запись удалена из памяти."
+        elif task_id.startswith("mem-extract-"):
+            summary = "Извлечение из диалога поставлено в очередь."
+        else:
+            return None
+
+    doc = ContentDocument(
+        locale="ru-RU",
+        title=None,
+        blocks=(ParagraphBlock(type="paragraph", text=summary[:8000]),),
+        meta=DocumentMeta(confidence=1.0, requires_review=False, source_refs=(), interaction="none"),
+    )
+    return FormatterTaskResult(
+        task_id=task_id,
+        agent_role="formatter",
+        status="success",
+        confidence=1.0,
+        requires_review=False,
+        error=None,
+        output=doc,
+        hitl_cards=(),
+    )
 
 
 class HitlRespondOutcome(BaseModel):
@@ -161,19 +205,24 @@ class HitlRespondFacade:
         *,
         action_id: str,
         task_id: str,
-    ) -> None:
-        """Approve/reject a pending mutation service when configured."""
+    ) -> dict[str, object] | None:
+        """Approve/reject a pending mutation service when configured.
+
+        Returns the approve-path payload (if any) so callers can surface it in UI.
+        """
         if service is None:
-            return
+            return None
         if action_id == "approve":
             execute = getattr(service, "execute_after_approval", None)
             if execute is not None:
-                await execute(task_id=task_id)
-            return
+                result = await execute(task_id=task_id)
+                return result if isinstance(result, dict) else None
+            return None
         if action_id == "reject":
             discard = getattr(service, "discard_pending", None)
             if discard is not None:
                 await discard(task_id=task_id)
+        return None
 
     def _pending_mutation_service(self, task_id: str) -> object | None:
         """Resolve pending mutation service for an off-graph tool task id."""
@@ -183,7 +232,7 @@ class HitlRespondFacade:
             return self._memory_save
         if task_id.startswith("mem-forget-"):
             return self._memory_forget
-        if task_id.startswith("mem-consolidate-"):
+        if task_id.startswith("mem-extract-"):
             return self._memory_consolidate
         if task_id.startswith(("att-index-", "att-restore-", "att-analyze-")):
             return self._attachment_index
@@ -200,11 +249,16 @@ class HitlRespondFacade:
     ) -> FormatterTaskResult | None:
         if card.purpose == "mcp_tool_approval":
             if _is_off_graph_tool_task(card.task_id):
-                await self._resolve_pending_mutation(
+                payload = await self._resolve_pending_mutation(
                     self._pending_mutation_service(card.task_id),
                     action_id=body.action_id,
                     task_id=card.task_id,
                 )
+                if body.action_id == "approve":
+                    return _formatter_from_off_graph_payload(
+                        task_id=card.task_id,
+                        payload=payload,
+                    )
                 return None
             return await self._intent.resume_after_tool_approval(
                 thread_id=card.thread_id,

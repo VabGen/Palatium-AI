@@ -15,10 +15,10 @@ from palatium_ai.infrastructure.retention.checkpointer_handler import Checkpoint
 _NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 
 
-def test_checkpoint_inactivity_cutoff() -> None:
-    windows = RetentionWindows(checkpoint_days=30)
+def test_checkpoint_inactivity_cutoff_dual_ttl() -> None:
+    windows = RetentionWindows(checkpoint_days=30, session_ttl_seconds=1800)
     cutoff = RetentionPolicy.checkpoint_inactivity_cutoff(now=_NOW, windows=windows)
-    assert cutoff == _NOW - timedelta(days=30)
+    assert cutoff == _NOW - timedelta(seconds=1800)
 
 
 @pytest.mark.asyncio()

@@ -109,6 +109,7 @@ async def _select_durable_hits(
             continue
         seen_texts.add(hit.text.lower())
         durable.append(hit)
+        # Reconsolidation on recall (060): bump access_frequency + last_accessed.
         await _maybe_bump_access(bump, namespace=namespace, item=item)
         if len(pinned) + len(durable) >= limit:
             break
@@ -128,7 +129,12 @@ def _durable_hit_from_item(
     text = str(item.get("text", "")).strip()
     if not text or text.lower() in seen:
         return None
-    confidence = max(0.0, min(1.0, coerce_float(item.get("confidence", 0.0))))
+    # Stored confidence wins; else search-time `_score` (M2 importance) so Write
+    # paths that omit confidence are not silently dropped by the Select gate.
+    if "confidence" in item:
+        confidence = max(0.0, min(1.0, coerce_float(item.get("confidence", 0.0))))
+    else:
+        confidence = max(0.0, min(1.0, coerce_float(item.get("_score", 0.0))))
     if confidence < min_confidence:
         return None
     score_f = _item_score(item)

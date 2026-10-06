@@ -391,7 +391,7 @@ class IntentHitlFlow:
             },
         )
         if self._consolidation is not None and formatted.status == "success":
-            self._consolidation.enqueue(
+            await self._consolidation.enqueue(
                 thread_id=thread_id,
                 task_id=task_id,
                 user_id=user_id,
