@@ -34,7 +34,7 @@
     "lucide-react": "^0.544.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "react-hot-toast": "^2.6.0"
+    "react-hot-toast": "^2.6.1"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
