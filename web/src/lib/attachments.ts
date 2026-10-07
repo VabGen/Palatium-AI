@@ -86,10 +86,8 @@ export function isTabularAttachmentFilename(filename: string): boolean {
 }
 
 /** Mirror of domain ``sanitize_source_refs`` — hide ``file#id8#pN`` noise in chips. */
-const SOURCE_REF_PARTS =
-  /^(?<name>.+?)(?:#(?<id>[0-9a-fA-F]{8}))?(?:#p(?<page>\d+))?$/i;
-const BARE_UUID =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const SOURCE_REF_PARTS = /^(?<name>.+?)(?:#(?<id>[0-9a-fA-F]{8}))?(?:#p(?<page>\d+))?$/i;
+const BARE_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
  * Collapse LLM filenames + internal citation ids/pages into unique user-facing chips.

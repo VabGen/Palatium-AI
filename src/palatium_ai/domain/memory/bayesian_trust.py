@@ -20,7 +20,7 @@ class BetaTrust(BaseModel):
     beta: float = Field(default=1.0, gt=0.0, le=1_000_000.0)
 
     def mean(self) -> float:
-        """Posterior mean = α / (α + β)."""
+        """Posterior mean = alpha / (alpha + beta)."""
         return self.alpha / (self.alpha + self.beta)
 
     def observe_success(self, *, weight: float = 1.0) -> BetaTrust:

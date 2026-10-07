@@ -91,7 +91,7 @@ def _resolve_as_of(raw: object) -> str | None:
     if not text:
         return datetime.now(UTC).isoformat().replace("+00:00", "Z")
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
     if parsed.tzinfo is None:

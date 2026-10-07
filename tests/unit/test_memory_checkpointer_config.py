@@ -32,7 +32,7 @@ def test_postgres_checkpointer_off_in_development_when_unset() -> None:
     assert settings.postgres_checkpointer_enabled is False
 
 
-@pytest.mark.parametrize("environment", ["staging", "production"])
+@pytest.mark.parametrize("environment", ("staging", "production"))
 def test_postgres_checkpointer_on_in_deploy_when_unset(environment: DeployEnv) -> None:
     settings = Settings(
         app=AppConfig(environment=environment),

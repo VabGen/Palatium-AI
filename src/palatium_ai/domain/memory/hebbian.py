@@ -10,7 +10,7 @@ def bump_hebbian_weight(
     *,
     learning_rate: float = 0.1,
 ) -> float:
-    """Asymptotic bump toward 1.0: ``w + η(1 − w)`` clamped to [0, 1]."""
+    """Asymptotic bump toward 1.0: ``w + eta*(1 - w)`` clamped to [0, 1]."""
     w = max(0.0, min(1.0, float(current)))
     eta = max(0.0, min(1.0, float(learning_rate)))
     return max(0.0, min(1.0, w + eta * (1.0 - w)))

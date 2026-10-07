@@ -12,12 +12,12 @@ from .contextualizer import (
     ContextualizerTaskResult,
     ContinuationKind,
 )
+from .extract_queue import ExtractJobQueuePort, ExtractJobRecord, ExtractQueueStats
 from .namespaces import org_namespace, thread_namespace, user_namespace
 from .ports import DialogTurnStore, MemoryPort
 from .promotion import PromotionCandidate, PromotionThresholds
 from .promotion_port import MemoryPromotionPort
 from .recall import MemoryHit, MemoryRecallBundle
-from .extract_queue import ExtractJobQueuePort, ExtractJobRecord, ExtractQueueStats
 from .scoring import (
     ImportanceInputs,
     compute_importance,

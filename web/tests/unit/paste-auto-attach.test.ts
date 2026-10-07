@@ -75,8 +75,9 @@ describe('displaySourceRefs', () => {
 
   it('keeps short id when same filename collides', async () => {
     const { displaySourceRefs } = await import('../../src/lib/attachments');
-    expect(
-      displaySourceRefs(['report.pdf#aaaaaaaa#p1', 'report.pdf#bbbbbbbb#p2'])
-    ).toEqual(['report.pdf#aaaaaaaa', 'report.pdf#bbbbbbbb']);
+    expect(displaySourceRefs(['report.pdf#aaaaaaaa#p1', 'report.pdf#bbbbbbbb#p2'])).toEqual([
+      'report.pdf#aaaaaaaa',
+      'report.pdf#bbbbbbbb',
+    ]);
   });
 });
