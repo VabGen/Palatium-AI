@@ -14,6 +14,7 @@ class SkillSummary(BaseModel):
 
     name: str = Field(min_length=1, max_length=64)
     description: str = Field(default="", max_length=500)
+    version: str = Field(default="0.0.0", max_length=32)
     has_reference: bool = False
 
 

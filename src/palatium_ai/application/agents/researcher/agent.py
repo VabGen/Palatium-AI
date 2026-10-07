@@ -21,6 +21,7 @@ from palatium_ai.application.agents.researcher.parsing import (
     summarize_mcp_content,
 )
 from palatium_ai.application.agents.researcher.prompts import RESEARCHER_SYSTEM_PROMPT
+from palatium_ai.application.agents.skill_hydrate import hydrate_skill_references
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.application.services.tool_argument_builder import (
     ToolArgumentBuilder,
@@ -164,6 +165,15 @@ class ResearcherAgent(BaseAgent):
             task_id=str(input.task_id),
         )
 
+        skill_catalog = input.context.get("skill_catalog", "")
+        skill_references = await hydrate_skill_references(
+            catalog_text=skill_catalog,
+            user_text=task_input.context_packet.user_text,
+            tool_executor=self._tool_executor,
+            mcp_registry=self._mcp_registry,
+            context=context,
+            repository=self._mcp_tool_call_repository,
+        )
         messages = [
             ChatMessage(role="system", content=RESEARCHER_SYSTEM_PROMPT),
             ChatMessage(
@@ -179,6 +189,8 @@ class ResearcherAgent(BaseAgent):
                         "attachment_context": task_input.context_packet.untrusted_context,
                         "prior_context": task_input.prior_context,
                         "revision_feedback": task_input.revision_feedback,
+                        "skill_catalog": skill_catalog,
+                        "skill_references": skill_references,
                     },
                     ensure_ascii=False,
                 ),

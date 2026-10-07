@@ -12,7 +12,11 @@ from .base import BaseConfig
 
 
 class SkillsConfig(BaseConfig):
-    """Filesystem roots for product procedural skills (not `.agent/` DX memory)."""
+    """Filesystem roots for product procedural skills (not `.agent/` DX memory).
+
+    ``FilesystemSkillCatalog`` indexes roots once per process — restart after
+    editing ``SKILL.md`` / ``reference.md`` (no hot-reload).
+    """
 
     roots: tuple[str, ...] = Field(
         default=("skills/procedural",),

@@ -12,8 +12,14 @@ from palatium_ai.domain.skills.types import SkillReference, SkillSummary
 
 logger = get_logger(__name__)
 
+
 class FilesystemSkillCatalog:
-    """Scan ``SKILL.md`` trees; summaries for JIT, ``reference.md`` on demand."""
+    """Scan ``SKILL.md`` trees; summaries for JIT, ``reference.md`` on demand.
+
+    Index is built once per process (no hot-reload). After editing skill files,
+    restart the API / Host process so ``skill_catalog`` and ``skill_reference``
+    pick up changes.
+    """
 
     def __init__(
         self,
@@ -33,6 +39,7 @@ class FilesystemSkillCatalog:
             SkillSummary(
                 name=name,
                 description=entry.description,
+                version=entry.version,
                 has_reference=entry.reference_path is not None,
             )
             for name, entry in sorted(index.items(), key=lambda item: item[0])
@@ -54,8 +61,8 @@ class FilesystemSkillCatalog:
             return None
         if path == entry.skill_path:
             try:
-                _name, _desc, body = parse_skill_frontmatter(raw)
-                content = body
+                parsed = parse_skill_frontmatter(raw)
+                content = parsed.body
             except ValueError:
                 content = raw
         else:
@@ -98,52 +105,80 @@ class FilesystemSkillCatalog:
                 logger.warning("skill_catalog.root_forbidden", root=str(root))
                 continue
             for skill_md in sorted(root.rglob("SKILL.md")):
-                if not _path_under_root(skill_md, root):
-                    continue
-                if any(marker in skill_md.parts for marker in (".agent",)):
-                    continue
-                try:
-                    raw = skill_md.read_text(encoding="utf-8")
-                    name, description, _body = parse_skill_frontmatter(raw)
-                except (OSError, ValueError) as exc:
-                    logger.warning(
-                        "skill_catalog.skip_invalid",
-                        path=str(skill_md),
-                        error=str(exc),
-                    )
-                    continue
-                ref = skill_md.parent / "reference.md"
-                entry = _SkillFiles(
-                    description=description,
-                    skill_path=skill_md,
-                    reference_path=ref if ref.is_file() else None,
-                )
-                if name in out:
-                    # G9 lite: curator refuses silent overwrite — keep first, warn.
-                    logger.warning(
-                        "skill_catalog.duplicate_name",
-                        name=name,
-                        kept=str(out[name].skill_path),
-                        skipped=str(skill_md),
-                    )
-                    continue
-                out[name] = entry
+                _ingest_skill_md(skill_md, root=root, out=out)
         return out
 
 
 class _SkillFiles:
-    __slots__ = ("description", "reference_path", "skill_path")
+    __slots__ = ("description", "reference_path", "skill_path", "version")
 
     def __init__(
         self,
         *,
         description: str,
+        version: str,
         skill_path: Path,
         reference_path: Path | None,
     ) -> None:
         self.description = description
+        self.version = version
         self.skill_path = skill_path
         self.reference_path = reference_path
+
+
+def _ingest_skill_md(
+    skill_md: Path,
+    *,
+    root: Path,
+    out: dict[str, _SkillFiles],
+) -> None:
+    if not _path_under_root(skill_md, root):
+        return
+    if any(marker in skill_md.parts for marker in (".agent",)):
+        return
+    parent = skill_md.parent.resolve()
+    if parent == root.resolve():
+        logger.warning(
+            "skill_catalog.skip_root_skill_md",
+            path=str(skill_md),
+            reason="SKILL.md must live in a per-skill subdirectory",
+        )
+        return
+    try:
+        raw = skill_md.read_text(encoding="utf-8")
+        parsed = parse_skill_frontmatter(raw)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "skill_catalog.skip_invalid",
+            path=str(skill_md),
+            error=str(exc),
+        )
+        return
+    if parent.name != parsed.name:
+        logger.warning(
+            "skill_catalog.skip_name_mismatch",
+            path=str(skill_md),
+            folder=parent.name,
+            name=parsed.name,
+        )
+        return
+    ref = parent / "reference.md"
+    entry = _SkillFiles(
+        description=parsed.description,
+        version=parsed.version,
+        skill_path=skill_md,
+        reference_path=ref if ref.is_file() else None,
+    )
+    if parsed.name in out:
+        # G9 lite: curator refuses silent overwrite — keep first, warn.
+        logger.warning(
+            "skill_catalog.duplicate_name",
+            name=parsed.name,
+            kept=str(out[parsed.name].skill_path),
+            skipped=str(skill_md),
+        )
+        return
+    out[parsed.name] = entry
 
 
 def _path_under_root(path: Path, root: Path) -> bool:

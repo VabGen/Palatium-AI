@@ -1,9 +1,10 @@
 ---
 name: hitl-irreversible
+version: 1.0.0
 description: >-
-  When planning irreversible actions (EDMS write, graph mutate, PII access,
-  code exec, finance): require HITL interrupt()+card before the step. Use when
-  adding tools, routes, or reviewing write paths for Zero Trust (020).
+  Use when adding tools, routes, or reviewing write paths that may perform
+  irreversible actions (EDMS write, graph mutate, PII access, code exec,
+  finance): require HITL interrupt()+one-shot card before the step (020).
 ---
 
 # HITL for irreversible work

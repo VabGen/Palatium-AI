@@ -355,7 +355,12 @@ def build_intent_service(
             continuation_agent=continuation,
             weaving_agent=weaving,
             researcher_agent=researcher,
-            coder_agent=CoderAgent(harness, CODER_CONFIG),
+            coder_agent=CoderAgent(
+                harness,
+                CODER_CONFIG,
+                mcp_registry=mcp_registry,
+                mcp_tool_call_repository=mcp_tool_call_repository,
+            ),
             analyst_agent=AnalystAgent(harness, ANALYST_CONFIG),
             critic_agent=critic,
             formatter_agent=formatter,
