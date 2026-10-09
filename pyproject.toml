@@ -249,6 +249,7 @@ filterwarnings = [
 ]
 markers = [
     "live: hits a real LLM / network; opt-in via PALATIUM_LIVE_EVAL=1",
+    "live_formatter: Formatter json_schema smoke; run with pytest -m live_formatter",
     "llm_live: live llm_judge evals; opt-in via PALATIUM_EVAL_LIVE_JUDGE=1",
     "integration: graph/service integration tests (fake LLM; no DATABASE_URL required)",
     "slow: load/latency/scaling regression tests; excluded from PR CI (080, 075)",

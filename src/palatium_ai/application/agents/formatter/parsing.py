@@ -1,18 +1,32 @@
 # src/palatium_ai/application/agents/formatter/parsing.py
 
-"""Parse and align Formatter LLM JSON."""
+"""Parse/align Formatter JSON; build minimal cache-friendly user payload (065)."""
 
 from __future__ import annotations
 
 import json
 import math
 
-from palatium_ai.application.agents.formatter.config import MIN_PIPELINE_CONFIDENCE, REVIEW_CONFIDENCE_CAP
+from palatium_ai.application.agents.formatter.cleanup import mechanical_cleanup
+from palatium_ai.application.agents.formatter.config import (
+    FORMATTER_ATTACHMENT_MAX_CHARS,
+    FORMATTER_DIALOG_MAX_CHARS,
+    FORMATTER_DIALOG_PER_TURN_MAX_CHARS,
+    FORMATTER_SOURCE_MAX_CHARS,
+    MIN_PIPELINE_CONFIDENCE,
+    REVIEW_CONFIDENCE_CAP,
+    FormatterStyleHint,
+)
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import ContentDocument
+from palatium_ai.domain.content.markdown_blocks import plain_paragraph_count
 from palatium_ai.domain.llm.response_parser import parse_llm_response
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.types import (
+    CONTENT_GENERATION_CAPABILITY,
+    DOCUMENT_GENERATION_CAPABILITY,
+)
 
 
 def parse_formatter_document(raw_content: str) -> ContentDocument:
@@ -49,15 +63,14 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     has_attachments = bool((task_input.context_packet.untrusted_context or "").strip())
 
     interaction = document.meta.interaction
-    if (
-        task_input.requires_user_choice or task_input.underspecification_kind == "discrete_choice"
-    ) and interaction == "none":
+    choice_required = task_input.requires_user_choice or task_input.underspecification_kind == "discrete_choice"
+    if choice_required and interaction == "none":
         interaction = "choice"
     elif has_attachments and not task_input.requires_user_choice and interaction == "choice":
         # Upload grounds the ask — drop LLM exclusive-menu tags about prior topics (055).
         interaction = "none"
-    # Prefer LLM refs when present; always union attachment file/page citations (W2 G03).
-    # Bare UUIDs are not user-facing citations — drop them (LLM often echoes fence ids).
+    # Prefer LLM refs when present; always union attachment file citations (W2 G03).
+    # Bare UUIDs / attachment:<uuid> are not user-facing — sanitize drops them.
     merged_refs = sanitize_source_refs((*document.meta.source_refs, *attachment_refs))
 
     return document.model_copy(
@@ -83,43 +96,134 @@ def clamp_confidence(value: float) -> float:
 
 
 def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object]:
+    """Minimal hot payload: final_text + style_hint + task_kind (+ gated extras).
+
+    When worker ``final_text`` is present it is authoritative — do NOT re-dump the
+    attachment fence (065). Attachment prose is included only when there is no
+    worker source (format_only / social+file), and then clipped.
+
+    Social without a worker draft must NOT put ``user_text`` into ``final_text``:
+    that made Formatter echo the greeting as a card instead of replying (055).
+    """
     locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
     has_attachments = bool((task_input.context_packet.untrusted_context or "").strip())
-    dialog_block = "(no prior turns)"
-    window: DialogTurnWindow | None = task_input.dialog_window
-    if window is not None and window.turns:
-        # File-grounded turns: prior assistant answers about other uploads must not
-        # compete with the current fence (cross-file bleed). Keep user turns only.
-        if has_attachments:
-            user_turns = tuple(turn for turn in window.turns if turn.role == "user")
-            window = window.model_copy(update={"turns": user_turns}) if user_turns else None
-        if window is not None and window.turns:
-            dialog_block = window.as_prompt_block(
-                max_chars=8000,
-                per_turn_max_chars=1200,
-            )
+    source = _clip(
+        mechanical_cleanup((task_input.worker_summary or "").strip()),
+        FORMATTER_SOURCE_MAX_CHARS,
+    )
+    user_text = (task_input.context_packet.user_text or "").strip()
+    task_kind = task_input.context_packet.task_kind
+    social_synthesis = _needs_social_synthesis(task_kind=task_kind, source=source)
+    # Empty final_text signals "compose a reply"; never echo the user's phatic line.
+    final_text = "" if social_synthesis else source or mechanical_cleanup(user_text)
 
-    memory_block = ""
-    if task_input.memory_hints:
-        memory_block = "\n".join(f"- {h}" for h in task_input.memory_hints[:4])
+    from palatium_ai.domain.policies.formatter_memory_merge import FormatterMemoryMergePolicy
 
-    return {
+    merge = FormatterMemoryMergePolicy.decide(
+        memory_hints=task_input.memory_hints,
+        has_source_content=bool(source),
+    )
+    memory_block = "\n".join(f"- {h}" for h in merge.hints) if merge.hints else ""
+
+    payload: dict[str, object] = {
+        "final_text": final_text,
+        "style_hint": resolve_style_hint(task_input),
+        "task_kind": task_kind,
         "response_locale": locale,
-        "user_text": task_input.context_packet.user_text,
-        "task_kind": task_input.context_packet.task_kind,
-        "route": task_input.context_packet.route,
-        "route_plan": task_input.context_packet.route_plan,
-        "context_summary": task_input.context_packet.context_summary,
-        "attachment_context": task_input.context_packet.untrusted_context,
-        "worker_summary": task_input.worker_summary,
-        "critic_summary": task_input.critic_summary,
-        "requires_review": task_input.requires_review,
-        "requires_user_choice": task_input.requires_user_choice,
-        "underspecification_kind": task_input.underspecification_kind,
-        "revision_feedback": task_input.revision_feedback,
-        "dialog_history": dialog_block,
-        "memory_hints": memory_block,
+        "format_hints": {
+            "requires_review": task_input.requires_review,
+            "requires_user_choice": task_input.requires_user_choice,
+            "underspecification_kind": task_input.underspecification_kind,
+            "revision_feedback": task_input.revision_feedback,
+        },
     }
+    if not source:
+        payload["user_text"] = user_text
+        payload["dialog_history"] = _formatter_dialog_block(
+            task_input.dialog_window,
+            has_attachments=has_attachments,
+        )
+        if has_attachments:
+            payload["attachment_context"] = _clip(
+                task_input.context_packet.untrusted_context or "",
+                FORMATTER_ATTACHMENT_MAX_CHARS,
+            )
+    if memory_block:
+        payload["memory_hints"] = memory_block
+    return payload
+
+
+def build_formatter_user_message(payload: dict[str, object]) -> str:
+    """XML-wrap dynamic JSON (Anthropic/OpenAI: separate instructions from data)."""
+    body = json.dumps(payload, ensure_ascii=False)
+    return f"<formatter_input>\n{body}\n</formatter_input>"
+
+
+def resolve_style_hint(task_input: FormatterInput) -> FormatterStyleHint:
+    """Compact composition hint — closed Literal, not a phrase list (055).
+
+    Order matters: an explicit user decision (choice / clarify / reformat / revise)
+    wins; then social synthesis (no worker draft); then generation tags from Intent;
+    then the worker answer's own shape — a single structure-free paragraph is shown
+    as prose, never compiled into sections.
+    """
+    if task_input.requires_user_choice or task_input.underspecification_kind == "discrete_choice":
+        return "choice_cards"
+    if task_input.underspecification_kind == "open_text":
+        return "clarify_open"
+    source = (task_input.worker_summary or "").strip()
+    if _needs_social_synthesis(
+        task_kind=task_input.context_packet.task_kind,
+        source=source,
+    ):
+        return "social_reply"
+    if task_input.context_packet.task_kind == "response_formatting":
+        return "restructure_sections_icons"
+    if (task_input.revision_feedback or "").strip():
+        return "revise_keep_structure"
+    caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
+    if DOCUMENT_GENERATION_CAPABILITY in caps:
+        return "document_generation"
+    if CONTENT_GENERATION_CAPABILITY in caps:
+        return "content_generation"
+    if source and plain_paragraph_count(source) == 1:
+        return "plain_text"
+    return "brand_sections_icons"
+
+
+def _needs_social_synthesis(*, task_kind: str, source: str) -> bool:
+    """Live social has no worker draft — Formatter must compose the reply, not echo."""
+    return task_kind == "social_conversation" and not source.strip()
+
+
+def _formatter_dialog_block(
+    window: DialogTurnWindow | None,
+    *,
+    has_attachments: bool,
+) -> str:
+    if window is None or not window.turns:
+        return "(no prior turns)"
+    # File-grounded turns: prior assistant answers about other uploads must not
+    # compete with the current fence (cross-file bleed). Keep user turns only.
+    if has_attachments:
+        user_turns = tuple(turn for turn in window.turns if turn.role == "user")
+        window = window.model_copy(update={"turns": user_turns}) if user_turns else None
+        if window is None or not window.turns:
+            return "(no prior turns)"
+    return window.as_prompt_block(
+        max_chars=FORMATTER_DIALOG_MAX_CHARS,
+        per_turn_max_chars=FORMATTER_DIALOG_PER_TURN_MAX_CHARS,
+    )
+
+
+def _clip(text: str, max_chars: int) -> str:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    if max_chars <= 24:
+        return text[:max_chars]
+    head = max_chars // 2
+    tail = max_chars - head - 15
+    return f"{text[:head]}\n…[truncated]…\n{text[-tail:]}"
 
 
 def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:

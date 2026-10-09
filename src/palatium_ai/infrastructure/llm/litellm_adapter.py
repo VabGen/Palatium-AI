@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import math
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
 from litellm import acompletion
 
 from palatium_ai.core.logging.redact import redact_text
+from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.models import (
     ChatMessage,
     LLMCompletion,
@@ -20,14 +21,63 @@ from palatium_ai.domain.llm.models import (
     LLMStreamDelta,
     LLMUsage,
 )
+from palatium_ai.domain.llm.structured_output import response_model_for_schema
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from pydantic import BaseModel
+
     from palatium_ai.core.config.llm.base import LLMProviderConfig
 
 logger = structlog.get_logger(__name__)
+
+_UNSUPPORTED_MARKERS = ("not support", "unsupported", "unrecognized", "unknown parameter", "invalid parameter")
+_FORMAT_MARKERS = ("response_format", "json_schema", "strict")
+
+
+def is_structured_output_unsupported(exc: BaseException) -> bool:
+    """True only for an explicit provider refusal of json_schema / strict mode.
+
+    ``invalid_schema`` is our payload, not a missing capability — callers must
+    see that error instead of falling back to ``json_object``.
+    """
+    message = str(exc).lower()
+    if "invalid_schema" in message or "invalid schema" in message:
+        return False
+    mentions_format = any(token in message for token in _FORMAT_MARKERS)
+    refused = any(token in message for token in _UNSUPPORTED_MARKERS)
+    return mentions_format and refused
+
+
+def build_provider_response_format(
+    response_format: LLMResponseFormat | None,
+    response_model: type[BaseModel] | None,
+) -> dict[str, Any] | None:
+    """Map the domain mode onto an OpenAI-compatible ``response_format`` payload."""
+    model = response_model_for_schema(response_format, response_model)
+    if model is not None:
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": model.__name__,
+                "schema": model.model_json_schema(),
+                "strict": True,
+            },
+        }
+    if response_format == "json_object":
+        return {"type": "json_object"}
+    return None
+
+
+def _raise_if_unsupported(exc: Exception, *, response_format: LLMResponseFormat | None) -> None:
+    if response_format == "json_schema" and is_structured_output_unsupported(exc):
+        logger.warning(
+            "llm.structured_output_unsupported",
+            error=redact_text(str(exc)),
+        )
+        raise StructuredOutputUnsupportedError(redact_text(str(exc))) from exc
 
 
 def _to_litellm_messages(messages: list[ChatMessage]) -> list[dict[str, object]]:
@@ -129,6 +179,7 @@ def _parse_completion(response: object) -> LLMCompletion:
 def _parse_stream_delta(chunk: object) -> LLMStreamDelta:
     content = ""
     finish_reason: str | None = None
+    model: str | None = None
 
     choices = getattr(chunk, "choices", None)
     if isinstance(choices, list) and choices:
@@ -142,7 +193,23 @@ def _parse_stream_delta(chunk: object) -> LLMStreamDelta:
         if isinstance(raw_finish, str):
             finish_reason = raw_finish
 
-    return LLMStreamDelta(content=content, finish_reason=finish_reason)
+    raw_model = getattr(chunk, "model", None)
+    if isinstance(raw_model, str) and raw_model.strip():
+        model = raw_model.strip()
+
+    usage_raw = getattr(chunk, "usage", None)
+    usage = _parse_usage(usage_raw) if usage_raw is not None else None
+    # Final usage chunk often has empty choices; treat zeroed usage as absent.
+    if usage is not None and usage.prompt_tokens == 0 and usage.completion_tokens == 0:
+        usage = None
+
+    return LLMStreamDelta(
+        content=content,
+        finish_reason=finish_reason,
+        usage=usage,
+        cost_usd=_parse_response_cost(chunk),
+        model=model,
+    )
 
 
 class LiteLLMAdapter:
@@ -162,19 +229,21 @@ class LiteLLMAdapter:
         model: str | None,
         temperature: float | None,
         max_tokens: int | None,
-        stream: bool,
         response_format: LLMResponseFormat | None,
-    ) -> dict[str, object]:
+        response_model: type[BaseModel] | None = None,
+    ) -> dict[str, Any]:
+        """Shared LiteLLM kwargs (``stream`` passed as a Literal at the call site)."""
         resolved_model = resolve_litellm_model(
             provider=self._provider,
             model=model or self._default_model,
             base_url=self._base_url,
         )
-        params: dict[str, object] = {
+        # Vendor boundary: LiteLLM's acompletion kwargs are typed per-arg; dict[str, Any]
+        # is the supported unpack form (dict[str, object] fails reportArgumentType).
+        params: dict[str, Any] = {
             "model": resolved_model,
             "api_key": self._api_key,
             "api_base": self._base_url,
-            "stream": stream,
         }
         if self._timeout_seconds is not None:
             # Forward the provider timeout so a hung completion cannot outlive the agent (020/050).
@@ -183,9 +252,9 @@ class LiteLLMAdapter:
             params["temperature"] = temperature
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
-        if response_format == "json_object":
-            # OpenAI-compatible structured mode; providers that ignore it still get codec parse.
-            params["response_format"] = {"type": "json_object"}
+        payload = build_provider_response_format(response_format, response_model)
+        if payload is not None:
+            params["response_format"] = payload
         return params
 
     async def generate(
@@ -196,14 +265,15 @@ class LiteLLMAdapter:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> LLMCompletion:
         """Выполняет синхронную генерацию текста."""
         params = self._build_params(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            stream=False,
             response_format=response_format,
+            response_model=response_model,
         )
         params["messages"] = _to_litellm_messages(messages)
         logger.debug(
@@ -214,11 +284,13 @@ class LiteLLMAdapter:
             response_format=response_format or "text",
         )
         try:
-            response = await acompletion(**params)
+            # stream=False as Literal selects the non-streaming overload.
+            response = await acompletion(**params, stream=False)
             completion = _parse_completion(response)
             logger.debug("LLM response received", provider=self._provider, model=completion.model)
             return completion
         except Exception as exc:
+            _raise_if_unsupported(exc, response_format=response_format)
             logger.error(
                 "LLM request failed",
                 provider=self._provider,
@@ -235,6 +307,7 @@ class LiteLLMAdapter:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         """Возвращает поток частичных ответов."""
         from time import perf_counter
@@ -245,13 +318,22 @@ class LiteLLMAdapter:
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            stream=True,
             response_format=response_format,
+            response_model=response_model,
         )
+        # OpenAI-compatible: last chunk carries usage (and LiteLLM may attach cost).
+        params["stream_options"] = {"include_usage": True}
         params["messages"] = _to_litellm_messages(messages)
         started = perf_counter()
         first_token = True
-        stream = await acompletion(**params)
+        # stream=True as Literal selects CustomStreamWrapper; cast keeps async-for typed
+        # when the checker still widens the union return.
+        try:
+            raw_stream = await acompletion(**params, stream=True)
+        except Exception as exc:
+            _raise_if_unsupported(exc, response_format=response_format)
+            raise
+        stream = cast("AsyncIterator[object]", raw_stream)
         async for chunk in stream:
             delta = _parse_stream_delta(chunk)
             if first_token and delta.content:
