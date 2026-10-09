@@ -46,8 +46,9 @@ class _CostReportingLLM:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> LLMCompletion:
-        _ = messages, temperature, max_tokens, response_format
+        _ = messages, temperature, max_tokens, response_format, response_model
         self.calls += 1
         return LLMCompletion(
             content="ok",
@@ -64,8 +65,9 @@ class _CostReportingLLM:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> AsyncIterator[LLMStreamDelta]:  # pragma: no cover - unused by these tests
-        _ = messages, model, temperature, max_tokens, response_format
+        _ = messages, model, temperature, max_tokens, response_format, response_model
         yield LLMStreamDelta(content="ok")
 
 
@@ -146,3 +148,24 @@ async def test_harness_records_gateway_cost_without_estimator_call() -> None:
 
     assert completion.cost_usd == 0.0042
     assert estimator.calls == []
+
+
+@pytest.mark.asyncio()
+async def test_harness_records_cost_missing_for_tier_alias_without_gateway_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from palatium_ai.core.observability import metrics as metrics_mod
+
+    seen: list[str] = []
+
+    def _capture(*, reason: str) -> None:
+        seen.append(reason)
+
+    monkeypatch.setattr(metrics_mod.agent_metrics, "record_llm_cost_missing", _capture)
+    estimator = _RecordingEstimator(value=0.0)
+    llm = _CostReportingLLM(cost_usd=None)
+    harness = Harness(llm=llm, cost_estimator=estimator)
+
+    await harness.call_llm(RESEARCHER_CONFIG, [ChatMessage(role="user", content="hi")])
+
+    assert seen == ["tier_alias"]

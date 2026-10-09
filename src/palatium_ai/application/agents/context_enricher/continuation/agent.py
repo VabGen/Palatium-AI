@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from palatium_ai.application.agents.context_enricher.continuation.parsing import parse_contextualizer_output
@@ -30,6 +31,40 @@ logger = get_logger(__name__)
 
 _FALLBACK_CONFIDENCE = 0.4
 _EXCERPT_MAX_CHARS = 1500
+
+
+def _maybe_log_debug_payload(
+    *,
+    task_id: str,
+    phase: str,
+    gate_reason: str,
+    invoke_llm: bool,
+    task_kind: str | None,
+    user_payload: Mapping[str, object] | None,
+    output: ContextualizerOutput | None,
+) -> None:
+    """Log gate + LLM payload when CONTEXTUALIZER_DEBUG_PAYLOAD is on (debug only)."""
+    from palatium_ai.core.config import get_settings
+
+    if not get_settings().contextualizer.debug_payload:
+        return
+    fields: dict[str, object] = {
+        "task_id": task_id,
+        "phase": phase,
+        "gate_reason": gate_reason,
+        "invoke_llm": invoke_llm,
+        "task_kind": task_kind,
+    }
+    if user_payload is not None:
+        fields["user_payload"] = user_payload
+    if output is not None:
+        fields["continuation_kind"] = output.continuation_kind
+        fields["confidence"] = output.confidence
+        fields["refers_to_prior"] = output.refers_to_prior
+        fields["rewritten_query"] = output.rewritten_query
+        fields["prior_assistant_excerpt"] = output.prior_assistant_excerpt
+        fields["reasoning"] = output.reasoning
+    logger.info("contextualizer.debug_payload", **fields)
 
 
 class ContextualizerAgent(BaseAgent):
@@ -81,6 +116,15 @@ class ContextualizerAgent(BaseAgent):
                 prior_assistant_excerpt=None,
                 reasoning=f"ContextualizerPolicy pass-through ({gate.reason}).",
             )
+            _maybe_log_debug_payload(
+                task_id=str(input.task_id),
+                phase="policy_passthrough",
+                gate_reason=gate.reason,
+                invoke_llm=False,
+                task_kind=task_kind_raw or None,
+                user_payload=None,
+                output=output,
+            )
             return AgentOutput(
                 task_id=input.task_id,
                 status="success",
@@ -103,6 +147,15 @@ class ContextualizerAgent(BaseAgent):
             "dialog_history": dialog_history,
             "memory_hints": list(clipped_hints),
         }
+        _maybe_log_debug_payload(
+            task_id=str(input.task_id),
+            phase="llm_request",
+            gate_reason=gate.reason,
+            invoke_llm=True,
+            task_kind=task_kind_raw or None,
+            user_payload=user_payload,
+            output=None,
+        )
         messages = [
             ChatMessage(role="system", content=CONTEXTUALIZER_SYSTEM_PROMPT),
             ChatMessage(role="user", content=json.dumps(user_payload, ensure_ascii=False)),
@@ -130,6 +183,15 @@ class ContextualizerAgent(BaseAgent):
             agent_metrics.record_error(self._config.role, "continuation_parse_fallback")
             return _fallback_agent_output(input, dialog_window, reason=f"parse_failed: {exc}")
 
+        _maybe_log_debug_payload(
+            task_id=str(input.task_id),
+            phase="llm_response",
+            gate_reason=gate.reason,
+            invoke_llm=True,
+            task_kind=task_kind_raw or None,
+            user_payload=user_payload,
+            output=output,
+        )
         return AgentOutput(
             task_id=input.task_id,
             status="success",

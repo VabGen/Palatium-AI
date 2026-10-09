@@ -233,8 +233,9 @@ class FakeLLMPort:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> LLMCompletion:
-        _ = temperature, max_tokens, response_format
+        _ = temperature, max_tokens, response_format, response_model
         self.calls.append(messages)
         return LLMCompletion(content=self._content, model=model or self._model)
 
@@ -246,8 +247,9 @@ class FakeLLMPort:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> AsyncIterator[LLMStreamDelta]:
-        _ = temperature, max_tokens, response_format
+        _ = temperature, max_tokens, response_format, response_model
         self.calls.append(messages)
         yield LLMStreamDelta(content=self._content)
 
@@ -269,8 +271,9 @@ class SequentialFakeLLMPort:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> LLMCompletion:
-        _ = temperature, max_tokens, response_format
+        _ = temperature, max_tokens, response_format, response_model
         self.calls.append(messages)
         if self._index >= len(self._responses):
             raise RuntimeError("SequentialFakeLLMPort has no more responses")
@@ -286,6 +289,7 @@ class SequentialFakeLLMPort:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         completion = await self.generate(
             messages,
@@ -293,6 +297,7 @@ class SequentialFakeLLMPort:
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+            response_model=response_model,
         )
         yield LLMStreamDelta(content=completion.content)
 
@@ -660,9 +665,16 @@ def make_dual_agent_stack(
     )
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Skip llm_live tests unless PALATIUM_EVAL_LIVE_JUDGE=1 (075)."""
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip opt-in live suites unless the operator selected them."""
     import os
+
+    markexpr = str(getattr(config.option, "markexpr", "") or "")
+    if "live_formatter" not in markexpr or "not live_formatter" in markexpr:
+        skip_formatter = pytest.mark.skip(reason="run explicitly: pytest -m live_formatter (needs QWEN_API_KEY)")
+        for item in items:
+            if "live_formatter" in item.keywords:
+                item.add_marker(skip_formatter)
 
     if os.environ.get("PALATIUM_EVAL_LIVE_JUDGE") != "1":
         skip_live = pytest.mark.skip(reason="llm_live requires PALATIUM_EVAL_LIVE_JUDGE=1")

@@ -25,9 +25,10 @@ class StaticLLMPort:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> LLMCompletion:
         self.calls.append(list(messages))
-        _ = temperature, max_tokens, response_format
+        _ = temperature, max_tokens, response_format, response_model
         return LLMCompletion(content=self._content, model=model or self._model)
 
     async def generate_stream(
@@ -38,6 +39,7 @@ class StaticLLMPort:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         completion = await self.generate(
             messages,
@@ -45,8 +47,14 @@ class StaticLLMPort:
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+            response_model=response_model,
         )
-        yield LLMStreamDelta(content=completion.content)
+        yield LLMStreamDelta(
+            content=completion.content,
+            usage=completion.usage,
+            cost_usd=completion.cost_usd,
+            model=completion.model,
+        )
 
 
 class SequentialStaticLLMPort(StaticLLMPort):
@@ -65,6 +73,7 @@ class SequentialStaticLLMPort(StaticLLMPort):
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
     ) -> LLMCompletion:
         if self._index >= len(self._responses):
             return await super().generate(
@@ -73,9 +82,10 @@ class SequentialStaticLLMPort(StaticLLMPort):
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
+                response_model=response_model,
             )
         self.calls.append(list(messages))
         content = self._responses[self._index]
         self._index += 1
-        _ = temperature, max_tokens, response_format
+        _ = temperature, max_tokens, response_format, response_model
         return LLMCompletion(content=content, model=model or self._model)

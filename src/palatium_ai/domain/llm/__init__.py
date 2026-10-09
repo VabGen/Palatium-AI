@@ -2,6 +2,7 @@
 
 """Доменные модели LLM."""
 
+from .errors import StructuredOutputUnsupportedError
 from .models import ChatMessage, LLMCompletion, LLMResponseFormat, LLMStreamDelta, LLMUsage
 
 __all__ = [
@@ -10,6 +11,7 @@ __all__ = [
     "LLMResponseFormat",
     "LLMStreamDelta",
     "LLMUsage",
+    "StructuredOutputUnsupportedError",
     "extract_json_object",
     "loads_llm_json",
 ]

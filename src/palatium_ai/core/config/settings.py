@@ -2,8 +2,9 @@
 
 """Модуль settings содержит класс Settings, который наследуется от BaseSettings и содержит все настройки приложения."""
 
+from collections.abc import Callable
 from functools import lru_cache
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from pydantic import Field, computed_field
 from pydantic_settings import SettingsConfigDict
@@ -11,6 +12,7 @@ from pydantic_settings import SettingsConfigDict
 from .app import AppConfig
 from .attachments import AttachmentConfig
 from .base import BaseConfig
+from .contextualizer import ContextualizerConfig
 from .database import DatabaseConfig, RedisConfig
 from .embeddings import EmbeddingConfig
 from .formatter import FormatterConfig
@@ -26,11 +28,17 @@ from .skills import SkillsConfig
 from .web import WebConfig
 
 
+def _load_database_config() -> DatabaseConfig:
+    """BaseSettings читает POSTGRES_* без аргументов; stubs требуют user/password/db."""
+    load = cast("Callable[[], DatabaseConfig]", DatabaseConfig)
+    return load()
+
+
 class Settings(BaseConfig):
     """Агрегатор всех конфигураций. Использует default_factory для инстанцирования суб-конфигов."""
 
     app: AppConfig = Field(default_factory=AppConfig)
-    db: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    db: DatabaseConfig = Field(default_factory=_load_database_config)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
@@ -45,6 +53,7 @@ class Settings(BaseConfig):
     web: WebConfig = Field(default_factory=WebConfig)
     attachments: AttachmentConfig = Field(default_factory=AttachmentConfig)
     formatter: FormatterConfig = Field(default_factory=FormatterConfig)
+    contextualizer: ContextualizerConfig = Field(default_factory=ContextualizerConfig)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(frozen=True)
 

@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 # Provider-neutral structured output mode (maps to OpenAI-compatible response_format).
-LLMResponseFormat = Literal["text", "json_object"]
+LLMResponseFormat = Literal["text", "json_object", "json_schema"]
 
 
 class ChatMessage(BaseModel):
@@ -47,9 +47,16 @@ class LLMCompletion(BaseModel):
 
 
 class LLMStreamDelta(BaseModel):
-    """Фрагмент потоковой генерации."""
+    """Фрагмент потоковой генерации.
+
+    Trailing chunks may carry usage/cost when the provider was asked for
+    ``stream_options.include_usage`` (OpenAI-compatible / LiteLLM).
+    """
 
     model_config = {"frozen": True}
 
     content: str = ""
     finish_reason: str | None = None
+    usage: LLMUsage | None = None
+    cost_usd: float | None = Field(default=None, ge=0.0)
+    model: str | None = None

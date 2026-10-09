@@ -1,0 +1,3 @@
+{
+  "response": "{\n  \"rewritten_query\": \"Составь официальный ответ на обращение гражданина Иванова И.И., в котором разъясняется срок рассмотрения заявления №42 от 01.09.2026 и подтверждается предоставление копии решения.\",\n  \"continuation_kind\": \"answer\",\n  \"confidence\": 0.95,\n  \"refers_to_prior\": true,\n  \"slot_filled_by_prior\": true,\n  \"prior_assistant_excerpt\": \"Обращение гражданина Иванова И.И.: прошу разъяснить срок рассмотрения заявления №42 от 01.09.2026 и предоставить копию решения.\",\n  \"reasoning\": \"Draft a reply to the prior appeal — new deliverable, not a reformat.\"\n}"
+}

@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from pydantic import BaseModel
+
     from palatium_ai.domain.llm.models import (
         ChatMessage,
         LLMCompletion,
@@ -28,6 +30,7 @@ class LLMPort(Protocol):
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> LLMCompletion:
         """Выполняет синхронную генерацию текста."""
         ...
@@ -40,6 +43,7 @@ class LLMPort(Protocol):
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         """Возвращает поток частичных ответов."""
         ...

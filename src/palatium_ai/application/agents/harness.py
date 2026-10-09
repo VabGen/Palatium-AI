@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 
+from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING
 
 from palatium_ai.application.services.context_builder import ContextBuilder
@@ -22,7 +24,15 @@ from palatium_ai.core.security.secret_scanner import (
 )
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion, LLMResponseFormat
+from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
+from palatium_ai.domain.llm.models import (
+    ChatMessage,
+    LLMCompletion,
+    LLMResponseFormat,
+    LLMStreamDelta,
+    LLMUsage,
+)
+from palatium_ai.domain.llm.structured_output import assert_json_schema_model
 from palatium_ai.domain.memory.compact import CompactRequest
 
 if TYPE_CHECKING:
@@ -32,6 +42,8 @@ if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.ports.llm import LlmCostEstimatorPort, LLMPort
     from palatium_ai.infrastructure.llm.factory import LLMClientFactory
+
+DeltaCallback = Callable[[str], object]
 
 logger = get_logger(__name__)
 
@@ -44,6 +56,42 @@ def _with_system_prompt_cache(messages: list[ChatMessage]) -> list[ChatMessage]:
     if first.role != "system" or first.cache_control is not None:
         return messages
     return [first.model_copy(update={"cache_control": "ephemeral"}), *messages[1:]]
+
+
+async def _accumulate_stream_deltas(
+    deltas: AsyncIterator[LLMStreamDelta],
+    *,
+    on_delta: DeltaCallback | None,
+    initial_model: str,
+) -> LLMCompletion:
+    """Join stream chunks into one completion; optionally forward content deltas."""
+    pieces: list[str] = []
+    finish_reason: str | None = None
+    usage = LLMUsage()
+    cost_usd: float | None = None
+    model = initial_model
+    async for delta in deltas:
+        if delta.content:
+            pieces.append(delta.content)
+            if on_delta is not None:
+                maybe = on_delta(delta.content)
+                if inspect.isawaitable(maybe):
+                    await maybe
+        if delta.finish_reason:
+            finish_reason = delta.finish_reason
+        if delta.usage is not None:
+            usage = delta.usage
+        if delta.cost_usd is not None:
+            cost_usd = delta.cost_usd
+        if delta.model:
+            model = delta.model
+    return LLMCompletion(
+        content="".join(pieces),
+        model=model,
+        usage=usage,
+        finish_reason=finish_reason,
+        cost_usd=cost_usd,
+    )
 
 
 def _resolve_cost_usd(
@@ -67,6 +115,41 @@ def _resolve_cost_usd(
         model=completion.model or fallback_model,
         prompt_tokens=completion.usage.prompt_tokens,
         completion_tokens=completion.usage.completion_tokens,
+    )
+
+
+def _missing_cost_reason(*, model: str) -> str:
+    """Closed reason set for ``palatium_llm_cost_missing_total`` (040 cardinality)."""
+    if model.strip().lower().startswith("tier-"):
+        return "tier_alias"
+    return "unpriced_model"
+
+
+def _record_missing_cost_if_needed(
+    *,
+    completion: LLMCompletion,
+    cost_usd: float,
+    fallback_model: str,
+    agent_role: str,
+) -> None:
+    """Emit metric+log when tokens exist but USD is unresolved (gateway gap)."""
+    usage = completion.usage
+    if completion.cost_usd is not None:
+        return
+    if cost_usd > 0.0:
+        return
+    if usage.prompt_tokens <= 0 and usage.completion_tokens <= 0:
+        return
+    model = (completion.model or fallback_model or "unknown").strip() or "unknown"
+    reason = _missing_cost_reason(model=model)
+    agent_metrics.record_llm_cost_missing(reason=reason)
+    logger.debug(
+        "llm.cost.missing",
+        agent_role=agent_role,
+        model=model,
+        reason=reason,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
     )
 
 
@@ -111,6 +194,42 @@ class Harness:
         msg = "Harness has no LLM configured (llm or llm_factory required)"
         raise RuntimeError(msg)
 
+    def _record_llm_usage(
+        self,
+        *,
+        config: AgentConfig,
+        completion: LLMCompletion,
+        fallback_model: str,
+    ) -> None:
+        usage = completion.usage
+        cost_usd = _resolve_cost_usd(
+            completion=completion,
+            fallback_model=fallback_model,
+            estimator=self._cost_estimator,
+        )
+        _record_missing_cost_if_needed(
+            completion=completion,
+            cost_usd=cost_usd,
+            fallback_model=fallback_model,
+            agent_role=config.role,
+        )
+        agent_metrics.record_token_usage(
+            agent_type=config.role,
+            model=completion.model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cost_usd=cost_usd,
+        )
+        turn_tokens = get_turn_token_collector()
+        if turn_tokens is not None:
+            turn_tokens.record(
+                agent=config.name,
+                model=completion.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                cost_usd=cost_usd,
+            )
+
     @traceable(name="harness.call_llm")
     async def call_llm(
         self,
@@ -118,8 +237,11 @@ class Harness:
         messages: list[ChatMessage],
         *,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMCompletion:
         """LLM with retry/backoff, budget guard, token metrics (030)."""
+        assert_json_schema_model(response_format, response_model)
         llm = self._resolve_llm(config)
         last_error: Exception | None = None
         resolved_model = config.llm_model
@@ -146,34 +268,21 @@ class Harness:
                         cached_messages,
                         model=resolved_model,
                         temperature=config.temperature,
+                        max_tokens=max_tokens,
                         response_format=response_format,
+                        response_model=response_model,
                     ),
                     timeout=config.timeout_seconds,
                 )
-                usage = completion.usage
-                cost_usd = _resolve_cost_usd(
+                self._record_llm_usage(
+                    config=config,
                     completion=completion,
                     fallback_model=resolved_model or "",
-                    estimator=self._cost_estimator,
                 )
-                agent_metrics.record_token_usage(
-                    agent_type=config.role,
-                    model=completion.model,
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
-                    cost_usd=cost_usd,
-                )
-                turn_tokens = get_turn_token_collector()
-                if turn_tokens is not None:
-                    turn_tokens.record(
-                        agent=config.name,
-                        model=completion.model,
-                        prompt_tokens=usage.prompt_tokens,
-                        completion_tokens=usage.completion_tokens,
-                        cost_usd=cost_usd,
-                    )
                 return completion
             except CostBudgetExceededError:
+                raise
+            except StructuredOutputUnsupportedError:
                 raise
             except CircuitOpenError as exc:
                 # All provider breakers are open: every retry would just re-check the
@@ -188,6 +297,58 @@ class Harness:
         raise AgentExecutionError(
             f"LLM call failed after {config.max_retries} attempts: {last_error}",
         ) from last_error
+
+    @traceable(name="harness.call_llm_stream")
+    async def call_llm_stream(
+        self,
+        config: AgentConfig,
+        messages: list[ChatMessage],
+        *,
+        response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
+        on_delta: DeltaCallback | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMCompletion:
+        """Streaming LLM; accumulates content and optionally forwards deltas (W1.4)."""
+        assert_json_schema_model(response_format, response_model)
+        llm = self._resolve_llm(config)
+        resolved_model = config.llm_model
+        if self._cost_budget is not None:
+            self._cost_budget.assert_turn_allows_call()
+
+        cached_messages = _with_system_prompt_cache(messages)
+        initial_model = (resolved_model or "").strip() or "unknown"
+        try:
+            completion = await asyncio.wait_for(
+                _accumulate_stream_deltas(
+                    llm.generate_stream(
+                        cached_messages,
+                        model=resolved_model,
+                        temperature=config.temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format,
+                        response_model=response_model,
+                    ),
+                    on_delta=on_delta,
+                    initial_model=initial_model,
+                ),
+                timeout=config.timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise AgentExecutionError(
+                f"LLM stream timed out after {config.timeout_seconds}s",
+            ) from exc
+        except StructuredOutputUnsupportedError:
+            raise
+        except CircuitOpenError as exc:
+            raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
+
+        self._record_llm_usage(
+            config=config,
+            completion=completion,
+            fallback_model=resolved_model or "",
+        )
+        return completion
 
     @traceable(name="harness.execute_with_guardrails")
     async def execute_with_guardrails(

@@ -12,11 +12,14 @@ import structlog
 
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.resilience import CircuitOpenError, ConsecutiveFailureCircuit
+from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
 
 from .litellm_adapter import LiteLLMAdapter
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from pydantic import BaseModel
 
     from palatium_ai.core.config.llm.base import LLMProviderConfig
     from palatium_ai.core.config.settings import Settings
@@ -156,6 +159,7 @@ class _AgentModelLLMAdapter:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> LLMCompletion:
         return await self._inner.generate(
             messages,
@@ -163,6 +167,7 @@ class _AgentModelLLMAdapter:
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+            response_model=response_model,
         )
 
     async def generate_stream(
@@ -173,6 +178,7 @@ class _AgentModelLLMAdapter:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         async for delta in self._inner.generate_stream(
             messages,
@@ -180,6 +186,7 @@ class _AgentModelLLMAdapter:
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+            response_model=response_model,
         ):
             yield delta
 
@@ -237,8 +244,34 @@ class _FallbackChainLLMAdapter:
             circuit.record_success()
         agent_metrics.record_circuit_state(f"{_LLM_CIRCUIT_PREFIX}{provider}", circuit.state_code())
 
-    def _raise_exhausted(self, errors: list[str], open_circuits: list[tuple[str, float]]) -> None:
+    def _capture_provider_failure(
+        self,
+        provider: str,
+        exc: Exception,
+        errors: list[str],
+        unsupported: list[StructuredOutputUnsupportedError],
+    ) -> None:
+        """Record an outage. A json_schema refusal is a capability gap, not a dead provider."""
+        if isinstance(exc, StructuredOutputUnsupportedError):
+            unsupported.append(exc)
+            errors.append(f"{provider}: structured output unsupported")
+            logger.warning("llm.structured_output_unsupported", provider=provider)
+            return
+        self._record(provider, failed=True)
+        errors.append(f"{provider}: {exc}")
+
+    def _raise_exhausted(
+        self,
+        errors: list[str],
+        open_circuits: list[tuple[str, float]],
+        unsupported: list[StructuredOutputUnsupportedError] | None = None,
+    ) -> None:
         """Fail fast when every provider is breaker-open; otherwise report real errors."""
+        pending = unsupported or []
+        if pending and len(pending) == len(errors) and not open_circuits:
+            raise StructuredOutputUnsupportedError(
+                "provider chain rejected json_schema structured output",
+            ) from pending[-1]
         if open_circuits and len(open_circuits) == len(self._adapters):
             provider, retry_after = min(open_circuits, key=lambda item: item[1])
             raise CircuitOpenError(
@@ -255,9 +288,11 @@ class _FallbackChainLLMAdapter:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> LLMCompletion:
         errors: list[str] = []
         open_circuits: list[tuple[str, float]] = []
+        unsupported: list[StructuredOutputUnsupportedError] = []
         for index, (provider, port) in enumerate(self._adapters):
             if not self._acquire(provider, errors, open_circuits):
                 continue
@@ -271,10 +306,10 @@ class _FallbackChainLLMAdapter:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     response_format=response_format,
+                    response_model=response_model,
                 )
             except Exception as exc:
-                self._record(provider, failed=True)
-                errors.append(f"{provider}: {exc}")
+                self._capture_provider_failure(provider, exc, errors, unsupported)
                 logger.warning(
                     "llm.fallback.try_next",
                     provider=provider,
@@ -284,6 +319,7 @@ class _FallbackChainLLMAdapter:
                 continue
             self._record(provider, failed=False)
             if index > 0:
+                agent_metrics.record_llm_fallback(to_provider=provider)
                 logger.warning(
                     "llm.fallback.used",
                     provider=provider,
@@ -291,7 +327,7 @@ class _FallbackChainLLMAdapter:
                     chain_size=len(self._adapters),
                 )
             return completion
-        self._raise_exhausted(errors, open_circuits)
+        self._raise_exhausted(errors, open_circuits, unsupported)
         raise AssertionError("unreachable: _raise_exhausted always raises")  # pragma: no cover
 
     async def generate_stream(
@@ -302,9 +338,11 @@ class _FallbackChainLLMAdapter:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         errors: list[str] = []
         open_circuits: list[tuple[str, float]] = []
+        unsupported: list[StructuredOutputUnsupportedError] = []
         for index, (provider, port) in enumerate(self._adapters):
             if not self._acquire(provider, errors, open_circuits):
                 continue
@@ -318,12 +356,12 @@ class _FallbackChainLLMAdapter:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     response_format=response_format,
+                    response_model=response_model,
                 )
                 async for delta in stream:
                     yield delta
             except Exception as exc:
-                self._record(provider, failed=True)
-                errors.append(f"{provider}: {exc}")
+                self._capture_provider_failure(provider, exc, errors, unsupported)
                 logger.warning(
                     "llm.fallback.stream_try_next",
                     provider=provider,
@@ -332,8 +370,16 @@ class _FallbackChainLLMAdapter:
                 )
                 continue
             self._record(provider, failed=False)
+            if index > 0:
+                agent_metrics.record_llm_fallback(to_provider=provider)
+                logger.warning(
+                    "llm.fallback.stream_used",
+                    provider=provider,
+                    attempt=index + 1,
+                    chain_size=len(self._adapters),
+                )
             return
-        self._raise_exhausted(errors, open_circuits)
+        self._raise_exhausted(errors, open_circuits, unsupported)
 
 
 def create_llm_client(settings: Settings, provider_name: str | None = None) -> LLMPort:
