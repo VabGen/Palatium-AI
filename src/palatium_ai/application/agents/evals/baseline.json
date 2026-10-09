@@ -15,6 +15,7 @@
     "context_enricher/continuation-format-followup": 1.0,
     "context_enricher/continuation-answer-followup": 1.0,
     "context_enricher/continuation-new-topic": 1.0,
+    "context_enricher/continuation-draft-from-prior": 1.0,
     "supervisor/social-formatter": 1.0,
     "supervisor/clarify-route": 1.0,
     "critic/format_passthrough_with_source": 1.0,

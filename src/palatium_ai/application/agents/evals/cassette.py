@@ -315,13 +315,15 @@ async def run_context_enricher_cassette(task: dict[str, Any]) -> dict[str, Any]:
             "dialog": task.get("dialog", []),
         }
     thread_id = "eval-cassette"
+    raw_kind = raw_input.get("task_kind") or raw_input.get("prior_task_kind")
+    task_kind = str(raw_kind).strip() if isinstance(raw_kind, str) and raw_kind.strip() else None
     task_input = ContextualizerInput(
         task_id=_task_id(task),
         user_text=str(raw_input.get("user_text", task.get("user_text", ""))),
         dialog_window=_dialog_from_input(raw_input, thread_id=thread_id),
         memory_hints=(),
         prompt_budget=MemoryPromptBudget(),
-        task_kind=None,
+        task_kind=task_kind,  # type: ignore[arg-type]
         requires_mcp=False,
     )
     llm = StaticLLMPort(llm_response)
@@ -362,8 +364,12 @@ async def run_researcher_cassette(task: dict[str, Any]) -> dict[str, Any]:
 
     args_cassette = task.get("args_cassette")
     if isinstance(args_cassette, str) and args_cassette.strip():
+        # Args, then the MCP agent-loop synthesis. Empty/error paths never dequeue the second.
         llm: StaticLLMPort | SequentialStaticLLMPort = SequentialStaticLLMPort(
-            [load_cassette_response(args_cassette.strip())]
+            [
+                load_cassette_response(args_cassette.strip()),
+                load_cassette_response("researcher/mcp_synthesis.json"),
+            ],
         )
     else:
         cassette = _require_cassette(task)
@@ -506,9 +512,7 @@ async def run_formatter_cassette(task: dict[str, Any]) -> dict[str, Any]:
         requires_review=bool(raw_input.get("requires_review", False)),
         requires_user_choice=bool(raw_input.get("requires_user_choice", False)),
         underspecification_kind=str(raw_input.get("underspecification_kind", "none")),
-        revision_feedback=raw_input.get("revision_feedback")
-        if isinstance(raw_input.get("revision_feedback"), str)
-        else None,
+        revision_feedback=raw_input.get("revision_feedback") if isinstance(raw_input.get("revision_feedback"), str) else None,
     )
     llm = StaticLLMPort(llm_response)
     harness = Harness(llm=llm)

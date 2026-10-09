@@ -53,5 +53,24 @@
       "refers_to_prior": true,
       "rewritten_query": "Предложи рецепт утки на ужин"
     }
+  },
+  {
+    "id": "continuation-draft-from-prior",
+    "cassette": "context_enricher/draft_from_prior.json",
+    "input": {
+      "user_text": "составь ответ на это обращение",
+      "task_kind": "knowledge_request",
+      "dialog": [
+        { "role": "user", "content": "Вот текст обращения" },
+        {
+          "role": "assistant",
+          "content": "Обращение гражданина Иванова И.И.: прошу разъяснить срок рассмотрения заявления №42 от 01.09.2026 и предоставить копию решения."
+        }
+      ]
+    },
+    "expect": {
+      "continuation_kind": "answer",
+      "refers_to_prior": true
+    }
   }
 ]
