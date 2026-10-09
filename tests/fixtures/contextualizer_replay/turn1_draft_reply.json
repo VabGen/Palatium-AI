@@ -1,0 +1,20 @@
+{
+  "id": "turn1_draft_reply",
+  "description": "Suspected draft→format misclassification: compose a reply to prior appeal text.",
+  "expect_kind": "answer",
+  "bug_kind": "format",
+  "user_text": "составь ответ на это обращение",
+  "task_kind": "knowledge_request",
+  "requires_mcp": false,
+  "memory_hints": [],
+  "dialog": [
+    {
+      "role": "user",
+      "content": "Вот текст обращения"
+    },
+    {
+      "role": "assistant",
+      "content": "Обращение гражданина Иванова И.И.: прошу разъяснить срок рассмотрения заявления №42 от 01.09.2026 и предоставить копию решения."
+    }
+  ]
+}
