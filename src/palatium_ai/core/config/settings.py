@@ -11,6 +11,7 @@ from pydantic_settings import SettingsConfigDict
 from .app import AppConfig
 from .attachments import AttachmentConfig
 from .base import BaseConfig
+from .contextualizer import ContextualizerConfig
 from .database import DatabaseConfig, RedisConfig
 from .embeddings import EmbeddingConfig
 from .formatter import FormatterConfig
@@ -45,6 +46,7 @@ class Settings(BaseConfig):
     web: WebConfig = Field(default_factory=WebConfig)
     attachments: AttachmentConfig = Field(default_factory=AttachmentConfig)
     formatter: FormatterConfig = Field(default_factory=FormatterConfig)
+    contextualizer: ContextualizerConfig = Field(default_factory=ContextualizerConfig)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(frozen=True)
 
