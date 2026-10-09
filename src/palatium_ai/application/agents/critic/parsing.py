@@ -26,7 +26,7 @@ def coerce_score(value: object, default: float = 0.0) -> int:
         return int(default)
     try:
         score = float(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return int(default)
     if score != score or score in (float("inf"), float("-inf")):
         return int(default)
@@ -68,7 +68,7 @@ def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
         user_input_chars = 0
     try:
         classification_confidence = float(input_context["classification_confidence"])
-    except KeyError, ValueError:
+    except (KeyError, ValueError):
         classification_confidence = 0.0
     worker_confidence_raw = input_context.get("worker_confidence", "")
     worker_confidence: float | None

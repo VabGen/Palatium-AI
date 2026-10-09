@@ -58,7 +58,7 @@ def _sniff_office_zip(data: bytes) -> str | None:
     try:
         with ZipFile(BytesIO(data)) as archive:
             names = {info.filename.replace("\\", "/") for info in archive.infolist()[:_ZIP_SNIFF_MEMBER_CAP]}
-    except BadZipFile, OSError:
+    except (BadZipFile, OSError):
         return None
     if "[Content_Types].xml" not in names and not any(n.endswith("[Content_Types].xml") for n in names):
         # Still OOXML-ish if word/ exists; Content_Types is the strong signal.

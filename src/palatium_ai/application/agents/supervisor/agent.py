@@ -51,7 +51,7 @@ class SupervisorAgent(BaseAgent):
                 float(input.context["classification_confidence"]),
                 default=0.0,
             )
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             confidence = 0.0
 
         executable_kind = WorkflowExecutionPolicy.executable_task_kind(

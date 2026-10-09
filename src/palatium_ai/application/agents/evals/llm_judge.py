@@ -55,7 +55,7 @@ class LlmJudgeGrader:
         raw = load_cassette_response(judge_cassette.strip())
         try:
             payload = loads_llm_json(raw)
-        except json.JSONDecodeError, ValueError:
+        except (json.JSONDecodeError, ValueError):
             return failed(0.0, details="judge cassette must be JSON object")
 
         if not isinstance(payload, dict):

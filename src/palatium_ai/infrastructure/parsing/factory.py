@@ -53,7 +53,7 @@ def _module_available(module_name: str) -> bool:
     """Whether a distribution is importable, without importing it."""
     try:
         return importlib.util.find_spec(module_name) is not None
-    except ImportError, ValueError:
+    except (ImportError, ValueError):
         return False
 
 

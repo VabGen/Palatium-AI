@@ -215,7 +215,7 @@ class HttpWebSearchPort:
             score_raw = raw.get("score", 0.5)
             try:
                 score = float(score_raw)  # type: ignore[arg-type]  # JSON value: duck-typed coercion (017)
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 score = 0.5
             hits.append(
                 WebSearchHit(

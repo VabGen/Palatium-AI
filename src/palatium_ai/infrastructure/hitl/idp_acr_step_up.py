@@ -115,7 +115,7 @@ class IdpAcrHitlStepUpProvider:
             return False
         try:
             claims = dict(self._decode(token))
-        except jwt.PyJWTError, ValueError, TypeError, KeyError:
+        except (jwt.PyJWTError, ValueError, TypeError, KeyError):
             return False
 
         sub = claims.get("sub")

@@ -261,7 +261,7 @@ class MCPRegistry:
                 )
                 return health.is_success
             return response.is_success
-        except httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError:
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError):
             return False
 
     def refresh(self) -> None:
