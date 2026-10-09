@@ -2,8 +2,9 @@
 
 """Модуль settings содержит класс Settings, который наследуется от BaseSettings и содержит все настройки приложения."""
 
+from collections.abc import Callable
 from functools import lru_cache
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from pydantic import Field, computed_field
 from pydantic_settings import SettingsConfigDict
@@ -27,11 +28,17 @@ from .skills import SkillsConfig
 from .web import WebConfig
 
 
+def _load_database_config() -> DatabaseConfig:
+    """BaseSettings читает POSTGRES_* без аргументов; stubs требуют user/password/db."""
+    load = cast("Callable[[], DatabaseConfig]", DatabaseConfig)
+    return load()
+
+
 class Settings(BaseConfig):
     """Агрегатор всех конфигураций. Использует default_factory для инстанцирования суб-конфигов."""
 
     app: AppConfig = Field(default_factory=AppConfig)
-    db: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    db: DatabaseConfig = Field(default_factory=_load_database_config)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)

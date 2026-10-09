@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from palatium_ai.application.agents.context_enricher.continuation.parsing import parse_contextualizer_output
@@ -39,7 +40,7 @@ def _maybe_log_debug_payload(
     gate_reason: str,
     invoke_llm: bool,
     task_kind: str | None,
-    user_payload: dict[str, object] | None,
+    user_payload: Mapping[str, object] | None,
     output: ContextualizerOutput | None,
 ) -> None:
     """Log gate + LLM payload when CONTEXTUALIZER_DEBUG_PAYLOAD is on (debug only)."""

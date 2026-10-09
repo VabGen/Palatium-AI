@@ -179,16 +179,29 @@ async def _run_once(
     }
 
 
-async def _async_main(args: argparse.Namespace) -> int:
-    _load_env()
+def _fixture_label(fixture_path: Path) -> str:
+    return str(fixture_path.relative_to(_ROOT)) if fixture_path.is_relative_to(_ROOT) else str(fixture_path)
+
+
+def _write_report(report: dict[str, Any], *, fixture_id: object) -> Path:
+    out_dir = _ROOT / "artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    out_path = out_dir / f"replay_continuity_intent_{fixture_id or 'case'}_{stamp}.json"
+    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return out_path
+
+
+async def _async_main(
+    *,
+    fixture: dict[str, Any],
+    fixture_path: Path,
+    runs: int,
+) -> dict[str, Any]:
     key = os.environ.get("QWEN_API_KEY", "").strip()
     if not key:
-        print("QWEN_API_KEY missing; cannot replay")
-        return 2
+        raise RuntimeError("QWEN_API_KEY missing; cannot replay")
 
-    fixture_path = Path(args.fixture).resolve()
-    fixture = _load_fixture(fixture_path)
-    runs = max(1, int(args.runs))
     base = os.environ.get("QWEN_BASE_URL", "").strip()
     model = os.environ.get("QWEN_DEFAULT_MODEL", "").strip() or "generative-model"
     adapter = LiteLLMAdapter(QwenLLMConfig(api_key=SecretStr(key), base_url=base, default_model=model))
@@ -226,8 +239,8 @@ async def _async_main(args: argparse.Namespace) -> int:
     ctx_kinds = [str(row.get("continuation_kind") or "null") for row in rows]
     intent_kinds = [str(row.get("intent_task_kind") or "null") for row in rows]
     verdict = _classify_route(task_kinds=task_kinds)
-    report = {
-        "fixture": str(fixture_path.relative_to(_ROOT)) if fixture_path.is_relative_to(_ROOT) else str(fixture_path),
+    return {
+        "fixture": _fixture_label(fixture_path),
         "fixture_id": fixture.get("id"),
         "runs": runs,
         "continuation_kind_counts": dict(Counter(ctx_kinds)),
@@ -237,25 +250,31 @@ async def _async_main(args: argparse.Namespace) -> int:
         "rows": rows,
         "recorded_at": datetime.now(UTC).isoformat(),
     }
-    out_dir = _ROOT / "artifacts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out_path = out_dir / f"replay_continuity_intent_{fixture.get('id', 'case')}_{stamp}.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print("---")
-    print(f"continuation_kind_counts={report['continuation_kind_counts']}")
-    print(f"intent_task_kind_counts={report['intent_task_kind_counts']}")
-    print(f"effective_task_kind_counts={report['effective_task_kind_counts']}")
-    print(f"verdict={verdict} (bug=effective response_formatting)")
-    print(f"wrote {out_path}")
-    return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, default=_DEFAULT_FIXTURE)
     parser.add_argument("--runs", type=int, default=3)
-    return asyncio.run(_async_main(parser.parse_args()))
+    args = parser.parse_args()
+    _load_env()
+    key = os.environ.get("QWEN_API_KEY", "").strip()
+    if not key:
+        print("QWEN_API_KEY missing; cannot replay")
+        return 2
+    fixture_path = Path(args.fixture).resolve()
+    fixture = _load_fixture(fixture_path)
+    report = asyncio.run(
+        _async_main(fixture=fixture, fixture_path=fixture_path, runs=max(1, int(args.runs))),
+    )
+    out_path = _write_report(report, fixture_id=fixture.get("id"))
+    print("---")
+    print(f"continuation_kind_counts={report['continuation_kind_counts']}")
+    print(f"intent_task_kind_counts={report['intent_task_kind_counts']}")
+    print(f"effective_task_kind_counts={report['effective_task_kind_counts']}")
+    print(f"verdict={report['verdict']} (bug=effective response_formatting)")
+    print(f"wrote {out_path}")
+    return 0
 
 
 if __name__ == "__main__":
