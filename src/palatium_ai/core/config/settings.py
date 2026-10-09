@@ -13,6 +13,7 @@ from .attachments import AttachmentConfig
 from .base import BaseConfig
 from .database import DatabaseConfig, RedisConfig
 from .embeddings import EmbeddingConfig
+from .formatter import FormatterConfig
 from .knowledge import KnowledgeConfig
 from .llm import LLMConfig
 from .logging import LoggingConfig
@@ -43,6 +44,7 @@ class Settings(BaseConfig):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     attachments: AttachmentConfig = Field(default_factory=AttachmentConfig)
+    formatter: FormatterConfig = Field(default_factory=FormatterConfig)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(frozen=True)
 
