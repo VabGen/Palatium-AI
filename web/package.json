@@ -30,11 +30,11 @@
   },
   "dependencies": {
     "@palatium/contract": "*",
-    "lottie-react": "^3.1.0",
-    "lucide-react": "^0.544.0",
+    "lottie-react": "^3.1.2",
+    "lucide-react": "^1.51.0",
     "react": "^19.3.0",
     "react-dom": "^19.1.1",
-    "react-hot-toast": "^2.6.0"
+    "react-hot-toast": "^2.6.1"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
@@ -48,7 +48,7 @@
     "@types/node": "^22.20.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.1.9",
-    "@vitejs/plugin-react": "^5.0.2",
+    "@vitejs/plugin-react": "^6.1.1",
     "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.12.0",
@@ -57,7 +57,7 @@
     "prettier": "^3.9.9",
     "typescript": "~5.9.2",
     "typescript-eslint": "^8.71.0",
-    "vite": "^7.1.5",
+    "vite": "^8.0.0",
     "vitest": "^5.0.3"
   },
   "customElements": "custom-elements.json"
