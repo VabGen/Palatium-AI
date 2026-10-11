@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Literal, cast
-from uuid import UUID
 
 from langgraph.types import Command
 
@@ -14,12 +13,10 @@ from palatium_ai.application.orchestration.run_config import build_graph_run_con
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.hitl_service import HitlInvalidActionError
 from palatium_ai.application.services.intent_turn_helpers import (
-    PENDING_ATTACHMENT_IDS_KEY,
     argument_preview,
     assistant_turn_content,
     assistant_turn_payload,
     extract_interrupt,
-    parse_pending_attachment_ids,
     response_preview,
     snapshot_awaits_resume,
     tenant_budget_key,
@@ -45,6 +42,7 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
     from palatium_ai.application.services.session_service import SessionService
     from palatium_ai.domain.memory.ports import DialogTurnStore
+    from palatium_ai.domain.memory.turns import DialogTurnWindow
 
 logger = get_logger(__name__)
 
@@ -86,14 +84,6 @@ class IntentHitlFlow:
         self._consolidation = consolidation
         self._option_synthesizer = option_synthesizer
 
-    async def _pending_attachment_ids(self, *, thread_id: str) -> list[UUID] | None:
-        """Restore ready attachments from the prior upload turn (HITL resume)."""
-        session = await self._session_service.get_session(thread_id=thread_id)
-        if session is None or not isinstance(session.context, dict):
-            return None
-        pending = parse_pending_attachment_ids(session.context.get(PENDING_ATTACHMENT_IDS_KEY))
-        return pending or None
-
     async def process_hitl_choice(
         self,
         *,
@@ -115,7 +105,8 @@ class IntentHitlFlow:
         )
         selection = ChoiceResumePolicy.selection_from_card(card, action_id)
         safe_text = ChoiceResumePolicy.graph_user_text(selection)
-        pending_attachments = await self._pending_attachment_ids(thread_id=thread_id)
+        # Pending sticky stays in session for SB2 rehydrate only when Continuity
+        # trusts a file-bound format/answer — never treat as explicit upload (055).
         await self._session_service.touch_session(
             thread_id=thread_id,
             user_id=user_id,
@@ -132,7 +123,7 @@ class IntentHitlFlow:
             user_id=user_id,
             org_id=org_id,
             is_admin=is_admin,
-            attachment_ids=pending_attachments,
+            attachment_ids=None,
         )
 
     async def acknowledge_quality_approve(
@@ -478,11 +469,9 @@ class IntentHitlFlow:
         preview = argument_preview(arguments)
         irreversible = bool(interrupt_payload.get("irreversible"))
         ttl_seconds = clamp_ttl_seconds(5 * 60) if irreversible else None
-        tier_literal: Literal["low", "medium", "high"]
-        if risk_tier in {"low", "medium", "high"}:
-            tier_literal = cast("Literal['low', 'medium', 'high']", risk_tier)
-        else:
-            tier_literal = "medium"
+        tier_literal: Literal["low", "medium", "high"] = (
+            cast("Literal['low', 'medium', 'high']", risk_tier) if risk_tier in {"low", "medium", "high"} else "medium"
+        )
         try:
             card = await self._hitl_service.create_tool_approval_card(
                 thread_id=thread_id,
@@ -536,10 +525,7 @@ class IntentHitlFlow:
             blocks=(
                 HeadingBlock(level=2, text="Human approval required before tool call", icon="shield"),
                 ParagraphBlock(
-                    text=(
-                        f"Paused before MCP `{server_name}.{tool_name}` "
-                        f"(side_effect={side_effect}). Choose Allow or Deny."
-                    )
+                    text=(f"Paused before MCP `{server_name}.{tool_name}` (side_effect={side_effect}). Choose Allow or Deny.")
                 ),
             ),
             meta=DocumentMeta(confidence=0.0, requires_review=True, source_refs=()),
@@ -604,8 +590,13 @@ class IntentHitlFlow:
         user_id: str | None = None,
         org_id: str | None = None,
         has_turn_attachments: bool = False,
+        dialog: DialogTurnWindow | None = None,
     ) -> FormatterTaskResult:
-        """Сервер создаёт HITL-карточки; LLM actions не являются источником истины."""
+        """Сервер создаёт HITL-карточки; LLM actions не являются источником истины.
+
+        ``user_text`` must be the current turn's ask; ``prior_context`` reaches the
+        option synthesizer only when it comes from the latest exchange in ``dialog``.
+        """
         from palatium_ai.application.services.interaction_assembler import (
             InteractionAssembler,
             interaction_plan_log_fields,
@@ -650,9 +641,10 @@ class IntentHitlFlow:
             and self._option_synthesizer is not None
             and user_text
         ):
+            fresh_prior = DiscreteChoiceSynthesisPolicy.fresh_prior(prior_context, dialog)
             synthesis = await self._option_synthesizer.synthesize(
                 user_text=user_text,
-                prior_context=prior_context,
+                prior_context=fresh_prior,
                 response_locale=document.locale,
             )
             logger.info(
@@ -661,6 +653,7 @@ class IntentHitlFlow:
                 task_id=task_id,
                 options=len(synthesis.actions),
                 underspecification_kind=underspecification_kind,
+                stale_choices=bool((prior_context or "").strip()) and fresh_prior is None,
             )
             if synthesis.actions:
                 document = DiscreteChoiceSynthesisPolicy.merge_actions_into_document(

@@ -15,9 +15,7 @@ from palatium_ai.core.security.prompt_injection import (
 )
 
 _CLEAN_DOCUMENT = (
-    "Договор поставки №42.\n"
-    "Стороны согласовали сроки поставки и порядок оплаты.\n"
-    "Ответственный за приёмку — отдел закупок."
+    "Договор поставки №42.\nСтороны согласовали сроки поставки и порядок оплаты.\nОтветственный за приёмку — отдел закупок."
 )
 
 
@@ -134,8 +132,7 @@ def test_legal_appendix_trade_secret_and_amendment_are_allow() -> None:
 def test_credential_exfiltration_ru_ignores_dates_and_article_refs_after_secret() -> None:
     """Regression: ``на \\S+.\\S+`` must not match 01.01.2024 / ст.5 next to «секрет»."""
     benign = (
-        "Передача секрета на основании ст.5 договора от 01.01.2024 "
-        "допускается с согласия Сторон. Секрет на стр.12 приложения."
+        "Передача секрета на основании ст.5 договора от 01.01.2024 допускается с согласия Сторон. Секрет на стр.12 приложения."
     )
     report = scan_prompt_injection(benign)
     assert "credential_exfiltration_ru" not in {finding.rule for finding in report.findings}

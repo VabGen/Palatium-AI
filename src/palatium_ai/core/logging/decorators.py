@@ -57,9 +57,7 @@ def log_execution_time(
                 return result
             except Exception as e:
                 duration = time.perf_counter() - start
-                log.error(
-                    "Function failed", function=func.__name__, duration_ms=duration * 1000, error=str(e), exc_info=True
-                )
+                log.error("Function failed", function=func.__name__, duration_ms=duration * 1000, error=str(e), exc_info=True)
                 raise
 
         import inspect

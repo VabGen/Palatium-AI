@@ -16,9 +16,7 @@ _PLANS = {
 
 
 def test_multi_step_collapses_to_knowledge_without_mcp() -> None:
-    assert (
-        WorkflowExecutionPolicy.executable_task_kind("multi_step_workflow", requires_mcp=False) == "knowledge_request"
-    )
+    assert WorkflowExecutionPolicy.executable_task_kind("multi_step_workflow", requires_mcp=False) == "knowledge_request"
 
 
 def test_multi_step_collapses_to_tool_with_mcp() -> None:
@@ -26,9 +24,7 @@ def test_multi_step_collapses_to_tool_with_mcp() -> None:
 
 
 def test_other_kinds_unchanged() -> None:
-    assert (
-        WorkflowExecutionPolicy.executable_task_kind("social_conversation", requires_mcp=False) == "social_conversation"
-    )
+    assert WorkflowExecutionPolicy.executable_task_kind("social_conversation", requires_mcp=False) == "social_conversation"
 
 
 def test_plan_text_does_not_claim_multi_step_decomposition() -> None:

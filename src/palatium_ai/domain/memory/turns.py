@@ -12,6 +12,36 @@ from pydantic import BaseModel, Field
 
 DialogRole = Literal["user", "assistant", "system"]
 
+# L2 payload key: UUID refs only (no OCR dump — 065 budget). Super Brain SB1.
+ATTACHMENT_IDS_PAYLOAD_KEY = "attachment_ids"
+
+
+def parse_turn_attachment_ids(payload: dict[str, Any] | None) -> tuple[UUID, ...]:
+    """Extract attachment UUID refs from a dialog turn payload."""
+    if not isinstance(payload, dict):
+        return ()
+    raw = payload.get(ATTACHMENT_IDS_PAYLOAD_KEY)
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+    elif isinstance(raw, (list, tuple)):
+        parts = [str(p).strip() for p in raw if str(p).strip()]
+    else:
+        return ()
+    out: list[UUID] = []
+    for part in parts:
+        try:
+            out.append(UUID(part))
+        except ValueError:
+            continue
+    return tuple(out)
+
+
+def attachment_ids_payload(attachment_ids: list[UUID] | tuple[UUID, ...]) -> dict[str, object]:
+    """Build dialog turn payload fragment for attachment refs."""
+    return {ATTACHMENT_IDS_PAYLOAD_KEY: [str(aid) for aid in attachment_ids]}
+
 
 class DialogTurn(BaseModel):
     """Одна реплика в thread."""

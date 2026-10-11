@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from palatium_ai.application.orchestration.run_config import build_graph_run_config
@@ -18,9 +19,11 @@ from palatium_ai.application.services.intent_turn_helpers import (
     write_audit,
 )
 from palatium_ai.application.services.memory_recall import recall_for_thread
+from palatium_ai.application.services.turn_reasoning_audit import turn_reasoning_fields
 from palatium_ai.application.services.turn_recall_context import TurnRecallContext, turn_recall_context
+from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, get_turn_sse_bridge
 from palatium_ai.core.logging import get_logger
-from palatium_ai.core.logging.context import trace_id_var
+from palatium_ai.core.logging.context import bind_turn_log_context, trace_id_var
 from palatium_ai.core.observability.hop_timings import turn_hop_timings
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.turn_tokens import turn_token_usage
@@ -38,6 +41,7 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
     from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.domain.memory.scratchpad import SessionScratchpad
 
@@ -46,6 +50,31 @@ logger = get_logger(__name__)
 _DEFAULT_DIALOG_WINDOW = 12
 
 AttachHitlCards = Callable[..., Awaitable[FormatterTaskResult]]
+
+
+def _with_turn_ids(raw: dict[str, Any], *, task_id: str, thread_id: str) -> dict[str, Any]:
+    return {**raw, "task_id": task_id, "thread_id": thread_id}
+
+
+async def _drain_sse_bridge(
+    bridge: TurnSseBridge,
+    *,
+    task_id: str,
+    thread_id: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Flush any SSE events left in the bridge after the graph stream ends."""
+    while True:
+        try:
+            raw = bridge.queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+        yield _with_turn_ids(raw, task_id=task_id, thread_id=thread_id)
+
+
+def _cancel_pending_tasks(*tasks: asyncio.Task[Any] | None) -> None:
+    for task in tasks:
+        if task is not None and not task.done():
+            task.cancel()
 
 
 class IntentGraphRunner:
@@ -69,6 +98,7 @@ class IntentGraphRunner:
         worker_summary_max_chars: int = 4000,
         mcp_tool_output_max_chars: int = 3000,
         turn_hop_budget_ms: int = 15_000,
+        graph_write: GraphWritePort | None = None,
     ) -> None:
         self._graph = graph
         self._session_service = session_service
@@ -85,6 +115,7 @@ class IntentGraphRunner:
         self._worker_summary_max_chars = worker_summary_max_chars
         self._mcp_tool_output_max_chars = mcp_tool_output_max_chars
         self._turn_hop_budget_ms = turn_hop_budget_ms
+        self._graph_write = graph_write
         self._attach_hitl_cards: AttachHitlCards | None = None
 
     def bind_attach_hitl_cards(self, attach: AttachHitlCards) -> None:
@@ -133,6 +164,7 @@ class IntentGraphRunner:
         run_config = build_graph_run_config(thread_id=thread_id, task_id=task_id)
 
         with (
+            bind_turn_log_context(session_id=thread_id, turn_id=task_id),
             turn_recall_context(recall_ctx),
             turn_hop_timings(budget_ms=self._turn_hop_budget_ms) as hops,
             turn_token_usage() as tokens,
@@ -183,31 +215,26 @@ class IntentGraphRunner:
         run_config = build_graph_run_config(thread_id=thread_id, task_id=task_id)
 
         with (
+            bind_turn_log_context(session_id=thread_id, turn_id=task_id),
             turn_recall_context(recall_ctx),
             turn_hop_timings(budget_ms=self._turn_hop_budget_ms) as hops,
             turn_token_usage() as tokens,
         ):
             # Dual stream: hops for SSE progress; values for terminal state without a
             # second aget_state round-trip (checkpoint_ns-as-subgraph pitfall — run_config).
+            # When TurnSseBridge is bound (process_stream), multiplex answer_delta /
+            # formatter_delta events from mid-node emits.
             final_state: AgentGraphState | None = None
-            async for item in self._graph.astream(
-                graph_input,
-                config=run_config,
-                stream_mode=["updates", "values"],
+            async for event in self._iter_graph_stream_events(
+                graph_input=graph_input,
+                run_config=run_config,
+                task_id=task_id,
+                thread_id=thread_id,
             ):
-                if not isinstance(item, tuple) or len(item) != 2:
+                if event.get("event") == "_values":
+                    final_state = cast("AgentGraphState", event["state"])
                     continue
-                mode, chunk = item
-                if mode == "updates" and isinstance(chunk, dict):
-                    for node_name in chunk:
-                        yield {
-                            "event": "hop",
-                            "node": str(node_name),
-                            "task_id": task_id,
-                            "thread_id": thread_id,
-                        }
-                elif mode == "values" and isinstance(chunk, dict):
-                    final_state = cast("AgentGraphState", dict(chunk))
+                yield event
 
             if final_state is None:
                 snapshot = await self._graph.aget_state(run_config)
@@ -224,6 +251,116 @@ class IntentGraphRunner:
             yield {
                 "event": "final_state",
                 "state": final_state,
+                "task_id": task_id,
+                "thread_id": thread_id,
+            }
+
+    async def _iter_graph_stream_events(
+        self,
+        *,
+        graph_input: AgentGraphState,
+        run_config: Any,
+        task_id: str,
+        thread_id: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield hop / answer_delta / formatter_delta; ``_values`` carries rolling state."""
+        bridge = get_turn_sse_bridge()
+        if bridge is None:
+            async for item in self._graph.astream(
+                graph_input,
+                config=run_config,
+                stream_mode=["updates", "values"],
+            ):
+                async for event in self._events_from_astream_item(
+                    item,
+                    task_id=task_id,
+                    thread_id=thread_id,
+                ):
+                    yield event
+            return
+
+        async for event in self._multiplex_astream_with_sse(
+            bridge,
+            graph_input=graph_input,
+            run_config=run_config,
+            task_id=task_id,
+            thread_id=thread_id,
+        ):
+            yield event
+
+    async def _multiplex_astream_with_sse(
+        self,
+        bridge: TurnSseBridge,
+        *,
+        graph_input: AgentGraphState,
+        run_config: Any,
+        task_id: str,
+        thread_id: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Interleave LangGraph astream chunks with mid-node SSE deltas."""
+        aiter = self._graph.astream(
+            graph_input,
+            config=run_config,
+            stream_mode=["updates", "values"],
+        ).__aiter__()
+
+        # typeshed types ``__anext__`` / ``Queue.get`` as Awaitable, but create_task
+        # requires a Coroutine — wrap so the call site stays typed without cast.
+        async def _next_graph_item() -> object:
+            return await aiter.__anext__()
+
+        async def _next_sse_event() -> dict[str, Any]:
+            return await bridge.queue.get()
+
+        graph_task: asyncio.Task[object] | None = asyncio.create_task(_next_graph_item())
+        sse_task: asyncio.Task[dict[str, Any]] | None = asyncio.create_task(_next_sse_event())
+        try:
+            while graph_task is not None:
+                wait_set = {t for t in (graph_task, sse_task) if t is not None}
+                done, _pending = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
+                if sse_task is not None and sse_task in done:
+                    yield _with_turn_ids(sse_task.result(), task_id=task_id, thread_id=thread_id)
+                    sse_task = asyncio.create_task(_next_sse_event())
+                if graph_task is not None and graph_task in done:
+                    try:
+                        item = graph_task.result()
+                    except StopAsyncIteration:
+                        graph_task = None
+                        break
+                    async for event in self._events_from_astream_item(
+                        item,
+                        task_id=task_id,
+                        thread_id=thread_id,
+                    ):
+                        yield event
+                    graph_task = asyncio.create_task(_next_graph_item())
+            async for event in _drain_sse_bridge(bridge, task_id=task_id, thread_id=thread_id):
+                yield event
+        finally:
+            _cancel_pending_tasks(graph_task, sse_task)
+
+    @staticmethod
+    async def _events_from_astream_item(
+        item: object,
+        *,
+        task_id: str,
+        thread_id: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        if not isinstance(item, tuple) or len(item) != 2:
+            return
+        mode, chunk = item
+        if mode == "updates" and isinstance(chunk, dict):
+            for node_name in chunk:
+                yield {
+                    "event": "hop",
+                    "node": str(node_name),
+                    "task_id": task_id,
+                    "thread_id": thread_id,
+                }
+        elif mode == "values" and isinstance(chunk, dict):
+            yield {
+                "event": "_values",
+                "state": dict(chunk),
                 "task_id": task_id,
                 "thread_id": thread_id,
             }
@@ -301,6 +438,8 @@ class IntentGraphRunner:
             max_chars=self._recall_max_chars,
             min_confidence=self._recall_min_confidence,
             scratchpad=pad,
+            graph_write=self._graph_write,
+            as_of=datetime.now(UTC),
         )
         graph_input: AgentGraphState = {
             "task_id": task_id,
@@ -339,7 +478,9 @@ class IntentGraphRunner:
         trace_id: str,
         tenant_key: str | None,
     ) -> None:
-        hop_fields = hops.budget_status(self._turn_hop_budget_ms)  # type: ignore[attr-defined]
+        # Use collector.budget_ms (may be strategy-scaled after weaving), not the
+        # static wiring default — otherwise format_only soft-degrade never matches logs.
+        hop_fields = hops.budget_status()  # type: ignore[attr-defined]
         token_fields = tokens.as_log_fields()  # type: ignore[attr-defined]
         logger.info(
             "agent.turn.hops",
@@ -355,6 +496,7 @@ class IntentGraphRunner:
                 "agent.turn.slow",
                 thread_id=thread_id,
                 task_id=task_id,
+                trace_id=trace_id,
                 hop_slowest_node=hop_fields["hop_slowest_node"],
                 hop_slowest_ms=hop_fields["hop_slowest_ms"],
                 hop_total_ms=hop_fields["hop_total_ms"],
@@ -426,12 +568,9 @@ class IntentGraphRunner:
             bool(getattr(routing_intent, "requires_user_choice", False)) if routing_intent is not None else False
         )
         resolved_underspec = (
-            str(getattr(routing_intent, "underspecification_kind", "none") or "none")
-            if routing_intent is not None
-            else "none"
+            str(getattr(routing_intent, "underspecification_kind", "none") or "none") if routing_intent is not None else "none"
         )
         prior_context = getattr(routing_intent, "prior_context", None) if routing_intent is not None else None
-        effective_user_text = str(final_state.get("effective_user_text") or text)
         has_turn_attachments = bool((final_state.get("untrusted_context") or "").strip())
 
         if isinstance(formatted, FormatterTaskResult):
@@ -443,11 +582,18 @@ class IntentGraphRunner:
                 task_kind=resolved_task_kind,
                 requires_user_choice=resolved_requires_user_choice,
                 underspecification_kind=resolved_underspec,
-                user_text=effective_user_text,
+                user_text=text,
                 prior_context=prior_context if isinstance(prior_context, str) else None,
                 user_id=user_id,
                 org_id=org_id,
                 has_turn_attachments=has_turn_attachments,
+                dialog=final_state.get("dialog_window"),
+            )
+            logger.info(
+                "agent.turn.reasoning",
+                thread_id=thread_id,
+                turn_id=task_id,
+                **turn_reasoning_fields(final_state, formatted, selected_strategy=selected_strategy),
             )
             if self._dialog_turn_store is not None:
                 await self._dialog_turn_store.append_turn(
@@ -459,9 +605,7 @@ class IntentGraphRunner:
                 )
             await self.refresh_scratchpad(thread_id=thread_id)
             pinned_locale = (
-                formatted.output.locale
-                if formatted.output is not None
-                else str(final_state.get("response_locale") or "und")
+                formatted.output.locale if formatted.output is not None else str(final_state.get("response_locale") or "und")
             )
             await self._session_service.touch_session(
                 thread_id=thread_id,
@@ -474,9 +618,7 @@ class IntentGraphRunner:
                     "requires_review": formatted.requires_review,
                     "last_response_preview": response_preview(formatted),
                     "hitl_card_ids": ",".join(card.card_id for card in formatted.hitl_cards),
-                    "effective_user_text": session_user_text_preview(
-                        str(final_state.get("effective_user_text") or text)
-                    ),
+                    "effective_user_text": session_user_text_preview(str(final_state.get("effective_user_text") or text)),
                     "last_critic_summary": critic_summary,
                     "response_locale": pinned_locale,
                 },

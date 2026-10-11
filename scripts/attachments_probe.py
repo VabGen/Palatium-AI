@@ -116,8 +116,7 @@ class Report:
         return {
             "failed": len(self.failed),
             "probes": [
-                {"check": probe.name, "ok": probe.ok, "detail": probe.detail, "hint": probe.hint}
-                for probe in self.probes
+                {"check": probe.name, "ok": probe.ok, "detail": probe.detail, "hint": probe.hint} for probe in self.probes
             ],
         }
 

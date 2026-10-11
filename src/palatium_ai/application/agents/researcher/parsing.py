@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import json
+
 from typing import TYPE_CHECKING
 
 from palatium_ai.application.agents.researcher.config import SUMMARY_MAX_CHARS
@@ -22,17 +24,37 @@ FAILURE_PLACEHOLDER_SUMMARY = "(no output)"
 
 
 def decode_researcher_input(input_context: dict[str, str]) -> ResearcherInput:
+    import json
+
     from palatium_ai.domain.agents.context_packet import ContextPacket
+    from palatium_ai.domain.memory.turns import DialogTurnWindow
 
     packet = ContextPacket.model_validate_json(input_context["context_packet_json"])
     prior = input_context.get("prior_context", "").strip()
     revision = input_context.get("revision_feedback", "").strip()
+    dialog_window: DialogTurnWindow | None = None
+    raw_dialog = (input_context.get("dialog_window_json") or "").strip()
+    if raw_dialog:
+        try:
+            dialog_window = DialogTurnWindow.model_validate_json(raw_dialog)
+        except Exception:
+            dialog_window = None
+    memory_hints: tuple[str, ...] = ()
+    raw_mh = input_context.get("memory_hints_json") or "[]"
+    try:
+        parsed_mh = json.loads(raw_mh)
+        if isinstance(parsed_mh, list):
+            memory_hints = tuple(str(h) for h in parsed_mh if str(h).strip())
+    except Exception:
+        memory_hints = ()
     return ResearcherInput(
         task_id=input_context["_task_id"],
         context_packet=packet,
         prior_context=prior or None,
         mcp_tool_output_max_chars=int(input_context.get("mcp_tool_output_max_chars", "3000")),
         revision_feedback=revision or None,
+        dialog_window=dialog_window,
+        memory_hints=memory_hints,
     )
 
 
@@ -86,6 +108,32 @@ def redact_mcp_arguments(arguments: dict[str, object]) -> dict[str, object]:
     return redacted
 
 
+def mcp_joined_text(outcome: MCPToolCallOutcome) -> str:
+    """Join MCP text parts and redact secrets. Empty when the tool sent no text."""
+    parts: list[str] = []
+    for item in outcome.content:
+        text = item.get("text")
+        if isinstance(text, str) and text:
+            parts.append(text)
+    return redact_text("\n".join(parts))
+
+
+def mcp_payload_is_empty(raw: str) -> bool:
+    """True when the tool sent no text or a JSON object with hit_count 0."""
+    text = raw.strip()
+    if not text:
+        return True
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    hit_count = payload.get("hit_count")
+    # bool is an int subclass; True must not count as hit_count 0.
+    return type(hit_count) is int and hit_count == 0
+
+
 def summarize_mcp_content(
     outcome: MCPToolCallOutcome,
     *,
@@ -94,13 +142,7 @@ def summarize_mcp_content(
     tool_name: str,
 ) -> str:
     """Convert MCP tool content into budgeted untrusted text for downstream LLM."""
-    parts: list[str] = []
-    for item in outcome.content:
-        text = item.get("text")
-        if isinstance(text, str) and text:
-            parts.append(text)
-    raw = "\n".join(parts) if parts else "MCP tool returned no text content."
-    raw = redact_text(raw)
+    raw = mcp_joined_text(outcome) or "MCP tool returned no text content."
     fenced = wrap_untrusted_tool_output(raw, source=f"mcp:{server_name}.{tool_name}")
     return compress_worker_context(fenced, max_chars=max_chars, label="mcp")
 

@@ -225,9 +225,7 @@ def _build_memory_port(settings: Settings, session_factory: async_sessionmaker[A
     if settings.memory.binary_quantize_rerank:
         # Helpers live in domain.memory.binary_quantize; bit(4096) column + HNSW
         # is a separate migration (060). Flag is parsed so ops can flip without code churn.
-        logger.info(
-            "MEMORY_BINARY_QUANTIZE_RERANK set (Hamming helpers ready; ANN column not migrated)"
-        )
+        logger.info("MEMORY_BINARY_QUANTIZE_RERANK set (Hamming helpers ready; ANN column not migrated)")
     return port
 
 

@@ -22,8 +22,7 @@ APP_ROLE = "palatium_app"
 POLICY_NAME = "message_feedback_user_isolation"
 
 _POLICY_PREDICATE = (
-    "nullif(current_setting('palatium.user_id', true), '') IS NOT NULL "
-    "AND user_id = current_setting('palatium.user_id', true)"
+    "nullif(current_setting('palatium.user_id', true), '') IS NOT NULL AND user_id = current_setting('palatium.user_id', true)"
 )
 
 

@@ -27,9 +27,7 @@ class JwtTokenService:
     def __init__(self, security: SecurityConfig) -> None:
         self._security = security
         self._jwks_client: PyJWKClient | None = None
-        if security.jwks_url is not None and (
-            security.jwt_algorithm.startswith("RS") or security.jwt_algorithm.startswith("ES")
-        ):
+        if security.jwks_url is not None and (security.jwt_algorithm.startswith("RS") or security.jwt_algorithm.startswith("ES")):
             self._jwks_client = PyJWKClient(str(security.jwks_url), cache_keys=True)
 
     def issue_dev_token(

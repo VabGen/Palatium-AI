@@ -14,6 +14,5 @@ def build_context_summary(
 ) -> str:
     capabilities = ", ".join(task_input.candidate_capabilities) if task_input.candidate_capabilities else "none"
     return (
-        f"task_kind={task_input.task_kind}; route={task_input.route}; "
-        f"capabilities={capabilities}; strategy={selected_strategy}"
+        f"task_kind={task_input.task_kind}; route={task_input.route}; capabilities={capabilities}; strategy={selected_strategy}"
     )

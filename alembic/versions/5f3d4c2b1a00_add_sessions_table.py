@@ -29,9 +29,7 @@ def upgrade() -> None:
         sa.Column("thread_id", sa.String(length=128), nullable=False),
         sa.Column("status", sa.String(length=32), server_default=sa.text("'active'"), nullable=False),
         sa.Column("title", sa.String(length=255), nullable=True),
-        sa.Column(
-            "context", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False
-        ),
+        sa.Column("context", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column(
             "created_at",

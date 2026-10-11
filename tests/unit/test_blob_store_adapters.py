@@ -355,9 +355,7 @@ def _fake_minio_client_raising_on_make_bucket(monkeypatch: pytest.MonkeyPatch, e
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("code", ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"))
-async def test_minio_ensure_bucket_tolerates_the_startup_create_race(
-    monkeypatch: pytest.MonkeyPatch, code: str
-) -> None:
+async def test_minio_ensure_bucket_tolerates_the_startup_create_race(monkeypatch: pytest.MonkeyPatch, code: str) -> None:
     """Regression: concurrent API workers both create the bucket at startup.
 
     Observed against a live store: the loser received ``BucketAlreadyOwnedByYou``, the

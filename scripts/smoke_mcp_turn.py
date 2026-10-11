@@ -177,9 +177,7 @@ def main() -> int:
         hitl_cards = process_body.get("hitl_cards")
         mcp_cards: list[dict[str, object]] = []
         if isinstance(hitl_cards, list):
-            mcp_cards = [
-                card for card in hitl_cards if isinstance(card, dict) and card.get("purpose") == "mcp_tool_approval"
-            ]
+            mcp_cards = [card for card in hitl_cards if isinstance(card, dict) and card.get("purpose") == "mcp_tool_approval"]
         hitl_resume: dict[str, object] | None = None
         if mcp_cards:
             hitl_resume = _approve_mcp_hitl(base=base, token=token, card=mcp_cards[0])

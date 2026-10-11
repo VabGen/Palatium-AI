@@ -159,9 +159,7 @@ async def test_agent_provider_wins_over_tier_provider(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(factory, "get_client", _fake_get_client)
 
-    client = factory.get_client_for_agent(
-        _agent_config(llm_provider="openai", llm_model="agent-model", model_tier="small")
-    )
+    client = factory.get_client_for_agent(_agent_config(llm_provider="openai", llm_model="agent-model", model_tier="small"))
     result = await client.generate([ChatMessage(role="user", content="hi")])
     assert captured == ["openai"]
     assert result.model == "agent-model"

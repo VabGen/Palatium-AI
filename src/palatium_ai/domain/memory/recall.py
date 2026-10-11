@@ -16,6 +16,8 @@ class MemoryHit(BaseModel):
     kind: str = Field(default="fact", max_length=32)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     score: int = Field(default=0, ge=0)
+    # Select tier: scratchpad | medium | graph (Super Brain SB0/SB3).
+    source: str = Field(default="medium", max_length=32)
 
 
 class MemoryRecallBundle(BaseModel):

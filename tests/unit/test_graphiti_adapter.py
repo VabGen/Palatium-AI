@@ -52,8 +52,7 @@ class _FakeGraphitiTransport:
         matched = [
             fact
             for fact in self._facts
-            if fact.get("group_id") == group_id
-            and (any(token in str(fact["text"]).lower() for token in tokens) or not tokens)
+            if fact.get("group_id") == group_id and (any(token in str(fact["text"]).lower() for token in tokens) or not tokens)
         ]
         return matched[:limit]
 

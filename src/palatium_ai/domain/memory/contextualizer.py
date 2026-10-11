@@ -47,7 +47,8 @@ class ContextualizerOutput(BaseModel):
     # for checkpoint serde; semantics are dialog-salient, not assistant-only.
     prior_assistant_excerpt: str | None = Field(default=None, max_length=4000)
     reasoning: str = Field(min_length=1, max_length=2000)
-    # True when this turn is a completed HITL user_choice pick (deterministic resume).
+    # True when the slot Intent sees as missing is already filled: a completed HITL
+    # pick (deterministic resume) or a prior-bound anaphora resolved from history.
     choice_slot_filled: bool = False
 
 

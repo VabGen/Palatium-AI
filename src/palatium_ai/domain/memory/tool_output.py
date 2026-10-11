@@ -40,6 +40,39 @@ def contains_untrusted_tool_output(text: str | None) -> bool:
     return "<<<UNTRUSTED_TOOL_OUTPUT" in text and _UNTRUSTED_CLOSE in text
 
 
+_UNTRUSTED_OPEN_MARK = "<<<UNTRUSTED_TOOL_OUTPUT"
+
+
+def strip_untrusted_tool_output(text: str) -> str:
+    """Drop closed envelope markers and keep the inner body.
+
+    Unclosed markers stay: a user may quote the marker, and deleting that
+    tail would drop their text. Only the verbatim researcher path calls this.
+    """
+    if not text:
+        return text
+    pieces: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        start = text.find(_UNTRUSTED_OPEN_MARK, cursor)
+        if start < 0:
+            pieces.append(text[cursor:])
+            break
+        header_end = text.find(">>>", start + len(_UNTRUSTED_OPEN_MARK))
+        if header_end < 0:
+            pieces.append(text[cursor:])
+            break
+        body_start = header_end + 3
+        close_at = text.find(_UNTRUSTED_CLOSE, body_start)
+        if close_at < 0:
+            pieces.append(text[cursor:])
+            break
+        pieces.append(text[cursor:start])
+        pieces.append(text[body_start:close_at])
+        cursor = close_at + len(_UNTRUSTED_CLOSE)
+    return "".join(pieces)
+
+
 def compress_worker_context(
     text: str,
     *,

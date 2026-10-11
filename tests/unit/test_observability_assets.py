@@ -109,9 +109,7 @@ def test_every_promql_app_metric_exists_in_registry() -> None:
     missing: list[str] = []
     for source, rule in _iter_rules():
         missing.extend(
-            f"{source}: {name}"
-            for name in _app_metrics_in(str(rule.get("expr", "")))
-            if not _is_registered(name, registered)
+            f"{source}: {name}" for name in _app_metrics_in(str(rule.get("expr", ""))) if not _is_registered(name, registered)
         )
     assert not missing, "alert rules reference unknown app metrics:\n" + "\n".join(missing)
 

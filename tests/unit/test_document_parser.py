@@ -273,9 +273,7 @@ async def test_docx_parser_rejects_an_archive_that_inflates_past_the_ratio() -> 
     pytest.importorskip("docx")
     parser = DocxParser(max_chars=1_000_000)
     with pytest.raises(DocumentParseError, match="parse budget"):
-        await parser.parse(
-            _make_docx_bomb(part="word/styles.xml", size=20_000_000), mime_type=_DOCX_MIME, filename="b.docx"
-        )
+        await parser.parse(_make_docx_bomb(part="word/styles.xml", size=20_000_000), mime_type=_DOCX_MIME, filename="b.docx")
 
 
 async def test_composite_dispatches_by_media_type() -> None:

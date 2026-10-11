@@ -213,9 +213,7 @@ def _app(
     return TestClient(app)
 
 
-def _client(
-    monkeypatch: pytest.MonkeyPatch, *, error: Exception | None = None
-) -> tuple[TestClient, _FakeAttachmentService]:
+def _client(monkeypatch: pytest.MonkeyPatch, *, error: Exception | None = None) -> tuple[TestClient, _FakeAttachmentService]:
     service = _FakeAttachmentService(error=error)
     return _app(monkeypatch, service), service
 
@@ -503,10 +501,7 @@ def test_restore_request_touches_session_on_fresh_thread(monkeypatch: pytest.Mon
     session_service.touch_session.assert_awaited_once()
     assert session_service.touch_session.await_args.kwargs["thread_id"] == "thread-fresh-restore"
     assert session_service.touch_session.await_args.kwargs["user_id"] == "user-1"
-    assert (
-        session_service.touch_session.await_args.kwargs["context_patch"]["last_operation"]
-        == "attachment_restore_requested"
-    )
+    assert session_service.touch_session.await_args.kwargs["context_patch"]["last_operation"] == "attachment_restore_requested"
 
 
 def test_restore_request_rejects_malware_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:

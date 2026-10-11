@@ -215,7 +215,7 @@ poetry run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 
 | researcher / coder / analyst | да | route | config |
 | parallel_workers | 2× parallel | multi-cap plan | mid+ |
 | critic | иногда | CriticPolicy / HopBudgetPolicy | **mid** |
-| formatter | не всегда | `ack_fast_path`, clarify stub, hop soft-skip repairs | small |
+| formatter | не всегда | ready-source passthrough / hop soft-degrade / cache; LLM for HITL, review, `format_only` | small |
 
 ---
 
@@ -252,6 +252,8 @@ poetry run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 
 | 3 | L1 live hit | **не подтверждён**; `RESPONSE_CACHE_*` добавлен во все env examples; сверить Redis + image |
 | 4 | Attachment fence loop sequential | low priority OPEN |
 | 5 | Route-template HTTP histogram | OPEN (есть METHOD-only) |
+| 6 | Formatter LLM on ready source | **DONE 2026-10-07** — `FormatterFastPathPolicy` default skip (`ready_source_passthrough`); `prose_to_blocks` + `answer_delta` SSE; LLM only HITL/structure/`format_only`. Metrics: `fast_path:<reason>`, `emit:deterministic_blockify\|passthrough_paragraph\|llm`, log `formatter_mode`. |
+| 7 | Live verify SSE + answer_delta (2026-10-07) | **✅** API host-local :8000. Bench: simple stream TTFT **764 ms** / total 3312 ms; complex **8169 ms**. Probe knowledge stream: `answer_delta` present, **no** `formatter_delta` (deterministic path). `scripts/dev-up.ps1` parse-broken (encoding) — start API manually until fixed. |
 
 **Повторить замер:**
 

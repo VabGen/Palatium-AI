@@ -29,6 +29,14 @@ class HopTimingCollector:
 
     hops: list[HopTiming] = field(default_factory=list)
     budget_ms: int = 0
+    base_budget_ms: int = 0
+
+    def apply_strategy_budget(self, strategy: str | None) -> None:
+        """Recompute ``budget_ms`` from base × strategy scale (HopBudgetPolicy)."""
+        from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
+
+        base = self.base_budget_ms if self.base_budget_ms > 0 else self.budget_ms
+        self.budget_ms = HopBudgetPolicy.effective_budget_ms(base_ms=base, strategy=strategy)
 
     def record(
         self,
@@ -86,7 +94,7 @@ def get_hop_collector() -> HopTimingCollector | None:
 @contextmanager
 def turn_hop_timings(*, budget_ms: int = 0) -> Iterator[HopTimingCollector]:
     """Bind a fresh collector for one IntentService turn."""
-    collector = HopTimingCollector(budget_ms=budget_ms)
+    collector = HopTimingCollector(budget_ms=budget_ms, base_budget_ms=budget_ms)
     token: Token[HopTimingCollector | None] = _current.set(collector)
     try:
         yield collector

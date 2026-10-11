@@ -63,9 +63,7 @@ _DOCSTRING_TEMPLATE = (
 # Строки-выводы держим отдельно: в собранном виде одна из них длиннее 120 символов,
 # а резать её внутри f-строки — значит получить E501 в самом генераторе.
 # `map` вместо генератора — чтобы строка не упиралась в предел длины.
-_DERIVED_AUTHORITIES_LINE = (
-    "EDMS_AUTHORITIES: tuple[EdmsAuthority, ...] = tuple(map(classify_authority, _EDMS_AUTHORITY_TOKENS))"
-)
+_DERIVED_AUTHORITIES_LINE = "EDMS_AUTHORITIES: tuple[EdmsAuthority, ...] = tuple(map(classify_authority, _EDMS_AUTHORITY_TOKENS))"
 _DERIVED_NAMES_LINE = "EDMS_AUTHORITY_NAMES: frozenset[str] = frozenset(_EDMS_AUTHORITY_TOKENS)"
 
 

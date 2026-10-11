@@ -48,11 +48,17 @@ class MemoryKeeperAgent(BaseAgent):
     @traceable(name="memory_keeper.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")
+        # Sleep-time extract is the only production caller (060); tag for log triage.
+        path = "extract_job" if str(input.trace_id).startswith("extract-") else "other"
+        logger.info(
+            "memory_keeper.run",
+            path=path,
+            task_id=str(input.task_id),
+            trace_id=input.trace_id,
+        )
         task_input = decode_memory_keeper_input(input.context)
 
-        existing = (
-            "\n".join(f"- {text}" for text in task_input.existing_memory_texts[:MAX_EXISTING_MEMORIES]) or "(none)"
-        )
+        existing = "\n".join(f"- {text}" for text in task_input.existing_memory_texts[:MAX_EXISTING_MEMORIES]) or "(none)"
         user_prompt = (
             f"thread_id={task_input.thread_id}\n"
             f"existing_memories:\n{existing}\n\n"
@@ -90,9 +96,7 @@ class MemoryKeeperAgent(BaseAgent):
 
         if high:
             confidence = min(f.confidence for f in high)
-            status: Literal["success", "failure", "partial"] = (
-                "success" if len(high) == len(output.facts) else "partial"
-            )
+            status: Literal["success", "failure", "partial"] = "success" if len(high) == len(output.facts) else "partial"
         elif output.facts:
             confidence = max(f.confidence for f in output.facts)
             status = "partial"

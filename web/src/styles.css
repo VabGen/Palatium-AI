@@ -310,6 +310,14 @@ textarea {
   color: var(--text-muted);
 }
 
+.msg.pending .stream-preview {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--text);
+  line-height: 1.45;
+  max-width: 100%;
+}
+
 .typing-dots {
   display: inline-flex;
   gap: 2px;

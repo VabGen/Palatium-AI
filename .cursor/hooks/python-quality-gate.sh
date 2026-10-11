@@ -3,9 +3,11 @@
 # результат пишет в лог, который агент видит в Hooks output channel.
 
 set -euo pipefail
+
 INPUT="$(cat)"
+
 if command -v jq >/dev/null 2>&1; then
-  FILE_PATH="$(echo "$INPUT" | jq -r '.file_path // ""')"
+  FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.file_path // ""' 2>/dev/null || true)"
 else
   echo "⚠️  python-quality-gate: jq не найден — извлекаю file_path через python3." >&2
   FILE_PATH="$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('file_path') or '')" 2>/dev/null || true)"
@@ -15,8 +17,11 @@ if [[ "$FILE_PATH" != *.py ]]; then
   exit 0
 fi
 
+# Нормализуем разделители для Windows-путей.
+NORMALIZED_PATH="${FILE_PATH//\\//}"
+
 # Skip generated / cache paths.
-case "$FILE_PATH" in
+case "$NORMALIZED_PATH" in
   *"/__pycache__/"*|*".mypy_cache"*|*".ruff_cache"*|*"/migrations/"*)
     exit 0
     ;;
@@ -27,41 +32,29 @@ RAN_ANYTHING=0
 
 if command -v poetry >/dev/null 2>&1; then
   RAN_ANYTHING=1
+
   if ! poetry run ruff check --fix "$FILE_PATH"; then
     echo "❌ ruff failed for $FILE_PATH" >&2
     STATUS=1
   fi
+
   if ! poetry run mypy --strict "$FILE_PATH"; then
     echo "❌ mypy --strict failed for $FILE_PATH — см. 010-typing-strict.mdc" >&2
     STATUS=1
   fi
-elif command -v ruff >/dev/null 2>&1; then
-  RAN_ANYTHING=1
-  if ! ruff check --fix "$FILE_PATH"; then
-    echo "❌ ruff failed for $FILE_PATH" >&2
-    STATUS=1
+else
+  if command -v ruff >/dev/null 2>&1; then
+    RAN_ANYTHING=1
+    if ! ruff check --fix "$FILE_PATH"; then
+      echo "❌ ruff failed for $FILE_PATH" >&2
+      STATUS=1
+    fi
+  else
+    echo "⚠️  ruff не найден в PATH — ruff не запускался для $FILE_PATH." >&2
   fi
-  [{
-	"resource": "/d:/project/palatium-ai/src/palatium_ai/domain/attachments/citations.py",
-	"owner": "Ruff",
-	"code": {
-		"value": "I001",
-		"target": {
-			"$mid": 1,
-			"path": "/ruff/rules/unsorted-imports",
-			"scheme": "https",
-			"authority": "docs.astral.sh"
-		}
-	},
-	"severity": 4,
-	"message": "Import block is un-sorted or un-formatted\n\nhelp: Organize imports",
-	"source": "Ruff",
-	"startLineNumber": 11,
-	"startColumn": 1,
-	"endLineNumber": 15,
-	"endColumn": 21,
-	"modelVersionId": 1
-}]if command -v mypy >/dev/null 2>&1; then
+
+  if command -v mypy >/dev/null 2>&1; then
+    RAN_ANYTHING=1
     if ! mypy --strict "$FILE_PATH"; then
       echo "❌ mypy --strict failed for $FILE_PATH — см. 010-typing-strict.mdc" >&2
       STATUS=1
@@ -72,7 +65,7 @@ elif command -v ruff >/dev/null 2>&1; then
 fi
 
 if [[ "$RAN_ANYTHING" -eq 0 ]]; then
-  echo "⚠️  Ни poetry, ни ruff не найдены в PATH — quality-gate НЕ запускался для $FILE_PATH." >&2
+  echo "⚠️  Ни poetry, ни ruff, ни mypy не найдены в PATH — quality-gate НЕ запускался для $FILE_PATH." >&2
 fi
 
 exit "$STATUS"

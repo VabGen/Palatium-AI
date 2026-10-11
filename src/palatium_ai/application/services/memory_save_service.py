@@ -121,10 +121,7 @@ class MemorySaveService:
         )
         await self._store_pending(payload)
 
-        preview = (
-            f"ns={kind}/{scope}; key={key}; type={mem_type}; "
-            f"text={text_value[:120]}{'…' if len(text_value) > 120 else ''}"
-        )
+        preview = f"ns={kind}/{scope}; key={key}; type={mem_type}; text={text_value[:120]}{'…' if len(text_value) > 120 else ''}"
         card = await self._hitl.create_tool_approval_card(
             thread_id=thread_id.strip(),
             task_id=task_id,

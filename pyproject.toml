@@ -128,7 +128,7 @@ build-backend = "poetry.core.masonry.api"
 
 # ── Ruff ────────────────────────────────────────────────────────────────────────
 [tool.ruff]
-line-length = 120
+line-length = 130
 target-version = "py314"
 # `mcp_servers/edms/edms-ai-assistant/` — чужой legacy-код СЭД, который разбирается как
 # референс для адаптера (092), а не поддерживается нами. Находки в нём (56 на момент

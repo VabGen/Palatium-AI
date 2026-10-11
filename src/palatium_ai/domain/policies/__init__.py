@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from .types import (
     LOW_RISK_ROUTE_STRATEGIES,
+    SUBSTANTIVE_USER_PAYLOAD_CHARS,
     AgentRole,
     ContinuationKind,
     ExecutionStrategy,
@@ -24,10 +25,22 @@ from .types import (
 
 if TYPE_CHECKING:
     from .ack_reply import AckReplyPolicy
+    from .attachment_stickiness import (
+        AttachmentRehydrateDecision,
+        AttachmentStickinessDecision,
+        AttachmentStickinessPolicy,
+    )
+    from .clarification import CLARIFY_MIN_CONFIDENCE, ClarificationGatePolicy
     from .compact import CompactPolicy
     from .contextualizer import ContextualizerGateDecision, ContextualizerPolicy
     from .continuity import ContinuityPolicy, EffectiveRoutingIntent
     from .critic import CriticGateDecision, CriticPolicy
+    from .formatter_fast_path import (
+        FormatterFastPathDecision,
+        FormatterFastPathPolicy,
+        FormatterPassthroughSignals,
+    )
+    from .formatter_memory_merge import FormatterMemoryMergeDecision, FormatterMemoryMergePolicy
     from .hop_budget import HopBudgetDecision, HopBudgetPolicy
     from .locale import ReplyLocalePolicy
     from .memory_namespace import MemoryNamespaceBinding, MemoryNamespacePolicy
@@ -48,12 +61,18 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "CLARIFY_MIN_CONFIDENCE",
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
     "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS",
     "LAST_RESORT_PLATFORM_TOOLS",
     "LOW_RISK_ROUTE_STRATEGIES",
+    "SUBSTANTIVE_USER_PAYLOAD_CHARS",
     "AckReplyPolicy",
     "AgentRole",
+    "AttachmentRehydrateDecision",
+    "AttachmentStickinessDecision",
+    "AttachmentStickinessPolicy",
+    "ClarificationGatePolicy",
     "CompactPolicy",
     "ContextualizerGateDecision",
     "ContextualizerPolicy",
@@ -63,6 +82,11 @@ __all__ = [
     "CriticPolicy",
     "EffectiveRoutingIntent",
     "ExecutionStrategy",
+    "FormatterFastPathDecision",
+    "FormatterFastPathPolicy",
+    "FormatterMemoryMergeDecision",
+    "FormatterMemoryMergePolicy",
+    "FormatterPassthroughSignals",
     "HopBudgetDecision",
     "HopBudgetPolicy",
     "MemoryNamespaceBinding",
@@ -94,6 +118,11 @@ __all__ = [
 
 _LAZY: dict[str, tuple[str, str]] = {
     "AckReplyPolicy": (".ack_reply", "AckReplyPolicy"),
+    "AttachmentStickinessPolicy": (".attachment_stickiness", "AttachmentStickinessPolicy"),
+    "AttachmentStickinessDecision": (".attachment_stickiness", "AttachmentStickinessDecision"),
+    "AttachmentRehydrateDecision": (".attachment_stickiness", "AttachmentRehydrateDecision"),
+    "CLARIFY_MIN_CONFIDENCE": (".clarification", "CLARIFY_MIN_CONFIDENCE"),
+    "ClarificationGatePolicy": (".clarification", "ClarificationGatePolicy"),
     "CompactPolicy": (".compact", "CompactPolicy"),
     "ContinuityPolicy": (".continuity", "ContinuityPolicy"),
     "EffectiveRoutingIntent": (".continuity", "EffectiveRoutingIntent"),
@@ -101,6 +130,11 @@ _LAZY: dict[str, tuple[str, str]] = {
     "ContextualizerPolicy": (".contextualizer", "ContextualizerPolicy"),
     "CriticGateDecision": (".critic", "CriticGateDecision"),
     "CriticPolicy": (".critic", "CriticPolicy"),
+    "FormatterFastPathDecision": (".formatter_fast_path", "FormatterFastPathDecision"),
+    "FormatterFastPathPolicy": (".formatter_fast_path", "FormatterFastPathPolicy"),
+    "FormatterPassthroughSignals": (".formatter_fast_path", "FormatterPassthroughSignals"),
+    "FormatterMemoryMergeDecision": (".formatter_memory_merge", "FormatterMemoryMergeDecision"),
+    "FormatterMemoryMergePolicy": (".formatter_memory_merge", "FormatterMemoryMergePolicy"),
     "HopBudgetDecision": (".hop_budget", "HopBudgetDecision"),
     "HopBudgetPolicy": (".hop_budget", "HopBudgetPolicy"),
     "MemoryNamespaceBinding": (".memory_namespace", "MemoryNamespaceBinding"),

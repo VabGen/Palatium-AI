@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Stop palatium-ai app and all local MCP server stubs (Poetry host profile).

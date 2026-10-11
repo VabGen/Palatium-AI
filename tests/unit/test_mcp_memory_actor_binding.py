@@ -17,9 +17,7 @@ from tests.conftest import PlatformKnowledgeMcpRegistry
 @pytest.mark.asyncio()
 async def test_call_mcp_tool_rebinds_org_scope_to_actor() -> None:
     port = InMemoryMemoryPort()
-    registry = PlatformKnowledgeMcpRegistry(
-        PlatformToolHandler(knowledge_port=InMemoryKnowledgePort(), memory_port=port)
-    )
+    registry = PlatformKnowledgeMcpRegistry(PlatformToolHandler(knowledge_port=InMemoryKnowledgePort(), memory_port=port))
     outcome = await call_mcp_tool(
         MCPToolCallParams(
             server_name="platform",
@@ -48,9 +46,7 @@ async def test_call_mcp_tool_rebinds_org_scope_to_actor() -> None:
 @pytest.mark.asyncio()
 async def test_call_mcp_tool_rejects_org_write_without_actor() -> None:
     port = InMemoryMemoryPort()
-    registry = PlatformKnowledgeMcpRegistry(
-        PlatformToolHandler(knowledge_port=InMemoryKnowledgePort(), memory_port=port)
-    )
+    registry = PlatformKnowledgeMcpRegistry(PlatformToolHandler(knowledge_port=InMemoryKnowledgePort(), memory_port=port))
     outcome = await call_mcp_tool(
         MCPToolCallParams(
             server_name="platform",
@@ -85,9 +81,7 @@ async def test_call_mcp_tool_search_memory_rebinds_user() -> None:
         key="k1",
         value={"text": "secret victim fact", "confidence": 0.9},
     )
-    registry = PlatformKnowledgeMcpRegistry(
-        PlatformToolHandler(knowledge_port=InMemoryKnowledgePort(), memory_port=port)
-    )
+    registry = PlatformKnowledgeMcpRegistry(PlatformToolHandler(knowledge_port=InMemoryKnowledgePort(), memory_port=port))
     outcome = await call_mcp_tool(
         MCPToolCallParams(
             server_name="platform",

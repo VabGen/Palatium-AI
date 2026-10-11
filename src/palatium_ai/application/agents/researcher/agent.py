@@ -11,10 +11,13 @@ from uuid import UUID
 
 from langgraph.types import interrupt
 
+from palatium_ai.application.agents.researcher.config import SUMMARY_MAX_CHARS, researcher_completion_budget
 from palatium_ai.application.agents.researcher.parsing import (
     FAILURE_PLACEHOLDER_SUMMARY,
     approval_granted,
     decode_researcher_input,
+    mcp_joined_text,
+    mcp_payload_is_empty,
     parse_researcher_output,
     redact_mcp_arguments,
     score_mcp_tool_confidence,
@@ -39,7 +42,13 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.agents.researcher import RESEARCHER_TOOL_ARGS_INVALID, ResearcherInput, ResearcherOutput
+from palatium_ai.domain.agents.researcher import (
+    MCP_EMPTY_RESULT,
+    MCP_TOOL_ERROR,
+    RESEARCHER_TOOL_ARGS_INVALID,
+    ResearcherInput,
+    ResearcherOutput,
+)
 from palatium_ai.domain.llm.models import ChatMessage
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
@@ -49,7 +58,9 @@ from palatium_ai.domain.mcp.tool_policy import (
     requires_interrupt_before_call,
     resolve_platform_pin,
 )
+from palatium_ai.domain.memory.tool_output import strip_untrusted_tool_output
 from palatium_ai.domain.policies.retrieval import RetrievalPolicy
+from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -105,6 +116,8 @@ class ResearcherAgent(BaseAgent):
             "mcp_tool_output_max_chars",
             "revision_feedback",
             "skill_catalog",
+            "memory_hints_json",
+            "dialog_window_json",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -189,6 +202,7 @@ class ResearcherAgent(BaseAgent):
                         "attachment_context": task_input.context_packet.untrusted_context,
                         "prior_context": task_input.prior_context,
                         "revision_feedback": task_input.revision_feedback,
+                        "memory_hints": list(task_input.memory_hints[:4]),
                         "skill_catalog": skill_catalog,
                         "skill_references": skill_references,
                     },
@@ -202,6 +216,7 @@ class ResearcherAgent(BaseAgent):
                 self._config,
                 messages,
                 response_format="json_object",
+                max_tokens=researcher_completion_budget(task_input.context_packet.candidate_capabilities),
             )
             output = parse_researcher_output(completion.content)
         except Exception:
@@ -245,16 +260,12 @@ class ResearcherAgent(BaseAgent):
         if descriptor is None:
             return None
 
-        args_or_failure = await self._build_mcp_tool_arguments(
-            task_input, context, server_name, tool_name, descriptor, task_uuid
-        )
+        args_or_failure = await self._build_mcp_tool_arguments(task_input, context, server_name, tool_name, descriptor, task_uuid)
         if isinstance(args_or_failure, AgentOutput):
             return args_or_failure
         arguments = args_or_failure
 
-        approval_failure = self._ensure_mcp_hitl_approval(
-            task_input, server_name, tool_name, descriptor, arguments, task_uuid
-        )
+        approval_failure = self._ensure_mcp_hitl_approval(task_input, server_name, tool_name, descriptor, arguments, task_uuid)
         if approval_failure is not None:
             return approval_failure
 
@@ -271,7 +282,7 @@ class ResearcherAgent(BaseAgent):
         if isinstance(outcome_or_failure, AgentOutput):
             return outcome_or_failure
 
-        return self._mcp_outcome_to_output(task_input, outcome_or_failure, server_name, tool_name, task_uuid)
+        return await self._mcp_outcome_to_output(task_input, outcome_or_failure, server_name, tool_name, task_uuid)
 
     async def _resolve_mcp_tool_binding(
         self,
@@ -356,10 +367,7 @@ class ResearcherAgent(BaseAgent):
             agent_metrics.record_error(self._config.role, "ToolArgumentBuildError")
             return _failure_output(
                 task_uuid,
-                summary=(
-                    f"Could not build valid arguments for MCP tool "
-                    f"{server_name}.{tool_name}. No tool call was executed."
-                ),
+                summary=(f"Could not build valid arguments for MCP tool {server_name}.{tool_name}. No tool call was executed."),
                 error=RESEARCHER_TOOL_ARGS_INVALID,
             )
         except Exception:
@@ -372,10 +380,7 @@ class ResearcherAgent(BaseAgent):
             agent_metrics.record_error(self._config.role, "args_build_unexpected")
             return _failure_output(
                 task_uuid,
-                summary=(
-                    f"Could not build valid arguments for MCP tool "
-                    f"{server_name}.{tool_name}. No tool call was executed."
-                ),
+                summary=(f"Could not build valid arguments for MCP tool {server_name}.{tool_name}. No tool call was executed."),
                 error=RESEARCHER_TOOL_ARGS_INVALID,
             )
 
@@ -425,10 +430,7 @@ class ResearcherAgent(BaseAgent):
             agent_metrics.record_error(self._config.role, "risk_or_hitl_failure")
             return _failure_output(
                 task_uuid,
-                summary=(
-                    f"MCP tool {server_name}.{tool_name} could not be "
-                    "prepared for execution. No tool call was executed."
-                ),
+                summary=(f"MCP tool {server_name}.{tool_name} could not be prepared for execution. No tool call was executed."),
                 error="MCP tool risk/approval stage failed",
             )
 
@@ -494,7 +496,7 @@ class ResearcherAgent(BaseAgent):
 
         return outcome
 
-    def _mcp_outcome_to_output(
+    async def _mcp_outcome_to_output(
         self,
         task_input: object,
         outcome: MCPToolCallOutcome,
@@ -503,31 +505,117 @@ class ResearcherAgent(BaseAgent):
         task_uuid: UUID,
     ) -> AgentOutput:
         task_input = _require_researcher_input(task_input)
-        summary = summarize_mcp_content(
+        raw = mcp_joined_text(outcome)
+        if outcome.is_error:
+            return _failure_output(task_uuid, summary=None, error=MCP_TOOL_ERROR)
+        if mcp_payload_is_empty(raw):
+            return _failure_output(task_uuid, summary=None, error=MCP_EMPTY_RESULT)
+        source = f"mcp:{server_name}.{tool_name}"
+        if _verbatim_requested(task_input):
+            return _verbatim_mcp_output(
+                raw,
+                source=source,
+                task_uuid=task_uuid,
+                confidence_threshold=self._config.confidence_threshold,
+            )
+        return await self._synthesize_mcp_output(
+            task_input,
+            outcome,
+            server_name=server_name,
+            tool_name=tool_name,
+            source=source,
+            task_uuid=task_uuid,
+        )
+
+    async def _synthesize_mcp_output(
+        self,
+        task_input: ResearcherInput,
+        outcome: MCPToolCallOutcome,
+        *,
+        server_name: str,
+        tool_name: str,
+        source: str,
+        task_uuid: UUID,
+    ) -> AgentOutput:
+        """Second agent-loop step: the tool body stays in the prompt, the model writes summary."""
+        fenced = summarize_mcp_content(
             outcome,
             max_chars=task_input.mcp_tool_output_max_chars,
             server_name=server_name,
             tool_name=tool_name,
         )
-        confidence = score_mcp_tool_confidence(
-            is_error=outcome.is_error,
-            summary_chars=len(summary.strip()),
+        try:
+            completion = await self._harness.call_llm(
+                self._config,
+                _synthesis_messages(task_input, tool_result=fenced, source=source),
+                response_format="json_object",
+                max_tokens=researcher_completion_budget(task_input.context_packet.candidate_capabilities),
+            )
+            output = parse_researcher_output(completion.content)
+        except Exception:
+            logger.exception("researcher MCP synthesis failed", task_id=str(task_uuid))
+            agent_metrics.record_error(self._config.role, "llm_stage_failure")
+            return _failure_output(task_uuid, summary=None, error="LLM stage failed in researcher agent")
+        status: Literal["success", "failure", "partial"] = (
+            "partial" if output.confidence < self._config.confidence_threshold else "success"
         )
-        output = ResearcherOutput(
-            summary=summary,
-            confidence=confidence,
-            sources_used=(f"mcp:{server_name}.{tool_name}",),
-        )
-        requires_review = outcome.is_error or output.confidence < self._config.confidence_threshold
-        status: Literal["success", "failure", "partial"] = "partial" if requires_review else "success"
-
         return AgentOutput(
             task_id=task_uuid,
             status=status,
             confidence=output.confidence,
             output=output,
-            error_message="MCP tool returned error content" if outcome.is_error else None,
         )
+
+
+def _verbatim_requested(task_input: ResearcherInput) -> bool:
+    caps = {item.strip().lower() for item in task_input.context_packet.candidate_capabilities}
+    return VERBATIM_EXTRACTION_CAPABILITY in caps
+
+
+def _verbatim_mcp_output(
+    raw: str,
+    *,
+    source: str,
+    task_uuid: UUID,
+    confidence_threshold: float,
+) -> AgentOutput:
+    """Keep the tool body. The envelope stays out of the user-visible summary."""
+    body = strip_untrusted_tool_output(raw).strip()
+    if not body:
+        return _failure_output(task_uuid, summary=None, error=MCP_EMPTY_RESULT)
+    if len(body) > SUMMARY_MAX_CHARS:
+        body = body[:SUMMARY_MAX_CHARS].rstrip() + "…"
+    confidence = score_mcp_tool_confidence(is_error=False, summary_chars=len(body))
+    output = ResearcherOutput(summary=body, confidence=confidence, sources_used=(source,))
+    status: Literal["success", "failure", "partial"] = "partial" if confidence < confidence_threshold else "success"
+    return AgentOutput(
+        task_id=task_uuid,
+        status=status,
+        confidence=confidence,
+        output=output,
+    )
+
+
+def _synthesis_messages(task_input: ResearcherInput, *, tool_result: str, source: str) -> list[ChatMessage]:
+    """Same researcher JSON contract as the dialog path; evidence is the MCP payload."""
+    payload = {
+        "user_text": task_input.context_packet.user_text,
+        "task_kind": task_input.context_packet.task_kind,
+        "requires_mcp": task_input.context_packet.requires_mcp,
+        "candidate_capabilities": list(task_input.context_packet.candidate_capabilities),
+        "route_plan": task_input.context_packet.route_plan,
+        "context_summary": task_input.context_packet.context_summary,
+        "attachment_context": task_input.context_packet.untrusted_context,
+        "prior_context": task_input.prior_context,
+        "revision_feedback": task_input.revision_feedback,
+        "memory_hints": list(task_input.memory_hints[:4]),
+        "mcp_tool_result": tool_result,
+        "mcp_source": source,
+    }
+    return [
+        ChatMessage(role="system", content=RESEARCHER_SYSTEM_PROMPT),
+        ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+    ]
 
 
 def _failure_output(

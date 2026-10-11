@@ -66,9 +66,7 @@ def test_rejected_status_requires_a_typed_reason() -> None:
 def test_quarantined_status_requires_a_typed_reason() -> None:
     with pytest.raises(ValidationError):
         _attachment(status="quarantined")
-    assert _attachment(status="quarantined", rejection_reason="malware_detected").rejection_reason == (
-        "malware_detected"
-    )
+    assert _attachment(status="quarantined", rejection_reason="malware_detected").rejection_reason == ("malware_detected")
 
 
 def test_unknown_status_is_rejected() -> None:

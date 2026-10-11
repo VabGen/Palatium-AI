@@ -39,7 +39,7 @@ export const ru = {
   'msg.agentsWorking': 'Агенты работают',
   'msg.emptyResponse': 'Пустой ответ',
   'msg.formatterOutputInvalid':
-    'Не удалось оформить ответ как выбор. Попробуйте переформулировать запрос или уточнить варианты.',
+    'Не удалось оформить ответ. Попробуйте переформулировать запрос или повторить.',
   'msg.devGap': 'DEV: документ похож на эксклюзивное меню, но HITL-карточки не созданы.',
 
   // --- Действия над ответом ---
@@ -210,7 +210,7 @@ export const en: Record<MessageKey, string> = {
   'msg.agentsWorking': 'Agents working',
   'msg.emptyResponse': 'Empty response',
   'msg.formatterOutputInvalid':
-    'Could not present this answer as a choice. Try rephrasing or listing the options you need.',
+    'Could not format the answer. Try rephrasing the request or try again.',
   'msg.devGap': 'DEV: document looks like an exclusive menu but no HITL cards were minted.',
 
   'action.like': 'Like this response',

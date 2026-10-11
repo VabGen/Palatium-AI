@@ -71,9 +71,7 @@ def _pptx_bytes() -> bytes:
 
 
 def test_sniff_pptx_ooxml() -> None:
-    assert (
-        sniff_media_type(_pptx_bytes()) == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    )
+    assert sniff_media_type(_pptx_bytes()) == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
 def test_sniff_utf8_text_sentinel() -> None:

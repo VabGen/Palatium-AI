@@ -23,9 +23,7 @@ judge = LlmJudgeGrader(llm_factory=_judge_llm_factory)
 
 
 def _live_judge_env_ok() -> bool:
-    return os.environ.get("PALATIUM_EVAL_LIVE_JUDGE") == "1" and bool(
-        os.environ.get("PALATIUM_EVAL_JUDGE_PROVIDER", "").strip()
-    )
+    return os.environ.get("PALATIUM_EVAL_LIVE_JUDGE") == "1" and bool(os.environ.get("PALATIUM_EVAL_JUDGE_PROVIDER", "").strip())
 
 
 @pytest.mark.llm_live()
@@ -36,16 +34,12 @@ async def test_live_judge_smoke_grade() -> None:
 
     result = await judge.grade(
         {
-            "rubric": (
-                "Output mentions a layered platform with orchestration or guardrails (Harness / LangGraph / MCP)."
-            ),
+            "rubric": ("Output mentions a layered platform with orchestration or guardrails (Harness / LangGraph / MCP)."),
             "generator_provider": os.environ.get("PALATIUM_EVAL_AGENT_PROVIDER", "openai"),
             "pass_threshold": 0.5,
         },
         {
-            "summary": (
-                "Palatium is a layered agent platform with Harness guardrails, LangGraph orchestration, and MCP tools."
-            ),
+            "summary": ("Palatium is a layered agent platform with Harness guardrails, LangGraph orchestration, and MCP tools."),
             "status": "success",
         },
     )

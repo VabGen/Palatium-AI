@@ -55,9 +55,11 @@ class MemoryPromotionService:
         uid = user_id.strip()
         if not uid:
             return 0
+        # Floor access=0 so preferences (promote-on-write) appear; Policy applies
+        # kind-specific bars for episodic facts (060 / SB4).
         candidates = await self._memory.list_promotion_candidates(
             user_id=uid,
-            min_access_frequency=self._thresholds.min_access_frequency,
+            min_access_frequency=0,
             min_importance=self._thresholds.min_importance,
             limit=max(1, min(limit, 128)),
         )

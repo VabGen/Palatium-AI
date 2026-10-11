@@ -22,24 +22,44 @@ def test_format_key_stable() -> None:
         ResponseCacheKeyParts(
             tenant_key="t1",
             model="strategy:format_only",
-            system_fingerprint="format_only_v1",
+            system_fingerprint=ResponseCacheKeyPolicy.system_fingerprint_for("format_only"),
             user_norm=ResponseCacheKeyPolicy.normalize_user_text("Hi!"),
             strategy="format_only",
             locale="en",
+            source_fingerprint="none",
         )
     )
     b = ResponseCacheKeyPolicy.build_key(
         ResponseCacheKeyParts(
             tenant_key="t1",
             model="strategy:format_only",
-            system_fingerprint="format_only_v1",
+            system_fingerprint=ResponseCacheKeyPolicy.system_fingerprint_for("format_only"),
             user_norm=ResponseCacheKeyPolicy.normalize_user_text("  hi!  "),
             strategy="format_only",
             locale="en",
+            source_fingerprint="none",
         )
     )
     assert a == b
     assert a.startswith("palatium:l1:")
+
+
+def test_source_fingerprint_isolates_keys() -> None:
+    base = dict(
+        tenant_key="t1",
+        model="strategy:format_only",
+        system_fingerprint=ResponseCacheKeyPolicy.system_fingerprint_for("format_only"),
+        user_norm="reformat",
+        strategy="format_only",
+        locale="en",
+    )
+    a = ResponseCacheKeyPolicy.build_key(
+        ResponseCacheKeyParts(**base, source_fingerprint=ResponseCacheKeyPolicy.fingerprint_source("A"))
+    )
+    b = ResponseCacheKeyPolicy.build_key(
+        ResponseCacheKeyParts(**base, source_fingerprint=ResponseCacheKeyPolicy.fingerprint_source("B"))
+    )
+    assert a != b
 
 
 def test_tenant_isolates_keys() -> None:
@@ -47,7 +67,7 @@ def test_tenant_isolates_keys() -> None:
         ResponseCacheKeyParts(
             tenant_key="a",
             model="strategy:format_only",
-            system_fingerprint="format_only_v1",
+            system_fingerprint=ResponseCacheKeyPolicy.system_fingerprint_for("format_only"),
             user_norm="hi",
             strategy="format_only",
             locale="en",
@@ -57,7 +77,7 @@ def test_tenant_isolates_keys() -> None:
         ResponseCacheKeyParts(
             tenant_key="b",
             model="strategy:format_only",
-            system_fingerprint="format_only_v1",
+            system_fingerprint=ResponseCacheKeyPolicy.system_fingerprint_for("format_only"),
             user_norm="hi",
             strategy="format_only",
             locale="en",
@@ -101,16 +121,26 @@ async def test_response_cache_roundtrip() -> None:
         locale="ru",
         strategy="format_only",
         result=result,
+        source_content="prior answer body",
     )
     hit = await svc.get(
         tenant_key="tenant-1",
         user_text="Привет",
         locale="ru",
         strategy="format_only",
+        source_content="prior answer body",
     )
     assert hit is not None
     assert hit.output is not None
     assert hit.output.title == "Hello!"
+    miss = await svc.get(
+        tenant_key="tenant-1",
+        user_text="Привет",
+        locale="ru",
+        strategy="format_only",
+        source_content="different prior",
+    )
+    assert miss is None
 
 
 @pytest.mark.asyncio()

@@ -34,9 +34,7 @@ def upgrade() -> None:
         sa.Column("namespace", sa.String(length=512), nullable=False),
         sa.Column("entry_key", sa.String(length=256), nullable=False),
         sa.Column("memory_type", sa.String(length=32), nullable=False, server_default="fact"),
-        sa.Column(
-            "value", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")
-        ),
+        sa.Column("value", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("search_text", sa.Text(), nullable=False, server_default=""),
         sa.Column("importance", sa.Float(), nullable=False, server_default="0"),
         sa.Column("contains_pii", sa.Boolean(), nullable=False, server_default=sa.text("false")),

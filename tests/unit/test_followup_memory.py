@@ -143,9 +143,7 @@ async def test_followup_answer_overrides_false_clarification() -> None:
     await dialog.append_turn(
         thread_id="follow-answer",
         role="assistant",
-        content=(
-            "План встречи\n• Утреннее собрание (9:00–9:30)\n• Завершение встречи (15:00–15:15) — подведение итогов"
-        ),
+        content=("План встречи\n• Утреннее собрание (9:00–9:30)\n• Завершение встречи (15:00–15:15) — подведение итогов"),
     )
 
     harness, contextualizer, intent_agent, _pipeline_llm = make_dual_agent_stack(
@@ -168,8 +166,7 @@ async def test_followup_answer_overrides_false_clarification() -> None:
             weaving_agent=make_weaving_agent(harness=harness),
             researcher_agent=make_researcher_agent(
                 FakeLLMPort(
-                    '{"summary": "Встреча завершается в 15:00–15:15", '
-                    '"confidence": 0.95, "sources_used": ["prior_context"]}'
+                    '{"summary": "Встреча завершается в 15:00–15:15", "confidence": 0.95, "sources_used": ["prior_context"]}'
                 ),
                 harness=harness,
             ),

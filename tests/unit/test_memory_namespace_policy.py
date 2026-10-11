@@ -77,9 +77,7 @@ def test_mcp_user_scope_consistency() -> None:
 
 def test_mcp_org_scope_consistency() -> None:
     assert MemoryNamespacePolicy.mcp_org_scope_consistent(namespace_kind="org", scope_id="org-1", org_id="org-1")
-    assert not MemoryNamespacePolicy.mcp_org_scope_consistent(
-        namespace_kind="org", scope_id="org-1", org_id="org-other"
-    )
+    assert not MemoryNamespacePolicy.mcp_org_scope_consistent(namespace_kind="org", scope_id="org-1", org_id="org-other")
     assert not MemoryNamespacePolicy.mcp_org_scope_consistent(namespace_kind="org", scope_id="org-1", org_id=None)
     assert MemoryNamespacePolicy.mcp_org_scope_consistent(namespace_kind="user", scope_id="u1", org_id=None)
 

@@ -1,0 +1,40 @@
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - generic [ref=e10]:
+      - heading "Palatium" [level=1] [ref=e11]
+      - paragraph [ref=e12]: Structured agent replies
+      - text: WS
+    - generic [ref=e13]:
+      - button "New chat" [ref=e14] [cursor=pointer]
+      - generic [ref=e15]: thread-b3adcedf-c8…
+      - button "Collapse assistant" [ref=e16] [cursor=pointer]
+  - main [ref=e19]:
+    - generic [ref=e58]:
+      - generic [ref=e59]: U
+      - paragraph [ref=e61]: привет
+    - generic [ref=e62]:
+      - generic [ref=e63]: P
+      - generic [ref=e64]:
+        - article [ref=e65]:
+          - paragraph [ref=e67]: Привет! Чем могу помочь?
+        - generic [ref=e68]:
+          - button "Like this response" [ref=e69] [cursor=pointer]
+          - button "Dislike this response" [ref=e72] [cursor=pointer]
+          - button "Copy response text" [ref=e75] [cursor=pointer]
+          - button "Export as PDF" [ref=e79] [cursor=pointer]
+          - button "Regenerate response" [ref=e83] [cursor=pointer]
+  - generic [ref=e20]:
+    - button "Memory" [ref=e22] [cursor=pointer]
+    - generic [ref=e34]:
+      - generic [ref=e35]: Project (knowledge base)
+      - textbox "Project (knowledge base)" [ref=e36]:
+        - /placeholder: When set, the file is indexed into that project KB
+    - generic "External sources" [ref=e52]:
+      - list [ref=e54]:
+        - listitem "capability=unavailable; EDMS MCP import not wired yet (092); Drive/SharePoint deferred after EDMS." [ref=e55]:
+          - generic [ref=e56]: EDMS (Канцлер NEXT)
+          - generic [ref=e57]: unavailable
+    - generic [ref=e37]:
+      - button "Attach a file" [ref=e38] [cursor=pointer]
+      - textbox "Message Palatium…" [active] [ref=e41]
+      - button "Send message" [disabled] [ref=e42]

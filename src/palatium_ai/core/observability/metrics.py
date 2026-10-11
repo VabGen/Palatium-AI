@@ -70,6 +70,16 @@ try:  # pragma: no cover - optional dependency
         "Estimated LLM cost in USD.",
         ["model", "direction"],
     )
+    _palatium_llm_cost_missing_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_llm_cost_missing_total",
+        "LLM completions with tokens but no resolvable USD cost (gateway absent).",
+        ["reason"],
+    )
+    _palatium_llm_fallback_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_llm_fallback_total",
+        "LLM calls that failed over from primary to another provider in the chain.",
+        ["to_provider"],
+    )
     _palatium_rbac_denied_total: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_rbac_denied_total",
         "RBAC tool denials total.",
@@ -111,6 +121,16 @@ try:  # pragma: no cover - optional dependency
         "Medium→graph promote batch failures.",
         ["error_type"],
     )
+    _palatium_memory_recall_source_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_memory_recall_source_total",
+        "Hot-path memory Select outcomes by source (Super Brain SB0).",
+        ["source"],
+    )
+    _palatium_attachment_sticky_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_attachment_sticky_total",
+        "Sticky attachment resolve actions (explicit/skip/rehydrate/clear).",
+        ["action"],
+    )
     _palatium_context_tokens_used: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_context_tokens_used",
         "Context tokens delivered to agents.",
@@ -139,6 +159,10 @@ try:  # pragma: no cover - optional dependency
         "palatium_llm_ttft_seconds",
         "Time to first LLM stream token (seconds).",
     )
+    _palatium_sse_ttft_seconds: _PromHistogram | _NoopMetric = _PromHistogram(
+        "palatium_sse_ttft_seconds",
+        "Time to first user-visible answer_delta on the SSE turn (seconds).",
+    )
     _palatium_cache_hit_total: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_cache_hit_total",
         "Application cache hits by layer.",
@@ -158,6 +182,8 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_turn_hop_budget_exceeded_total = _NoopMetric()
     _palatium_agent_token_usage_total = _NoopMetric()
     _palatium_agent_cost_usd_total = _NoopMetric()
+    _palatium_llm_cost_missing_total = _NoopMetric()
+    _palatium_llm_fallback_total = _NoopMetric()
     _palatium_rbac_denied_total = _NoopMetric()
     _palatium_circuit_breaker_state = _NoopMetric()
     _palatium_memory_query_duration_seconds = _NoopMetric()
@@ -167,12 +193,15 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_memory_extract_dead_letter_total = _NoopMetric()
     _palatium_memory_recall_at_k = _NoopMetric()
     _palatium_memory_promote_errors_total = _NoopMetric()
+    _palatium_memory_recall_source_total = _NoopMetric()
+    _palatium_attachment_sticky_total = _NoopMetric()
     _palatium_context_tokens_used = _NoopMetric()
     _palatium_audit_write_failures_total = _NoopMetric()
     _palatium_secret_redactions_total = _NoopMetric()
     _palatium_attachment_parse_total = _NoopMetric()
     _palatium_turn_duration_seconds = _NoopMetric()
     _palatium_llm_ttft_seconds = _NoopMetric()
+    _palatium_sse_ttft_seconds = _NoopMetric()
     _palatium_cache_hit_total = _NoopMetric()
     _palatium_cache_miss_total = _NoopMetric()
 
@@ -201,9 +230,7 @@ class AgentMetrics:
         with self._lock:
             self._node_executions[(agent_type, node_name)] += 1
         safe_duration = max(0.0, float(duration_seconds))
-        _palatium_agent_request_duration_seconds.labels(agent_type=agent_type, node_name=node_name).observe(
-            safe_duration
-        )
+        _palatium_agent_request_duration_seconds.labels(agent_type=agent_type, node_name=node_name).observe(safe_duration)
 
     def record_error(self, agent_type: str, error_type: str) -> None:
         with self._lock:
@@ -265,6 +292,16 @@ class AgentMetrics:
             ).inc(completion_tokens)
         if cost_usd > 0.0:
             _palatium_agent_cost_usd_total.labels(model=model, direction="llm").inc(cost_usd)
+
+    def record_llm_cost_missing(self, *, reason: str) -> None:
+        """Count completions where tokens > 0 but USD could not be resolved (040)."""
+        safe = (reason or "unknown").strip()[:64] or "unknown"
+        _palatium_llm_cost_missing_total.labels(reason=safe).inc()
+
+    def record_llm_fallback(self, *, to_provider: str) -> None:
+        """Count successful failovers onto a secondary LLM provider (020)."""
+        safe = (to_provider or "unknown").strip()[:64] or "unknown"
+        _palatium_llm_fallback_total.labels(to_provider=safe).inc()
 
     def record_context_tokens(self, agent_type: str, tokens: int) -> None:
         safe = (agent_type or "unknown").strip()[:64] or "unknown"
@@ -330,6 +367,16 @@ class AgentMetrics:
         safe = (error_type or "runtime").strip()[:64] or "runtime"
         _palatium_memory_promote_errors_total.labels(error_type=safe).inc()
 
+    def record_memory_recall_source(self, *, source: str) -> None:
+        """Count hot-path Select by source (scratchpad/medium/graph/skipped_*)."""
+        safe = (source or "unknown").strip()[:64] or "unknown"
+        _palatium_memory_recall_source_total.labels(source=safe).inc()
+
+    def record_attachment_sticky(self, *, action: str) -> None:
+        """Count sticky attachment policy actions (SB0/SB1)."""
+        safe = (action or "unknown").strip()[:64] or "unknown"
+        _palatium_attachment_sticky_total.labels(action=safe).inc()
+
     def record_turn_duration(
         self,
         *,
@@ -339,12 +386,14 @@ class AgentMetrics:
     ) -> None:
         kind = (task_kind or "unknown").strip()[:64] or "unknown"
         strat = (strategy or "unknown").strip()[:64] or "unknown"
-        _palatium_turn_duration_seconds.labels(task_kind=kind, strategy=strat).observe(
-            max(0.0, float(duration_seconds))
-        )
+        _palatium_turn_duration_seconds.labels(task_kind=kind, strategy=strat).observe(max(0.0, float(duration_seconds)))
 
     def record_llm_ttft(self, duration_seconds: float) -> None:
         _palatium_llm_ttft_seconds.observe(max(0.0, float(duration_seconds)))
+
+    def record_sse_ttft(self, duration_seconds: float) -> None:
+        """First answer_delta after process_stream bind (user-visible TTFT)."""
+        _palatium_sse_ttft_seconds.observe(max(0.0, float(duration_seconds)))
 
     def record_cache_hit(self, *, cache_layer: str) -> None:
         layer = (cache_layer or "unknown").strip()[:32] or "unknown"

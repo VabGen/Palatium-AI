@@ -50,9 +50,7 @@ class IntentClassifierAgent(BaseAgent):
                 underspecification_kind="none",
                 candidate_capabilities=(),
                 confidence=1.0,
-                reasoning=(
-                    f"deterministic HITL choice resume kind={hitl_resume.resume_kind} action_id={hitl_resume.action_id}"
-                ),
+                reasoning=(f"deterministic HITL choice resume kind={hitl_resume.resume_kind} action_id={hitl_resume.action_id}"),
             )
             return AgentOutput(
                 task_id=input.task_id,

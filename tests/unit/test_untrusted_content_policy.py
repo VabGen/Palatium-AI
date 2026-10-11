@@ -215,14 +215,10 @@ def test_budget_helper_keeps_both_fences_when_names_match() -> None:
     id_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     name = "Kodex_V2.docx"
     fence_a = (
-        f"<<<UNTRUSTED_TOOL_OUTPUT source=attachment:{id_a}:{name}>>>\n"
-        + ("AAA-" * 2000)
-        + "\n<<<END_UNTRUSTED_TOOL_OUTPUT>>>"
+        f"<<<UNTRUSTED_TOOL_OUTPUT source=attachment:{id_a}:{name}>>>\n" + ("AAA-" * 2000) + "\n<<<END_UNTRUSTED_TOOL_OUTPUT>>>"
     )
     fence_b = (
-        f"<<<UNTRUSTED_TOOL_OUTPUT source=attachment:{id_b}:{name}>>>\n"
-        + ("BBB-" * 2000)
-        + "\n<<<END_UNTRUSTED_TOOL_OUTPUT>>>"
+        f"<<<UNTRUSTED_TOOL_OUTPUT source=attachment:{id_b}:{name}>>>\n" + ("BBB-" * 2000) + "\n<<<END_UNTRUSTED_TOOL_OUTPUT>>>"
     )
     joined = f"{fence_a}\n\n{fence_b}"
     budgeted = budget_untrusted_text(joined, max_chars=2500)

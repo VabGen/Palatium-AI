@@ -13,6 +13,9 @@ from .contracts import TaskResult
 
 # Stable failure when planned MCP args cannot be built/validated.
 RESEARCHER_TOOL_ARGS_INVALID = "researcher_tool_args_invalid"
+# Machine codes. Formatter maps them; they are not user-facing prose.
+MCP_EMPTY_RESULT = "mcp_empty_result"
+MCP_TOOL_ERROR = "mcp_tool_error"
 
 
 class ResearcherInput(BaseModel):

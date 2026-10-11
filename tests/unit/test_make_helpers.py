@@ -281,9 +281,7 @@ _API_RECREATING = ("up", "up-full", "rebuild-app")
 def test_recipes_do_not_shell_out_to_posix_builtins() -> None:
     """`make init` used to run `[ -f … ]` and `cp`, which cannot work on a stock Windows."""
     offenders = [
-        line
-        for line in _recipe_lines()
-        if line.startswith("\t") and _POSIX_BUILTINS.search(line) and "python" not in line
+        line for line in _recipe_lines() if line.startswith("\t") and _POSIX_BUILTINS.search(line) and "python" not in line
     ]
     assert not offenders, "recipe still depends on a POSIX builtin:\n" + "\n".join(offenders)
 
@@ -329,9 +327,7 @@ def test_launch_targets_wait_for_real_health() -> None:
         assert any("--wait" in line and "--env-file" in line for line in probe_lines), (
             f"{target!r} must wait for readiness through the probe (`--wait SECONDS`)"
         )
-        assert "--wait-timeout" not in recipe, (
-            f"{target!r} went back to `docker compose up --wait`, which fails on silo-init"
-        )
+        assert "--wait-timeout" not in recipe, f"{target!r} went back to `docker compose up --wait`, which fails on silo-init"
 
 
 def test_rebuild_app_verifies_only_after_the_waiting_probe() -> None:

@@ -22,16 +22,13 @@ judge = LlmJudgeGrader(llm_factory=_judge_llm_factory)
 
 _SMOKE_TASK: dict[str, object] = {
     "rubric": (
-        "The agent output should mention a layered platform with orchestration "
-        "or guardrails (Harness / LangGraph / MCP)."
+        "The agent output should mention a layered platform with orchestration or guardrails (Harness / LangGraph / MCP)."
     ),
     "pass_threshold": 0.5,
 }
 
 _SMOKE_OUTPUT: dict[str, object] = {
-    "summary": (
-        "Palatium is a layered agent platform with Harness guardrails, LangGraph orchestration, and MCP tools."
-    ),
+    "summary": ("Palatium is a layered agent platform with Harness guardrails, LangGraph orchestration, and MCP tools."),
     "status": "success",
 }
 

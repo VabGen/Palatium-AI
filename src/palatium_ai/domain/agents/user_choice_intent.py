@@ -31,9 +31,7 @@ class UserChoiceIntentPolicy:
         caps = tuple(output.candidate_capabilities)
         cap_set = {item.strip().lower() for item in caps}
         underspec: UnderspecificationKind = output.underspecification_kind
-        requires_user_choice = (
-            bool(output.requires_user_choice) or underspec == "discrete_choice" or "user_choice" in cap_set
-        )
+        requires_user_choice = bool(output.requires_user_choice) or underspec == "discrete_choice" or "user_choice" in cap_set
 
         if requires_user_choice and underspec == "none":
             underspec = "discrete_choice"

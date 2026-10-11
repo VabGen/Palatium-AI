@@ -45,9 +45,7 @@ async def test_g1_knowledge_loss_forget_expires_graph() -> None:
             "value_json": json.dumps({"text": "Must not orphan in graph", "confidence": 0.9}),
         },
     )
-    await graph.upsert_fact(
-        GraphFactUpsert(user_id="g1-kl", entry_key="fact-1", text="Must not orphan in graph")
-    )
+    await graph.upsert_fact(GraphFactUpsert(user_id="g1-kl", entry_key="fact-1", text="Must not orphan in graph"))
     forget = await handler.call_tool(
         "forget_memory",
         {
@@ -175,9 +173,7 @@ async def test_m7_recall_at_k_above_slo() -> None:
         # Fallback: token still present in hit text.
         if not retrieved_keys:
             retrieved_keys = [gold_key for hit in bundle.hits if token in hit.text.lower()]
-        scores.append(
-            recall_at_k(retrieved_keys=retrieved_keys, relevant_keys=frozenset({gold_key}), k=k)
-        )
+        scores.append(recall_at_k(retrieved_keys=retrieved_keys, relevant_keys=frozenset({gold_key}), k=k))
 
     mean = mean_recall_at_k(scores)
     agent_metrics.record_memory_recall_at_k(k=k, value=mean)
@@ -195,11 +191,14 @@ def test_g7_faithfulness_and_precision_pure() -> None:
     corpus = frozenset({"User prefers duck for dinner", "Meetings in UTC"})
     assert faithfulness_grounded(hint_texts=["User prefers duck for dinner"], corpus_texts=corpus) == 1.0
     assert faithfulness_grounded(hint_texts=["Invented alien fact"], corpus_texts=corpus) == 0.0
-    assert context_precision_at_k(
-        retrieved_keys=["gold", "noise"],
-        relevant_keys=frozenset({"gold"}),
-        k=2,
-    ) == 0.5
+    assert (
+        context_precision_at_k(
+            retrieved_keys=["gold", "noise"],
+            relevant_keys=frozenset({"gold"}),
+            k=2,
+        )
+        == 0.5
+    )
 
 
 @pytest.mark.asyncio()

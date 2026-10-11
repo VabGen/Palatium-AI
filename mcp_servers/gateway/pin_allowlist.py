@@ -23,6 +23,4 @@ def allowlist_for(server_name: str) -> frozenset[str]:
     try:
         return GATEWAY_PINNED_TOOLS[server_name]
     except KeyError as exc:
-        raise ValueError(
-            f"MCP gateway does not proxy server {server_name!r}; allowed: {sorted(GATEWAY_SERVERS)}"
-        ) from exc
+        raise ValueError(f"MCP gateway does not proxy server {server_name!r}; allowed: {sorted(GATEWAY_SERVERS)}") from exc

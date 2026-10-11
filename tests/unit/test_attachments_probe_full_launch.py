@@ -202,9 +202,7 @@ def test_run_until_ready_retries_only_the_probes_that_are_not_ready() -> None:
     assert (warm.calls, cold.calls) == (2, 3)
     assert clock.slept == [mod._RETRY_DELAY_SECONDS, mod._RETRY_DELAY_SECONDS]
     assert not report.failed
-    assert [probe.name for probe in report.probes] == ["s3", "clamav", "api"], (
-        "each probe must be reported exactly once"
-    )
+    assert [probe.name for probe in report.probes] == ["s3", "clamav", "api"], "each probe must be reported exactly once"
     assert announced
     assert "clamav" in announced[0]
 

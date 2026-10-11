@@ -294,9 +294,7 @@ _ELASTIC_FOLDED_RULES: tuple[_Rule, ...] = tuple(
 
 _RULES: tuple[tuple[_Rule, re.Pattern[str]], ...] = tuple((rule, _compile(rule.source)) for rule in _RULE_SPECS)
 
-_ELASTIC_RULES: tuple[tuple[_Rule, re.Pattern[str]], ...] = tuple(
-    (rule, _compile(rule.source)) for rule in _ELASTIC_FOLDED_RULES
-)
+_ELASTIC_RULES: tuple[tuple[_Rule, re.Pattern[str]], ...] = tuple((rule, _compile(rule.source)) for rule in _ELASTIC_FOLDED_RULES)
 
 
 class InjectionFinding(BaseModel):

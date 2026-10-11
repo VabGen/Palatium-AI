@@ -23,15 +23,30 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: false,
-    minify: 'esbuild',
+    // Vite 8: Oxc minifier (esbuild minify is deprecated).
+    minify: true,
     cssCodeSplit: true,
     target: 'es2020',
-    rollupOptions: {
+    rolldownOptions: {
+      // lottie-web uses direct eval; previously silenced via esbuild.logOverride.
+      checks: { eval: false },
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react/jsx-runtime'],
-          ui: ['lucide-react'],
-          animations: ['lottie-react'],
+        // Vite 8 / Rolldown: object-form manualChunks removed; use codeSplitting.
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor',
+              test: /[/\\]node_modules[/\\](react|react-dom)([/\\]|$)/,
+            },
+            {
+              name: 'ui',
+              test: /[/\\]node_modules[/\\]lucide-react([/\\]|$)/,
+            },
+            {
+              name: 'animations',
+              test: /[/\\]node_modules[/\\]lottie-react([/\\]|$)/,
+            },
+          ],
         },
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
@@ -42,8 +57,5 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['react', 'react-dom', 'lucide-react', 'lottie-react'],
-  },
-  esbuild: {
-    logOverride: { eval: 'silent' },
   },
 });

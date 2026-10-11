@@ -38,6 +38,40 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _DEFAULT_POLL_SECONDS = 0.5
+_MAX_BACKOFF_SECONDS = 60.0
+# Missing relation/column will not heal until a migration; stop instead of hot-looping.
+_SCHEMA_FAILURES_TO_STOP = 5
+_SCHEMA_ERROR_NAMES = frozenset(
+    {
+        "ProgrammingError",
+        "UndefinedTableError",
+        "UndefinedColumnError",
+        "InvalidSchemaNameError",
+    }
+)
+
+
+def _exception_chain(exc: BaseException) -> tuple[BaseException, ...]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return tuple(chain)
+
+
+def _is_programming_error(exc: BaseException) -> bool:
+    """Schema/SQL errors (missing table) — retrying at 500ms will not create DDL."""
+    return any(type(item).__name__ in _SCHEMA_ERROR_NAMES for item in _exception_chain(exc))
+
+
+def _is_operational_error(exc: BaseException) -> bool:
+    """Connectivity blips — backoff and keep the worker alive."""
+    if _is_programming_error(exc):
+        return False
+    return any(type(item).__name__ == "OperationalError" for item in _exception_chain(exc))
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +105,7 @@ class MemoryExtractService:
         self._memory_persistence = memory_persistence
         self._job_queue = job_queue
         self._dialog_turn_store = dialog_turn_store
-        self._poll_seconds = max(0.05, poll_seconds)
+        self._poll_seconds: float = max(0.05, poll_seconds)
         self._stop = asyncio.Event()
 
     async def enqueue(
@@ -101,9 +135,13 @@ class MemoryExtractService:
     async def run_worker(self) -> None:
         """Background loop: claim SKIP LOCKED jobs until stop()."""
         self._stop.clear()
+        schema_failures = 0
+        operational_failures = 0
         while not self._stop.is_set():
             try:
                 record = await self._job_queue.claim()
+                schema_failures = 0
+                operational_failures = 0
                 if record is None:
                     await self._record_queue_metrics()
                     try:
@@ -127,6 +165,7 @@ class MemoryExtractService:
                         thread_id=job.thread_id,
                         task_id=job.task_id,
                         job_id=str(record.id),
+                        error_type=type(exc).__name__,
                         error=str(exc),
                     )
                     await self._job_queue.fail(record.id, error=str(exc))
@@ -134,12 +173,63 @@ class MemoryExtractService:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.error("memory_extract.worker_error", error=str(exc))
-                await asyncio.sleep(self._poll_seconds)
+                delay = self._backoff_for_worker_error(
+                    exc,
+                    schema_failures=schema_failures,
+                    operational_failures=operational_failures,
+                )
+                if _is_programming_error(exc):
+                    schema_failures += 1
+                    if schema_failures >= _SCHEMA_FAILURES_TO_STOP:
+                        logger.critical(
+                            "memory_extract.worker_stopped",
+                            reason="schema_error",
+                            error_type=type(exc).__name__,
+                            error=str(exc),
+                            consecutive=schema_failures,
+                        )
+                        return
+                elif _is_operational_error(exc):
+                    operational_failures += 1
+                await asyncio.sleep(delay)
 
     async def stop(self) -> None:
         """Signal worker to exit after the current claim cycle."""
         self._stop.set()
+
+    def _backoff_for_worker_error(
+        self,
+        exc: BaseException,
+        *,
+        schema_failures: int,
+        operational_failures: int,
+    ) -> float:
+        """Classify claim/loop failures: schema errors stop; connectivity backs off."""
+        error_type = type(exc).__name__
+        if _is_programming_error(exc):
+            step = schema_failures + 1
+            delay: float = min(_MAX_BACKOFF_SECONDS, self._poll_seconds * (2 ** (step - 1)))
+            logger.error(
+                "memory_extract.schema_error",
+                error_type=error_type,
+                error=str(exc),
+                consecutive=step,
+                backoff_seconds=delay,
+            )
+            return delay
+        if _is_operational_error(exc):
+            step = operational_failures + 1
+            delay = min(_MAX_BACKOFF_SECONDS, max(1.0, self._poll_seconds * (2 ** (step - 1))))
+            logger.error(
+                "memory_extract.operational_error",
+                error_type=error_type,
+                error=str(exc),
+                consecutive=step,
+                backoff_seconds=delay,
+            )
+            return delay
+        logger.error("memory_extract.worker_error", error_type=error_type, error=str(exc))
+        return self._poll_seconds
 
     @traceable(name="memory_extract.process_job")
     async def _process_job(self, job: MemoryExtractJob) -> None:
@@ -154,9 +244,7 @@ class MemoryExtractService:
             existing.extend(await self._memory_port.search(namespace=user_ns, query=excerpt[:500], limit=4))
         if org_ns is not None:
             existing.extend(await self._memory_port.search(namespace=org_ns, query=excerpt[:500], limit=4))
-        existing_texts = tuple(
-            str(item.get("text", "")).strip() for item in existing if str(item.get("text", "")).strip()
-        )
+        existing_texts = tuple(str(item.get("text", "")).strip() for item in existing if str(item.get("text", "")).strip())
         task_input = MemoryKeeperInput(
             task_id=job.task_id,
             thread_id=job.thread_id,
@@ -191,7 +279,15 @@ class MemoryExtractService:
         if self._dialog_turn_store is None:
             return ""
         window = await self._dialog_turn_store.list_recent_turns(thread_id=thread_id, limit=8)
-        return window.as_prompt_block()[:12000]
+        body = window.as_prompt_block()[:12000]
+        # SB2: attachment UUID refs + titles in extract (not full OCR) so L3 knows
+        # which documents were discussed without dumping fences into medium.
+        meta_lines = _attachment_meta_lines(window)
+        if not meta_lines:
+            return body
+        meta = "\n".join(meta_lines)
+        combined = f"{body}\n\n[attachment_refs]\n{meta}"
+        return combined[:12000]
 
     async def _record_queue_metrics(self) -> None:
         try:
@@ -204,3 +300,30 @@ class MemoryExtractService:
             lag_seconds=stats.lag_seconds,
             dead=stats.dead,
         )
+
+
+def _attachment_meta_lines(window: object) -> list[str]:
+    from palatium_ai.domain.memory.turns import ATTACHMENT_IDS_PAYLOAD_KEY, parse_turn_attachment_ids
+
+    turns = getattr(window, "turns", ()) or ()
+    lines: list[str] = []
+    for turn in turns:
+        if getattr(turn, "role", None) != "user":
+            continue
+        ids = parse_turn_attachment_ids(getattr(turn, "payload", None))
+        if not ids:
+            continue
+        title = ""
+        payload = getattr(turn, "payload", None)
+        if isinstance(payload, dict):
+            raw_title = payload.get("attachment_titles") or payload.get("title")
+            if isinstance(raw_title, str) and raw_title.strip():
+                title = raw_title.strip()[:120]
+            elif isinstance(raw_title, list):
+                title = ", ".join(str(t).strip() for t in raw_title if str(t).strip())[:120]
+        id_csv = ",".join(str(i) for i in ids)
+        if title:
+            lines.append(f"- ids={id_csv}; title={title}")
+        else:
+            lines.append(f"- ids={id_csv}; key={ATTACHMENT_IDS_PAYLOAD_KEY}")
+    return lines[:8]

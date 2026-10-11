@@ -102,9 +102,7 @@ def setup_logging(settings: Settings) -> None:
         uv_logger.setLevel(getattr(logging, log_cfg.level.upper(), logging.INFO))
 
     if log_cfg.file:
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_cfg.file, maxBytes=10_485_760, backupCount=5, encoding="utf-8"
-        )
+        file_handler = logging.handlers.RotatingFileHandler(log_cfg.file, maxBytes=10_485_760, backupCount=5, encoding="utf-8")
         file_handler.terminator = "\n"
         file_handler.setFormatter(logging.Formatter("%(message)s"))
         file_handler.setLevel(getattr(logging, log_cfg.level.upper(), logging.INFO))

@@ -74,7 +74,7 @@ async def _run(
         return EXIT_INVALID_CONFIG
     memory = PostgresMemoryPort(session_factory)
     service = MemoryPromotionService(
-        memory=memory,  # type: ignore[arg-type]  # PostgresMemoryPort implements promote surface (017)
+        memory=memory,
         graph_write=build_graph_write_port(settings),
         thresholds=PromotionThresholds(
             min_access_frequency=settings.memory.promote_min_access_frequency,

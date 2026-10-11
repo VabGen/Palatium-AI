@@ -244,9 +244,7 @@ def assert_baseline_gate(
                 continue
             task_floor = task_expected - tolerance
             if task.score < task_floor:
-                failures.append(
-                    f"{key}: score {task.score:.3f} < baseline {task_expected:.3f} - tolerance {tolerance:.3f}"
-                )
+                failures.append(f"{key}: score {task.score:.3f} < baseline {task_expected:.3f} - tolerance {tolerance:.3f}")
     if failures:
         raise AssertionError("; ".join(failures))
 
@@ -265,9 +263,7 @@ def assert_nightly_baseline_gate(
             continue
         floor = expected - tolerance
         if report.score < floor:
-            failures.append(
-                f"{agent}: score {report.score:.3f} < nightly baseline {expected:.3f} - tolerance {tolerance:.3f}"
-            )
+            failures.append(f"{agent}: score {report.score:.3f} < nightly baseline {expected:.3f} - tolerance {tolerance:.3f}")
         for task in report.tasks:
             key = f"{agent}/{task.task_id}"
             task_expected = task_baseline.get(key)

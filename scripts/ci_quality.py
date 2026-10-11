@@ -111,9 +111,7 @@ def _enforce_coverage() -> None:
             raise SystemExit(f"global coverage {global_percent:.2f}% < {floor:g}% (PALATIUM_COV_MIN_GLOBAL)")
         print(f"coverage: global floor {floor:g}% satisfied")
     else:
-        print(
-            f"coverage: global floor not enforced (set PALATIUM_COV_MIN_GLOBAL to ratchet above {global_percent:.2f}%)"
-        )
+        print(f"coverage: global floor not enforced (set PALATIUM_COV_MIN_GLOBAL to ratchet above {global_percent:.2f}%)")
 
 
 def main() -> int:

@@ -27,10 +27,18 @@ from .scoring import (
     recency_score,
 )
 from .scratchpad import ScratchpadSlot, ScratchpadSlotKind, SessionScratchpad
-from .turns import DialogRole, DialogTurn, DialogTurnWindow
+from .turns import (
+    ATTACHMENT_IDS_PAYLOAD_KEY,
+    DialogRole,
+    DialogTurn,
+    DialogTurnWindow,
+    attachment_ids_payload,
+    parse_turn_attachment_ids,
+)
 from .types import MemoryType
 
 __all__ = [
+    "ATTACHMENT_IDS_PAYLOAD_KEY",
     "DEFAULT_PROMPT_BUDGET",
     "CompactMethod",
     "CompactRequest",
@@ -60,11 +68,13 @@ __all__ = [
     "ScratchpadSlot",
     "ScratchpadSlotKind",
     "SessionScratchpad",
+    "attachment_ids_payload",
     "clip_memory_hints",
     "compute_importance",
     "frequency_score",
     "merge_hybrid_memory_hits",
     "org_namespace",
+    "parse_turn_attachment_ids",
     "rank_by_search_importance",
     "recency_score",
     "thread_namespace",

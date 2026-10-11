@@ -37,6 +37,8 @@ alwaysApply: false
 | `palatium_agent_errors_total` | `agent_type`, `error_type` |
 | `palatium_agent_human_escalation_total` | `reason` |
 | `palatium_agent_cost_usd_total` | `model` (без task_type — кардинальность) |
+| `palatium_llm_cost_missing_total` | `reason` (`tier_alias` / `unpriced_model`) |
+| `palatium_llm_fallback_total` | `to_provider` |
 | `palatium_rbac_denied_total` | `agent_type`, `tool_name` |
 | `palatium_hitl_card_replay_rejected_total` | — |
 | `palatium_circuit_breaker_state` | `target` (0=closed, 1=half_open, 2=open) |
@@ -47,8 +49,12 @@ alwaysApply: false
 | `palatium_memory_extract_queue_lag_seconds` | — |
 | `palatium_memory_extract_dead_letter_total` | — |
 | `palatium_memory_promote_errors_total` | `error_type` |
+| `palatium_memory_recall_source_total` | `source` (`scratchpad` / `medium` / `graph` / `skipped_policy` / `empty`) |
+| `palatium_attachment_sticky_total` | `action` (sticky entry / rehydrate / clear) |
 | `palatium_context_tokens_used` | `agent_type` |
 | `palatium_attachment_parse_total` | `extraction_source`, `media_kind` |
+| `palatium_llm_ttft_seconds` | — (first LLM stream token) |
+| `palatium_sse_ttft_seconds` | — (first user-visible `answer_delta`) |
 
 ## Audit log — hash-chained
 

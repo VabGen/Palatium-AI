@@ -126,9 +126,7 @@ def test_memory_extract_returns_hitl_card(api_client: TestClient) -> None:
 
 def test_memory_save_ownership_error_maps_to_403(api_client: TestClient) -> None:
     resources = memory.get_app_resources(api_client.app)  # type: ignore[arg-type]
-    resources.memory_save_service.request_save = AsyncMock(
-        side_effect=ValueError("scope_id must match authenticated user")
-    )
+    resources.memory_save_service.request_save = AsyncMock(side_effect=ValueError("scope_id must match authenticated user"))
     response = api_client.post(
         "/api/memory/save",
         json={

@@ -29,6 +29,7 @@
 #     --profile observability    Langfuse v3 + ClickHouse (LANGCHAIN_TRACING_V2=true)
 #     --profile mcp-gateway      MCP gateway proxies
 #     --profile docker-mcp / docker-api   MCP servers + API inside Docker
+#     --profile memory-jobs      memory_promote loop (medium → Neo4j; Super Brain SB4)
 #
 #   Rebuild only the app tier (infra keeps running):
 #     make rebuild-app   (menu: STACK -> "Rebuild api + MCP")
@@ -844,8 +845,11 @@ services:
       UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       AUDIT_LOG_FILE: /app/logs/audit-chain.log
-      # LLM Gateway — приложение ходит ТОЛЬКО сюда
-      PALATIUM_GATEWAY_URL: ${PALATIUM_GATEWAY_URL:-http://litellm:4000}
+      # LLM Gateway — приложение ходит ТОЛЬКО сюда.
+      # Hardcode service DNS (same host-vs-container split as LANGFUSE_HOST):
+      # env/.env may keep http://127.0.0.1:4000 for Poetry-on-host; that loopback
+      # inside this container is the container itself → ConnectionRefusedError.
+      PALATIUM_GATEWAY_URL: http://litellm:4000
       # Scoped virtual key (scripts/litellm-provision-key.ps1). Falls back to the
       # master key if unset/empty so a missing app key can never cause a silent 401.
       PALATIUM_GATEWAY_KEY: ${PALATIUM_GATEWAY_KEY:-${LITELLM_MASTER_KEY}}
@@ -884,6 +888,59 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # Out-of-band medium → Neo4j promote (M3 / Super Brain SB4). Not on the chat hot path.
+  # Requires MEMORY_PROMOTE_USER_IDS (comma-separated) and GRAPH_QUERY_BACKEND=neo4j.
+  memory-promote:
+    profiles: [ "memory-jobs" ]
+    image: palatium-ai:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    env_file:
+      - ./env/.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      MEMORY_BACKEND: ${MEMORY_BACKEND:-postgres}
+      GRAPH_QUERY_BACKEND: ${GRAPH_QUERY_BACKEND:-neo4j}
+      GRAPHITI_NEO4J_URI: bolt://neo4j:7687
+      GRAPHITI_NEO4J_USER: ${GRAPHITI_NEO4J_USER:-neo4j}
+      GRAPHITI_NEO4J_PASSWORD: ${GRAPHITI_NEO4J_PASSWORD:?set GRAPHITI_NEO4J_PASSWORD in env/.env}
+      MEMORY_PROMOTE_ENABLED: ${MEMORY_PROMOTE_ENABLED:-true}
+      MEMORY_PROMOTE_INTERVAL_SECONDS: ${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}
+      MEMORY_PROMOTE_USER_IDS: ${MEMORY_PROMOTE_USER_IDS:-}
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        set -eu
+        if [ -z "$${MEMORY_PROMOTE_USER_IDS}" ]; then
+          echo "MEMORY_PROMOTE_USER_IDS empty — memory-promote idle (set ids to enable)"
+          while true; do sleep "$${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}"; done
+        fi
+        while true; do
+          echo "$${MEMORY_PROMOTE_USER_IDS}" | tr ',' '\n' | while read -r uid; do
+            uid=$$(echo "$$uid" | tr -d '[:space:]')
+            [ -z "$$uid" ] && continue
+            python -m palatium_ai.jobs.memory_promote --user-id "$$uid" || true
+          done
+          sleep "$${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}"
+        done
+    restart: unless-stopped
 
 volumes:
   palatium_pgdata:

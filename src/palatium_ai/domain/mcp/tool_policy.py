@@ -207,9 +207,7 @@ _PLATFORM_TOOL_DESCRIPTIONS: dict[str, str] = {
     "search_memory": "Hybrid search over episodic memory entries (read).",
     "save_memory": "Upsert episodic memory entry (write; HITL).",
     "forget_memory": "Delete episodic memory entry by key (write; HITL).",
-    "extract_transcript_memories": (
-        "Enqueue sleep-time extract (transcript → medium via MemoryKeeper; write; HITL)."
-    ),
+    "extract_transcript_memories": ("Enqueue sleep-time extract (transcript → medium via MemoryKeeper; write; HITL)."),
     "graph_query": (
         "Read-only parameterized Cypher against the knowledge graph "
         "(bi-temporal MemoryFact: bind $as_of / ACTIVE_FACT_AS_OF_PREDICATE)."

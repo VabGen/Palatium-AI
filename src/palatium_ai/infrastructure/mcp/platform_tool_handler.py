@@ -139,9 +139,7 @@ class PlatformToolHandler:
             user_id=user_id.strip(),
             thread_id=thread_id.strip(),
             document_id=(document_id.strip() if isinstance(document_id, str) and document_id.strip() else None),
-            document_title=(
-                document_title.strip() if isinstance(document_title, str) and document_title.strip() else None
-            ),
+            document_title=(document_title.strip() if isinstance(document_title, str) and document_title.strip() else None),
             mime_type=mime_type.strip() if isinstance(mime_type, str) and mime_type.strip() else None,
             chunks=tuple(chunks),
         )

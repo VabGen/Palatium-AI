@@ -29,11 +29,7 @@ def _settings(
             dict.fromkeys(
                 [
                     primary,
-                    *[
-                        name.strip().lower()
-                        for name in fallback.split(",")
-                        if name.strip() and name.strip().lower() != primary
-                    ],
+                    *[name.strip().lower() for name in fallback.split(",") if name.strip() and name.strip().lower() != primary],
                 ]
             )
         ),
@@ -97,7 +93,5 @@ def test_hardening_rejects_short_hitl_signing_secret() -> None:
 def test_hardening_accepts_asymmetric_jwt_and_public_cors() -> None:
     long_secret = SimpleNamespace(get_secret_value=lambda: "x" * 48)
     _assert_environment_hardening(
-        _settings(
-            jwt_algorithm="ES256", cors_origin_list=("https://app.palatium.example",), hitl_signing_secret=long_secret
-        )
+        _settings(jwt_algorithm="ES256", cors_origin_list=("https://app.palatium.example",), hitl_signing_secret=long_secret)
     )

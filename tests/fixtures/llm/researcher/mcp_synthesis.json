@@ -1,0 +1,3 @@
+{
+  "response": "{\"summary\": \"Retrieved cassette hit from the platform tool.\", \"confidence\": 0.66, \"sources_used\": [\"mcp:platform.search_knowledge\"]}"
+}

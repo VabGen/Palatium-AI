@@ -9,7 +9,7 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Protocol
 
-from palatium_ai.domain.graph.write_port import GraphFactUpsert
+from palatium_ai.domain.graph.write_port import GraphFactRecord, GraphFactUpsert
 from palatium_ai.domain.policies.graph_fact import GraphFactPolicy
 
 # Fixed templates — never f-string user text into Cypher (070 / 020).
@@ -85,6 +85,53 @@ SET f.expired_at = datetime(), f.updated_at = datetime()
 RETURN count(f) AS n
 """.strip()
 
+# Bi-temporal active Select for hot-path fusion (SB3); binds $as_of / $user_id / $limit.
+_LIST_ACTIVE_CYPHER = """
+MATCH (f:MemoryFact)
+WHERE f.user_id = $user_id
+  AND (f.valid_at IS NULL OR f.valid_at <= datetime($as_of))
+  AND (f.invalid_at IS NULL OR f.invalid_at > datetime($as_of))
+  AND (f.expired_at IS NULL OR f.expired_at > datetime($as_of))
+  AND ($thread_id = '' OR f.thread_id = $thread_id OR f.thread_id IS NULL OR f.thread_id = '')
+RETURN f.node_id AS node_id, f.user_id AS user_id, f.entry_key AS entry_key,
+       f.text AS text, f.kind AS kind, coalesce(f.importance, 0.0) AS importance,
+       coalesce(f.confidence, 0.0) AS confidence, coalesce(f.version, 1) AS version,
+       coalesce(f.source_type, 'promote') AS source_type,
+       coalesce(f.contains_pii, false) AS contains_pii
+ORDER BY coalesce(f.importance, 0.0) DESC, coalesce(f.confidence, 0.0) DESC
+LIMIT $limit
+""".strip()
+
+
+def _row_int(value: object, *, default: int) -> int:
+    """Coerce Neo4j row cell to int; non-numeric → default."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _row_float(value: object, *, default: float) -> float:
+    """Coerce Neo4j row cell to float; non-numeric → default."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
+
 
 class Neo4jWriteTransport(Protocol):
     """Minimal async write surface (injectable in tests)."""
@@ -96,9 +143,11 @@ class Neo4jWriteTransport(Protocol):
         params: dict[str, object],
     ) -> list[dict[str, object]]:
         """Execute parameterized write/read Cypher; return result rows."""
+        ...
 
     async def aclose(self) -> None:
         """Close driver / pool resources."""
+        ...
 
 
 class Neo4jGraphWritePort:
@@ -120,10 +169,7 @@ class Neo4jGraphWritePort:
             existing_text = str(find_rows[0].get("text", "") or "") or None
             raw_id = find_rows[0].get("node_id")
             old_node_id = str(raw_id).strip() if raw_id else None
-            try:
-                old_version = int(find_rows[0].get("version") or 0)
-            except (TypeError, ValueError):
-                old_version = 0
+            old_version = _row_int(find_rows[0].get("version"), default=0)
             existing_pii = bool(find_rows[0].get("contains_pii", False))
 
         action = GraphFactPolicy.decide_write(
@@ -184,15 +230,61 @@ class Neo4jGraphWritePort:
         )
         if not rows:
             return False
-        try:
-            return int(rows[0].get("n") or 0) > 0
-        except (TypeError, ValueError):
-            return False
+        return _row_int(rows[0].get("n"), default=0) > 0
 
     async def bump_hebbian_on_entry(self, *, user_id: str, entry_key: str) -> float:
         """Hebbian edge bump is in-memory/eval-gated (M8); Neo4j path is a no-op for now."""
         _ = (user_id, entry_key)
         return 0.0
+
+    async def list_active_facts(
+        self,
+        *,
+        user_id: str,
+        limit: int = 8,
+        as_of: datetime | None = None,
+        thread_id: str | None = None,
+    ) -> list[GraphFactRecord]:
+        """Budgeted active MemoryFact Select for L4 hot-path fusion (SB3)."""
+        moment = as_of or datetime.now(UTC)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        as_of_iso = moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        safe_limit = max(1, min(int(limit), 32))
+        rows = await self._transport.run_write(
+            cypher=_LIST_ACTIVE_CYPHER,
+            params={
+                "user_id": user_id.strip(),
+                "as_of": as_of_iso,
+                "limit": safe_limit,
+                "thread_id": (thread_id or "").strip(),
+            },
+        )
+        out: list[GraphFactRecord] = []
+        for row in rows:
+            text = str(row.get("text", "") or "").strip()
+            node_id = str(row.get("node_id", "") or "").strip()
+            entry_key = str(row.get("entry_key", "") or "").strip()
+            if not text or not node_id or not entry_key:
+                continue
+            importance = _row_float(row.get("importance"), default=0.0)
+            confidence = _row_float(row.get("confidence"), default=0.0)
+            version = _row_int(row.get("version"), default=1)
+            out.append(
+                GraphFactRecord(
+                    node_id=node_id,
+                    user_id=str(row.get("user_id", user_id)),
+                    entry_key=entry_key,
+                    text=text[:2000],
+                    kind=str(row.get("kind", "fact") or "fact")[:32],
+                    importance=max(0.0, min(1.0, importance)),
+                    confidence=max(0.0, min(1.0, confidence)),
+                    version=max(1, version),
+                    source_type=str(row.get("source_type", "promote") or "promote")[:32],
+                    contains_pii=bool(row.get("contains_pii", False)),
+                )
+            )
+        return out
 
     async def aclose(self) -> None:
         await self._transport.aclose()

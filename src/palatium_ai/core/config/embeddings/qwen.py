@@ -10,7 +10,12 @@ from .base import EmbeddingProviderConfig
 
 
 class QwenEmbeddingConfig(EmbeddingProviderConfig):
-    """Настройки эмбеддингов Qwen (Alibaba Cloud)."""
+    """Настройки эмбеддингов Qwen.
+
+    Code defaults target public DashScope (legacy dims). Corporate memory SoT is
+    ``qwen3-embedding-8b`` @ 4096 via env (``env/.env.example``,
+    ``core/types/embeddings.py``) — gateway id is often ``embedding-model``.
+    """
 
     provider_name: str = "qwen"
 

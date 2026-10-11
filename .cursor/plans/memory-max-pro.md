@@ -513,3 +513,20 @@ M0 (norm sync 060/099/TZ) → M0b (rename hard cut) → M1 (dual TTL)
 на hybrid cortex** (Postgres medium + sleep-time extract + CronJob promote +
 bi-temporal Neo4j + HITL + evals). Полный рефакторинг = волны M0→M5 по осям,
 не снос SoT. Pre-flight: **GO после M0 norm sync**; первый код — M0b.
+
+---
+
+## 13. Super Brain (SB0–SB5) — conversational Select поверх M0–M8
+
+Статус волн (реализация 2026-10-07): закрывает UX-разрыв «spine DONE, чат не помнит».
+
+| Волна | Фокус | Статус |
+|---|---|---|
+| **SB0** | Runtime metrics `recall_source` / sticky + эта секция | DONE |
+| **SB1** | `AttachmentStickinessPolicy` — no blind sticky restore; dialog `attachment_ids` payload | DONE |
+| **SB2** | Mid-graph rehydrate по prior + extract attachment meta | DONE |
+| **SB3** | L3+L4 fusion в `recall_for_thread`; Researcher/Formatter hints; recall after Continuity | DONE |
+| **SB4** | Compose `memory-jobs` + GET `/ready` graph/memory checks | DONE |
+| **SB5** | Eval gates sticky-poison / doc-format / identity+task / L4 select | DONE |
+
+Не меняет ADR 0004 / hybrid SoT. Детали — план Super Brain Memory (отдельный артефакт).

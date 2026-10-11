@@ -10,7 +10,11 @@ import structlog
 
 from litellm import aembedding
 
-from palatium_ai.core.types.embeddings import MEMORY_EMBEDDING_DIM, assert_vector_dim
+from palatium_ai.core.types.embeddings import (
+    MEMORY_EMBEDDING_DIM,
+    assert_vector_dim,
+    canonical_model_for_dim,
+)
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
 
 if TYPE_CHECKING:
@@ -28,8 +32,9 @@ def _read_field(obj: object, key: str) -> object | None:
 
 def _extract_embeddings(response: object) -> list[list[float]]:
     """Extract embedding vectors from LiteLLM or OpenAI-compatible responses."""
-    if hasattr(response, "model_dump"):
-        dumped = response.model_dump()
+    dump = getattr(response, "model_dump", None)
+    if callable(dump):
+        dumped = dump()
         if isinstance(dumped, dict):
             response = dumped
 
@@ -76,11 +81,14 @@ class LiteLLMEmbeddingAdapter:
         expected_dim = self._config.get_dimension()
         # Do not send `dimensions`: corporate vLLM rejects Matryoshka
         # ("does not support matryoshka representation"). Native width only.
+        # ``model`` is the LiteLLM/gateway route id; ``canonical_model`` is the
+        # registry SoT name (060) so ops can spot placeholder aliases.
         logger.debug(
             "Embedding request",
             provider=self._provider,
             texts_count=len(texts),
             model=resolved_model,
+            canonical_model=canonical_model_for_dim(expected_dim) or "unknown",
             expected_dim=expected_dim,
         )
         try:

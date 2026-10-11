@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import os
 
+from typing import Annotated
+
 from pydantic import Field, field_validator
+from pydantic_settings import NoDecode
 
 from .base import BaseConfig
 
@@ -18,7 +21,9 @@ class SkillsConfig(BaseConfig):
     editing ``SKILL.md`` / ``reference.md`` (no hot-reload).
     """
 
-    roots: tuple[str, ...] = Field(
+    # NoDecode: pydantic-settings JSON-decodes complex envs before validators;
+    # SKILLS_ROOTS=skills/procedural (pathsep string) must not require JSON.
+    roots: Annotated[tuple[str, ...], NoDecode] = Field(
         default=("skills/procedural",),
         validation_alias="SKILLS_ROOTS",
         description="OS pathsep-separated roots relative to process cwd / absolute.",

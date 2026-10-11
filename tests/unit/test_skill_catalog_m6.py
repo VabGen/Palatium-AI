@@ -162,9 +162,7 @@ def test_select_skills_by_overlap() -> None:
     )
     assert picked[0] == "memory-os-write"
     catalog = "Procedural skills:\n- memory-os-write [+ref]: Use when implementing durable memory Write paths.\n"
-    assert parse_skill_catalog_entries(catalog) == (
-        ("memory-os-write", "Use when implementing durable memory Write paths."),
-    )
+    assert parse_skill_catalog_entries(catalog) == (("memory-os-write", "Use when implementing durable memory Write paths."),)
 
 
 @pytest.mark.asyncio()

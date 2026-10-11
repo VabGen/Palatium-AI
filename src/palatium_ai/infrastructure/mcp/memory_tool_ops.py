@@ -334,15 +334,11 @@ async def extract_transcript_memories(
     if not isinstance(thread_id, str) or not thread_id.strip():
         return _error_result("Invalid params: thread_id is required")
     if consolidation is None:
-        return _error_result(
-            "extract_transcript_memories unavailable: extract worker not configured"
-        )
+        return _error_result("extract_transcript_memories unavailable: extract worker not configured")
 
     task_id_raw = arguments.get("task_id", "")
     task_id = (
-        task_id_raw.strip()
-        if isinstance(task_id_raw, str) and task_id_raw.strip()
-        else f"mcp-extract-{thread_id.strip()[:32]}"
+        task_id_raw.strip() if isinstance(task_id_raw, str) and task_id_raw.strip() else f"mcp-extract-{thread_id.strip()[:32]}"
     )
     org_id_raw = arguments.get("org_id", "")
     org_id = org_id_raw.strip() if isinstance(org_id_raw, str) and org_id_raw.strip() else None

@@ -8,8 +8,10 @@ import pytest
 
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
+from palatium_ai.application.agents.intent_classifier.prompts import INTENT_CLASSIFIER_SYSTEM_PROMPT
 from palatium_ai.application.orchestration.agent_bridge import intent_output_to_task_result, intent_to_agent_input
 from palatium_ai.domain.agents.intent import IntentClassifierInput
+from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 from tests.conftest import FakeLLMPort
 
 
@@ -90,3 +92,26 @@ async def test_intent_classifier_user_choice_cap_owned_by_policy() -> None:
     assert result.output.requires_user_choice is True
     assert result.output.task_kind == "clarification_needed"
     assert result.output.underspecification_kind == "discrete_choice"
+
+
+def test_intent_prompt_tags_verbatim_extraction() -> None:
+    assert VERBATIM_EXTRACTION_CAPABILITY in INTENT_CLASSIFIER_SYSTEM_PROMPT
+    for phrase in ("дай текст", "OCR", "дословно"):
+        assert phrase in INTENT_CLASSIFIER_SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio()
+async def test_intent_classifier_keeps_verbatim_extraction() -> None:
+    user_text = "дай текст файла дословно"
+    llm = FakeLLMPort(
+        '{"task_kind":"knowledge_request","requires_mcp":false,"requires_user_choice":false,'
+        '"underspecification_kind":"none","candidate_capabilities":["verbatim_extraction"],'
+        '"confidence":0.9,"reasoning":"exact text"}',
+    )
+    result = await _classify(llm, IntentClassifierInput(task_id="t5", text=user_text))
+
+    assert result.output is not None
+    assert VERBATIM_EXTRACTION_CAPABILITY in result.output.candidate_capabilities
+    sent = "\n".join(message.content for message in llm.calls[0])
+    assert user_text in sent
+    assert VERBATIM_EXTRACTION_CAPABILITY in sent

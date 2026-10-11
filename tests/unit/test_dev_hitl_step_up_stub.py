@@ -177,6 +177,4 @@ def test_snapshot_awaits_resume_contract() -> None:
         )
         is True
     )
-    assert (
-        _snapshot_awaits_resume(SimpleNamespace(interrupts=(), tasks=(), values={"__interrupt__": ("pause",)})) is True
-    )
+    assert _snapshot_awaits_resume(SimpleNamespace(interrupts=(), tasks=(), values={"__interrupt__": ("pause",)})) is True

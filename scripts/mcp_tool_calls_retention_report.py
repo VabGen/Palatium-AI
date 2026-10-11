@@ -68,9 +68,7 @@ def main() -> int:
     parser = _build_parser()
     try:
         args = parser.parse_args()
-        args.purge_years = (
-            args.purge_years if args.purge_years is not None else read_int_env("MCP_RETENTION_PURGE_YEARS")
-        )
+        args.purge_years = args.purge_years if args.purge_years is not None else read_int_env("MCP_RETENTION_PURGE_YEARS")
         if args.purge_years is None:
             parser.error("--purge-years is required (or set MCP_RETENTION_PURGE_YEARS)")
         if args.purge_years < 1:

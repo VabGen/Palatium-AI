@@ -36,9 +36,12 @@ from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.intent_hitl_flow import max_quality_revisions
 from palatium_ai.application.services.memory_recall import recall_for_thread
 from palatium_ai.application.services.routing_intent_resolver import resolve_routing_intent
+from palatium_ai.application.services.turn_attachment_context import get_turn_attachment_context
 from palatium_ai.application.services.turn_recall_context import get_turn_recall_context
 from palatium_ai.core.exceptions import ClarifyError
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.observability.hop_timings import get_hop_collector
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.span_names import (
     NODE_ANALYST,
     NODE_CODER,
@@ -83,6 +86,7 @@ from palatium_ai.domain.memory.contextualizer import ContextualizerInput
 from palatium_ai.domain.memory.recall import MemoryRecallBundle
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies import ContinuityPolicy, MemoryRecallPolicy
+from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
 from palatium_ai.domain.policies.parallel_workers import ParallelWorkerPolicy
 
 if TYPE_CHECKING:
@@ -129,7 +133,16 @@ async def continuation_node(
         )
         classification = state.get("classification")
         raw_intent = classification.output if classification is not None else None
-        recall = await _maybe_deferred_durable_recall(state, raw_intent)
+        intent_task_kind = raw_intent.task_kind if raw_intent is not None else None
+        intent_requires_mcp = bool(raw_intent.requires_mcp) if raw_intent is not None else False
+        intent_decision = MemoryRecallPolicy.decide(
+            task_kind=intent_task_kind,
+            requires_mcp=intent_requires_mcp,
+        )
+        recall = await _maybe_deferred_durable_recall(
+            state,
+            decision=intent_decision,
+        )
         memory_hints = recall.hint_texts if recall is not None else ()
         budget = state.get("prompt_budget") or MemoryPromptBudget()
         task_input = ContextualizerInput(
@@ -138,8 +151,8 @@ async def continuation_node(
             dialog_window=window,
             memory_hints=memory_hints,
             prompt_budget=budget,
-            task_kind=raw_intent.task_kind if raw_intent is not None else None,
-            requires_mcp=bool(raw_intent.requires_mcp) if raw_intent is not None else False,
+            task_kind=intent_task_kind,
+            requires_mcp=intent_requires_mcp,
         )
         agent_input = contextualizer_to_agent_input(
             task_input,
@@ -154,26 +167,61 @@ async def continuation_node(
         )
         output = getattr(result, "output", None)
         rewritten = output.rewritten_query if output is not None else selectors.resolved_user_text(state)
-        has_turn_attachments = bool((state.get("untrusted_context") or "").strip())
+        entry_has_attachments = bool((state.get("untrusted_context") or "").strip())
         routing_intent = resolve_routing_intent(
             contextualizer=output,
             dialog=window,
             raw_intent=raw_intent,
-            has_turn_attachments=has_turn_attachments,
+            has_turn_attachments=entry_has_attachments,
         )
+        # SB2: rehydrate dialog-bound attachments after Continuity (not sticky poison).
+        untrusted_context = state.get("untrusted_context") or ""
+        rehydrate = AttachmentStickinessPolicy.decide_rehydrate(
+            continuation_kind=routing_intent.continuation_kind,
+            refers_to_prior=bool(output.refers_to_prior if output is not None else routing_intent.trust_prior_for_workers),
+            has_turn_attachments=entry_has_attachments,
+            dialog=window,
+            prior_context=routing_intent.prior_context,
+            trust_prior_for_workers=routing_intent.trust_prior_for_workers,
+        )
+        agent_metrics.record_attachment_sticky(action=rehydrate.reason)
+        attach_ctx = get_turn_attachment_context()
+        if rehydrate.clear_pending and attach_ctx is not None and attach_ctx.clear_pending is not None:
+            await attach_ctx.clear_pending()
+        if rehydrate.attachment_ids and attach_ctx is not None and attach_ctx.rehydrate is not None and not entry_has_attachments:
+            fenced = await attach_ctx.rehydrate(rehydrate.attachment_ids)
+            if fenced.strip():
+                untrusted_context = fenced
+                agent_metrics.record_attachment_sticky(action="rehydrate_applied")
+
         raw_user = state.get("user_text")
         effective_user_text = ContinuityPolicy.resolve_effective_user_text(
             raw_user_text=raw_user if isinstance(raw_user, str) else "",
             rewritten_query=rewritten,
-            has_turn_attachments=has_turn_attachments,
+            has_turn_attachments=entry_has_attachments,
         )
+        # SB3: if Intent skipped (or narrowed) durable recall but Continuity remapped kind, fill now.
+        routed_decision = MemoryRecallPolicy.decide(
+            task_kind=routing_intent.task_kind,
+            requires_mcp=routing_intent.requires_mcp,
+        )
+        recall_after = recall
+        widened = routed_decision.kinds is None and intent_decision.kinds is not None
+        if routed_decision.allowed and (not intent_decision.allowed or widened):
+            recall_after = await _maybe_deferred_durable_recall(
+                state,
+                decision=routed_decision,
+                existing_override=recall,
+                query=effective_user_text,
+            )
         update: AgentGraphState = {
             "contextualization": result,
             "effective_user_text": effective_user_text,
             "routing_intent": routing_intent,
+            "untrusted_context": untrusted_context,
         }
-        if recall is not None:
-            update["memory_recall"] = recall
+        if recall_after is not None:
+            update["memory_recall"] = recall_after
         return update, result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_CONTINUATION, state=state, run=run)
@@ -181,15 +229,23 @@ async def continuation_node(
 
 async def _maybe_deferred_durable_recall(
     state: AgentGraphState,
-    raw_intent: object | None,
+    *,
+    decision: object,
+    existing_override: MemoryRecallBundle | None = None,
+    query: str | None = None,
 ) -> MemoryRecallBundle | None:
-    """P1.5: run durable recall only when MemoryRecallPolicy allows it."""
-    existing = state.get("memory_recall")
-    task_kind = getattr(raw_intent, "task_kind", None) if raw_intent is not None else None
-    requires_mcp = bool(getattr(raw_intent, "requires_mcp", False)) if raw_intent is not None else False
-    decision = MemoryRecallPolicy.decide(task_kind=task_kind, requires_mcp=requires_mcp)
-    if not decision.allowed:
-        logger.debug("memory_recall.skipped", reason=decision.reason)
+    """P1.5 + SB3: durable recall when MemoryRecallPolicy allows (Intent or Continuity).
+
+    ``query`` overrides the raw ask with the Contextualizer's standalone rewrite once
+    it exists: an anaphoric follow-up has no retrievable terms of its own.
+    """
+    existing = existing_override if existing_override is not None else state.get("memory_recall")
+    allowed = bool(getattr(decision, "allowed", False))
+    reason = str(getattr(decision, "reason", "unknown"))
+    kinds = getattr(decision, "kinds", None)
+    if not allowed:
+        logger.info("memory_recall.skipped", reason=reason)
+        agent_metrics.record_memory_recall_source(source="skipped_policy")
         return existing
 
     ctx = get_turn_recall_context()
@@ -199,13 +255,16 @@ async def _maybe_deferred_durable_recall(
     return await recall_for_thread(
         ctx.memory_port,
         thread_id=ctx.thread_id,
-        query=ctx.query,
+        query=(query or "").strip() or ctx.query,
         user_id=ctx.user_id,
         org_id=ctx.org_id,
         limit=ctx.limit,
         max_chars=ctx.max_chars,
         min_confidence=ctx.min_confidence,
         scratchpad=ctx.scratchpad,
+        kinds=kinds,
+        graph_write=ctx.graph_write,
+        as_of=ctx.as_of,
     )
 
 
@@ -289,6 +348,12 @@ async def weaving_node(
                 task_id=task_input.task_id,
                 agent_role=agent.config.role,
             )
+            strategy = None
+            if result.output is not None:
+                strategy = str(result.output.execution_bundle.selected_strategy)
+            hop = get_hop_collector()
+            if hop is not None:
+                hop.apply_strategy_budget(strategy)
             return {"context_bundle": result}, result
         except ClarifyError as exc:
             logger.info("Context weaver requires clarification", question=str(exc))
@@ -298,6 +363,22 @@ async def weaving_node(
             }, TaskResultStub()
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_WEAVING, state=state, run=run)
+
+
+def _emit_worker_answer_deltas(result: object) -> None:
+    """Stream worker prose early (before Critic) for user-visible SSE TTFT."""
+    from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+    from palatium_ai.application.agents.researcher.parsing import FAILURE_PLACEHOLDER_SUMMARY
+    from palatium_ai.domain.agents.researcher import ResearcherTaskResult
+
+    if not isinstance(result, ResearcherTaskResult):
+        return
+    if result.status == "failure" or result.output is None:
+        return
+    summary = result.output.summary.strip()
+    if not summary or summary == FAILURE_PLACEHOLDER_SUMMARY:
+        return
+    emit_answer_deltas(summary)
 
 
 @traceable(name=NODE_CRITIC)
@@ -347,6 +428,7 @@ async def researcher_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
+        _emit_worker_answer_deltas(result)
         return {"execution": result}, result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_RESEARCHER, state=state, run=run)
@@ -372,6 +454,7 @@ async def coder_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
+        _emit_worker_answer_deltas(result)
         return {"execution": result}, result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_CODER, state=state, run=run)
@@ -397,6 +480,7 @@ async def analyst_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
+        _emit_worker_answer_deltas(result)
         return {"execution": result}, result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_ANALYST, state=state, run=run)
@@ -477,6 +561,7 @@ async def parallel_workers_node(
 
         research_result, analyst_result = await asyncio.gather(_run_researcher(), _run_analyst())
         merged = merge_parallel_worker_results(research_result, analyst_result)  # type: ignore[arg-type]
+        _emit_worker_answer_deltas(merged)
         return {"execution": merged}, merged
 
     return await run_logged_node(
@@ -508,36 +593,38 @@ async def formatter_node(
 ) -> AgentGraphState:
     async def run() -> tuple[AgentGraphState, object]:
         if state.get("requires_clarification"):
-            from palatium_ai.application.orchestration import selectors as orch_selectors
-            from palatium_ai.domain.content import ContentDocument
-            from palatium_ai.domain.content.content_document import DocumentMeta, ParagraphBlock
-
-            question = state.get("clarification_question") or "?"
-            locale = orch_selectors.resolved_response_locale(state)
-            doc = ContentDocument(
-                schema_version=1,
-                locale=locale,
-                title=None,
-                blocks=(ParagraphBlock(type="paragraph", text=str(question)[:8000]),),
-                actions=(),
-                meta=DocumentMeta(
-                    confidence=1.0,
-                    requires_review=False,
-                    source_refs=(),
-                    interaction="none",
-                ),
-            )
-            result = FormatterTaskResult(
-                task_id=selectors.require_task_id(state),
-                agent_role="formatter",
-                status="success",
-                confidence=1.0,
-                requires_review=False,
-                output=doc,
-            )
-            return {"formatted": result}, result
+            return _formatter_clarification_result(state)
+        mcp_failure = _mcp_failure_formatter_result(state)
+        if mcp_failure is not None:
+            return mcp_failure
         snapshot = OrchestrationSnapshot.from_state(state)
         task_input = node_inputs.build_formatter_input(snapshot, state)
+        from palatium_ai.application.agents.formatter.fast_path import try_formatter_fast_path
+        from palatium_ai.application.services.turn_response_cache import try_cached_formatter_result
+
+        cached = await try_cached_formatter_result(
+            task_input=task_input,
+            selected_strategy=snapshot.selected_strategy,
+        )
+        if cached is not None:
+            from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+
+            if cached.output is not None:
+                emit_answer_deltas(cached.output.plain_text())
+            return {"formatted": cached}, cached
+        fast = try_formatter_fast_path(
+            task_input=task_input,
+            task_kind=snapshot.task_kind,
+            selected_strategy=snapshot.selected_strategy,
+            agent_role=agent.config.role,
+            worker_confidence=selectors.resolved_worker_confidence(state),
+        )
+        if fast is not None:
+            return {"formatted": fast}, fast
+        # Early TTFT: stream worker prose while Formatter LLM compiles ContentDocument.
+        from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+
+        emit_answer_deltas(task_input.worker_summary or "")
         agent_input = formatter_to_agent_input(
             task_input,
             trace_id=_trace_id(state),
@@ -552,6 +639,73 @@ async def formatter_node(
         return {"formatted": result}, result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_FORMATTER, state=state, run=run)
+
+
+def _mcp_failure_formatter_result(
+    state: AgentGraphState,
+) -> tuple[AgentGraphState, FormatterTaskResult] | None:
+    """Presentation for MCP empty/error. The graph still reaches Formatter."""
+    from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+    from palatium_ai.application.agents.formatter.deterministic import aligned_document_from_source
+    from palatium_ai.application.agents.formatter.messages import localized_message
+    from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, MCP_TOOL_ERROR
+
+    execution = state.get("execution")
+    reason = execution.error if execution is not None else None
+    if not isinstance(reason, str) or reason not in {MCP_EMPTY_RESULT, MCP_TOOL_ERROR}:
+        return None
+    snapshot = OrchestrationSnapshot.from_state(state)
+    task_input = node_inputs.build_formatter_input(snapshot, state)
+    text = localized_message(
+        task_input.response_locale,
+        reason,
+        user_text=selectors.resolved_user_text(state),
+    )
+    if not text:
+        return None
+    document, _mode = aligned_document_from_source(text, task_input=task_input, confidence=0.0)
+    emit_answer_deltas(text)
+    result = FormatterTaskResult(
+        task_id=task_input.task_id,
+        agent_role="formatter",
+        status="success",
+        confidence=document.meta.confidence,
+        requires_review=False,
+        output=document,
+    )
+    return {"formatted": result}, result
+
+
+def _formatter_clarification_result(
+    state: AgentGraphState,
+) -> tuple[AgentGraphState, FormatterTaskResult]:
+    from palatium_ai.domain.content import ContentDocument
+    from palatium_ai.domain.content.content_document import DocumentMeta, ParagraphBlock
+
+    question = state.get("clarification_question") or "?"
+    locale = selectors.resolved_response_locale(state)
+    doc = ContentDocument(
+        schema_version=1,
+        locale=locale,
+        title=None,
+        blocks=(ParagraphBlock(type="paragraph", text=str(question)[:8000]),),
+        actions=(),
+        meta=DocumentMeta(
+            confidence=1.0,
+            requires_review=False,
+            source_refs=(),
+            interaction="none",
+        ),
+    )
+    result = FormatterTaskResult(
+        task_id=selectors.require_task_id(state),
+        agent_role="formatter",
+        status="success",
+        confidence=1.0,
+        requires_review=False,
+        output=doc,
+    )
+    return {"formatted": result}, result
 
 
 def route_after_context(

@@ -569,9 +569,7 @@ async def test_drill_researcher_does_not_invent_mcp_when_unavailable() -> None:
     from palatium_ai.domain.mcp.models import ToolExecutionPlan
     from tests.conftest import make_researcher_agent
 
-    llm = FakeLLMPort(
-        '{"summary": "Invented EDMS hits", "confidence": 0.95, "sources_used": ["mcp:edms.search_documents"]}'
-    )
+    llm = FakeLLMPort('{"summary": "Invented EDMS hits", "confidence": 0.95, "sources_used": ["mcp:edms.search_documents"]}')
     harness = Harness(llm=llm)
     agent = make_researcher_agent(llm, harness=harness)
     packet = ContextPacket(

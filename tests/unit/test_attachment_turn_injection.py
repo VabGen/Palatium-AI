@@ -184,8 +184,7 @@ async def test_fenced_attachment_reaches_researcher_and_formatter_payloads() -> 
         '"confidence": 0.95, "reasoning": "Question about an attached document"}',
     )
     llm_researcher = FakeLLMPort(
-        '{"summary": "Delivery terms per the attached contract.", "confidence": 0.9, '
-        '"sources_used": ["llm_internal_reasoning"]}',
+        '{"summary": "Delivery terms per the attached contract.", "confidence": 0.9, "sources_used": ["llm_internal_reasoning"]}',
     )
     llm_critic = FakeLLMPort(
         '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "Looks correct"}',

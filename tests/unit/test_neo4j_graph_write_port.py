@@ -68,9 +68,7 @@ async def test_upsert_fact_find_then_create_parameterized() -> None:
 @pytest.mark.asyncio()
 async def test_upsert_fact_refresh_same_text() -> None:
     old_id = _stable_node_id("u1", "k1", 1)
-    transport = _FakeWriteTransport(
-        find_row={"text": "same fact", "node_id": old_id, "version": 1, "contains_pii": False}
-    )
+    transport = _FakeWriteTransport(find_row={"text": "same fact", "node_id": old_id, "version": 1, "contains_pii": False})
     port = Neo4jGraphWritePort(transport)
     command = GraphFactUpsert(
         user_id="u1",
@@ -89,9 +87,7 @@ async def test_upsert_fact_refresh_same_text() -> None:
 @pytest.mark.asyncio()
 async def test_upsert_fact_supersede_different_text() -> None:
     old_id = _stable_node_id("u1", "k1", 1)
-    transport = _FakeWriteTransport(
-        find_row={"text": "old truth", "node_id": old_id, "version": 1, "contains_pii": False}
-    )
+    transport = _FakeWriteTransport(find_row={"text": "old truth", "node_id": old_id, "version": 1, "contains_pii": False})
     port = Neo4jGraphWritePort(transport)
     command = GraphFactUpsert(
         user_id="u1",

@@ -86,9 +86,7 @@ async def test_fail_moves_to_dead_letter() -> None:
     await queue.fail(job.id, error="boom1")
     # Backoff: force available for second attempt.
     pending = queue._rows[job.id]
-    queue._rows[job.id] = pending.model_copy(
-        update={"available_at": datetime.now(UTC) - timedelta(seconds=1)}
-    )
+    queue._rows[job.id] = pending.model_copy(update={"available_at": datetime.now(UTC) - timedelta(seconds=1)})
     job2 = await queue.claim()
     assert job2 is not None
     await queue.fail(job2.id, error="boom2")
@@ -135,3 +133,44 @@ async def test_extract_worker_does_not_call_promote() -> None:
 
     hits = await port.search(namespace=user_namespace("user-m3"), query="tables", limit=4)
     assert hits
+
+
+class _MissingExtractJobsQueue:
+    """Claim always fails as if ``memory.extract_jobs`` was never migrated."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def claim(self) -> None:
+        self.calls += 1
+        from sqlalchemy.exc import ProgrammingError
+
+        raise ProgrammingError(
+            "UPDATE memory.extract_jobs",
+            {},
+            Exception('relation "memory.extract_jobs" does not exist'),
+        )
+
+
+@pytest.mark.asyncio()
+async def test_extract_worker_stops_on_missing_table() -> None:
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from palatium_ai.application.services.memory_extract import _SCHEMA_FAILURES_TO_STOP
+
+    queue = _MissingExtractJobsQueue()
+    service = MemoryExtractService(
+        harness=MagicMock(),
+        memory_keeper=MagicMock(),
+        memory_port=MagicMock(),
+        memory_persistence=MagicMock(),
+        job_queue=queue,  # type: ignore[arg-type]
+        poll_seconds=0.5,
+    )
+    sleep = AsyncMock()
+    with patch("palatium_ai.application.services.memory_extract.asyncio.sleep", sleep):
+        await service.run_worker()
+    assert queue.calls == _SCHEMA_FAILURES_TO_STOP
+    assert sleep.await_count == _SCHEMA_FAILURES_TO_STOP - 1
+    delays = [call.args[0] for call in sleep.await_args_list]
+    assert delays == [0.5, 1.0, 2.0, 4.0]

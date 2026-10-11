@@ -190,9 +190,7 @@ def _resolve_ticket(ticket: str) -> str | None:
     for token in tokens:
         # Trailing punctuation from the sentence ("…§5.") is not part of the path.
         cleaned = token.rstrip(".-")
-        candidates = [
-            base / f"{cleaned}{suffix}" for base in (_ROOT, _ROOT / ".cursor") for suffix in _IMPLIED_SUFFIXES
-        ]
+        candidates = [base / f"{cleaned}{suffix}" for base in (_ROOT, _ROOT / ".cursor") for suffix in _IMPLIED_SUFFIXES]
         if not any(candidate.is_file() for candidate in candidates):
             return f"ticket references {cleaned!r}, which does not exist in this repo"
     return None

@@ -192,11 +192,7 @@ class MemoryNamespacePolicy:
         args = dict(arguments)
         args["user_id"] = user_actor
 
-        if (
-            tool_name
-            in {"search_memory", "search_knowledge", "ingest_document", "extract_transcript_memories"}
-            and thread_actor
-        ):
+        if tool_name in {"search_memory", "search_knowledge", "ingest_document", "extract_transcript_memories"} and thread_actor:
             args["thread_id"] = thread_actor
 
         if tool_name in {"search_memory", "extract_transcript_memories"}:

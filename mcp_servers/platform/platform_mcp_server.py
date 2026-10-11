@@ -212,9 +212,7 @@ register_pinned_tool(
     mcp,
     fn=extract_transcript_memories,
     name="extract_transcript_memories",
-    description=(
-        "Enqueue sleep-time extract (transcript → medium via MemoryKeeper; write; HITL)."
-    ),
+    description=("Enqueue sleep-time extract (transcript → medium via MemoryKeeper; write; HITL)."),
     input_schema=PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA,
     read_only=False,
 )
@@ -222,10 +220,7 @@ register_pinned_tool(
     mcp,
     fn=graph_query,
     name="graph_query",
-    description=(
-        "Read-only parameterized Cypher against the knowledge graph "
-        "($params only; bi-temporal MemoryFact via $as_of)."
-    ),
+    description=("Read-only parameterized Cypher against the knowledge graph ($params only; bi-temporal MemoryFact via $as_of)."),
     input_schema=PLATFORM_GRAPH_QUERY_SCHEMA,
     read_only=True,
 )
@@ -233,9 +228,7 @@ register_pinned_tool(
     mcp,
     fn=skill_reference,
     name="skill_reference",
-    description=(
-        "Load procedural skill reference.md (or SKILL body) by catalog name (read)."
-    ),
+    description=("Load procedural skill reference.md (or SKILL body) by catalog name (read)."),
     input_schema=PLATFORM_SKILL_REFERENCE_SCHEMA,
     read_only=True,
 )

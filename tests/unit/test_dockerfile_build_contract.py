@@ -122,9 +122,7 @@ def test_attachments_runtime_installs_tesseract_when_requested() -> None:
 def test_attachments_builder_verifies_ocr_python_extras() -> None:
     """Poetry ``attachments`` group must actually expose Pillow/pytesseract/pymupdf."""
     install = _install_run()
-    assert "import PIL, pytesseract, fitz" in install, (
-        "WITH_ATTACHMENTS=1 installs the group but never asserts OCR Python extras"
-    )
+    assert "import PIL, pytesseract, fitz" in install, "WITH_ATTACHMENTS=1 installs the group but never asserts OCR Python extras"
 
 
 def test_no_bare_trailing_or_true_can_hide_a_failed_install() -> None:

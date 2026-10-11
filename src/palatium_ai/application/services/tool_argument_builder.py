@@ -133,8 +133,7 @@ class ToolArgumentBuilder:
             return arguments
 
         raise ToolArgumentBuildError(
-            f"Tool '{descriptor.name}': argument generation failed "
-            f"after {self._max_retries + 1} attempt(s): {last_error}"
+            f"Tool '{descriptor.name}': argument generation failed after {self._max_retries + 1} attempt(s): {last_error}"
         )
 
     def _build_messages(

@@ -12,11 +12,11 @@ if TYPE_CHECKING:
 
     from structlog.types import EventDict
 
-from .context import session_id_var, trace_id_var, user_id_var
+from .context import session_id_var, trace_id_var, turn_id_var, user_id_var
 
 
 def add_context_vars(logger: logging.Logger, method_name: str, event_dict: EventDict) -> EventDict:
-    """Add trace_id and optional user/session from context vars."""
+    """Add trace_id and optional user/session/turn from context vars."""
     trace_id = trace_id_var.get()
     if trace_id:
         event_dict["trace_id"] = trace_id
@@ -26,6 +26,9 @@ def add_context_vars(logger: logging.Logger, method_name: str, event_dict: Event
     sid = session_id_var.get()
     if sid:
         event_dict["session_id"] = sid
+    turn_id = turn_id_var.get()
+    if turn_id:
+        event_dict.setdefault("turn_id", turn_id)
     return event_dict
 
 

@@ -248,9 +248,7 @@ class DocxParser:
 class XlsxParser:
     """Parser for ``.xlsx`` backed by openpyxl (one :class:`ParsedPage` per sheet)."""
 
-    _MEDIA_TYPES: ClassVar[frozenset[str]] = frozenset(
-        {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
-    )
+    _MEDIA_TYPES: ClassVar[frozenset[str]] = frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
     _MAX_UNCOMPRESSED_BYTES_PER_CHAR: ClassVar[int] = 4
     _MAX_COMPRESSION_RATIO: ClassVar[int] = 100
     #: Parts openpyxl materialises into cell text during read.
@@ -334,10 +332,7 @@ class XlsxParser:
                         msg = "xlsx expands beyond the configured parse budget"
                         raise DocumentParseError(msg)
                     name = info.filename.replace("\\", "/")
-                    if (
-                        any(name.startswith(prefix) for prefix in self._TEXT_PART_PREFIXES)
-                        and info.file_size > text_budget
-                    ):
+                    if any(name.startswith(prefix) for prefix in self._TEXT_PART_PREFIXES) and info.file_size > text_budget:
                         msg = "xlsx text part exceeds the configured parse budget"
                         raise DocumentParseError(msg)
         except BadZipFile as exc:
@@ -385,8 +380,7 @@ class PptxParser:
                 slide_names = sorted(
                     name
                     for name in archive.namelist()
-                    if name.replace("\\", "/").startswith(self._SLIDE_PREFIX)
-                    and name.replace("\\", "/").endswith(".xml")
+                    if name.replace("\\", "/").startswith(self._SLIDE_PREFIX) and name.replace("\\", "/").endswith(".xml")
                 )
                 pages: list[ParsedPage] = []
                 truncated = False
@@ -398,9 +392,7 @@ class PptxParser:
                     raw = archive.read(slide_name)
                     root = etree.fromstring(raw)
                     texts = [
-                        (node.text or "").strip()
-                        for node in root.xpath("//*[local-name()='t']")
-                        if (node.text or "").strip()
+                        (node.text or "").strip() for node in root.xpath("//*[local-name()='t']") if (node.text or "").strip()
                     ]
                     body = "\n".join(texts)
                     budget = self._max_chars - total_chars
@@ -450,9 +442,7 @@ class HtmlParser:
     """Parser for ``text/html``: strip scripts/styles, emit visible text (G07)."""
 
     _MEDIA_TYPES: ClassVar[frozenset[str]] = frozenset({"text/html"})
-    _DROP_TAGS: ClassVar[frozenset[str]] = frozenset(
-        {"script", "style", "noscript", "template", "iframe", "object", "embed"}
-    )
+    _DROP_TAGS: ClassVar[frozenset[str]] = frozenset({"script", "style", "noscript", "template", "iframe", "object", "embed"})
 
     def __init__(self, *, max_chars: int) -> None:
         self._max_chars = max_chars

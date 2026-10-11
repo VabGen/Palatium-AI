@@ -22,9 +22,15 @@ _SOURCE_RE = re.compile(
     r"(?P<source>[^\s>]+)",
     re.IGNORECASE,
 )
-_BARE_UUID_RE = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+_UUID_RE = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+_BARE_UUID_RE = re.compile(rf"^{_UUID_RE}$")
+# LLM often echoes fence sources: ``attachment:<uuid>``, ``attachment:<uuid>:file``,
+# or legacy ``attachment:file`` — never show the technical prefix in UI chips.
+_ATTACHMENT_PREFIX_RE = re.compile(
+    rf"^attachment:(?:(?P<id>{_UUID_RE}):)?(?P<rest>.+)$",
+    re.IGNORECASE,
 )
+_ATTACHMENT_UUID_ONLY_RE = re.compile(rf"^attachment:(?P<id>{_UUID_RE})$", re.IGNORECASE)
 # ``name.pdf``, ``name.pdf#aaaaaaaa``, ``name.pdf#aaaaaaaa#p1``, ``name.pdf#p1``.
 _REF_PARTS_RE = re.compile(
     r"^(?P<name>.+?)"
@@ -120,12 +126,31 @@ def sanitize_source_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(cleaned)
 
 
+def _normalize_ref_label(label: str) -> str | None:
+    """Strip ``attachment:`` fence echoes; drop uuid-only technical refs."""
+    text = label.strip()
+    if not text:
+        return None
+    if _ATTACHMENT_UUID_ONLY_RE.match(text) or _BARE_UUID_RE.match(text):
+        return None
+    prefixed = _ATTACHMENT_PREFIX_RE.match(text)
+    if prefixed is not None:
+        rest = (prefixed.group("rest") or "").strip()
+        if not rest or _BARE_UUID_RE.match(rest):
+            return None
+        return rest
+    return text
+
+
 def _parse_ref_parts(label: str) -> tuple[str, str] | None:
-    match = _REF_PARTS_RE.match(label)
+    normalized = _normalize_ref_label(label)
+    if normalized is None:
+        return None
+    match = _REF_PARTS_RE.match(normalized)
     if match is None:
         return None
     filename = (match.group("name") or "").strip()
-    if not filename:
+    if not filename or filename.lower().startswith("attachment:"):
         return None
     id8 = (match.group("id") or "").strip().lower()
     return filename, id8

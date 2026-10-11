@@ -87,15 +87,8 @@ class InMemoryExtractJobQueue:
             candidates = [
                 row
                 for row in self._rows.values()
-                if (
-                    row.status == "pending"
-                    and (row.available_at is None or row.available_at <= now)
-                )
-                or (
-                    row.status == "running"
-                    and row.leased_until is not None
-                    and row.leased_until < now
-                )
+                if (row.status == "pending" and (row.available_at is None or row.available_at <= now))
+                or (row.status == "running" and row.leased_until is not None and row.leased_until < now)
             ]
             if not candidates:
                 return None
@@ -117,9 +110,7 @@ class InMemoryExtractJobQueue:
             row = self._rows.get(job_id)
             if row is None:
                 return
-            self._rows[job_id] = row.model_copy(
-                update={"status": "done", "leased_until": None, "last_error": None}
-            )
+            self._rows[job_id] = row.model_copy(update={"status": "done", "leased_until": None, "last_error": None})
 
     async def fail(self, job_id: UUID, *, error: str) -> None:
         async with self._lock:
@@ -128,9 +119,7 @@ class InMemoryExtractJobQueue:
                 return
             now = datetime.now(UTC)
             if row.attempts >= row.max_attempts:
-                self._rows[job_id] = row.model_copy(
-                    update={"status": "dead", "leased_until": None, "last_error": error[:2000]}
-                )
+                self._rows[job_id] = row.model_copy(update={"status": "dead", "leased_until": None, "last_error": error[:2000]})
                 return
             delay = _BACKOFF_BASE_SECONDS * (2 ** max(0, row.attempts - 1))
             self._rows[job_id] = row.model_copy(
@@ -319,14 +308,10 @@ class PostgresExtractJobQueue:
                 .where(MemoryExtractJobORM.status.in_(("pending", "running")))
             )
             dead = await session.scalar(
-                select(func.count())
-                .select_from(MemoryExtractJobORM)
-                .where(MemoryExtractJobORM.status == "dead")
+                select(func.count()).select_from(MemoryExtractJobORM).where(MemoryExtractJobORM.status == "dead")
             )
             oldest = await session.scalar(
-                select(func.min(MemoryExtractJobORM.created_at)).where(
-                    MemoryExtractJobORM.status == "pending"
-                )
+                select(func.min(MemoryExtractJobORM.created_at)).where(MemoryExtractJobORM.status == "pending")
             )
         lag = 0.0
         if oldest is not None:

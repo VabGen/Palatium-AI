@@ -21,11 +21,7 @@ class MemoryKeeperGrader:
         resolved = resolve_output(task, output)
         if not resolved and isinstance(task.get("cassette_parse"), str):
             parsed = parse_memory_keeper_output(task["cassette_parse"])
-            resolved = {
-                "facts": [
-                    {"text": fact.text, "kind": fact.kind, "confidence": fact.confidence} for fact in parsed.facts
-                ]
-            }
+            resolved = {"facts": [{"text": fact.text, "kind": fact.kind, "confidence": fact.confidence} for fact in parsed.facts]}
 
         facts = resolved.get("facts", [])
         if not isinstance(facts, list):

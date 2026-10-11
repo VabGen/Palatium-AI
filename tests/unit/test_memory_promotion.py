@@ -29,6 +29,7 @@ def test_promotion_policy_requires_access_and_importance() -> None:
         namespace=("user", "u1"),
         entry_key="k1",
         text="likes duck for dinner",
+        kind="fact",
         importance=0.9,
         access_frequency=2,
         user_id="u1",
@@ -41,6 +42,25 @@ def test_promotion_policy_requires_access_and_importance() -> None:
 
     already = ready.model_copy(update={"promoted_at": datetime.now(UTC)})
     assert PromotionPolicy.should_promote(already, thresholds=thresholds) is False
+
+
+def test_preference_promotes_without_access_bumps() -> None:
+    """Identity prefs are durable on write — Neo4j must not wait for reconsolidation."""
+    thresholds = PromotionThresholds(min_access_frequency=3, min_importance=0.7)
+    pref = PromotionCandidate(
+        namespace=("user", "u1"),
+        entry_key="name",
+        text="User's name is Gennady",
+        kind="preference",
+        importance=0.9,
+        access_frequency=0,
+        user_id="u1",
+        confidence=0.95,
+    )
+    assert PromotionPolicy.required_access_frequency("preference", thresholds=thresholds) == 0
+    assert PromotionPolicy.should_promote(pref, thresholds=thresholds) is True
+    fact_same = pref.model_copy(update={"kind": "fact"})
+    assert PromotionPolicy.should_promote(fact_same, thresholds=thresholds) is False
 
 
 def test_promotion_policy_rejects_blank_text() -> None:
@@ -73,9 +93,7 @@ def test_effective_importance_treats_naive_timestamp_as_utc() -> None:
     )
 
     with_tz = candidate.model_copy(update={"last_accessed": datetime(2026, 1, 1, 11, 0, tzinfo=UTC)})
-    assert PromotionPolicy.effective_importance(candidate, now=now) == PromotionPolicy.effective_importance(
-        with_tz, now=now
-    )
+    assert PromotionPolicy.effective_importance(candidate, now=now) == PromotionPolicy.effective_importance(with_tz, now=now)
 
 
 @pytest.mark.asyncio()
@@ -95,22 +113,20 @@ async def test_recall_bumps_access_frequency() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_promotion_batch_upserts_graph_and_marks() -> None:
+async def test_promotion_batch_upserts_preference_without_bumps() -> None:
     port = InMemoryMemoryPort()
     graph = InMemoryGraphWritePort()
     ns = user_namespace("alice")
     await port.put(
         namespace=ns,
-        key="pref-duck",
+        key="pref-name",
         value={
-            "text": "User prefers duck for dinner",
+            "text": "User's name is Gennady",
             "kind": "preference",
             "confidence": 0.95,
             "importance": 0.9,
         },
     )
-    for _ in range(3):
-        assert await port.bump_access(namespace=ns, key="pref-duck") >= 1
 
     service = MemoryPromotionService(
         memory=port,
@@ -121,8 +137,9 @@ async def test_promotion_batch_upserts_graph_and_marks() -> None:
     assert promoted == 1
     assert len(graph.facts) == 1
     fact = next(iter(graph.facts.values()))
-    assert "duck" in fact.text.lower()
+    assert "gennady" in fact.text.lower()
     assert fact.user_id == "alice"
+    assert fact.kind == "preference"
 
     # Idempotent: already promoted → no second upsert mark
     promoted_again = await service.run_batch(user_id="alice", limit=8)

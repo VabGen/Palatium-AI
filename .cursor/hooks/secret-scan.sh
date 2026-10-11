@@ -38,6 +38,7 @@ for entry in "${SECRET_PATTERNS[@]}"; do
   pattern="${entry#*:}"
   if echo "$NEW_CONTENT" | grep -Eiq -- "$pattern"; then
     echo "[$(date -u +%FT%TZ)] SECRET_PATTERN_MATCH pattern=$name file=$FILE_PATH" >> "$LOG_DIR/security-events.log"
+    
     audit_append_event "secret_pattern_match" "pattern" "$name" "file_path" "$FILE_PATH" || true
     echo "⚠️  Обнаружен потенциальный секрет ($name) в $FILE_PATH — проверь перед коммитом." >&2
     break

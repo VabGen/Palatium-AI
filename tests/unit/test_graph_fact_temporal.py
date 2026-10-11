@@ -49,12 +49,8 @@ def test_active_fact_predicate_binds_as_of() -> None:
 @pytest.mark.asyncio()
 async def test_in_memory_supersede_keeps_history() -> None:
     port = InMemoryGraphWritePort()
-    first = await port.upsert_fact(
-        GraphFactUpsert(user_id="u1", entry_key="k", text="v1", kind="fact", importance=0.9)
-    )
-    second = await port.upsert_fact(
-        GraphFactUpsert(user_id="u1", entry_key="k", text="v2", kind="fact", importance=0.9)
-    )
+    first = await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="k", text="v1", kind="fact", importance=0.9))
+    second = await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="k", text="v2", kind="fact", importance=0.9))
     assert first != second
     active = port.get_active_fact(user_id="u1", entry_key="k")
     assert active is not None
@@ -63,18 +59,14 @@ async def test_in_memory_supersede_keeps_history() -> None:
     rows = port.list_facts_as_of(user_id="u1", as_of=datetime.now(UTC))
     assert len(rows) == 1
     assert rows[0].text == "v2"
-    third = await port.upsert_fact(
-        GraphFactUpsert(user_id="u1", entry_key="k", text="v2", kind="fact", importance=0.5)
-    )
+    third = await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="k", text="v2", kind="fact", importance=0.5))
     assert third == second
 
 
 @pytest.mark.asyncio()
 async def test_expire_hides_fact_from_temporal_query() -> None:
     port = InMemoryGraphWritePort()
-    await port.upsert_fact(
-        GraphFactUpsert(user_id="u1", entry_key="gone", text="forget me", kind="fact")
-    )
+    await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="gone", text="forget me", kind="fact"))
     assert await port.expire_fact(user_id="u1", entry_key="gone") is True
     assert port.get_active_fact(user_id="u1", entry_key="gone") is None
     assert port.list_facts_as_of(user_id="u1", as_of=datetime.now(UTC)) == []
@@ -182,11 +174,7 @@ async def test_graph_query_injects_as_of() -> None:
         "graph_query",
         {
             "user_id": "user-1",
-            "cypher": (
-                "MATCH (f:MemoryFact) WHERE "
-                + ACTIVE_FACT_AS_OF_PREDICATE
-                + " RETURN f.text AS text LIMIT $lim"
-            ),
+            "cypher": ("MATCH (f:MemoryFact) WHERE " + ACTIVE_FACT_AS_OF_PREDICATE + " RETURN f.text AS text LIMIT $lim"),
             "params_json": json.dumps({"lim": 5, "as_of": "should-not-win"}),
             "as_of": "2026-03-15T12:00:00Z",
         },

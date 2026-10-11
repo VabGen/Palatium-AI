@@ -138,9 +138,7 @@ class DocumentIngestService:
             raise ValueError(msg)
 
         commit_task_id = f"{_DOC_INGEST_TASK_PREFIX}{uuid4().hex[:12]}"
-        preview = (
-            f"thread_id={payload.thread_id}; chunks={len(payload.chunks)}; document_id={payload.document_id or '(new)'}"
-        )
+        preview = f"thread_id={payload.thread_id}; chunks={len(payload.chunks)}; document_id={payload.document_id or '(new)'}"
         card = await self._hitl.create_tool_approval_card(
             thread_id=payload.thread_id,
             task_id=commit_task_id,
@@ -154,9 +152,7 @@ class DocumentIngestService:
             ttl_seconds=5 * 60,
         )
         await self._delete_pending(prepare_task_id)
-        await self._store_pending(
-            payload.model_copy(update={"user_id": owner_user_id, "prepare_task_id": commit_task_id})
-        )
+        await self._store_pending(payload.model_copy(update={"user_id": owner_user_id, "prepare_task_id": commit_task_id}))
         return card
 
     @traceable(name="document_ingest.execute_after_approval")

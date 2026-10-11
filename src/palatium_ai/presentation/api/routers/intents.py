@@ -108,23 +108,29 @@ async def process_intent(body: ClassifyIntentRequest, request: Request) -> Forma
 
 @router.post("/process/stream")
 async def process_intent_stream(body: ClassifyIntentRequest, request: Request) -> StreamingResponse:
-    """SSE stream: hop progress events, then a final ``result`` with FormatterTaskResult."""
+    """SSE stream: hop / answer_delta / result, then terminal ``done`` (Streaming 2026)."""
     principal = get_principal(request)
     resources = get_app_resources(request.app)
 
     async def event_gen() -> AsyncIterator[str]:
+        stream = resources.intent_service.process_stream(
+            text=body.text,
+            thread_id=body.thread_id,
+            user_id=principal.subject,
+            org_id=principal.org_id,
+            is_admin=principal_is_admin(request, principal),
+            attachment_ids=list(body.attachment_ids),
+        )
+        emit_done = False
         try:
-            async for event in resources.intent_service.process_stream(
-                text=body.text,
-                thread_id=body.thread_id,
-                user_id=principal.subject,
-                org_id=principal.org_id,
-                is_admin=principal_is_admin(request, principal),
-                attachment_ids=list(body.attachment_ids),
-            ):
+            async for event in stream:
+                if await request.is_disconnected():
+                    await stream.aclose()
+                    return
                 name = str(event.get("event", "message"))
                 payload = {k: v for k, v in event.items() if k != "event"}
                 yield f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            emit_done = True
         except (
             KillSwitchEngagedError,
             CostBudgetExceededError,
@@ -137,6 +143,10 @@ async def process_intent_stream(body: ClassifyIntentRequest, request: Request) -
                 ensure_ascii=False,
             )
             yield f"event: error\ndata: {err_payload}\n\n"
+            emit_done = True
+        finally:
+            if emit_done and not await request.is_disconnected():
+                yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(
         event_gen(),

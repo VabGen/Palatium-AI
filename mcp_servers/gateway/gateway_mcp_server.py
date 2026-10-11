@@ -77,9 +77,7 @@ def build_app_from_env() -> object:
     server = os.environ.get("MCP_GATEWAY_SERVER", "").strip()
     upstream = os.environ.get("MCP_UPSTREAM_URL", "").strip()
     if server not in {"edms", "analytics"}:
-        raise RuntimeError(
-            "MCP_GATEWAY_SERVER must be 'edms' or 'analytics' (platform is Host-local only; never proxied)"
-        )
+        raise RuntimeError("MCP_GATEWAY_SERVER must be 'edms' or 'analytics' (platform is Host-local only; never proxied)")
     if not upstream:
         raise RuntimeError("MCP_UPSTREAM_URL is required (stub URL today; real MCP adapter later)")
     return harden_asgi_app(

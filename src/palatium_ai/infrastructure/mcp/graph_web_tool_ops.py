@@ -99,7 +99,6 @@ def _resolve_as_of(raw: object) -> str | None:
     return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-
 async def web_fallback(
     web_search_port: WebSearchPort | None,
     arguments: dict[str, object],

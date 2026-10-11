@@ -243,9 +243,7 @@ class AttachmentConfig(BaseConfig):
         if self.blob_backend != "minio":
             return self
         if self.minio_access_key is None or self.minio_secret_key is None:
-            msg = (
-                "ATTACHMENTS_BLOB_BACKEND=minio requires ATTACHMENTS_MINIO_ACCESS_KEY and ATTACHMENTS_MINIO_SECRET_KEY"
-            )
+            msg = "ATTACHMENTS_BLOB_BACKEND=minio requires ATTACHMENTS_MINIO_ACCESS_KEY and ATTACHMENTS_MINIO_SECRET_KEY"
             raise ValueError(msg)
         if not self.minio_bucket.strip():
             msg = "ATTACHMENTS_MINIO_BUCKET must not be empty"

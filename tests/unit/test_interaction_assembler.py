@@ -147,8 +147,7 @@ def test_heading_plus_list_still_menu_shaped() -> None:
                 type="list",
                 style="ordered",
                 items=tuple(
-                    ListItem(text=item, icon=None, emphasis=None)
-                    for item in ("Путешествия", "Работа", "Семья", "Технологии")
+                    ListItem(text=item, icon=None, emphasis=None) for item in ("Путешествия", "Работа", "Семья", "Технологии")
                 ),
             ),
         ),

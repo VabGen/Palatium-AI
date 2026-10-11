@@ -17,10 +17,16 @@ Do NOT classify into narrow business scenarios. Classify the *ask itself* into e
   about dialog context / memory / session state / why the assistant answered as it
   did. Those are knowledge_request (or capability_discovery when asking what
   tools/systems can do). requires_mcp must stay false for social_conversation.
-- clarification_needed: insufficient information for an *actionable* request
-  OR the primary ask is to present exclusive alternatives for the user to pick
-  before the next step (topic/type/option menus). Prefer this over knowledge_request
-  when the turn's job is the menu itself, not answering after a pick.
+- clarification_needed: RARE. Only when no reasonable answer can be produced without
+  user input (a REQUIRED parameter is missing and has no sensible default), OR the
+  primary ask is to present exclusive alternatives for the user to pick before the
+  next step (topic/type/option menus). If you can answer with a sensible default,
+  answer: classify the ask itself (usually knowledge_request).
+
+Generation asks (creative content, drafting a letter/reply/document) are
+knowledge_request with requires_mcp=false; tag them via candidate_capabilities
+("compose" for creative content, "draft" for documents). They are NOT clarification
+just because an optional parameter (topic, tone, length, style) is unstated.
 
 Continuity hints (from Contextualizer) describe dependence on prior dialog — they do NOT
 force a task_kind. Classify from the rewritten text:
@@ -55,13 +61,38 @@ Also decide:
   • "open_text" — missing free-form info that cannot be a short exclusive menu
     (paste a document, provide an opaque id, unconstrained narrative detail).
   Do NOT invent discrete_choice for fully specified asks.
+  Optional parameters with a sensible default are NOT missing → "none".
+  A parameter phrased as a pointer to context ("on the topic", "about it", "the same",
+  "на тему", "об этом") when has_prior_dialog=true is NOT missing → "none": the dialog
+  supplies the value (Contextualizer binds it). You cannot see history — do not guess
+  that it is empty.
 - requires_user_choice: true iff underspecification_kind is "discrete_choice"
   OR the primary deliverable is an exclusive option menu. False for open_text,
   completed picks, and HITL_CHOICE_RESUME. Prefer clarification_needed when true.
 - candidate_capabilities: short platform-level capability tags like
-  ["search","retrieve","summarize","analyze","format","orchestrate","tool_call","mcp_discovery","user_choice"]
+  ["search","retrieve","summarize","analyze","format","orchestrate","tool_call","mcp_discovery",
+   "user_choice","compose","draft","verbatim_extraction"]
   Prefer ["format"] when continuation_kind=format; include "user_choice" when
   requires_user_choice is true; do not invent "search" without a tool ask.
+- confidence: how sure you are of task_kind. Below 0.7 a clarification_needed label is
+  treated as a guess and the platform answers on the default path instead.
+
+Examples (input → output axes; reasoning omitted):
+- {"text":"tell me a joke","has_prior_dialog":false} → knowledge_request, requires_mcp=false,
+  underspecification_kind="none", candidate_capabilities=["compose"]
+- {"text":"расскажи анекдот на тему","has_prior_dialog":true} → knowledge_request,
+  underspecification_kind="none", candidate_capabilities=["compose"] (topic comes from dialog)
+- {"text":"напиши ответ на обращение","has_prior_dialog":true} → knowledge_request,
+  underspecification_kind="none", candidate_capabilities=["draft"]
+- {"text":"дай текст / OCR / дословно","has_prior_dialog":false} → knowledge_request,
+  requires_mcp=false, underspecification_kind="none",
+  candidate_capabilities=["verbatim_extraction"]
+- {"text":"что было в предыдущем документе?","has_prior_dialog":true} → knowledge_request,
+  underspecification_kind="none", candidate_capabilities=["retrieve","summarize"]
+- {"text":"предложи несколько тем на выбор","has_prior_dialog":false} → clarification_needed,
+  requires_user_choice=true, underspecification_kind="discrete_choice",
+  candidate_capabilities=["user_choice"]
+- {"text":"thanks!","has_prior_dialog":true} → social_conversation, requires_mcp=false
 
 Respond ONLY with valid JSON:
 {"task_kind":"<kind>","requires_mcp":false,"requires_user_choice":false,

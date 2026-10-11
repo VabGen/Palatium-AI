@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Status of palatium-ai dev stack (host Poetry processes + Docker services).

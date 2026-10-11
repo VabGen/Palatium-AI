@@ -9,6 +9,8 @@ ContinuityPolicy — единственный слой, который види�
 2. Подавить ложный HITL Intent на follow-up (suppress_intent_hitl).
 3. Применить *операцию* continuity, которую Intent не может увидеть без истории:
    - format + prior → response_formatting
+     (кроме false format: Intent clarify-slot open_text/discrete_choice/choice
+     или social_conversation — demote, без sticky rehydrate)
    - answer + refers_to_prior + clarification_needed → knowledge_request
      (history-blind Intent думает, что фактов нет, хотя они в prior)
 
@@ -30,7 +32,12 @@ Source polarity for prior_context (workers):
 - Не классифицирует phatic/social/capability — это зона Intent.
 - Не эскалирует в Researcher / Critic LLM / HITL сама по себе.
 - Не снимает requires_user_choice: exclusive selection остаётся HITL-карточками —
-  кроме completed HITL pick (Contextualizer.choice_slot_filled): слот уже заполнен.
+  кроме Contextualizer.choice_slot_filled: слот уже заполнен (completed HITL pick
+  ИЛИ anaphora «на тему» / «об этом», значение которой есть в истории).
+
+Clarify — исключение: ClarificationGatePolicy (единый gate в ``_finalize``) пропускает
+clarification только с названным пробелом и confidence ≥ CLARIFY_MIN_CONFIDENCE;
+Contextualizer ``clarify`` ниже порога → new_topic (классификация по Intent).
 
 continuation_kind — сигнал о *зависимости от prior*, не о *типе задачи*.
 requires_user_choice — сигнал Intent о *обязательном выборе*; Continuity форсит
@@ -50,14 +57,18 @@ from pydantic import BaseModel, Field
 from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
-from palatium_ai.domain.policies.types import ContinuationKind, TaskKind, UnderspecificationKind
+from palatium_ai.domain.policies.clarification import CLARIFY_MIN_CONFIDENCE, ClarificationGatePolicy
+from palatium_ai.domain.policies.types import (
+    SUBSTANTIVE_USER_PAYLOAD_CHARS,
+    ContinuationKind,
+    TaskKind,
+    UnderspecificationKind,
+)
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.contextualizer import ContextualizerOutput
     from palatium_ai.domain.memory.turns import DialogTurnWindow
 
-# User turn shorter than this is not treated as a document/payload source.
-_MIN_USER_PAYLOAD_CHARS = 400
 # Prefer user payload when it is clearly richer than assistant prior.
 _USER_OVER_ASSISTANT_RATIO = 2
 # Max short user intents to bundle under a topic-switched assistant dump.
@@ -144,7 +155,7 @@ class ContinuityPolicy:
     def prior_user_content(
         dialog: DialogTurnWindow | None,
         *,
-        min_chars: int = _MIN_USER_PAYLOAD_CHARS,
+        min_chars: int = SUBSTANTIVE_USER_PAYLOAD_CHARS,
     ) -> str | None:
         """Most recent substantive user turn (document / payload), if any."""
         if dialog is None:
@@ -165,7 +176,7 @@ class ContinuityPolicy:
         cls,
         dialog: DialogTurnWindow | None,
         *,
-        max_chars: int = _MIN_USER_PAYLOAD_CHARS,
+        max_chars: int = SUBSTANTIVE_USER_PAYLOAD_CHARS,
         max_items: int = _MAX_SHORT_USER_INTENTS,
     ) -> tuple[str, ...]:
         """Recent short user turns (preferences / asks), oldest→newest, capped."""
@@ -205,7 +216,7 @@ class ContinuityPolicy:
         if not last_asst:
             return None
         longest = max(len(text) for text in intents)
-        threshold = max(longest * _USER_OVER_ASSISTANT_RATIO, _MIN_USER_PAYLOAD_CHARS)
+        threshold = max(longest * _USER_OVER_ASSISTANT_RATIO, SUBSTANTIVE_USER_PAYLOAD_CHARS)
         if len(last_asst) < threshold:
             return None
         return cls._clip_prior("\n".join(intents))
@@ -255,7 +266,10 @@ class ContinuityPolicy:
         if user_rich is not None:
             if not asst:
                 return cls._clip_prior(user_rich)
-            if len(user_rich) >= max(len(asst) * _USER_OVER_ASSISTANT_RATIO, _MIN_USER_PAYLOAD_CHARS):
+            if len(user_rich) >= max(
+                len(asst) * _USER_OVER_ASSISTANT_RATIO,
+                SUBSTANTIVE_USER_PAYLOAD_CHARS,
+            ):
                 return cls._clip_prior(user_rich)
 
         if continuation_kind == "format":
@@ -275,7 +289,7 @@ class ContinuityPolicy:
     def _prior_source_label(*, prior: str | None, assistant_prior: str | None) -> str:
         clipped_asst = ContinuityPolicy._clip_prior(assistant_prior)
         if prior and prior != clipped_asst:
-            return "user_payload" if len(prior) >= _MIN_USER_PAYLOAD_CHARS else "user_intents"
+            return "user_payload" if len(prior) >= SUBSTANTIVE_USER_PAYLOAD_CHARS else "user_intents"
         return "assistant"
 
     @classmethod
@@ -298,15 +312,17 @@ class ContinuityPolicy:
         if clarify_underspec_default and underspec == "none":
             underspec = "discrete_choice" if requires_user_choice else "open_text"
 
-        normalized = UserChoiceIntentPolicy.normalize(
-            IntentClassifierOutput(
-                task_kind=task_kind,
-                requires_mcp=requires_mcp,
-                requires_user_choice=requires_user_choice,
-                underspecification_kind=underspec,
-                candidate_capabilities=caps,
-                confidence=max(0.0, min(1.0, confidence)),
-                reasoning=(reasoning or "continuity")[:2000],
+        normalized = ClarificationGatePolicy.apply(
+            UserChoiceIntentPolicy.normalize(
+                IntentClassifierOutput(
+                    task_kind=task_kind,
+                    requires_mcp=requires_mcp,
+                    requires_user_choice=requires_user_choice,
+                    underspecification_kind=underspec,
+                    candidate_capabilities=caps,
+                    confidence=max(0.0, min(1.0, confidence)),
+                    reasoning=(reasoning or "continuity")[:2000],
+                )
             )
         )
         # Trusted-prior follow-ups suppress history-blind Intent review unless choice HITL.
@@ -355,6 +371,10 @@ class ContinuityPolicy:
             snap.kind = "answer"
             snap.refers_to_prior = True
             recovered_false_clarify = True
+        elif snap.kind == "clarify" and snap.ctx_confidence < CLARIFY_MIN_CONFIDENCE:
+            # A guessed clarify costs the user a round-trip: classify from Intent alone.
+            snap.kind = "new_topic"
+            snap.refers_to_prior = False
 
         # New upload on this turn owns file-oriented asks; format/answer-of-prior
         # would summarize the previous document and may skip the researcher (055).
@@ -376,6 +396,11 @@ class ContinuityPolicy:
             if snap.raw_task == "clarification_needed":
                 snap.raw_task = "knowledge_request"
             recovered_false_clarify = True
+
+        # False Contextualizer ``format`` (PDF dump in dialog) must not override an
+        # Intent clarify-slot or self-contained social ask — sticky rehydrate poison (055).
+        # True format follow-ups keep Intent clarify with underspec=none / no choice.
+        cls._demote_false_format(snap)
 
         formatted = cls._try_resolve_format(snap=snap, assistant_prior=assistant_prior, dialog=dialog)
         if formatted is not None:
@@ -401,7 +426,7 @@ class ContinuityPolicy:
                 prior_context=assistant_prior,
                 trust_prior_for_workers=False,
                 reasoning=f"continuity=clarify; {snap.intent_reasoning}",
-                confidence=snap.confidence,
+                confidence=snap.ctx_confidence,
                 clarify_underspec_default=True,
             )
 
@@ -417,6 +442,25 @@ class ContinuityPolicy:
             reasoning=f"continuity={snap.kind}; trust intent: {snap.intent_reasoning}",
             confidence=snap.confidence,
         )
+
+    @staticmethod
+    def _demote_false_format(snap: _ResolveSnapshot) -> None:
+        """Structural gate: Intent clarify-slot / social beats false Contextualizer format."""
+        if snap.kind != "format":
+            return
+        if snap.raw_task == "social_conversation":
+            snap.kind = "new_topic"
+            snap.refers_to_prior = False
+            return
+        if snap.choice_slot_filled:
+            return
+        if snap.raw_task != "clarification_needed":
+            return
+        active_slot = snap.requires_user_choice or snap.underspec in {"open_text", "discrete_choice"}
+        if not active_slot:
+            return
+        snap.kind = "clarify"
+        snap.refers_to_prior = False
 
     @classmethod
     def _try_resolve_format(
@@ -520,6 +564,7 @@ class _ResolveSnapshot:
     intent_reasoning: str
     confidence: float
     choice_slot_filled: bool
+    ctx_confidence: float
 
     @classmethod
     def from_inputs(
@@ -539,6 +584,7 @@ class _ResolveSnapshot:
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,
+            ctx_confidence=float(contextualizer.confidence) if contextualizer is not None else 1.0,
         )
 
 
@@ -551,24 +597,15 @@ def _map_answer_task(
         caps = tuple(c for c in snap.caps if c != "user_choice") or ("summarize",)
         reasoning = f"continuity=answer; HITL choice slot filled → knowledge_request; {snap.intent_reasoning}"
         return "knowledge_request", caps, reasoning
-    if (
-        snap.raw_task == "clarification_needed"
-        and not snap.requires_user_choice
-        and snap.underspec != "discrete_choice"
-    ):
+    if snap.raw_task == "clarification_needed" and not snap.requires_user_choice and snap.underspec != "discrete_choice":
         caps = snap.caps or ("summarize",)
         if recovered_false_clarify:
             reasoning = f"continuity=answer; recovered false clarify → knowledge_request; {snap.intent_reasoning}"
         else:
-            reasoning = (
-                f"continuity=answer; corrected history-blind clarify → knowledge_request; {snap.intent_reasoning}"
-            )
+            reasoning = f"continuity=answer; corrected history-blind clarify → knowledge_request; {snap.intent_reasoning}"
         return "knowledge_request", caps, reasoning
     if recovered_false_clarify:
-        reasoning = (
-            f"continuity=answer; recovered false clarify; "
-            f"trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
-        )
+        reasoning = f"continuity=answer; recovered false clarify; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
     else:
         reasoning = f"continuity=answer; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
     return snap.raw_task, snap.caps, reasoning

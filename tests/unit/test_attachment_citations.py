@@ -91,3 +91,16 @@ def test_sanitize_keeps_id_when_same_filename_collides() -> None:
         )
     )
     assert refs == ("report.pdf#aaaaaaaa", "report.pdf#bbbbbbbb")
+
+
+def test_sanitize_drops_attachment_uuid_fence_echo() -> None:
+    """Live UI bug: LLM puts fence source ``attachment:<uuid>`` into source_refs."""
+    refs = sanitize_source_refs(
+        (
+            f"attachment:{_ID_A}",
+            f"attachment:{_ID_A}:Обращение.docx",
+            "Обращение.docx",
+            "attachment:note.txt",
+        )
+    )
+    assert refs == ("Обращение.docx", "note.txt")

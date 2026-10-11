@@ -320,10 +320,7 @@ class PostgresKnowledgePort:
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
             result = await session.execute(
-                select(KnowledgeChunkORM, doc)
-                .join(doc, KnowledgeChunkORM.document_id == doc.id)
-                .where(*filters)
-                .limit(limit * 4)
+                select(KnowledgeChunkORM, doc).join(doc, KnowledgeChunkORM.document_id == doc.id).where(*filters).limit(limit * 4)
             )
             rows = result.all()
         scored: list[tuple[float, dict[str, object]]] = []

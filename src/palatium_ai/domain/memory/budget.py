@@ -20,6 +20,8 @@ class MemoryPromptBudget(BaseModel):
     memory_max_chars: int = Field(default=800, ge=100, le=4000)
     prior_excerpt_max_chars: int = Field(default=1500, ge=100, le=16_000)
     worker_summary_max_chars: int = Field(default=8_000, ge=500, le=16_000)
+    # Formatter last-mile: critic is a hint, not a second dump of the answer (065).
+    formatter_critic_summary_max_chars: int = Field(default=400, ge=100, le=2_000)
     mcp_tool_output_max_chars: int = Field(default=3000, ge=500, le=16_000)
     # Fenced attachment text for one turn. Above this the block is truncated with
     # an explicit marker rather than silently cut (020, 065).

@@ -64,3 +64,14 @@ class GraphWritePort(Protocol):
     async def bump_hebbian_on_entry(self, *, user_id: str, entry_key: str) -> float:
         """Reinforce Hebbian weight on the active fact; return new weight (0 if none)."""
         ...
+
+    async def list_active_facts(
+        self,
+        *,
+        user_id: str,
+        limit: int = 8,
+        as_of: datetime | None = None,
+        thread_id: str | None = None,
+    ) -> list[GraphFactRecord]:
+        """Budgeted Select of active MemoryFact rows (Super Brain SB3 L4 fusion)."""
+        ...

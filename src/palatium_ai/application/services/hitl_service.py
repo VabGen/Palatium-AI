@@ -259,9 +259,7 @@ class HitlService:
         owner = (owner_user_id or "").strip() or None
         tenant = (org_id or "").strip() or None
         # Manager queue is org-scoped; write/high-risk without org cannot be operated.
-        if (
-            side_effect.strip().lower() == "write" or clamped_risk > HitlTimeoutPolicy.RISK_ESCALATION_THRESHOLD
-        ) and not tenant:
+        if (side_effect.strip().lower() == "write" or clamped_risk > HitlTimeoutPolicy.RISK_ESCALATION_THRESHOLD) and not tenant:
             raise HitlInvalidActionError(
                 "org_id required for write/high-risk MCP tool approval cards",
             )

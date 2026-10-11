@@ -11,9 +11,11 @@ from sqlalchemy import text
 
 from palatium_ai.domain.policies.retention import RetentionClass, RetentionPolicy, RetentionWindows
 from palatium_ai.domain.ports.retention import RetentionClassReport
+from palatium_ai.infrastructure.retention._scalars import rpc_int
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 
 class MemoryRetentionHandler:
     """Backfill NULL expires_at then delete due rows for one memory RetentionClass."""
@@ -74,7 +76,7 @@ class MemoryRetentionHandler:
             text("SELECT memory.retention_count_expired(:now, :cls)"),
             {"now": now, "cls": self.retention_class},
         )
-        return int(result.scalar_one() or 0)
+        return rpc_int(result.scalar_one())
 
     async def _backfill(self, session: AsyncSession, *, limit: int) -> int:
         result = await session.execute(
@@ -92,11 +94,11 @@ class MemoryRetentionHandler:
                 "lim": limit,
             },
         )
-        return int(result.scalar_one() or 0)
+        return rpc_int(result.scalar_one())
 
     async def _delete_expired(self, session: AsyncSession, *, now: datetime, limit: int) -> int:
         result = await session.execute(
             text("SELECT memory.retention_delete_expired(:now, :lim, :cls)"),
             {"now": now, "lim": limit, "cls": self.retention_class},
         )
-        return int(result.scalar_one() or 0)
+        return rpc_int(result.scalar_one())

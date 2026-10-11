@@ -381,12 +381,7 @@ class AuditChainLogger:
         ev = rec.get("event")
         current = rec.get("current_hash")
         meta = rec.get("metadata", {})
-        if (
-            not isinstance(ts, str)
-            or not isinstance(conv, str)
-            or not isinstance(ev, str)
-            or not isinstance(current, str)
-        ):
+        if not isinstance(ts, str) or not isinstance(conv, str) or not isinstance(ev, str) or not isinstance(current, str):
             errors.append(f"line {line_no}: missing required fields")
             return None
         if not isinstance(meta, dict):

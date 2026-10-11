@@ -1,0 +1,20 @@
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - generic [ref=e10]:
+      - heading "Palatium" [level=1] [ref=e11]
+      - paragraph [ref=e12]: Structured agent replies
+    - generic [ref=e13]:
+      - button "New chat" [ref=e14] [cursor=pointer]
+      - generic [ref=e15]: thread-b3adcedf-c8…
+      - button "Collapse assistant" [ref=e16] [cursor=pointer]
+  - main [ref=e19]
+  - generic [ref=e20]:
+    - button "Memory" [ref=e22] [cursor=pointer]
+    - generic [ref=e34]:
+      - generic [ref=e35]: Project (knowledge base)
+      - textbox "Project (knowledge base)" [ref=e36]:
+        - /placeholder: When set, the file is indexed into that project KB
+    - generic [ref=e37]:
+      - button "Attach a file" [ref=e38] [cursor=pointer]
+      - textbox "Message Palatium…" [ref=e41]
+      - button "Send message" [disabled] [ref=e42]

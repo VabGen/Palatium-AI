@@ -12,10 +12,12 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.memory.tool_output import contains_untrusted_tool_output
-from palatium_ai.domain.policies.types import ExecutionStrategy, TaskKind
+from palatium_ai.domain.policies.types import (
+    SUBSTANTIVE_USER_PAYLOAD_CHARS,
+    ExecutionStrategy,
+    TaskKind,
+)
 
-# User turn long enough to be a payload (document / detailed ask), not a phatic ping.
-_SUBSTANTIVE_USER_CHARS = 400
 _HIGH_CONFIDENCE_STRATEGIES = frozenset({"reason_only", "retrieve_then_reason", "data_analysis", "code_sandbox"})
 
 
@@ -129,7 +131,7 @@ class CriticPolicy:
 
         # Clarify while user already sent a substantive payload → likely wrong route.
         clarifying = selected_strategy == "clarify" or task_kind == "clarification_needed"
-        if clarifying and user_input_chars >= _SUBSTANTIVE_USER_CHARS:
+        if clarifying and user_input_chars >= SUBSTANTIVE_USER_PAYLOAD_CHARS:
             return _invoke("clarify_with_substantive_input")
 
         if selected_strategy == "clarify":

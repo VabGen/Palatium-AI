@@ -86,19 +86,36 @@ export function isTabularAttachmentFilename(filename: string): boolean {
 }
 
 /** Mirror of domain ``sanitize_source_refs`` — hide ``file#id8#pN`` noise in chips. */
+const UUID =
+  '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 const SOURCE_REF_PARTS = /^(?<name>.+?)(?:#(?<id>[0-9a-fA-F]{8}))?(?:#p(?<page>\d+))?$/i;
-const BARE_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const BARE_UUID = new RegExp(`^${UUID}$`);
+const ATTACHMENT_UUID_ONLY = new RegExp(`^attachment:(?<id>${UUID})$`, 'i');
+const ATTACHMENT_PREFIX = new RegExp(`^attachment:(?:(?<id>${UUID}):)?(?<rest>.+)$`, 'i');
+
+function normalizeSourceRefLabel(label: string): string | null {
+  const text = label.trim();
+  if (!text || BARE_UUID.test(text) || ATTACHMENT_UUID_ONLY.test(text)) return null;
+  const prefixed = ATTACHMENT_PREFIX.exec(text);
+  if (prefixed) {
+    const rest = prefixed.groups?.rest?.trim() ?? '';
+    if (!rest || BARE_UUID.test(rest)) return null;
+    return rest;
+  }
+  return text;
+}
 
 /**
  * Collapse LLM filenames + internal citation ids/pages into unique user-facing chips.
  * Keeps ``name#id8`` only when the same filename appears with different ids.
+ * Drops fence echoes like ``attachment:<uuid>``.
  */
 export function displaySourceRefs(refs: readonly string[]): string[] {
   const parsed: Array<{ name: string; id: string }> = [];
   for (const raw of refs) {
-    const label = raw.trim();
-    if (!label || BARE_UUID.test(label)) continue;
-    const match = SOURCE_REF_PARTS.exec(label);
+    const normalized = normalizeSourceRefLabel(raw);
+    if (!normalized || normalized.toLowerCase().startsWith('attachment:')) continue;
+    const match = SOURCE_REF_PARTS.exec(normalized);
     const name = match?.groups?.name?.trim();
     if (!name) continue;
     parsed.push({ name, id: (match?.groups?.id ?? '').toLowerCase() });

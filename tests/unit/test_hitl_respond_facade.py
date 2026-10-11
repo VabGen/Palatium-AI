@@ -296,9 +296,7 @@ async def test_respond_attachment_analyze_approve_returns_summary_document() -> 
     intent = AsyncMock()
     intent.resume_after_tool_approval = AsyncMock()
     attachment = AsyncMock()
-    attachment.execute_after_approval = AsyncMock(
-        return_value={"summary": "Строк: 12; столбцов: 3", "tables_json": "[]"}
-    )
+    attachment.execute_after_approval = AsyncMock(return_value={"summary": "Строк: 12; столбцов: 3", "tables_json": "[]"})
     facade = HitlRespondFacade(
         hitl_service=hitl,
         intent_service=intent,

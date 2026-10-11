@@ -1,0 +1,32 @@
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - generic [ref=e10]:
+      - heading "Palatium" [level=1] [ref=e11]
+      - paragraph [ref=e12]: Structured agent replies
+    - generic [ref=e13]:
+      - button "New chat" [active] [ref=e14] [cursor=pointer]
+      - generic [ref=e15]: thread-ce02a5c3-06…
+      - button "Collapse assistant" [ref=e16] [cursor=pointer]
+  - main [ref=e19]:
+    - generic [ref=e45]:
+      - heading "Ask anything" [level=2] [ref=e46]
+      - paragraph [ref=e47]: I'll provide structured answers. You can copy, export, or give feedback.
+      - paragraph [ref=e48]: Attach a PDF, DOCX, image, CSV, MD or TXT (up to 50 MB) and ask about it — the file is scanned before it reaches a model.
+      - generic [ref=e49]:
+        - button "What is on today's agenda" [ref=e50] [cursor=pointer]
+        - button "Draft an agenda for tomorrow's meeting" [ref=e51] [cursor=pointer]
+  - generic [ref=e20]:
+    - button "Memory" [ref=e22] [cursor=pointer]
+    - generic [ref=e34]:
+      - generic [ref=e35]: Project (knowledge base)
+      - textbox "Project (knowledge base)" [ref=e36]:
+        - /placeholder: When set, the file is indexed into that project KB
+    - generic "External sources" [ref=e52]:
+      - list [ref=e54]:
+        - listitem "capability=unavailable; EDMS MCP import not wired yet (092); Drive/SharePoint deferred after EDMS." [ref=e55]:
+          - generic [ref=e56]: EDMS (Канцлер NEXT)
+          - generic [ref=e57]: unavailable
+    - generic [ref=e37]:
+      - button "Attach a file" [ref=e38] [cursor=pointer]
+      - textbox "Message Palatium…" [ref=e41]
+      - button "Send message" [disabled] [ref=e42]

@@ -120,11 +120,7 @@ class RetentionPolicy:
         """Days until medium-term memory row expires (access does not extend PII)."""
         kind = RetentionPolicy.memory_class(memory_type=memory_type, contains_pii=contains_pii)
         if kind == "memory_pii":
-            base = (
-                windows.memory_episode_days
-                if str(memory_type).strip().lower() == "episode"
-                else windows.memory_medium_days
-            )
+            base = windows.memory_episode_days if str(memory_type).strip().lower() == "episode" else windows.memory_medium_days
             return RetentionPolicy.effective_days(
                 base,
                 contains_pii=True,

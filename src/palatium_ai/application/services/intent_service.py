@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
@@ -31,12 +31,23 @@ from palatium_ai.application.services.intent_turn_helpers import (
 from palatium_ai.application.services.kill_switch import KillSwitchService
 from palatium_ai.application.services.response_cache_service import ResponseCacheService
 from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
+from palatium_ai.application.services.turn_attachment_context import (
+    TurnAttachmentContext,
+    turn_attachment_context,
+)
+from palatium_ai.application.services.turn_response_cache import (
+    TurnResponseCacheContext,
+    turn_response_cache,
+)
+from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, turn_sse_bridge
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
 from palatium_ai.domain.hitl.cards import HITLCardView
+from palatium_ai.domain.memory.turns import attachment_ids_payload
+from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
@@ -51,6 +62,7 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
     from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
 
 logger = get_logger(__name__)
@@ -90,6 +102,7 @@ class IntentService:
         turn_hop_budget_ms: int = 15_000,
         attachment_service: AttachmentService | None = None,
         response_cache: ResponseCacheService | None = None,
+        graph_write: GraphWritePort | None = None,
     ) -> None:
         self._session_service = session_service
         self._hitl_service = hitl_service
@@ -118,6 +131,7 @@ class IntentService:
             worker_summary_max_chars=worker_summary_max_chars,
             mcp_tool_output_max_chars=mcp_tool_output_max_chars,
             turn_hop_budget_ms=turn_hop_budget_ms,
+            graph_write=graph_write,
         )
         self._hitl_flow = IntentHitlFlow(
             graph_runner=self._graph_runner,
@@ -185,23 +199,50 @@ class IntentService:
         thread_id: str,
         restore_pending: bool = False,
     ) -> list[UUID] | None:
-        """Explicit upload ids win; otherwise restore sticky session attachments.
+        """Explicit upload ids win; sticky pending is not auto-fenced (SB1).
 
-        Composer chips clear after send (UI), but follow-ups like «дай сводку»
-        still refer to the last ready uploads — restore ``pending_attachment_ids``
-        from the session when ``restore_pending`` is True (process / HITL resume).
+        Session ``pending_attachment_ids`` stay for mid-graph rehydrate (SB2) when
+        Continuity marks a file-bound format/answer. Blind restore poisoned
+        follow-ups (joke after webp) by clearing dialog prior (055/Continuity).
         """
-        if attachment_ids:
-            return list(attachment_ids)
-        if not restore_pending:
-            return None
-        pending = await self._pending_attachment_ids(thread_id=thread_id)
-        return pending or None
+        pending = await self._pending_attachment_ids(thread_id=thread_id) if restore_pending else []
+        explicit = tuple(attachment_ids) if attachment_ids else ()
+        decision = AttachmentStickinessPolicy.decide_entry(
+            explicit_ids=explicit or None,
+            pending_ids=tuple(pending),
+        )
+        agent_metrics.record_attachment_sticky(action=decision.reason)
+        if decision.clear_pending:
+            await self._clear_pending_attachments(thread_id=thread_id)
+        if decision.restore_ids:
+            return list(decision.restore_ids)
+        return None
+
+    async def _clear_pending_attachments(self, *, thread_id: str) -> None:
+        await self._session_service.touch_session(
+            thread_id=thread_id,
+            context_patch={PENDING_ATTACHMENT_IDS_KEY: ""},
+        )
 
     def _attachment_context_patch(self, attachment_ids: Sequence[UUID] | None) -> dict[str, object]:
         if not attachment_ids:
             return {}
         return {PENDING_ATTACHMENT_IDS_KEY: self._serialize_pending_attachment_ids(attachment_ids)}
+
+    def _bind_turn_attachment_context(self, *, thread_id: str, user_id: str | None) -> TurnAttachmentContext:
+        """Callbacks for continuation_node rehydrate / clear sticky (SB2)."""
+
+        async def _rehydrate(ids: Sequence[UUID]) -> str:
+            return await self._turn_untrusted_context(
+                list(ids),
+                thread_id=thread_id,
+                user_id=user_id,
+            )
+
+        async def _clear() -> None:
+            await self._clear_pending_attachments(thread_id=thread_id)
+
+        return TurnAttachmentContext(rehydrate=_rehydrate, clear_pending=_clear)
 
     @traceable(name="intent_service.classify")
     async def classify(
@@ -345,9 +386,7 @@ class IntentService:
             candidate_capabilities = list(routing_intent.candidate_capabilities)
             requires_mcp = routing_intent.requires_mcp
         else:
-            resolved_task_kind = (
-                classification.output.task_kind if classification.output is not None else "clarification_needed"
-            )
+            resolved_task_kind = classification.output.task_kind if classification.output is not None else "clarification_needed"
             candidate_capabilities = (
                 list(classification.output.candidate_capabilities) if classification.output is not None else []
             )
@@ -429,26 +468,35 @@ class IntentService:
             },
         )
         if self._dialog_turn_store is not None:
+            payload = attachment_ids_payload(tuple(resolved_attachments)) if resolved_attachments else None
             await self._dialog_turn_store.append_turn(
                 thread_id=thread_id,
                 role="user",
                 content=text,
                 task_id=resolved_task_id,
+                payload=payload,
             )
 
-        final_state = await self._graph_runner.run_graph(
-            text=text,
-            thread_id=thread_id,
-            task_id=resolved_task_id,
-            user_id=user_id,
-            org_id=org_id,
+        cache_ctx = TurnResponseCacheContext(
+            cache=self._response_cache,
             tenant_key=tenant_key,
-            untrusted_context=await self._turn_untrusted_context(
-                resolved_attachments,
-                thread_id=thread_id,
-                user_id=user_id,
-            ),
+            user_text=text,
         )
+        attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
+        with turn_response_cache(cache_ctx), turn_attachment_context(attach_ctx):
+            final_state = await self._graph_runner.run_graph(
+                text=text,
+                thread_id=thread_id,
+                task_id=resolved_task_id,
+                user_id=user_id,
+                org_id=org_id,
+                tenant_key=tenant_key,
+                untrusted_context=await self._turn_untrusted_context(
+                    resolved_attachments,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                ),
+            )
         interrupted = _extract_interrupt(final_state)
         if interrupted is not None:
             formatted = await self._hitl_flow.finalize_tool_interrupt(
@@ -508,12 +556,14 @@ class IntentService:
         task_kind = "unknown"
         strategy = "unknown"
         locale = "und"
+        source_content = ""
         if final_state is not None:
             routing = final_state.get("routing_intent")
             if routing is not None:
                 task_kind = str(getattr(routing, "task_kind", "") or "unknown")
             strategy = str(orch_selectors.selected_strategy(final_state))
             locale = str(final_state.get("response_locale") or "und")
+            source_content = orch_selectors.resolved_worker_summary(final_state) or ""
         elif formatted.output is not None:
             locale = formatted.output.locale or "und"
         agent_metrics.record_turn_duration(
@@ -529,6 +579,7 @@ class IntentService:
             locale=locale,
             strategy=strategy,
             result=formatted,
+            source_content=source_content,
         )
 
     @traceable(name="intent_service.process_stream")
@@ -542,7 +593,7 @@ class IntentService:
         *,
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """SSE-oriented process: yield hop events, then a final FormatterTaskResult payload."""
         started = perf_counter()
         resolved_task_id = task_id or str(uuid4())
@@ -581,11 +632,13 @@ class IntentService:
             },
         )
         if self._dialog_turn_store is not None:
+            payload = attachment_ids_payload(tuple(resolved_attachments)) if resolved_attachments else None
             await self._dialog_turn_store.append_turn(
                 thread_id=thread_id,
                 role="user",
                 content=text,
                 task_id=resolved_task_id,
+                payload=payload,
             )
 
         untrusted = await self._turn_untrusted_context(
@@ -594,19 +647,30 @@ class IntentService:
             user_id=user_id,
         )
         final_state: AgentGraphState | None = None
-        async for event in self._graph_runner.stream_graph(
-            text=text,
-            thread_id=thread_id,
-            task_id=resolved_task_id,
-            user_id=user_id,
-            org_id=org_id,
+        cache_ctx = TurnResponseCacheContext(
+            cache=self._response_cache,
             tenant_key=tenant_key,
-            untrusted_context=untrusted,
+            user_text=text,
+        )
+        attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
+        with (
+            turn_response_cache(cache_ctx),
+            turn_sse_bridge(TurnSseBridge()),
+            turn_attachment_context(attach_ctx),
         ):
-            if event.get("event") == "final_state":
-                final_state = cast("AgentGraphState", event["state"])
-                continue
-            yield event
+            async for event in self._graph_runner.stream_graph(
+                text=text,
+                thread_id=thread_id,
+                task_id=resolved_task_id,
+                user_id=user_id,
+                org_id=org_id,
+                tenant_key=tenant_key,
+                untrusted_context=untrusted,
+            ):
+                if event.get("event") == "final_state":
+                    final_state = cast("AgentGraphState", event["state"])
+                    continue
+                yield event
 
         if final_state is None:
             yield {

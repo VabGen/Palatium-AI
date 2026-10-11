@@ -9,9 +9,20 @@ from datetime import UTC, datetime
 from palatium_ai.domain.memory.promotion import PromotionCandidate, PromotionThresholds
 from palatium_ai.domain.memory.scoring import ImportanceInputs, compute_importance, recency_score
 
+# Durable prefs (name, locale, likes) are promote-eligible on write — no wait for
+# reconsolidation bumps. Episodic facts still need ``min_access_frequency``.
+_PREFERENCE_PROMOTE_KINDS: frozenset[str] = frozenset({"preference"})
+
 
 class PromotionPolicy:
     """Pure gate: access_frequency + importance; already-promoted rows never re-enter."""
+
+    @staticmethod
+    def required_access_frequency(kind: str, *, thresholds: PromotionThresholds) -> int:
+        """Access bar for one candidate kind (preferences skip the reconsolidation wait)."""
+        if str(kind).strip().lower() in _PREFERENCE_PROMOTE_KINDS:
+            return 0
+        return thresholds.min_access_frequency
 
     @staticmethod
     def should_promote(
@@ -24,7 +35,11 @@ class PromotionPolicy:
             return False
         if not candidate.text.strip():
             return False
-        if candidate.access_frequency < thresholds.min_access_frequency:
+        min_access = PromotionPolicy.required_access_frequency(
+            candidate.kind,
+            thresholds=thresholds,
+        )
+        if candidate.access_frequency < min_access:
             return False
         importance = PromotionPolicy.effective_importance(candidate, now=now)
         return importance >= thresholds.min_importance

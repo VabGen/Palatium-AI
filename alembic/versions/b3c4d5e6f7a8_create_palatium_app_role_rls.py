@@ -19,8 +19,7 @@ KNOWLEDGE_SCHEMA = "knowledge"
 APP_ROLE = "palatium_app"
 
 _POLICY_PREDICATE = (
-    "nullif(current_setting('palatium.user_id', true), '') IS NOT NULL "
-    "AND user_id = current_setting('palatium.user_id', true)"
+    "nullif(current_setting('palatium.user_id', true), '') IS NOT NULL AND user_id = current_setting('palatium.user_id', true)"
 )
 
 

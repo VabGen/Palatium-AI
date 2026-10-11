@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
+    from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import MemoryPort
     from palatium_ai.domain.memory.scratchpad import SessionScratchpad
 
@@ -32,6 +35,9 @@ class TurnRecallContext:
     max_chars: int
     min_confidence: float
     scratchpad: SessionScratchpad | None
+    graph_write: GraphWritePort | None = None
+    # Turn-start snapshot (UTC): entry and deferred recall see the same L4 view.
+    as_of: datetime | None = None
 
 
 _current: ContextVar[TurnRecallContext | None] = ContextVar("turn_recall_context", default=None)

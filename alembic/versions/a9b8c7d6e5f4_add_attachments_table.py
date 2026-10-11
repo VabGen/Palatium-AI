@@ -30,8 +30,7 @@ POLICY_NAME = "attachments_user_isolation"
 # Fail-closed: an unset *or empty* scope makes the predicate false, so a session
 # that forgot to bind palatium.user_id sees no rows instead of every row (060).
 _POLICY_PREDICATE = (
-    "nullif(current_setting('palatium.user_id', true), '') IS NOT NULL "
-    "AND user_id = current_setting('palatium.user_id', true)"
+    "nullif(current_setting('palatium.user_id', true), '') IS NOT NULL AND user_id = current_setting('palatium.user_id', true)"
 )
 
 

@@ -33,6 +33,8 @@ Return ONLY JSON:
 Rules:
 - 2 to 12 options; action_id = choice_1 .. choice_N
 - Labels are concrete alternatives for the missing slot (topic/type/format/kind/branch)
+  of user_text. prior_context (may be null) is background only: never offer an option
+  that switches to a different task or repeats an earlier request from it
 - Write "framing" and EVERY option "label" in response_locale from the user JSON.
   Never answer in English (or any other language) unless response_locale itself is
   that language. Language mirroring is mandatory, not optional.

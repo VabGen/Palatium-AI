@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Start palatium-ai app and remote MCP stubs for development (Poetry-host profile).

@@ -220,10 +220,9 @@ class HitlInteractionPolicy:
     ) -> bool:
         if interaction == "confirm" and len(actions) >= 1:
             return True
-        if interaction == "choice" and len(actions) >= cls._MIN_CHOICE_OPTIONS:
-            return True
-        # Explicit actions without interaction tag still become clickable cards.
-        return len(actions) >= cls._MIN_CHOICE_OPTIONS
+        # Untagged actions are formatter suggestions, not an exclusive pick: minting
+        # them as a required choice card blocks an answered turn (D4).
+        return interaction == "choice" and len(actions) >= cls._MIN_CHOICE_OPTIONS
 
     @classmethod
     def _promote_structural_choices(

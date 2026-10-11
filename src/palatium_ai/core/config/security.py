@@ -226,16 +226,12 @@ class SecurityConfig(BaseConfig):
     @property
     def hitl_step_up_acr_set(self) -> frozenset[str]:
         """Accepted ACR values for IdP step-up JWTs."""
-        return frozenset(
-            part.strip() for part in self.hitl_step_up_required_acr.replace(" ", ",").split(",") if part.strip()
-        )
+        return frozenset(part.strip() for part in self.hitl_step_up_required_acr.replace(" ", ",").split(",") if part.strip())
 
     @property
     def hitl_step_up_amr_set(self) -> frozenset[str]:
         """Accepted AMR values for IdP/WebAuthn step-up JWTs."""
-        return frozenset(
-            part.strip() for part in self.hitl_step_up_required_amr.replace(" ", ",").split(",") if part.strip()
-        )
+        return frozenset(part.strip() for part in self.hitl_step_up_required_amr.replace(" ", ",").split(",") if part.strip())
 
     @property
     def hitl_notify_email_recipients(self) -> tuple[str, ...]:

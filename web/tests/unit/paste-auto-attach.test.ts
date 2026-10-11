@@ -80,4 +80,15 @@ describe('displaySourceRefs', () => {
       'report.pdf#bbbbbbbb',
     ]);
   });
+
+  it('drops attachment:uuid fence echoes from chips', async () => {
+    const { displaySourceRefs } = await import('../../src/lib/attachments');
+    expect(
+      displaySourceRefs([
+        'attachment:faf33068-2f62-49c1-b403-747723ab0bac',
+        'attachment:faf33068-2f62-49c1-b403-747723ab0bac:Обращение.docx',
+        'Обращение.docx',
+      ])
+    ).toEqual(['Обращение.docx']);
+  });
 });

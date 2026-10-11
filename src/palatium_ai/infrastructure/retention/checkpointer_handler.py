@@ -23,9 +23,7 @@ _DELETE_BY_CONVERSATION: dict[str, str] = {
     "checkpoint_blobs": (
         "DELETE FROM public.checkpoint_blobs AS c WHERE c.thread_id = :conv_id OR starts_with(c.thread_id, :prefix)"
     ),
-    "checkpoints": (
-        "DELETE FROM public.checkpoints AS c WHERE c.thread_id = :conv_id OR starts_with(c.thread_id, :prefix)"
-    ),
+    "checkpoints": ("DELETE FROM public.checkpoints AS c WHERE c.thread_id = :conv_id OR starts_with(c.thread_id, :prefix)"),
 }
 _DELETE_BY_THREAD: dict[str, str] = {
     "checkpoint_writes": "DELETE FROM public.checkpoint_writes WHERE thread_id = :tid",

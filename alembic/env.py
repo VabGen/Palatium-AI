@@ -84,8 +84,7 @@ def process_revision_directives(
     cmd_opts = migration_ctx.config.cmd_opts if migration_ctx.config is not None else None
     if bool(getattr(cmd_opts, "autogenerate", False)) and (not target_metadata.tables or not _REGISTERED_ORM_MODELS):
         raise RuntimeError(
-            "Autogenerate refused: ORM MetaData has no tables. "
-            "Import models in alembic/env.py, or use `alembic revision -m`."
+            "Autogenerate refused: ORM MetaData has no tables. Import models in alembic/env.py, or use `alembic revision -m`."
         )
 
 

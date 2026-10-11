@@ -39,11 +39,7 @@ class LocalDataframeAttachmentAnalysis:
     async def analyze(self, request: AttachmentAnalysisRequest) -> AttachmentAnalysisResult:
         """Load CSV/XLSX bytes and return structured tables + plain summary."""
         mime = (request.mime_type or "").strip().lower()
-        if (
-            mime not in _CSV_MIMES
-            and mime != _XLSX_MIME
-            and not request.filename.lower().endswith((".csv", ".xlsx", ".txt"))
-        ):
+        if mime not in _CSV_MIMES and mime != _XLSX_MIME and not request.filename.lower().endswith((".csv", ".xlsx", ".txt")):
             msg = f"local analysis supports CSV/XLSX only; got {mime or 'unknown'}"
             raise RuntimeError(msg)
 

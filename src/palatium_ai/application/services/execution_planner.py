@@ -12,7 +12,7 @@ from palatium_ai.domain.agents.workflow_policy import WorkflowExecutionPolicy
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
 from palatium_ai.domain.mcp.models import ExecutionPlanBundle, ToolExecutionPlan
 from palatium_ai.domain.policies.parallel_workers import ParallelWorkerPolicy
-from palatium_ai.domain.policies.types import TaskKind
+from palatium_ai.domain.policies.types import CONTENT_GENERATION_CAPABILITY, TaskKind
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.supervisor import WorkerRoute
@@ -47,8 +47,7 @@ class ExecutionPlanner:
                 strategy="data_analysis",
                 requires_tool_call=False,
                 rationale=(
-                    f"Parallel multi-capability plan ({parallel.reason}): "
-                    "structured analysis alongside knowledge retrieval."
+                    f"Parallel multi-capability plan ({parallel.reason}): structured analysis alongside knowledge retrieval."
                 ),
             )
             return ExecutionPlanBundle(
@@ -81,8 +80,7 @@ class ExecutionPlanner:
                 "Parallel research half: fenced attachment text already present; ground without search_knowledge."
             )
         return _search_knowledge_plan(
-            f"Parallel research half: retrieve via platform.search_knowledge "
-            f"then reason (executable_kind={executable_kind})."
+            f"Parallel research half: retrieve via platform.search_knowledge then reason (executable_kind={executable_kind})."
         )
 
     async def _build_primary_step(self, task_input: ContextWeaverInput) -> ToolExecutionPlan:
@@ -192,6 +190,15 @@ def _knowledge_or_tool_plan(
         )
     if task_input.requires_mcp:
         return _mcp_unresolved_plan()
+    caps = {c.strip().lower() for c in task_input.candidate_capabilities}
+    if CONTENT_GENERATION_CAPABILITY in caps:
+        # Creative text is generated, not retrieved: corpus hits would only pull the
+        # answer toward unrelated documents. Drafts keep retrieval (they cite norms).
+        return ToolExecutionPlan(
+            strategy="reason_only",
+            requires_tool_call=False,
+            rationale="Content generation ask; compose from dialog/memory context without search_knowledge.",
+        )
     return _search_knowledge_plan(
         "Knowledge path without domain MCP binding: retrieve via "
         "platform.search_knowledge then reason "
@@ -212,8 +219,7 @@ def _mcp_unresolved_plan() -> ToolExecutionPlan:
         strategy="reason_only",
         requires_tool_call=False,
         rationale=(
-            "requires_mcp=true but no MCP capability resolved; "
-            "worker must fail closed instead of inventing tool results."
+            "requires_mcp=true but no MCP capability resolved; worker must fail closed instead of inventing tool results."
         ),
     )
 

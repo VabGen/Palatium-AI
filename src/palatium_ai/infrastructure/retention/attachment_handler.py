@@ -14,6 +14,7 @@ from palatium_ai.core.logging import get_logger
 from palatium_ai.domain.attachments.policies import DEFAULT_ATTACHMENT_LIMITS, AttachmentIntakePolicy
 from palatium_ai.domain.policies.retention import RetentionClass, RetentionPolicy, RetentionWindows
 from palatium_ai.domain.ports.retention import RetentionClassReport
+from palatium_ai.infrastructure.retention._scalars import rpc_int
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -128,7 +129,7 @@ class AttachmentRetentionHandler:
             ),
             {"now": now, "pending_before": pending_before, "cls": self.retention_class},
         )
-        return int(result.scalar_one() or 0)
+        return rpc_int(result.scalar_one())
 
     async def _list(
         self,
@@ -191,12 +192,12 @@ class AttachmentRetentionHandler:
                 text("SELECT knowledge.retention_delete_by_attachment(:id)"),
                 {"id": attachment_id},
             )
-            knowledge_deleted = int(knowledge_result.scalar_one() or 0)
+            knowledge_deleted = rpc_int(knowledge_result.scalar_one())
             deleted = await session.execute(
                 text("SELECT palatium_ai.retention_delete_attachment(:id)"),
                 {"id": attachment_id},
             )
-            if int(deleted.scalar_one() or 0) < 1:
+            if rpc_int(deleted.scalar_one()) < 1:
                 await session.rollback()
                 msg = f"attachment row missing after blob purge: {attachment_id}"
                 raise RuntimeError(msg)

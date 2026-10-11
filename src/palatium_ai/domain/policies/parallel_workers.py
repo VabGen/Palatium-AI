@@ -30,9 +30,7 @@ class ParallelWorkerPolicy:
     """Decide multi-step research∥analyst fan-out from capabilities / plan steps."""
 
     @classmethod
-    def decide_from_capabilities(
-        cls, *, candidate_capabilities: tuple[str, ...] | list[str]
-    ) -> ParallelWorkersDecision:
+    def decide_from_capabilities(cls, *, candidate_capabilities: tuple[str, ...] | list[str]) -> ParallelWorkersDecision:
         """Whether planner should emit both retrieve and data_analysis steps."""
         caps = {c.strip().lower() for c in candidate_capabilities if c and c.strip()}
         has_research = bool(caps & _RESEARCH_CAPS)
@@ -42,9 +40,7 @@ class ParallelWorkerPolicy:
         return ParallelWorkersDecision(parallel=False, reason="single_capability_path")
 
     @classmethod
-    def decide_from_steps(
-        cls, steps: tuple[ToolExecutionPlan, ...] | list[ToolExecutionPlan]
-    ) -> ParallelWorkersDecision:
+    def decide_from_steps(cls, steps: tuple[ToolExecutionPlan, ...] | list[ToolExecutionPlan]) -> ParallelWorkersDecision:
         """Whether graph should route to the parallel workers node."""
         strategies = {step.strategy for step in steps}
         has_research = bool(strategies & RESEARCHER_STRATEGIES)

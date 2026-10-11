@@ -239,9 +239,7 @@ class AttachmentService:
             # install without the ``attachments`` extra, or a type left in the
             # registry ahead of its parser). Refuse now: accepting the upload only
             # to reject it after the scan/parse round-trip is a contract drift (055).
-            self._raise_intake_refusal(
-                IntakeDecision(allowed=False, filename=decision.filename, reason="mime_not_allowed")
-            )
+            self._raise_intake_refusal(IntakeDecision(allowed=False, filename=decision.filename, reason="mime_not_allowed"))
 
         scoped_project = (project_id or "").strip() or None
         if scoped_project and mode != "index":
@@ -422,9 +420,7 @@ class AttachmentService:
             content_type=attachment.mime_type,
         )
         await self._delete_chunk_parts(attachment_id, up_to_index=chunk_count)
-        saved = await self._repository.save(
-            attachment.model_copy(update={"status": "uploaded", "size_bytes": len(assembled)})
-        )
+        saved = await self._repository.save(attachment.model_copy(update={"status": "uploaded", "size_bytes": len(assembled)}))
         await self._audit(
             event="attachment_chunked_finalized",
             thread_id=saved.thread_id or "",
@@ -633,9 +629,7 @@ class AttachmentService:
 
     async def _purge(self, attachment: Attachment, *, user_id: str) -> None:
         """Drop both objects and the row, then record why it disappeared (020)."""
-        await self._delete_chunk_parts(
-            attachment.id, up_to_index=AttachmentIntakePolicy.max_chunk_part_index(self._limits)
-        )
+        await self._delete_chunk_parts(attachment.id, up_to_index=AttachmentIntakePolicy.max_chunk_part_index(self._limits))
         await self._blob_store.delete(attachment.blob_key)
         if attachment.derived_text_key:
             await self._blob_store.delete(attachment.derived_text_key)
@@ -737,10 +731,7 @@ class AttachmentService:
             msg = "attachment quarantine restore requires a configured HITL service"
             raise RuntimeError(msg)
         attachment = await self._require(attachment_id, user_id=user_id)
-        if (
-            attachment.status not in _INJECTION_RESTORE_STATUSES
-            or attachment.rejection_reason not in _QUARANTINE_RESTORE_REASONS
-        ):
+        if attachment.status not in _INJECTION_RESTORE_STATUSES or attachment.rejection_reason not in _QUARANTINE_RESTORE_REASONS:
             raise AttachmentRestoreNotAllowedError(
                 attachment.id,
                 status=attachment.status,
@@ -814,9 +805,7 @@ class AttachmentService:
             instruction=instruction.strip()[:4_000],
         )
         await self._store_analyze_pending(payload)
-        preview = (
-            f"analyze attachment={attachment.id}; file={attachment.filename}; instruction={payload.instruction[:200]}"
-        )
+        preview = f"analyze attachment={attachment.id}; file={attachment.filename}; instruction={payload.instruction[:200]}"
         card = await self._hitl.create_tool_approval_card(
             thread_id=thread_id,
             task_id=task_id,
@@ -970,8 +959,7 @@ class AttachmentService:
             raise RuntimeError(msg)
 
         chunks_payload = [
-            {"index": chunk.index, "text": chunk.text, "contextual_prefix": chunk.contextual_prefix}
-            for chunk in payload.chunks
+            {"index": chunk.index, "text": chunk.text, "contextual_prefix": chunk.contextual_prefix} for chunk in payload.chunks
         ]
         arguments: dict[str, object] = {
             "user_id": payload.user_id,
@@ -1024,10 +1012,7 @@ class AttachmentService:
             msg = f"pending attachment restore missing for task_id={task_id}"
             raise ValueError(msg)
         attachment = await self._require(payload.attachment_id, user_id=payload.user_id)
-        if (
-            attachment.status not in _INJECTION_RESTORE_STATUSES
-            or attachment.rejection_reason not in _QUARANTINE_RESTORE_REASONS
-        ):
+        if attachment.status not in _INJECTION_RESTORE_STATUSES or attachment.rejection_reason not in _QUARANTINE_RESTORE_REASONS:
             raise AttachmentRestoreNotAllowedError(
                 attachment.id,
                 status=attachment.status,

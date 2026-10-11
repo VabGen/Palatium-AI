@@ -49,6 +49,14 @@ def embedding_dim_for_model(model: EmbeddingModel) -> int:
     return _MODEL_DIM[model]
 
 
+def canonical_model_for_dim(dim: int) -> EmbeddingModel | None:
+    """Map runtime vector width to registry model id (observability labels)."""
+    for model, model_dim in _MODEL_DIM.items():
+        if model_dim == dim:
+            return model
+    return None
+
+
 def assert_vector_dim(*, schema: str, vector_len: int) -> None:
     """Fail before insert when vector length mismatches schema registry (060)."""
     model = embedding_model_for_schema(schema)

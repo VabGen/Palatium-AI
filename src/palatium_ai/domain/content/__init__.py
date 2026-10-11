@@ -24,6 +24,7 @@ from .content_document import (
     WidgetBlock,
     parse_content_document,
 )
+from .markdown_blocks import count_ordered_markers, prose_to_blocks
 
 __all__ = [
     "ActionKind",
@@ -47,5 +48,7 @@ __all__ = [
     "StepsBlock",
     "TableBlock",
     "WidgetBlock",
+    "count_ordered_markers",
     "parse_content_document",
+    "prose_to_blocks",
 ]

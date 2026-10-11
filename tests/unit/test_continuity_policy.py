@@ -152,6 +152,57 @@ def test_format_forces_response_formatting() -> None:
     assert effective.trust_prior_for_workers is True
 
 
+def test_false_format_with_open_text_slot_stays_clarify() -> None:
+    """Intent clarify-slot + false Contextualizer format must not sticky-bind PDF prior."""
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="Переформатируй сводку документа",
+        continuation_kind="format",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="План\n• Завершение встречи",
+        reasoning="false format on underspec creative ask",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="clarification_needed",
+        requires_mcp=False,
+        requires_user_choice=False,
+        underspecification_kind="open_text",
+        candidate_capabilities=(),
+        confidence=0.85,
+        reasoning="missing topic slot",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.task_kind == "clarification_needed"
+    assert effective.continuation_kind == "clarify"
+    assert effective.trust_prior_for_workers is False
+    assert effective.suppress_intent_hitl is False
+
+
+def test_false_format_with_social_demotes_to_new_topic() -> None:
+    """Self-contained social Intent beats false format of intervening document."""
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="Переформатируй ответ по документу",
+        continuation_kind="format",
+        confidence=0.85,
+        refers_to_prior=True,
+        prior_assistant_excerpt="План...",
+        reasoning="false format on phatic",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="social_conversation",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.9,
+        reasoning="phatic",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.task_kind == "social_conversation"
+    assert effective.continuation_kind == "new_topic"
+    assert effective.trust_prior_for_workers is False
+
+
 def test_format_with_turn_attachments_does_not_bind_prior_file() -> None:
     """New upload + «сводка» must not rewrite the previous file via format-of-prior."""
     dialog = _dialog_with_prior()
@@ -422,10 +473,12 @@ def test_answer_without_prior_falls_back_to_intent() -> None:
         prior_assistant_excerpt=None,
         reasoning="thinks answer but no prior text",
     )
+    # The clarify names its gap (open_text) — otherwise ClarificationGatePolicy demotes it.
     raw = IntentClassifierOutput(
         task_kind="clarification_needed",
         requires_mcp=False,
         candidate_capabilities=(),
+        underspecification_kind="open_text",
         confidence=0.9,
         reasoning="no context",
     )

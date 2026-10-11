@@ -13,7 +13,12 @@ import {
   setAuthToken,
 } from '../runtime/auth';
 import { t } from '../i18n';
-import { adoptTraceIdFromResponse, getOrCreateTraceId, TRACE_HEADER } from '../lib/trace';
+import {
+  adoptTraceIdFromResponse,
+  beginTurnTraceId,
+  getOrCreateTraceId,
+  TRACE_HEADER,
+} from '../lib/trace';
 import { apiUrl } from '../runtime/endpoints';
 
 /**
@@ -256,6 +261,9 @@ async function fetchWithAuth(
         if (res.ok || res.status < 500) return res;
         lastFailure = await apiFailure(res);
       } catch (err) {
+        if (init.signal?.aborted) {
+          throw err instanceof Error ? err : new DOMException('Aborted', 'AbortError');
+        }
         if (attempt === retries) {
           throw err instanceof Error ? err : new Error(t('error.requestFailed'));
         }
@@ -328,6 +336,7 @@ export async function processIntent(
     throw new Error(t('error.tooManyAttachments', { count: MAX_ATTACHMENTS }));
   }
 
+  beginTurnTraceId();
   const res = await fetchWithAuth(
     '/intents/process',
     {
@@ -346,9 +355,39 @@ export async function processIntent(
 }
 
 export type ProcessStreamHopHandler = (node: string) => void;
+export type ProcessStreamDeltaHandler = (delta: string, accumulated: string) => void;
+
+export type ProcessStreamHandlers = {
+  onHop?: ProcessStreamHopHandler;
+  /** Early user-facing prose (deterministic / worker source) — preferred for pending UI. */
+  onAnswerDelta?: ProcessStreamDeltaHandler;
+  /** Partial Formatter JSON tokens — secondary preview when answer_delta is absent. */
+  onFormatterDelta?: ProcessStreamDeltaHandler;
+  /** Abort in-flight SSE (unmount / new turn). */
+  signal?: AbortSignal;
+};
 
 /**
- * SSE process path (P1.6): hop events then final FormatterTaskResult.
+ * Best-effort prose from partial Formatter JSON (W1.4 SSE). Final UI still uses
+ * the structured ``result`` event — this is only for progressive preview.
+ */
+export function previewTextFromFormatterJson(accumulated: string): string {
+  const texts: string[] = [];
+  const re = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(accumulated)) !== null) {
+    const raw = match[1] ?? '';
+    try {
+      texts.push(JSON.parse(`"${raw}"`) as string);
+    } catch {
+      texts.push(raw.replace(/\\n/g, '\n').replace(/\\"/g, '"'));
+    }
+  }
+  return texts.join('\n\n').trim();
+}
+
+/**
+ * SSE process path (P1.6): hop / answer_delta / formatter_delta then final FormatterTaskResult.
  * Falls back to non-streaming ``processIntent`` if the stream endpoint is unavailable.
  */
 export async function processIntentStream(
@@ -357,8 +396,12 @@ export async function processIntentStream(
   userId?: string | null,
   orgId?: string | null,
   attachmentIds: readonly string[] = [],
-  onHop?: ProcessStreamHopHandler
+  onHopOrHandlers?: ProcessStreamHopHandler | ProcessStreamHandlers
 ): Promise<FormatterTaskResult> {
+  const handlers: ProcessStreamHandlers =
+    typeof onHopOrHandlers === 'function'
+      ? { onHop: onHopOrHandlers }
+      : (onHopOrHandlers ?? {});
   if (text.length === 0) {
     throw new Error(t('error.emptyMessage'));
   }
@@ -369,6 +412,12 @@ export async function processIntentStream(
     throw new Error(t('error.tooManyAttachments', { count: MAX_ATTACHMENTS }));
   }
 
+  const signal = handlers.signal;
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+
+  beginTurnTraceId();
   const res = await fetchWithAuth(
     '/intents/process/stream',
     {
@@ -378,6 +427,7 @@ export async function processIntentStream(
         thread_id: threadId,
         ...(attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
       }),
+      signal,
     },
     userId,
     orgId,
@@ -392,10 +442,16 @@ export async function processIntentStream(
   }
 
   const reader = res.body.getReader();
+  const onAbort = () => {
+    void reader.cancel();
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   const decoder = new TextDecoder();
   let buffer = '';
   let result: FormatterTaskResult | null = null;
   let streamError: string | null = null;
+  let formatterAccumulated = '';
+  let answerAccumulated = '';
 
   const flushBlock = (block: string) => {
     const lines = block.split('\n');
@@ -416,11 +472,27 @@ export async function processIntentStream(
       return;
     }
     if (eventName === 'hop' && typeof payload.node === 'string') {
-      onHop?.(payload.node);
+      handlers.onHop?.(payload.node);
+      return;
+    }
+    if (eventName === 'answer_delta' && typeof payload.delta === 'string') {
+      if (payload.replace === true) {
+        answerAccumulated = '';
+      }
+      answerAccumulated += payload.delta;
+      handlers.onAnswerDelta?.(payload.delta, answerAccumulated);
+      return;
+    }
+    if (eventName === 'formatter_delta' && typeof payload.delta === 'string') {
+      formatterAccumulated += payload.delta;
+      handlers.onFormatterDelta?.(payload.delta, formatterAccumulated);
       return;
     }
     if (eventName === 'result' && payload.result && typeof payload.result === 'object') {
       result = payload.result as FormatterTaskResult;
+      return;
+    }
+    if (eventName === 'done') {
       return;
     }
     if (eventName === 'error') {
@@ -433,17 +505,24 @@ export async function processIntentStream(
     }
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() ?? '';
-    for (const block of parts) {
-      if (block.trim()) flushBlock(block);
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
+      for (const block of parts) {
+        if (block.trim()) flushBlock(block);
+      }
     }
+    if (buffer.trim()) flushBlock(buffer);
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
   }
-  if (buffer.trim()) flushBlock(buffer);
 
   if (streamError) throw new Error(streamError);
   if (!result) throw new Error(t('error.requestFailed'));

@@ -18,6 +18,12 @@ from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.intent import UnderspecificationKind
     from palatium_ai.domain.hitl.interaction_policy import HitlCardPlan
+    from palatium_ai.domain.memory.turns import DialogTurnWindow
+
+# Head of prior_context used to locate its source turn (prior is head-clipped, 055).
+_PRIOR_NEEDLE_CHARS = 120
+# Latest exchange = last user ask + the assistant reply to it.
+_FRESH_EXCHANGE_TURNS = 2
 
 
 class DiscreteChoiceSynthesisPolicy:
@@ -25,6 +31,28 @@ class DiscreteChoiceSynthesisPolicy:
 
     _MIN = 2
     _MAX = 12
+
+    @classmethod
+    def fresh_prior(
+        cls,
+        prior_context: str | None,
+        dialog: DialogTurnWindow | None,
+    ) -> str | None:
+        """Prior usable as option background, or None when it is stale (D6).
+
+        Options come from the current ask; prior is admitted only when it was
+        produced by the latest exchange. Older context (a document several turns
+        back, bundled earlier intents) would mint choices about a previous task.
+        """
+        _ = cls
+        prior = (prior_context or "").strip()
+        if not prior or dialog is None or not dialog.turns:
+            return None
+        needle = prior[:_PRIOR_NEEDLE_CHARS]
+        latest = dialog.turns[-_FRESH_EXCHANGE_TURNS:]
+        if any(needle in turn.content for turn in latest):
+            return prior
+        return None
 
     @classmethod
     def needs_synthesis(

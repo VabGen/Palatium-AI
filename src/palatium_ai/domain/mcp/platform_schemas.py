@@ -145,9 +145,7 @@ class PlatformExtractTranscriptMemoriesInput(BaseModel):
 PLATFORM_SEARCH_MEMORY_SCHEMA = pinned_input_schema(PlatformSearchMemoryInput)
 PLATFORM_SAVE_MEMORY_SCHEMA = pinned_input_schema(PlatformSaveMemoryInput)
 PLATFORM_FORGET_MEMORY_SCHEMA = pinned_input_schema(PlatformForgetMemoryInput)
-PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA = pinned_input_schema(
-    PlatformExtractTranscriptMemoriesInput
-)
+PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA = pinned_input_schema(PlatformExtractTranscriptMemoriesInput)
 
 
 class PlatformGraphQueryInput(BaseModel):

@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from palatium_ai.domain.policies.retention import RetentionClass, RetentionPolicy, RetentionWindows
 from palatium_ai.domain.ports.retention import RetentionClassReport
+from palatium_ai.infrastructure.retention._scalars import rpc_int
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -64,11 +65,11 @@ class KnowledgeOrphanRetentionHandler:
             text("SELECT knowledge.retention_count_orphans(:cutoff)"),
             {"cutoff": cutoff},
         )
-        return int(result.scalar_one() or 0)
+        return rpc_int(result.scalar_one())
 
     async def _delete(self, session: AsyncSession, *, cutoff: datetime, limit: int) -> int:
         result = await session.execute(
             text("SELECT knowledge.retention_delete_orphans(:cutoff, :lim)"),
             {"cutoff": cutoff, "lim": limit},
         )
-        return int(result.scalar_one() or 0)
+        return rpc_int(result.scalar_one())

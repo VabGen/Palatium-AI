@@ -78,9 +78,7 @@ def _intent_payload(case: BenchmarkCase) -> str:
 def _service_for_case(case: BenchmarkCase) -> IntentService:
     mcp = FakeMCPRegistry() if case.requires_mcp else None
     if case.requires_mcp:
-        researcher_llm: FakeLLMPort | SequentialFakeLLMPort = SequentialFakeLLMPort(
-            [json.dumps({"query": case.user_text})]
-        )
+        researcher_llm: FakeLLMPort | SequentialFakeLLMPort = SequentialFakeLLMPort([json.dumps({"query": case.user_text})])
     else:
         researcher_llm = FakeLLMPort(
             json.dumps(

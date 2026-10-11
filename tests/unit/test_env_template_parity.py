@@ -185,9 +185,7 @@ def test_every_template_declares_the_full_canon(template: Path) -> None:
 def test_env_files_contain_no_stray_keys(env_file: Path) -> None:
     """A typo / renamed key is otherwise indistinguishable from an unset one."""
     known = _settings_keys() | _compose_keys() | NON_SETTINGS_KEYS
-    strays = sorted(
-        key for key in _declared_keys(env_file) if key not in known and not key.startswith(NON_SETTINGS_PREFIXES)
-    )
+    strays = sorted(key for key in _declared_keys(env_file) if key not in known and not key.startswith(NON_SETTINGS_PREFIXES))
     assert not strays, f"{env_file.name} has unknown key(s): {', '.join(strays)}"
 
 

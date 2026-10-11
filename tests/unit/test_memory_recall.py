@@ -77,6 +77,31 @@ async def test_recall_drops_low_confidence_hits() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_recall_kinds_filter_preference_only() -> None:
+    """capability_discovery path: durable Select keeps preference, drops fact (W3)."""
+    port = InMemoryMemoryPort()
+    await port.put(
+        namespace=thread_namespace("t-cap"),
+        key="pref",
+        value={"text": "User prefers graph_query for org charts", "kind": "preference", "confidence": 0.95},
+    )
+    await port.put(
+        namespace=thread_namespace("t-cap"),
+        key="fact",
+        value={"text": "Org chart lives in Neo4j", "kind": "fact", "confidence": 0.95},
+    )
+    bundle = await recall_for_thread(
+        port,
+        thread_id="t-cap",
+        query="what tools can you use",
+        limit=4,
+        kinds=("preference",),
+    )
+    assert len(bundle.hits) == 1
+    assert bundle.hits[0].kind == "preference"
+
+
+@pytest.mark.asyncio()
 async def test_recall_merges_user_namespace_preferences() -> None:
     port = InMemoryMemoryPort()
     await port.put(

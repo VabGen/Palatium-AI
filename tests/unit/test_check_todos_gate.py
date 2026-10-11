@@ -123,9 +123,7 @@ def test_dangling_ticket_path_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(module, "_ROOT", tmp_path)
     (tmp_path / "plans").mkdir()
 
-    findings, records = module._inspect_line(
-        "sample.py", 1, _record("team", "plans/missing-plan §2", "2026-09-01"), date.today()
-    )
+    findings, records = module._inspect_line("sample.py", 1, _record("team", "plans/missing-plan §2", "2026-09-01"), date.today())
 
     assert records == []
     assert len(findings) == 1
@@ -197,9 +195,7 @@ def test_pyproject_toml_is_in_scan_files() -> None:
     assert "pyproject.toml" in module._SCAN_FILES
 
 
-def test_stale_records_are_reported_without_blocking(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_stale_records_are_reported_without_blocking(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Age is visible but not fatal by default: a gate would be beaten by a date bump."""
     module = _load_module()
     old = _record("team", _VALID_TICKET, "2020-01-01")

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 from datetime import UTC, datetime
 from typing import Any
@@ -19,6 +20,9 @@ _RELEVANCE_WEIGHT = 0.4
 _FREQUENCY_WEIGHT = 0.2
 _FREQUENCY_SATURATION = 10
 _DEFAULT_HALF_LIFE_DAYS = 7.0
+_MIN_TERM_CHARS = 3
+_TERM_STEM_CHARS = 5
+_TERM_RE = re.compile(r"\w+", re.UNICODE)
 
 MemoryHitTuple = tuple[str, float, dict[str, object]]
 
@@ -63,6 +67,24 @@ def frequency_score(access_frequency: int, *, saturation: int = _FREQUENCY_SATUR
     if access_frequency <= 0:
         return 0.0
     return min(1.0, access_frequency / float(saturation))
+
+
+def lexical_relevance(query: str, text: str) -> float:
+    """Share of query terms present in ``text`` ∈ [0, 1] (graph facts have no vector score).
+
+    Terms are Unicode words of at least ``_MIN_TERM_CHARS``; a term matches when the
+    fact has a word with the same leading ``_TERM_STEM_CHARS`` — a language-agnostic
+    stand-in for stemming so inflected forms (документ / документе) still match.
+    """
+    query_stems = _term_stems(query)
+    if not query_stems:
+        return 0.0
+    text_stems = _term_stems(text)
+    return len(query_stems & text_stems) / len(query_stems)
+
+
+def _term_stems(value: str) -> set[str]:
+    return {word[:_TERM_STEM_CHARS] for word in _TERM_RE.findall(value.casefold()) if len(word) >= _MIN_TERM_CHARS}
 
 
 def compute_importance(

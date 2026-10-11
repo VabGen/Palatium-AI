@@ -16,5 +16,5 @@ CONTEXT_WEAVER_CONFIG = AgentConfig(
 )
 
 WEAVING_CONFIG = CONTEXT_WEAVER_CONFIG
+# Deterministic planner (no LLM): a produced plan — including clarify — is certain.
 PLANNED_CONFIDENCE = 1.0
-CLARIFY_CONFIDENCE = 0.5

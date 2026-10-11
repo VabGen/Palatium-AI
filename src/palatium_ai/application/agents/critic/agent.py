@@ -124,6 +124,7 @@ class CriticAgent(BaseAgent):
                         "route": task_input.context_packet.route,
                         "selected_strategy": task_input.selected_strategy,
                         "continuation_kind": task_input.continuation_kind,
+                        "candidate_capabilities": list(task_input.context_packet.candidate_capabilities),
                         "context_summary": task_input.context_packet.context_summary,
                         "attachment_context": task_input.context_packet.untrusted_context,
                         "classification_confidence": task_input.classification_confidence,

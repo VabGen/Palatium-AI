@@ -73,9 +73,7 @@ def hitl_api_client(
         acknowledge_quality_approve=acknowledge,
         resume_after_tool_approval=AsyncMock(),
     )
-    session_service = SimpleNamespace(
-        get_session=AsyncMock(return_value=SimpleNamespace(user_id="anonymous", thread_id="th-1"))
-    )
+    session_service = SimpleNamespace(get_session=AsyncMock(return_value=SimpleNamespace(user_id="anonymous", thread_id="th-1")))
     resources = SimpleNamespace(
         hitl_service=hitl_service,
         intent_service=intent_service,

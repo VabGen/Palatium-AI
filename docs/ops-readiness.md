@@ -163,7 +163,10 @@ poetry run python scripts/run_agent_evals_nightly.py
 | RLS `memory.entries` / `knowledge.*` | — | policy + `FORCE`; session `set_config('palatium.user_id')` via `set_rls_user_scope` (fail-closed); role `palatium_app` **NOBYPASSRLS** (migration `b3c4d5e6f7a8`) |
 | Direct `PlatformToolHandler.call_tool` | — | bypasses actor bind (tests/local only); production path goes through `call_mcp_tool` |
 | `POST /api/memory/extract` | — | HITL `mem-extract-*`; **503** если sleep-time worker выключен |
-| `GRAPH_QUERY_BACKEND` | `in_memory` | `neo4j` opt-in |
+| `GRAPH_QUERY_BACKEND` | `in_memory` | **staging/prod: `neo4j`** (GET `/ready` warns otherwise; SB4) |
+| `MEMORY_BACKEND` | `postgres` | staging/prod force `postgres` (GET `/ready`) |
+| `memory-promote` compose | profile `memory-jobs` | `MEMORY_PROMOTE_USER_IDS` + interval; out-of-band promote (SB4) |
+| Memory Select SLA | scratchpad+L2 same-session; L3 next turn+; L4 after promote (≥`MEMORY_PROMOTE_MIN_ACCESS_FREQUENCY`) | Super Brain |
 | `WEB_FALLBACK_BACKEND` | `stub` | `http` + `WEB_FALLBACK_PROVIDER` (`ddg`/`brave`) |
 | `WEB_FALLBACK_RETRY_*` / `WEB_FALLBACK_CIRCUIT_*` | 3 / 30s | fail-closed empty hits + note |
 

@@ -51,8 +51,7 @@ class SearchKnowledgeQuery(BaseModel):
     source_document_id: str | None = Field(
         default=None,
         max_length=128,
-        description="When set, only chunks whose source_document_id equals this value "
-        "(attachment UUID or project:<id>:<hex>).",
+        description="When set, only chunks whose source_document_id equals this value (attachment UUID or project:<id>:<hex>).",
     )
     limit: int = Field(default=8, ge=1, le=32)
 

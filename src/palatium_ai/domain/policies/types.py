@@ -44,6 +44,18 @@ UnderspecificationKind = Literal[
 
 ContinuationKind = Literal["format", "answer", "new_topic", "clarify"]
 
+# Structural length floor: user turn long enough to be a document/payload vs
+# phatic ping. Shared by Continuity + Critic (055 — one constant, not copies).
+SUBSTANTIVE_USER_PAYLOAD_CHARS = 400
+
+# Intent ``candidate_capabilities`` tags for generation asks. Generation stays a
+# ``knowledge_request`` (no new TaskKind): planner sends ``compose`` to reason_only
+# (``draft`` keeps retrieval), Formatter keeps the generated text's own shape.
+CONTENT_GENERATION_CAPABILITY = "compose"
+DOCUMENT_GENERATION_CAPABILITY = "draft"
+# Exact body of a file/tool payload (OCR, extract, "дай текст"). No second paraphrase.
+VERBATIM_EXTRACTION_CAPABILITY = "verbatim_extraction"
+
 # --- Routing / execution (supervisor, researcher, critic) ---
 
 ExecutionStrategy = Literal[
@@ -74,7 +86,11 @@ LOW_RISK_ROUTE_STRATEGIES: frozenset[RouteStrategy] = frozenset(
 UntrustedContentAction = Literal["allow", "mask", "quarantine", "reject"]
 
 __all__ = [
+    "CONTENT_GENERATION_CAPABILITY",
+    "DOCUMENT_GENERATION_CAPABILITY",
     "LOW_RISK_ROUTE_STRATEGIES",
+    "SUBSTANTIVE_USER_PAYLOAD_CHARS",
+    "VERBATIM_EXTRACTION_CAPABILITY",
     "AgentRole",
     "ContinuationKind",
     "ExecutionStrategy",

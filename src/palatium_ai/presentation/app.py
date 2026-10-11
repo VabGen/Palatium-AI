@@ -87,9 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         window_seconds=resolved_settings.security.api_rate_limit_window_seconds,
         path_prefixes=resolved_settings.security.rate_limit_path_prefixes,
     )
-    metrics_public = (
-        resolved_settings.security.metrics_public if resolved_settings.app.environment == "development" else False
-    )
+    metrics_public = resolved_settings.security.metrics_public if resolved_settings.app.environment == "development" else False
     application.add_middleware(
         AuthMiddleware,
         security=resolved_settings.security,
@@ -290,8 +288,7 @@ def _assert_environment_hardening(settings: Settings) -> None:
     step_up_method = getattr(settings.security, "hitl_step_up_method", "hmac_stub")
     if step_up_method == "hmac_stub":
         raise RuntimeError(
-            "HITL_STEP_UP_METHOD=hmac_stub is forbidden when ENVIRONMENT is staging or production "
-            "(use idp_acr or webauthn)"
+            "HITL_STEP_UP_METHOD=hmac_stub is forbidden when ENVIRONMENT is staging or production (use idp_acr or webauthn)"
         )
     # 020 / 055: symmetric JWT in a hardened environment is a shared-secret footgun — require
     # asymmetric signing/verification (JWKS). Default HS256 must not silently reach production.
@@ -307,9 +304,7 @@ def _assert_environment_hardening(settings: Settings) -> None:
     # 020: HITL action tokens are HMAC even with asymmetric JWT — require a non-trivial key.
     hitl_secret = getattr(settings.security, "hitl_signing_secret", None)
     if hitl_secret is not None and 0 < len(hitl_secret.get_secret_value().strip()) < 32:
-        raise RuntimeError(
-            "HITL_SIGNING_SECRET must be at least 32 characters when ENVIRONMENT is staging or production"
-        )
+        raise RuntimeError("HITL_SIGNING_SECRET must be at least 32 characters when ENVIRONMENT is staging or production")
 
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104 — CORS origin allowlist, not a bind address

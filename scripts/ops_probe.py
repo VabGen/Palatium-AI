@@ -77,6 +77,24 @@ def main() -> int:
     if not ok:
         failed += 1
 
+    status, body = _request("GET", f"{base}/ready")
+    ready_ok = status == 200
+    ready_note = "parse body.status / warnings (SB4 graph+memory backends)"
+    if ready_ok:
+        try:
+            payload = json.loads(body)
+            ready_status = str(payload.get("status", ""))
+            warnings = payload.get("warnings") or []
+            ready_note = f"status={ready_status}; warnings={len(warnings)}"
+            # Local/dev may be degraded (in_memory graph); still probe endpoint.
+            ready_ok = ready_status in {"ok", "degraded"}
+        except json.JSONDecodeError:
+            ready_ok = False
+            ready_note = "non-JSON body"
+    results.append({"check": "ready", "status": status, "ok": ready_ok, "note": ready_note})
+    if not ready_ok:
+        failed += 1
+
     status, body = _request("GET", f"{base}/metrics")
     metrics_ok = status == 200 or status == 401
     results.append(

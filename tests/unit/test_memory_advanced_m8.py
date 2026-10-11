@@ -173,9 +173,7 @@ async def test_save_memory_optional_emotional_valence() -> None:
             "namespace_kind": "user",
             "scope_id": "emo",
             "entry_key": "e1",
-            "value_json": json.dumps(
-                {"text": "Felt great about the release", "confidence": 0.9, "emotional_valence": 0.7}
-            ),
+            "value_json": json.dumps({"text": "Felt great about the release", "confidence": 0.9, "emotional_valence": 0.7}),
         },
     )
     assert ok.is_error is False

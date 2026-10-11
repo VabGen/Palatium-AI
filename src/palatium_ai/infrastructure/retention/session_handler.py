@@ -82,9 +82,6 @@ class SessionTranscriptRetentionHandler:
     ) -> list[str]:
         batch = max(1, min(limit, self._windows.batch_size))
         result = await session.execute(
-            select(SessionORM.thread_id)
-            .where(SessionORM.updated_at < cutoff)
-            .order_by(SessionORM.updated_at.asc())
-            .limit(batch)
+            select(SessionORM.thread_id).where(SessionORM.updated_at < cutoff).order_by(SessionORM.updated_at.asc()).limit(batch)
         )
         return [str(row) for row in result.scalars().all()]

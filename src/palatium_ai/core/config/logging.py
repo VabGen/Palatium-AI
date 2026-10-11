@@ -12,9 +12,7 @@ from .base import BaseConfig
 class LoggingConfig(BaseConfig):
     """Настройки вывода логов."""
 
-    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
-        default="INFO", validation_alias="LOG_LEVEL"
-    )
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="INFO", validation_alias="LOG_LEVEL")
     json_logs: bool = Field(default=False, validation_alias="LOG_JSON")
     file: str | None = Field(default=None, validation_alias="LOG_FILE")
     json_file: str | None = Field(default=None, validation_alias="LOG_JSON_FILE")

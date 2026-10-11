@@ -136,6 +136,21 @@ class InMemoryGraphWritePort:
                 out.append(_to_record(row))
         return out
 
+    async def list_active_facts(
+        self,
+        *,
+        user_id: str,
+        limit: int = 8,
+        as_of: datetime | None = None,
+        thread_id: str | None = None,
+    ) -> list[GraphFactRecord]:
+        """Budgeted active facts for hot-path L4 Select (SB3)."""
+        _ = thread_id  # in-memory store has no thread index; filter unused
+        moment = as_of or datetime.now(UTC)
+        rows = self.list_facts_as_of(user_id=user_id, as_of=moment)
+        rows.sort(key=lambda r: (r.importance, r.confidence), reverse=True)
+        return rows[: max(1, min(int(limit), 32))]
+
     def _active(self, key: tuple[str, str], *, as_of: datetime) -> _StoredFact | None:
         for node_id in reversed(self._index.get(key, [])):
             row = self._by_node[node_id]

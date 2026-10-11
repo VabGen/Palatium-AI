@@ -96,9 +96,7 @@ def _ratio(count_instructions: _Counted, build: Callable[[int], Callable[[], obj
     return count_instructions(build(_SMALL * _SCALE_FACTOR)) / baseline
 
 
-def _assert_at_most_linear(
-    count_instructions: _Counted, build: Callable[[int], Callable[[], object]], label: str
-) -> float:
+def _assert_at_most_linear(count_instructions: _Counted, build: Callable[[int], Callable[[], object]], label: str) -> float:
     """Fail when ``_SCALE_FACTOR``x input costs quadratic-order instructions."""
     ratio = _ratio(count_instructions, build)
     assert ratio <= _MAX_RATIO, f"{label} looks super-linear: {ratio:.2f}x instructions for {_SCALE_FACTOR}x input"

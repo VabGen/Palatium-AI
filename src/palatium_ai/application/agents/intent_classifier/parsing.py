@@ -36,11 +36,9 @@ def parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
     if task_kind == "social_conversation":
         requires_mcp = False
     raw_capabilities = payload.get("candidate_capabilities", [])
-    capabilities: tuple[str, ...]
-    if isinstance(raw_capabilities, list):
-        capabilities = tuple(str(item) for item in raw_capabilities if str(item))
-    else:
-        capabilities = tuple()
+    capabilities: tuple[str, ...] = (
+        tuple(str(item) for item in raw_capabilities if str(item)) if isinstance(raw_capabilities, list) else ()
+    )
 
     return UserChoiceIntentPolicy.normalize(
         IntentClassifierOutput(
@@ -71,6 +69,7 @@ def _coerce_underspecification_kind(payload: dict[str, object]) -> Underspecific
 
 
 def _coerce_task_kind(value: object) -> TaskKind:
-    if isinstance(value, str) and value in _VALID_TASK_KINDS:
-        return cast("TaskKind", value)
-    return "clarification_needed"
+    """Unknown labels take the default answer path — never a clarification (055)."""
+    if isinstance(value, str) and value.strip() in _VALID_TASK_KINDS:
+        return cast("TaskKind", value.strip())
+    return "knowledge_request"

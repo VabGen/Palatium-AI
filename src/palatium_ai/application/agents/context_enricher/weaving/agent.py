@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
-from palatium_ai.application.agents.context_enricher.weaving.config import CLARIFY_CONFIDENCE, PLANNED_CONFIDENCE
+from palatium_ai.application.agents.context_enricher.weaving.config import PLANNED_CONFIDENCE
 from palatium_ai.application.agents.context_enricher.weaving.parsing import decode_context_weaver_input
 from palatium_ai.application.agents.context_enricher.weaving.planning import build_context_summary
 from palatium_ai.application.services.execution_planner import ExecutionPlanner
@@ -17,7 +17,6 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.context_weaver import ContextWeaverOutput
-from palatium_ai.domain.agents.execution import CLARIFY_STRATEGY
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.ports.harness import HarnessPort
 
@@ -113,14 +112,12 @@ class ContextWeaverAgent(BaseAgent):
             available_capabilities=task_input.candidate_capabilities,
         )
 
-        requires_review = execution_plan.strategy == CLARIFY_STRATEGY
-        status: Literal["success", "failure", "partial"] = "partial" if requires_review else "success"
-        confidence = CLARIFY_CONFIDENCE if requires_review else PLANNED_CONFIDENCE
-
+        # The plan is a deterministic function of routing; strategy="clarify" is a
+        # decision already made upstream (ClarificationGatePolicy), not weaving doubt.
         return AgentOutput(
             task_id=input.task_id,
-            status=status,
-            confidence=confidence,
+            status="success",
+            confidence=PLANNED_CONFIDENCE,
             output=output,
         )
 

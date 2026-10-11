@@ -163,9 +163,7 @@ def build_hitl_service(
         recipients = security.hitl_notify_email_recipients
         if recipients and security.hitl_notify_smtp_host.strip() and security.hitl_notify_email_from.strip():
             password = (
-                security.hitl_notify_smtp_password.get_secret_value()
-                if security.hitl_notify_smtp_password is not None
-                else None
+                security.hitl_notify_smtp_password.get_secret_value() if security.hitl_notify_smtp_password is not None else None
             )
             channels.append(
                 EmailHitlNotifier(
@@ -388,9 +386,7 @@ def build_intent_service(
                 min_access_frequency=settings.memory.promote_min_access_frequency,
                 min_importance=settings.memory.promote_min_importance,
             )
-        extract_queue = (
-            PostgresExtractJobQueue(session_factory) if session_factory is not None else InMemoryExtractJobQueue()
-        )
+        extract_queue = PostgresExtractJobQueue(session_factory) if session_factory is not None else InMemoryExtractJobQueue()
         memory_extract = MemoryExtractService(
             harness=harness,
             memory_keeper=memory_keeper,
@@ -447,6 +443,7 @@ def build_intent_service(
         turn_hop_budget_ms=settings.observability.turn_hop_budget_ms,
         attachment_service=attachment_service,
         response_cache=response_cache,
+        graph_write=graph_write,
     )
     return intent_service, memory_extract, capability_index, document_ingest
 
@@ -550,9 +547,7 @@ def build_attachment_service(
     from palatium_ai.infrastructure.connectors import DisabledAttachmentConnector
 
     analysis = (
-        LocalDataframeAttachmentAnalysis()
-        if settings.attachments.analysis_backend == "local"
-        else DisabledAttachmentAnalysis()
+        LocalDataframeAttachmentAnalysis() if settings.attachments.analysis_backend == "local" else DisabledAttachmentAnalysis()
     )
     logger.info(
         "AttachmentService wired",

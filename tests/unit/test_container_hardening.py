@@ -227,9 +227,7 @@ def test_litellm_healthcheck_covers_its_migration_startup() -> None:
     healthcheck = _service("litellm").get("healthcheck", {})
     start_period = str(healthcheck.get("start_period", ""))
     assert start_period.endswith("s"), f"litellm start_period must be explicit, got {start_period!r}"
-    assert int(start_period.removesuffix("s")) >= 120, (
-        f"litellm start_period {start_period} is shorter than the migration run"
-    )
+    assert int(start_period.removesuffix("s")) >= 120, f"litellm start_period {start_period} is shorter than the migration run"
 
 
 def test_litellm_runs_a_single_worker() -> None:

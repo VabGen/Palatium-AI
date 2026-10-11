@@ -17,8 +17,5 @@ class FormatterConfig(BaseConfig):
     debug_stream_deltas: bool = Field(
         default=False,
         validation_alias="FORMATTER_DEBUG_STREAM_DELTAS",
-        description=(
-            "When true, FormatterAgent emits raw JSON chunks as formatter_delta. "
-            "Leave false in production."
-        ),
+        description=("When true, FormatterAgent emits raw JSON chunks as formatter_delta. Leave false in production."),
     )

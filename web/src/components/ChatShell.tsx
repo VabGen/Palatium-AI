@@ -26,6 +26,7 @@ import {
   requestAttachmentIndex,
   requestAttachmentQuarantineRestore,
   listAttachmentConnectors,
+  previewTextFromFormatterJson,
   processIntentStream,
   sendFeedback,
 } from '../api/client';
@@ -33,6 +34,7 @@ import type { AttachmentConnectorSource } from '../api/client';
 import type { ContentDocument, FormatterTaskResult, HITLCardView } from '../types/contentDocument';
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
+import { closeIncompleteMarkdown } from '../lib/incompleteMarkdown';
 import { connectSessionSocket, startSessionSocketPing } from '../lib/sessionSocket';
 import { formatNumber, t } from '../i18n';
 import { setPanelOpen, startNewThread as startNewThreadInRuntime } from '../runtime/store';
@@ -216,9 +218,41 @@ export function ChatShell() {
   const [projectId, setProjectId] = useState('');
   const [connectors, setConnectors] = useState<AttachmentConnectorSource[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  /** Progressive formatter SSE preview (JSON → extracted ``text`` fields). */
+  const [streamPreview, setStreamPreview] = useState('');
   const messageEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const streamPreviewRafRef = useRef(0);
+  const streamPreviewPendingRef = useRef('');
+
+  const scheduleStreamPreview = useCallback((text: string) => {
+    streamPreviewPendingRef.current = text;
+    if (streamPreviewRafRef.current !== 0) return;
+    streamPreviewRafRef.current = requestAnimationFrame(() => {
+      streamPreviewRafRef.current = 0;
+      setStreamPreview(closeIncompleteMarkdown(streamPreviewPendingRef.current));
+    });
+  }, []);
+
+  const clearStreamPreview = useCallback(() => {
+    if (streamPreviewRafRef.current !== 0) {
+      cancelAnimationFrame(streamPreviewRafRef.current);
+      streamPreviewRafRef.current = 0;
+    }
+    streamPreviewPendingRef.current = '';
+    setStreamPreview('');
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.abort();
+      if (streamPreviewRafRef.current !== 0) {
+        cancelAnimationFrame(streamPreviewRafRef.current);
+      }
+    };
+  }, []);
 
   const uploading = attachments.some(
     chip => chip.status === 'uploading' || chip.status === 'scanning'
@@ -587,6 +621,10 @@ export function ChatShell() {
 
     setInput('');
     setBusy(true);
+    clearStreamPreview();
+    streamAbortRef.current?.abort();
+    const abort = new AbortController();
+    streamAbortRef.current = abort;
     const userMsgId = crypto.randomUUID();
     setMessages(prev => [
       ...prev,
@@ -594,7 +632,19 @@ export function ChatShell() {
     ]);
 
     try {
-      const result = await processIntentStream(text, threadId, userId, orgId, attachmentIds);
+      let hasAnswerDelta = false;
+      const result = await processIntentStream(text, threadId, userId, orgId, attachmentIds, {
+        signal: abort.signal,
+        onAnswerDelta: (_delta, accumulated) => {
+          hasAnswerDelta = true;
+          scheduleStreamPreview(accumulated);
+        },
+        onFormatterDelta: (_delta, accumulated) => {
+          if (hasAnswerDelta) return;
+          const preview = previewTextFromFormatterJson(accumulated);
+          if (preview) scheduleStreamPreview(preview);
+        },
+      });
       const hydratedCards = await hydratePendingHitlCards(
         fieldsFromFormatterResult(result).hitlCards,
         userId,
@@ -607,6 +657,9 @@ export function ChatShell() {
       // leave the composer. Failed chips stay so the user can see why / retry.
       setAttachments(prev => prev.filter(chip => chip.status !== 'ready'));
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
       // Сообщение уже humanized в `errorDetail` (см. client.ts).
       const message = err instanceof Error ? err.message : t('error.requestFailed');
       setMessages(prev => [
@@ -624,6 +677,10 @@ export function ChatShell() {
       ]);
       // Keep ready chips on failure so the user can retry without re-upload.
     } finally {
+      if (streamAbortRef.current === abort) {
+        streamAbortRef.current = null;
+      }
+      clearStreamPreview();
       setBusy(false);
     }
   }
@@ -645,13 +702,30 @@ export function ChatShell() {
         )
       );
       setBusy(true);
+      clearStreamPreview();
+      streamAbortRef.current?.abort();
+      const abort = new AbortController();
+      streamAbortRef.current = abort;
       try {
+        let hasAnswerDelta = false;
         const result = await processIntentStream(
           userMsg.text,
           threadId,
           userId,
           orgId,
-          userMsg.attachmentIds ?? []
+          userMsg.attachmentIds ?? [],
+          {
+            signal: abort.signal,
+            onAnswerDelta: (_delta, accumulated) => {
+              hasAnswerDelta = true;
+              scheduleStreamPreview(accumulated);
+            },
+            onFormatterDelta: (_delta, accumulated) => {
+              if (hasAnswerDelta) return;
+              const preview = previewTextFromFormatterJson(accumulated);
+              if (preview) scheduleStreamPreview(preview);
+            },
+          }
         );
         const hydratedCards = await hydratePendingHitlCards(
           fieldsFromFormatterResult(result).hitlCards,
@@ -667,6 +741,9 @@ export function ChatShell() {
         );
         toast.success(t('toast.regenerated'));
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
         setMessages(prev =>
           prev.map(msg =>
             msg.id === messageId && msg.role === 'assistant'
@@ -680,10 +757,14 @@ export function ChatShell() {
         );
         toast.error(t('toast.regenerateFailed'));
       } finally {
+        if (streamAbortRef.current === abort) {
+          streamAbortRef.current = null;
+        }
+        clearStreamPreview();
         setBusy(false);
       }
     },
-    [messages, threadId, userId, orgId]
+    [messages, threadId, userId, orgId, clearStreamPreview, scheduleStreamPreview]
   );
 
   const handleFeedback = useCallback(
@@ -948,12 +1029,18 @@ export function ChatShell() {
 
         {busy && !messages.some(m => m.role === 'assistant' && m._regenerating) && (
           <div className="msg assistant pending fade-in">
-            <span className="typing-dots">
-              <span>.</span>
-              <span>.</span>
-              <span>.</span>
-            </span>
-            <span>{t('msg.agentsWorking')}</span>
+            {streamPreview ? (
+              <p className="stream-preview">{streamPreview}</p>
+            ) : (
+              <>
+                <span className="typing-dots">
+                  <span>.</span>
+                  <span>.</span>
+                  <span>.</span>
+                </span>
+                <span>{t('msg.agentsWorking')}</span>
+              </>
+            )}
           </div>
         )}
         <div ref={messageEndRef} />
