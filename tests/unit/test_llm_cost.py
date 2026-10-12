@@ -45,10 +45,13 @@ def test_estimate_cost_unknown_model_is_zero() -> None:
     assert cost == 0.0
 
 
-def test_estimate_cost_skips_gateway_tier_alias() -> None:
+def test_estimate_cost_resolves_registered_tier_alias() -> None:
+    from palatium_ai.core.finops.pricing import register_tier_costs
+
+    register_tier_costs()
     cost = estimate_completion_cost_usd(
         model="tier-small",
         prompt_tokens=100,
         completion_tokens=50,
     )
-    assert cost == 0.0
+    assert cost > 0.0
