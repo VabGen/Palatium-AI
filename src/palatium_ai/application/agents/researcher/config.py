@@ -24,6 +24,7 @@ RESEARCHER_CONFIG = AgentConfig(
         "mcp:platform.graph_query",
         "mcp:platform.skill_reference",
         "mcp:platform.web_fallback",
+        "mcp:platform.read_attachment",
     ),
     timeout_seconds=90,
     max_retries=3,

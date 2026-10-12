@@ -13,7 +13,7 @@ alwaysApply: true
 
 `search_knowledge`, `search_memory`, `save_memory`, `forget_memory`,
 `extract_transcript_memories`, `ingest_document`, `graph_query`,
-`skill_reference`, `web_fallback`
+`skill_reference`, `web_fallback`, `read_attachment`
 
 Новый инструмент = правка этого перечня + отдельное обсуждение, не ad-hoc регистрация.
 Канонический набор мутаций памяти из 060 покрыт: `save_memory` / `forget_memory` /

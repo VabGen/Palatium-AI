@@ -197,15 +197,49 @@ class PlatformSkillReferenceInput(BaseModel):
     )
 
 
+class PlatformReadAttachmentInput(BaseModel):
+    """Input for ``mcp:platform.read_attachment`` (read; lazy OCR write-through)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Owner user id for RLS-scoped attachment reads.",
+    )
+    attachment_id: str = Field(
+        min_length=36,
+        max_length=36,
+        description="UUID of the attachment to read (owner-scoped).",
+    )
+    max_chars: str = Field(
+        default="32000",
+        max_length=6,
+        description="Max characters to return (1-500000), string-encoded for MCP.",
+    )
+    offset: str = Field(
+        default="0",
+        max_length=8,
+        description="Character offset into extracted text (string-encoded).",
+    )
+    force_ocr: str = Field(
+        default="false",
+        max_length=5,
+        description="If true, bypass derived-text cache and re-run DocumentParserPort.",
+    )
+
+
 PLATFORM_GRAPH_QUERY_SCHEMA = pinned_input_schema(PlatformGraphQueryInput)
 PLATFORM_WEB_FALLBACK_SCHEMA = pinned_input_schema(PlatformWebFallbackInput)
 PLATFORM_SKILL_REFERENCE_SCHEMA = pinned_input_schema(PlatformSkillReferenceInput)
+PLATFORM_READ_ATTACHMENT_SCHEMA = pinned_input_schema(PlatformReadAttachmentInput)
 
 __all__ = [
     "PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA",
     "PLATFORM_FORGET_MEMORY_SCHEMA",
     "PLATFORM_GRAPH_QUERY_SCHEMA",
     "PLATFORM_INGEST_DOCUMENT_SCHEMA",
+    "PLATFORM_READ_ATTACHMENT_SCHEMA",
     "PLATFORM_SAVE_MEMORY_SCHEMA",
     "PLATFORM_SEARCH_KNOWLEDGE_SCHEMA",
     "PLATFORM_SEARCH_MEMORY_SCHEMA",
@@ -215,6 +249,7 @@ __all__ = [
     "PlatformForgetMemoryInput",
     "PlatformGraphQueryInput",
     "PlatformIngestDocumentInput",
+    "PlatformReadAttachmentInput",
     "PlatformSaveMemoryInput",
     "PlatformSearchKnowledgeInput",
     "PlatformSearchMemoryInput",

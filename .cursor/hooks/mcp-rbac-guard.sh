@@ -30,6 +30,7 @@ READ_TOOLS=(
   "graph_query"
   "skill_reference"
   "web_fallback"
+  "read_attachment"
 )
 
 # Мутации/побочные эффекты — требуют HITL (020: interrupt()+Command(resume=...)

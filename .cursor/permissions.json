@@ -68,7 +68,8 @@
     "*:search_memory",
     "*:graph_query",
     "*:skill_reference",
-    "*:web_fallback"
+    "*:web_fallback",
+    "*:read_attachment"
   ],
 
   // Подсказки для Auto-review Auto-Run (действуют в соответствующем режиме).

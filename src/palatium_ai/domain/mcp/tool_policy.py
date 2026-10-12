@@ -44,6 +44,7 @@ from palatium_ai.domain.mcp.platform_schemas import (
     PLATFORM_FORGET_MEMORY_SCHEMA,
     PLATFORM_GRAPH_QUERY_SCHEMA,
     PLATFORM_INGEST_DOCUMENT_SCHEMA,
+    PLATFORM_READ_ATTACHMENT_SCHEMA,
     PLATFORM_SAVE_MEMORY_SCHEMA,
     PLATFORM_SEARCH_KNOWLEDGE_SCHEMA,
     PLATFORM_SEARCH_MEMORY_SCHEMA,
@@ -150,6 +151,12 @@ _PLATFORM_SIDE_EFFECTS: dict[str, PlatformToolPin] = {
         risk_tier="medium",
         requires_hitl=False,
     ),
+    "mcp:platform.read_attachment": PlatformToolPin(
+        side_effect="read",
+        schema_fingerprint=schema_fingerprint(PLATFORM_READ_ATTACHMENT_SCHEMA),
+        risk_tier="low",
+        requires_hitl=False,
+    ),
 }
 
 
@@ -199,6 +206,7 @@ _PLATFORM_INPUT_SCHEMAS: dict[str, dict[str, object]] = {
     "graph_query": PLATFORM_GRAPH_QUERY_SCHEMA,
     "skill_reference": PLATFORM_SKILL_REFERENCE_SCHEMA,
     "web_fallback": PLATFORM_WEB_FALLBACK_SCHEMA,
+    "read_attachment": PLATFORM_READ_ATTACHMENT_SCHEMA,
 }
 
 _PLATFORM_TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -217,6 +225,10 @@ _PLATFORM_TOOL_DESCRIPTIONS: dict[str, str] = {
         "level-1 catalog is in context key skill_catalog (065 progressive disclosure)."
     ),
     "web_fallback": "External web search fallback after local retrieval empty.",
+    "read_attachment": (
+        "On-demand read of a user-owned attachment (lazy Tesseract/Vision OCR with "
+        "write-through cache; call when attachment_context says text is missing)."
+    ),
 }
 
 
