@@ -136,6 +136,37 @@ class _FakeAttachmentRepository:
             raise LookupError(msg)
         del self.rows[attachment_id]
 
+    async def update_extraction_state(
+        self,
+        attachment_id: UUID,
+        *,
+        user_id: str,
+        ocr_applied: bool,
+        extract_status: str,
+        extracted_chars: int,
+        derived_text_key: str | None = None,
+        page_count: int | None = None,
+        contains_pii: bool | None = None,
+    ) -> Attachment:
+        row = await self.get(attachment_id, user_id=user_id)
+        if row is None:
+            msg = f"no attachment row for {attachment_id}"
+            raise LookupError(msg)
+        updates: dict[str, object] = {
+            "ocr_applied": ocr_applied,
+            "extract_status": extract_status,
+            "extracted_chars": extracted_chars,
+        }
+        if derived_text_key is not None:
+            updates["derived_text_key"] = derived_text_key
+        if page_count is not None:
+            updates["page_count"] = page_count
+        if contains_pii is not None:
+            updates["contains_pii"] = contains_pii
+        updated = row.model_copy(update=updates)
+        self.rows[attachment_id] = updated
+        return updated
+
     async def list_reclaimable(
         self,
         cutoff: datetime,
@@ -621,8 +652,12 @@ async def test_build_turn_context_reports_missing_derived_content() -> None:
     assert attachment.derived_text_key is not None
     await blob.delete(attachment.derived_text_key)
 
-    with pytest.raises(AttachmentContentMissingError):
-        await service.build_turn_context(attachment_ids=[attachment.id], user_id=_USER, thread_id=_THREAD)
+    # Soft NOTICE (not turn failure): agent can call platform.read_attachment.
+    ctx = await service.build_turn_context(attachment_ids=[attachment.id], user_id=_USER, thread_id=_THREAD)
+    assert len(ctx.blocks) == 1
+    assert "[!CAUTION]" in ctx.blocks[0].fenced_text
+    assert str(attachment.id) in ctx.blocks[0].fenced_text
+    assert "read_attachment" in ctx.blocks[0].fenced_text
 
 
 async def test_build_turn_context_rejects_unknown_attachment() -> None:

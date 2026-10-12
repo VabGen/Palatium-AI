@@ -449,7 +449,34 @@ class AttachmentService:
         # before the long AV/OCR path returns.
         if attachment.status != "scanning":
             attachment = await self._repository.save(attachment.model_copy(update={"status": "scanning"}))
+        return await self._run_pipeline_and_persist(attachment, audit_event="attachment_completed")
 
+    @traceable(name="attachment.reingest")
+    async def reingest(self, *, attachment_id: UUID, user_id: str) -> Attachment:
+        """Re-run AV/parse/OCR on an existing owner blob (on-demand; never bulk)."""
+        attachment = await self._require(attachment_id, user_id=user_id)
+        if attachment.status not in _USABLE_FOR_TURN:
+            raise AttachmentNotUsableError(attachment.id, state=attachment.status)
+        if attachment.is_expired:
+            raise AttachmentNotUsableError(attachment.id, state="expired")
+        attachment = await self._repository.save(
+            attachment.model_copy(
+                update={
+                    "status": "scanning",
+                    "rejection_reason": None,
+                    "error": None,
+                },
+            ),
+        )
+        return await self._run_pipeline_and_persist(attachment, audit_event="attachment_reingested")
+
+    async def _run_pipeline_and_persist(
+        self,
+        attachment: Attachment,
+        *,
+        audit_event: str,
+    ) -> Attachment:
+        """Shared complete/reingest persistence after ``pipeline.run``."""
         try:
             outcome = await self._pipeline.run(attachment, limits=self._limits)
         except Exception:
@@ -463,7 +490,7 @@ class AttachmentService:
                 ),
             )
             agent_metrics.record_error("attachments", "pipeline_unexpected")
-            logger.exception("attachment.complete unexpected failure", attachment_id=str(failed.id))
+            logger.exception("attachment.pipeline unexpected failure", attachment_id=str(failed.id))
             return failed
 
         updated = attachment
@@ -495,7 +522,7 @@ class AttachmentService:
         updated = updated.model_copy(update=row_update)
         saved = await self._repository.save(updated)
         await self._audit(
-            event="attachment_completed",
+            event=audit_event,
             thread_id=saved.thread_id or "",
             payload={
                 "attachment_id": str(saved.id),
@@ -508,10 +535,11 @@ class AttachmentService:
         if not outcome.admitted:
             agent_metrics.record_error("attachments", f"pipeline_{outcome.rejection_reason or 'refused'}")
         logger.info(
-            "attachment.complete",
+            "attachment.pipeline_persist",
             attachment_id=str(saved.id),
             status=saved.status,
             page_count=saved.page_count or 0,
+            audit_event=audit_event,
         )
         return saved
 
@@ -1156,19 +1184,54 @@ class AttachmentService:
             raise AttachmentNotUsableError(attachment.id, state=attachment.status)
         if attachment.is_expired:
             raise AttachmentNotUsableError(attachment.id, state="expired")
-        body = await self._reviewed_body(attachment)
         source = attachment_fence_source(attachment_id=attachment.id, filename=attachment.filename)
-        fence_body = body.text
-        if body.truncated:
-            # Explicit marker so Formatter/Researcher surface incompleteness instead
-            # of inventing a mid-word "full text unavailable" paraphrase (065).
+        try:
+            content = await self._read_content(attachment)
+        except AttachmentContentMissingError:
+            return self._missing_text_block(attachment, source=source)
+        if content.scan.action not in ("allow", "mask"):
+            raise AttachmentNotUsableError(attachment.id, state=content.scan.action)
+        if not content.safe_text.strip():
+            return self._missing_text_block(attachment, source=source)
+
+        report = scan_prompt_injection(content.safe_text)
+        prepared = UntrustedContentPolicy.prepare_fenced_attachment(
+            content.safe_text,
+            report,
+            thresholds=self._thresholds,
+        )
+        if not prepared.usable:
+            raise AttachmentNotUsableError(attachment.id, state=f"rescan_{prepared.action}")
+        fence_body = prepared.text
+        if content.truncated:
             fence_body = f"[attachment extraction truncated — full text unavailable]\n\n{fence_body}"
         return AttachmentContextBlock(
             attachment_id=attachment.id,
             filename=attachment.filename,
             source=source,
             fenced_text=wrap_untrusted_tool_output(fence_body, source=source),
-            action=body.action,
+            action=prepared.action,
+            page_count=attachment.page_count or 0,
+        )
+
+    def _missing_text_block(self, attachment: Attachment, *, source: str) -> AttachmentContextBlock:
+        """Ready attachment without usable text: NOTICE so the agent can tool-call (070)."""
+        aid = str(attachment.id)
+        notice = (
+            f"<<<ATTACHMENT:{attachment.filename}>>>\n"
+            "> [!CAUTION]\n"
+            "Текст не извлечён. Файл доступен для чтения по требованию.\n"
+            f"attachment_id: {aid}\n"
+            f'Вызови platform.read_attachment(attachment_id="{aid}") — '
+            "Tesseract / LLM Vision распознают скан и закэшируют результат.\n"
+            "<<<END_ATTACHMENT>>>"
+        )
+        return AttachmentContextBlock(
+            attachment_id=attachment.id,
+            filename=attachment.filename,
+            source=source,
+            fenced_text=wrap_untrusted_tool_output(notice, source=source),
+            action="allow",
             page_count=attachment.page_count or 0,
         )
 
