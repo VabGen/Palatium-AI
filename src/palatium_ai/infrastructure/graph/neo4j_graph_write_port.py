@@ -9,13 +9,16 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Protocol
 
+from palatium_ai.domain.graph.temporal import EXPIRED_AT_SENTINEL
 from palatium_ai.domain.graph.write_port import GraphFactRecord, GraphFactUpsert
 from palatium_ai.domain.policies.graph_fact import GraphFactPolicy
 
 # Fixed templates — never f-string user text into Cypher (070 / 020).
+# Active = not invalidated and not yet system-expired (NULL legacy or far-future sentinel).
 _FIND_ACTIVE_CYPHER = """
 MATCH (f:MemoryFact {user_id: $user_id, entry_key: $entry_key})
-WHERE f.invalid_at IS NULL AND f.expired_at IS NULL
+WHERE f.invalid_at IS NULL
+  AND (f.expired_at IS NULL OR f.expired_at > datetime())
 RETURN f.text AS text, f.node_id AS node_id, f.version AS version,
        coalesce(f.contains_pii, false) AS contains_pii
 ORDER BY coalesce(f.version, 1) DESC
@@ -47,7 +50,7 @@ CREATE (f:MemoryFact {
   valid_at: datetime($valid_at),
   created_at: datetime(),
   invalid_at: null,
-  expired_at: null
+  expired_at: datetime($sentinel)
 })
 RETURN f.node_id AS node_id
 """.strip()
@@ -71,7 +74,7 @@ CREATE (f:MemoryFact {
   valid_at: datetime($valid_at),
   created_at: datetime(),
   invalid_at: null,
-  expired_at: null
+  expired_at: datetime($sentinel)
 })
 CREATE (f)-[:SUPERSEDES]->(old)
 SET old.superseded_by = $node_id
@@ -80,7 +83,7 @@ RETURN f.node_id AS node_id
 
 _EXPIRE_CYPHER = """
 MATCH (f:MemoryFact {user_id: $user_id, entry_key: $entry_key})
-WHERE f.expired_at IS NULL
+WHERE f.expired_at IS NULL OR f.expired_at > datetime()
 SET f.expired_at = datetime(), f.updated_at = datetime()
 RETURN count(f) AS n
 """.strip()
@@ -212,6 +215,7 @@ class Neo4jGraphWritePort:
             "source_type": command.source_type,
             "contains_pii": bool(command.contains_pii),
             "valid_at": valid_at_iso,
+            "sentinel": EXPIRED_AT_SENTINEL,
         }
         if action == "supersede" and old_node_id:
             rows = await self._transport.run_write(

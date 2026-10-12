@@ -365,6 +365,7 @@ async def startup(settings: Settings) -> AppResources:
     feedback_service = FeedbackService(PostgresMessageFeedbackRepository(session_factory))
     checkpointer_handle = await create_checkpointer(settings)
     graph_ports = build_graph_ports(settings)
+    await _ensure_neo4j_memory_schema(graph_ports)
     attachment_ports = await build_attachment_ports(settings, session_factory)
     attachment_service: AttachmentService | None = None
     if attachment_ports is not None:
@@ -503,6 +504,21 @@ async def startup(settings: Settings) -> AppResources:
         attachment_service=attachment_service,
         feedback_service=feedback_service,
     )
+
+
+async def _ensure_neo4j_memory_schema(graph_ports: GraphPorts) -> None:
+    """Idempotent MemoryFact indexes + expired_at backfill (Phase 4). Soft-fail."""
+    closer = graph_ports._shared_closer
+    driver = getattr(closer, "driver", None) if closer is not None else None
+    if driver is None:
+        return
+    try:
+        from palatium_ai.infrastructure.memory.neo4j_schema import ensure_memory_schema
+
+        await ensure_memory_schema(driver)
+    except Exception as exc:
+        # App stays up; queries work without indexes, just slower (Phase 4 DoD).
+        logger.exception("neo4j.schema_bootstrap_failed", error=str(exc))
 
 
 async def _hitl_sweep_loop(hitl_service: HitlService) -> None:

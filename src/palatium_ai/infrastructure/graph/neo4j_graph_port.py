@@ -42,6 +42,11 @@ class Neo4jDriverTransport:
         self._driver = AsyncGraphDatabase.driver(uri.strip(), auth=(user.strip() or "neo4j", password))
         self._closed = False
 
+    @property
+    def driver(self) -> object:
+        """Underlying Neo4j AsyncDriver for runtime schema bootstrap (Phase 4)."""
+        return self._driver
+
     async def run_query(
         self,
         *,

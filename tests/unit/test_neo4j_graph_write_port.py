@@ -21,7 +21,7 @@ class _FakeWriteTransport:
 
     async def run_write(self, *, cypher: str, params: dict[str, object]) -> list[dict[str, object]]:
         self.calls.append((cypher, dict(params)))
-        if "WHERE f.invalid_at IS NULL AND f.expired_at IS NULL" in cypher:
+        if "WHERE f.invalid_at IS NULL" in cypher and "expired_at" in cypher and "CREATE" not in cypher:
             return [self._find_row] if self._find_row is not None else []
         if "RETURN count(f) AS n" in cypher:
             return [{"n": 1}]
@@ -63,6 +63,8 @@ async def test_upsert_fact_find_then_create_parameterized() -> None:
     assert create_params["importance"] == 0.91
     assert create_params["source_namespace"] == "user/alice"
     assert create_params["version"] == 1
+    assert create_params["sentinel"] == "9999-12-31T23:59:59Z"
+    assert "datetime($sentinel)" in create_cypher
 
 
 @pytest.mark.asyncio()

@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+# Far-future system-time sentinel: Neo4j omits null props, so writes/indexes need a
+# concrete ``expired_at`` to avoid UnknownPropertyKeyWarning (Phase 4).
+EXPIRED_AT_SENTINEL = "9999-12-31T23:59:59Z"
+
 # Parameterized Cypher fragment for ``graph_query`` (caller binds $as_of + $user_id).
 # ``datetime($as_of)`` — Neo4j stores bi-temporal props as DateTime; raw string compare
 # silently yields no rows (Wave M5 live verify 2026-10-06).
