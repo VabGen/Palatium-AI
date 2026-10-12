@@ -3,34 +3,9 @@
     {
       "name": "Default",
       "files": [
-        ".vscode/changelists.json",
-        ".pre-commit-config.yaml",
-        "tox.ini",
         "pyproject.toml",
-        "src/palatium_ai/core/observability/cost_tracker.py",
-        "src/palatium_ai/infrastructure/graph/neo4j_graph_port.py",
-        "src/palatium_ai/infrastructure/memory/graphiti_adapter.py",
-        "src/palatium_ai/infrastructure/memory/mem0_adapter.py",
-        "tests/conftest.py",
-        "scripts/smoke_hitl_choice.py",
-        "scripts/smoke_social_turn.py",
-        "src/palatium_ai/application/services/tool_argument_builder.py",
-        "src/palatium_ai/core/security/secret_scanner.py",
-        "src/palatium_ai/domain/graph/port.py",
-        "src/palatium_ai/domain/hitl/ports.py",
-        "src/palatium_ai/domain/hitl/step_up.py",
-        "src/palatium_ai/domain/knowledge/port.py",
-        "src/palatium_ai/domain/mcp/models.py",
-        "src/palatium_ai/domain/memory/ports.py",
-        "src/palatium_ai/domain/sessions/ports.py",
-        "src/palatium_ai/domain/web/port.py",
-        "src/palatium_ai/infrastructure/database/init_db.py",
-        "src/palatium_ai/infrastructure/mcp/base.py",
-        "src/palatium_ai/infrastructure/mcp/jwt_auth.py",
-        "src/palatium_ai/infrastructure/parsing/document_parser.py",
-        "src/palatium_ai/infrastructure/parsing/image_ocr.py",
-        "src/palatium_ai/infrastructure/parsing/pdf_vision.py",
-        "tests/unit/test_week3_observability.py"
+        ".vscode/changelists.json",
+        "scripts/install-tesseract.ps1"
       ]
     }
   ],

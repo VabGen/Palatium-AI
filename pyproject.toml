@@ -306,3 +306,26 @@ exclude_lines = [
 # === === === === === === === === === === === === === === === === === === === === === === === === === === === === ===
 
 # ===================================================================================================================
+
+# ================ Tesseract OCR installation =======================================================================
+# choco install tesseract -y
+# Проверь текущий PATH
+#   $env:PATH
+
+# Добавь путь к Tesseract (временно для текущей сессии)
+#   $env:PATH += ";C:\Program Files\Tesseract-OCR"
+# $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# Добавляет в User PATH
+#   [Environment]::SetEnvironmentVariable("Path", $env:PATH + ";C:\Program Files\Tesseract-OCR", "User")
+
+# Скачать русскую модель (~44 MB)
+# Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata" `
+#    -OutFile "C:\Program Files\Tesseract-OCR\tessdata\rus.traineddata"
+
+# Проверить что файл скачался
+# Test-Path "C:\Program Files\Tesseract-OCR\tessdata\rus.traineddata"
+
+# Список доступных языков
+# tesseract --list-langs
+# ===================================================================================================================
