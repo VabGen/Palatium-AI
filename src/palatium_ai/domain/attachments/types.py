@@ -48,7 +48,12 @@ AttachmentRejectionReason = Literal[
     "expired",
 ]
 
+# Row metadata for extraction state (nullable columns; see ``attachments.read``).
+# Closed vocabulary when set — never free-text from the client (010).
+AttachmentExtractStatus = Literal["text_ok", "ocr_ok", "vision_ok", "empty"]
+
 __all__ = [
+    "AttachmentExtractStatus",
     "AttachmentMode",
     "AttachmentRejectionReason",
     "AttachmentStatus",

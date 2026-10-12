@@ -14,6 +14,7 @@ from .errors import (
     AttachmentNotFoundError,
     AttachmentNotUsableError,
     AttachmentRestoreNotAllowedError,
+    AttachmentTooLargeError,
     AttachmentUploadTooLargeError,
 )
 from .indexing import (
@@ -44,12 +45,27 @@ from .policies import (
     AttachmentRetentionPolicy,
     IntakeDecision,
 )
-from .types import AttachmentMode, AttachmentRejectionReason, AttachmentStatus
+from .read import (
+    DEFAULT_READ_MAX_CHARS,
+    AttachmentReadRequest,
+    AttachmentReadResult,
+    ExtractStatus,
+    OcrEngine,
+    extraction_source_to_extract_status,
+    extraction_source_to_ocr_engine,
+)
+from .types import (
+    AttachmentExtractStatus,
+    AttachmentMode,
+    AttachmentRejectionReason,
+    AttachmentStatus,
+)
 
 __all__ = [
     "AUTO_ATTACH_CHARS",
     "DEFAULT_ATTACHMENT_LIMITS",
     "DEFAULT_MIN_AVG_CHARS_PER_PAGE",
+    "DEFAULT_READ_MAX_CHARS",
     "INTENT_TEXT_LIMIT",
     "SUPPORTED_MEDIA_TYPES",
     "Attachment",
@@ -60,6 +76,7 @@ __all__ = [
     "AttachmentContentMissingError",
     "AttachmentContextBlock",
     "AttachmentError",
+    "AttachmentExtractStatus",
     "AttachmentIndexPayload",
     "AttachmentIntakePolicy",
     "AttachmentIntakeRejectedError",
@@ -69,21 +86,28 @@ __all__ = [
     "AttachmentNotFoundError",
     "AttachmentNotUsableError",
     "AttachmentProjectRef",
+    "AttachmentReadRequest",
+    "AttachmentReadResult",
     "AttachmentRejectionReason",
     "AttachmentRestoreNotAllowedError",
     "AttachmentRestorePayload",
     "AttachmentRetentionPolicy",
     "AttachmentScanSummary",
     "AttachmentStatus",
+    "AttachmentTooLargeError",
     "AttachmentTurnContext",
     "AttachmentUploadTooLargeError",
+    "ExtractStatus",
     "ExtractionSource",
     "IntakeDecision",
+    "OcrEngine",
     "ParseRouteDecision",
     "ParseStrategy",
     "TextFromChatDecision",
     "TextFromChatRoute",
     "choose_parse_strategy",
+    "extraction_source_to_extract_status",
+    "extraction_source_to_ocr_engine",
     "route_text_from_chat",
     "text_layer_is_sufficient",
 ]

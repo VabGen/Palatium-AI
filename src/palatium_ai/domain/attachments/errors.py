@@ -46,6 +46,22 @@ class AttachmentUploadTooLargeError(AttachmentError):
         super().__init__(f"attachment {attachment_id} upload is {size_bytes} bytes, over the {max_size_bytes} byte cap")
 
 
+class AttachmentTooLargeError(AttachmentError):
+    """On-demand read refused because the stored object exceeds the size ceiling (035).
+
+    Distinct from :class:`AttachmentUploadTooLargeError` (intake path / HTTP 413):
+    this is the ``platform.read_attachment`` fail-closed guard for an existing row.
+    """
+
+    def __init__(self, attachment_id: UUID, *, size_bytes: int, max_size_bytes: int) -> None:
+        self.attachment_id = attachment_id
+        self.size_bytes = size_bytes
+        self.max_size_bytes = max_size_bytes
+        super().__init__(
+            f"attachment {attachment_id} is {size_bytes} bytes, over the {max_size_bytes} byte read ceiling",
+        )
+
+
 class AttachmentNotFoundError(AttachmentError):
     """No attachment visible to the acting user for the given id (060)."""
 
@@ -125,5 +141,6 @@ __all__ = [
     "AttachmentNotFoundError",
     "AttachmentNotUsableError",
     "AttachmentRestoreNotAllowedError",
+    "AttachmentTooLargeError",
     "AttachmentUploadTooLargeError",
 ]
