@@ -359,9 +359,11 @@ export type ProcessStreamDeltaHandler = (delta: string, accumulated: string) => 
 
 export type ProcessStreamHandlers = {
   onHop?: ProcessStreamHopHandler;
-  /** Early user-facing prose (deterministic / worker source) — preferred for pending UI. */
+  /** Formatter GFM tokens — primary pending UI preview (Hybrid Phase 1). */
+  onTextDelta?: ProcessStreamDeltaHandler;
+  /** Worker / fast-path prose; dual-emit during Formatter stream (fallback until clients migrate). */
   onAnswerDelta?: ProcessStreamDeltaHandler;
-  /** Partial Formatter JSON tokens — secondary preview when answer_delta is absent. */
+  /** @deprecated Legacy JSON token preview; unused when text_delta is present. */
   onFormatterDelta?: ProcessStreamDeltaHandler;
   /** Abort in-flight SSE (unmount / new turn). */
   signal?: AbortSignal;
@@ -452,6 +454,8 @@ export async function processIntentStream(
   let streamError: string | null = null;
   let formatterAccumulated = '';
   let answerAccumulated = '';
+  let textAccumulated = '';
+  let hasTextDelta = false;
 
   const flushBlock = (block: string) => {
     const lines = block.split('\n');
@@ -475,9 +479,17 @@ export async function processIntentStream(
       handlers.onHop?.(payload.node);
       return;
     }
+    if (eventName === 'text_delta' && typeof payload.content === 'string') {
+      hasTextDelta = true;
+      textAccumulated += payload.content;
+      handlers.onTextDelta?.(payload.content, textAccumulated);
+      return;
+    }
     if (eventName === 'answer_delta' && typeof payload.delta === 'string') {
       if (payload.replace === true) {
         answerAccumulated = '';
+        // Dual-emit replace also resets markdown preview accumulator.
+        textAccumulated = '';
       }
       answerAccumulated += payload.delta;
       handlers.onAnswerDelta?.(payload.delta, answerAccumulated);
@@ -485,7 +497,9 @@ export async function processIntentStream(
     }
     if (eventName === 'formatter_delta' && typeof payload.delta === 'string') {
       formatterAccumulated += payload.delta;
-      handlers.onFormatterDelta?.(payload.delta, formatterAccumulated);
+      if (!hasTextDelta && answerAccumulated.length === 0) {
+        handlers.onFormatterDelta?.(payload.delta, formatterAccumulated);
+      }
       return;
     }
     if (eventName === 'result' && payload.result && typeof payload.result === 'object') {

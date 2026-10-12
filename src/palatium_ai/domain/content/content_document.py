@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -29,6 +29,10 @@ IconToken = Literal[
     "edit",
     "settings",
 ]
+
+# Closed allow-list for Formatter <icon name="…"/> tokens (emoji forbidden).
+ICON_NAMES: tuple[str, ...] = get_args(IconToken)
+ICON_NAME_SET: frozenset[str] = frozenset(ICON_NAMES)
 
 CalloutTone = Literal["info", "success", "warning", "danger"]
 ListStyle = Literal["ordered", "unordered"]

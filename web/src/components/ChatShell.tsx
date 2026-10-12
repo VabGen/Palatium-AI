@@ -35,6 +35,7 @@ import type { ContentDocument, FormatterTaskResult, HITLCardView } from '../type
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
 import { closeIncompleteMarkdown } from '../lib/incompleteMarkdown';
+import { StreamMarkdownPreview } from './StreamMarkdownPreview';
 import { connectSessionSocket, startSessionSocketPing } from '../lib/sessionSocket';
 import { formatNumber, t } from '../i18n';
 import { setPanelOpen, startNewThread as startNewThreadInRuntime } from '../runtime/store';
@@ -218,21 +219,27 @@ export function ChatShell() {
   const [projectId, setProjectId] = useState('');
   const [connectors, setConnectors] = useState<AttachmentConnectorSource[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  /** Progressive formatter SSE preview (JSON → extracted ``text`` fields). */
+  /** Progressive SSE preview: GFM via text_delta, plain via answer_delta fallback. */
   const [streamPreview, setStreamPreview] = useState('');
+  const [streamPreviewIsMarkdown, setStreamPreviewIsMarkdown] = useState(false);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   const streamPreviewRafRef = useRef(0);
   const streamPreviewPendingRef = useRef('');
+  const streamPreviewMarkdownRef = useRef(false);
 
-  const scheduleStreamPreview = useCallback((text: string) => {
+  const scheduleStreamPreview = useCallback((text: string, asMarkdown = false) => {
     streamPreviewPendingRef.current = text;
+    streamPreviewMarkdownRef.current = asMarkdown;
     if (streamPreviewRafRef.current !== 0) return;
     streamPreviewRafRef.current = requestAnimationFrame(() => {
       streamPreviewRafRef.current = 0;
-      setStreamPreview(closeIncompleteMarkdown(streamPreviewPendingRef.current));
+      const pending = streamPreviewPendingRef.current;
+      const md = streamPreviewMarkdownRef.current;
+      setStreamPreviewIsMarkdown(md);
+      setStreamPreview(md ? pending : closeIncompleteMarkdown(pending));
     });
   }, []);
 
@@ -242,6 +249,8 @@ export function ChatShell() {
       streamPreviewRafRef.current = 0;
     }
     streamPreviewPendingRef.current = '';
+    streamPreviewMarkdownRef.current = false;
+    setStreamPreviewIsMarkdown(false);
     setStreamPreview('');
   }, []);
 
@@ -632,17 +641,23 @@ export function ChatShell() {
     ]);
 
     try {
+      let hasTextDelta = false;
       let hasAnswerDelta = false;
       const result = await processIntentStream(text, threadId, userId, orgId, attachmentIds, {
         signal: abort.signal,
+        onTextDelta: (_delta, accumulated) => {
+          hasTextDelta = true;
+          scheduleStreamPreview(accumulated, true);
+        },
         onAnswerDelta: (_delta, accumulated) => {
           hasAnswerDelta = true;
-          scheduleStreamPreview(accumulated);
+          if (hasTextDelta) return;
+          scheduleStreamPreview(accumulated, false);
         },
         onFormatterDelta: (_delta, accumulated) => {
-          if (hasAnswerDelta) return;
+          if (hasTextDelta || hasAnswerDelta) return;
           const preview = previewTextFromFormatterJson(accumulated);
-          if (preview) scheduleStreamPreview(preview);
+          if (preview) scheduleStreamPreview(preview, false);
         },
       });
       const hydratedCards = await hydratePendingHitlCards(
@@ -707,6 +722,7 @@ export function ChatShell() {
       const abort = new AbortController();
       streamAbortRef.current = abort;
       try {
+        let hasTextDelta = false;
         let hasAnswerDelta = false;
         const result = await processIntentStream(
           userMsg.text,
@@ -716,14 +732,19 @@ export function ChatShell() {
           userMsg.attachmentIds ?? [],
           {
             signal: abort.signal,
+            onTextDelta: (_delta, accumulated) => {
+              hasTextDelta = true;
+              scheduleStreamPreview(accumulated, true);
+            },
             onAnswerDelta: (_delta, accumulated) => {
               hasAnswerDelta = true;
-              scheduleStreamPreview(accumulated);
+              if (hasTextDelta) return;
+              scheduleStreamPreview(accumulated, false);
             },
             onFormatterDelta: (_delta, accumulated) => {
-              if (hasAnswerDelta) return;
+              if (hasTextDelta || hasAnswerDelta) return;
               const preview = previewTextFromFormatterJson(accumulated);
-              if (preview) scheduleStreamPreview(preview);
+              if (preview) scheduleStreamPreview(preview, false);
             },
           }
         );
@@ -1030,7 +1051,11 @@ export function ChatShell() {
         {busy && !messages.some(m => m.role === 'assistant' && m._regenerating) && (
           <div className="msg assistant pending fade-in">
             {streamPreview ? (
-              <p className="stream-preview">{streamPreview}</p>
+              streamPreviewIsMarkdown ? (
+                <StreamMarkdownPreview markdown={streamPreview} />
+              ) : (
+                <p className="stream-preview">{streamPreview}</p>
+              )
             ) : (
               <>
                 <span className="typing-dots">

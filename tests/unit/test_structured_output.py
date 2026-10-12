@@ -13,7 +13,6 @@ from palatium_ai.application.agents.formatter.config import FORMATTER_CONFIG
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.core.config.llm.qwen import QwenLLMConfig
 from palatium_ai.core.exceptions import AgentExecutionError
-from palatium_ai.domain.content import CalloutBlock, ContentDocument, DocumentMeta
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
 from palatium_ai.infrastructure.llm.litellm_adapter import (
@@ -25,17 +24,6 @@ from palatium_ai.infrastructure.llm.litellm_adapter import (
 class _Probe(BaseModel):
     task_kind: str
     confidence: float
-
-
-def _document_json() -> str:
-    document = ContentDocument(
-        locale="en-US",
-        title=None,
-        blocks=(CalloutBlock(tone="success", title="Done", body="No errors.", icon="success"),),
-        actions=(),
-        meta=DocumentMeta(confidence=0.9, requires_review=False, source_refs=(), interaction="none"),
-    )
-    return document.model_dump_json()
 
 
 def _messages() -> list[ChatMessage]:
@@ -136,35 +124,87 @@ async def test_adapter_keeps_invalid_schema_as_a_provider_error(monkeypatch: pyt
 
 def _agent(side_effect: object) -> tuple[FormatterAgent, AsyncMock]:
     harness = AsyncMock()
-    harness.call_llm = AsyncMock(side_effect=side_effect)
+    # Single completion → return_value (LLMCompletion is not a call side-effect iterable).
+    if isinstance(side_effect, LLMCompletion):
+        harness.call_llm = AsyncMock(return_value=side_effect)
+    else:
+        harness.call_llm = AsyncMock(side_effect=side_effect)
     return FormatterAgent(harness, FORMATTER_CONFIG), harness
 
 
 @pytest.mark.asyncio()
-async def test_formatter_falls_back_only_on_structured_output_refusal() -> None:
-    body = _document_json()
-    agent, harness = _agent([StructuredOutputUnsupportedError("nope"), LLMCompletion(content=body, model="test")])
-    document = await agent._complete([ChatMessage(role="user", content="hi")], max_tokens=32)
-    assert document.content == body
-    formats = [call.kwargs["response_format"] for call in harness.call_llm.await_args_list]
-    assert formats == ["json_schema", "json_object"]
-    assert harness.call_llm.await_args_list[0].kwargs["response_model"] is ContentDocument
-    assert harness.call_llm.await_args_list[1].kwargs["response_model"] is None
+async def test_formatter_complete_uses_text_format() -> None:
+    body = "Done. No errors."
+    agent, harness = _agent(LLMCompletion(content=body, model="test"))
+    completion, markdown = await agent._complete([ChatMessage(role="user", content="hi")], max_tokens=32)
+    assert completion.content == body
+    assert markdown == body
+    kwargs = harness.call_llm.await_args.kwargs
+    assert kwargs["response_format"] == "text"
+    assert kwargs["response_model"] is None
 
 
 @pytest.mark.asyncio()
-async def test_formatter_repair_stays_on_json_schema() -> None:
-    body = _document_json()
+async def test_formatter_repair_stays_on_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from palatium_ai.domain.agents.context_packet import ContextPacket
+    from palatium_ai.domain.agents.formatter import FormatterInput
+    from palatium_ai.domain.content import CalloutBlock, ContentDocument, DocumentMeta
+    from palatium_ai.domain.mcp.models import ToolExecutionPlan
+
+    task_input = FormatterInput(
+        task_id="t1",
+        context_packet=ContextPacket(
+            task_id="t1",
+            user_text="hi",
+            task_kind="knowledge_request",
+            route="researcher",
+            route_plan="answer",
+            requires_mcp=False,
+            execution_plan=ToolExecutionPlan(
+                strategy="reason_only",
+                requires_tool_call=False,
+                rationale="r",
+            ),
+            context_summary="s",
+        ),
+        worker_summary="Done.",
+        response_locale="en-US",
+    )
+    good = ContentDocument(
+        locale="en-US",
+        title=None,
+        blocks=(CalloutBlock(tone="success", title="Done", body="No errors.", icon="success"),),
+        actions=(),
+        meta=DocumentMeta(confidence=0.9, requires_review=False, source_refs=(), interaction="none"),
+    )
+    calls = {"n": 0}
+
+    def _parse(markdown: str, _task: FormatterInput) -> ContentDocument:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("boom")
+        _ = markdown
+        return good
+
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.agent.markdown_to_content_document",
+        _parse,
+    )
     agent, harness = _agent(
         [
-            LLMCompletion(content="{not-json", model="test"),
-            LLMCompletion(content=body, model="test"),
+            LLMCompletion(content="bad", model="test"),
+            LLMCompletion(content="> [!SUCCESS]\n> No errors.", model="test"),
         ],
     )
-    document = await agent._generate_document([ChatMessage(role="user", content="hi")], max_tokens=32)
+    document = await agent._generate_document(
+        [ChatMessage(role="user", content="hi")],
+        task_input=task_input,
+        max_tokens=32,
+    )
     assert document.blocks[0].type == "callout"
     formats = [call.kwargs["response_format"] for call in harness.call_llm.await_args_list]
-    assert formats == ["json_schema", "json_schema"]
+    assert formats == ["text", "text"]
+    assert all(call.kwargs["response_model"] is None for call in harness.call_llm.await_args_list)
 
 
 @pytest.mark.asyncio()

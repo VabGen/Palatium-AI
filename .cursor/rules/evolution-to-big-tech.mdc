@@ -1,0 +1,39 @@
+---
+description: Big Tech evolution principles, Hybrid SSE, phase order (agent-requestable)
+alwaysApply: false
+---
+
+# Evolution → Big Tech 2026
+
+Канон реализации: `.cursor/plans/evolution-to-big-tech.md`.
+При противоречии побеждают правила **000/020/030/060/065/075/084**.
+
+## Принципы
+
+1. Streaming-First для UI-facing LLM (TTFT ≤ 500 ms на trivial path).
+2. `ContentDocument` — persistence + internal; SSE UI — Markdown (+ custom XML tags).
+3. Parallel over sequential where no data-dependency (`Send()` — Phase 2).
+4. Fail fast, fall back gracefully (worker prose / fallback stream).
+5. Every token has a price (tier `cost_per_token` — Phase 3).
+6. OpenTelemetry GenAI SemConv (`gen_ai.*` — Phase 3).
+7. Dynamic LLM timeouts: `base + prompt×0.01 + max_tokens×0.05`, cap 90s (Phase 4).
+
+## Phase 1 Hybrid SSE (норма)
+
+| Event | Role |
+|---|---|
+| `hop` | Graph node started/updated — **name frozen; do not rename** |
+| `answer_delta` | Worker / fast-path prose; dual-emit during Formatter stream (migration) |
+| `text_delta` | Formatter GFM markdown tokens (`content`) — primary preview |
+| `result` | `FormatterTaskResult` with `ContentDocument` (parsed from final markdown) |
+| `error` / `done` | Unchanged |
+
+- Dual-emit `replace: true` **once**, when Formatter stream starts after prior worker `answer_delta`.
+- Clickable HITL cards only from server `result`, never from stream XML.
+- Qdrant forbidden (**060**); Phase 2 cache = Redis L1 + LiteLLM semantic.
+
+## Phase order
+
+1 → 4 → 3 → 2 → 5 → 6 → 7. Branch/PR tag: `big-tech-evolution/phase-N`.
+
+Do not rewrite `Dockerfile` or break `.github/workflows/ci.yml`.
