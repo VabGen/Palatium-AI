@@ -93,6 +93,9 @@ class AttachmentResponse(BaseModel):
     expires_at: datetime | None = None
     project_id: str | None = None
     contains_pii: bool = False
+    ocr_applied: bool | None = None
+    extract_status: str | None = None
+    extracted_chars: int | None = None
 
 
 class AttachmentListResponse(BaseModel):
@@ -218,6 +221,9 @@ def _to_response(attachment: Attachment) -> AttachmentResponse:
         expires_at=attachment.expires_at,
         project_id=attachment.project_id,
         contains_pii=attachment.contains_pii,
+        ocr_applied=attachment.ocr_applied,
+        extract_status=attachment.extract_status,
+        extracted_chars=attachment.extracted_chars,
     )
 
 
@@ -350,6 +356,22 @@ async def complete_upload(attachment_id: UUID, request: Request) -> AttachmentRe
 
     try:
         attachment = await service.complete_upload(
+            attachment_id=attachment_id,
+            user_id=principal.subject,
+        )
+    except AttachmentError as exc:
+        raise HTTPException(status_code=_error_status(exc), detail=str(exc)) from exc
+    return _to_response(attachment)
+
+
+@router.post("/{attachment_id}/reingest", status_code=status.HTTP_202_ACCEPTED, response_model=AttachmentResponse)
+async def reingest_attachment(attachment_id: UUID, request: Request) -> AttachmentResponse:
+    """Re-run parse/OCR on an existing owner blob (on-demand; no bulk backfill)."""
+    principal = get_principal(request)
+    service = _attachment_service(request)
+
+    try:
+        attachment = await service.reingest(
             attachment_id=attachment_id,
             user_id=principal.subject,
         )
