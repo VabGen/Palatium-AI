@@ -34,7 +34,6 @@ import type { AttachmentConnectorSource } from '../api/client';
 import type { ContentDocument, FormatterTaskResult, HITLCardView } from '../types/contentDocument';
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
-import { closeIncompleteMarkdown } from '../lib/incompleteMarkdown';
 import { StreamMarkdownPreview } from './StreamMarkdownPreview';
 import { connectSessionSocket, startSessionSocketPing } from '../lib/sessionSocket';
 import { formatNumber, t } from '../i18n';
@@ -75,6 +74,8 @@ type AssistantChatMessage = {
   _feedbackDislike?: boolean;
   _feedbackSending?: boolean;
   _regenerating?: boolean;
+  /** True while SSE preview fills this bubble (stable key until document lands). */
+  _streaming?: boolean;
   error?: string;
   status?: string;
 };
@@ -219,27 +220,25 @@ export function ChatShell() {
   const [projectId, setProjectId] = useState('');
   const [connectors, setConnectors] = useState<AttachmentConnectorSource[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  /** Progressive SSE preview: GFM via text_delta, plain via answer_delta fallback. */
+  /** Progressive SSE preview — always GFM via StreamMarkdownPreview (Path C). */
   const [streamPreview, setStreamPreview] = useState('');
-  const [streamPreviewIsMarkdown, setStreamPreviewIsMarkdown] = useState(false);
+  /** Preserves bubble height across preview → BlockRenderer to avoid layout jump. */
+  const [streamBubbleMinHeight, setStreamBubbleMinHeight] = useState<number | undefined>();
   const messageEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   const streamPreviewRafRef = useRef(0);
   const streamPreviewPendingRef = useRef('');
-  const streamPreviewMarkdownRef = useRef(false);
+  const streamBubbleRef = useRef<HTMLDivElement | null>(null);
+  const streamingAssistantIdRef = useRef<string | null>(null);
 
-  const scheduleStreamPreview = useCallback((text: string, asMarkdown = false) => {
+  const scheduleStreamPreview = useCallback((text: string) => {
     streamPreviewPendingRef.current = text;
-    streamPreviewMarkdownRef.current = asMarkdown;
     if (streamPreviewRafRef.current !== 0) return;
     streamPreviewRafRef.current = requestAnimationFrame(() => {
       streamPreviewRafRef.current = 0;
-      const pending = streamPreviewPendingRef.current;
-      const md = streamPreviewMarkdownRef.current;
-      setStreamPreviewIsMarkdown(md);
-      setStreamPreview(md ? pending : closeIncompleteMarkdown(pending));
+      setStreamPreview(streamPreviewPendingRef.current);
     });
   }, []);
 
@@ -249,9 +248,16 @@ export function ChatShell() {
       streamPreviewRafRef.current = 0;
     }
     streamPreviewPendingRef.current = '';
-    streamPreviewMarkdownRef.current = false;
-    setStreamPreviewIsMarkdown(false);
     setStreamPreview('');
+  }, []);
+
+  const lockStreamBubbleHeight = useCallback(() => {
+    const el = streamBubbleRef.current;
+    if (el) setStreamBubbleMinHeight(el.offsetHeight);
+  }, []);
+
+  const clearStreamBubbleHeight = useCallback(() => {
+    setStreamBubbleMinHeight(undefined);
   }, []);
 
   useEffect(() => {
@@ -631,13 +637,23 @@ export function ChatShell() {
     setInput('');
     setBusy(true);
     clearStreamPreview();
+    clearStreamBubbleHeight();
     streamAbortRef.current?.abort();
     const abort = new AbortController();
     streamAbortRef.current = abort;
     const userMsgId = crypto.randomUUID();
+    const assistantId = crypto.randomUUID();
+    streamingAssistantIdRef.current = assistantId;
     setMessages(prev => [
       ...prev,
       { id: userMsgId, role: 'user', text, attachmentIds, attachmentNames },
+      {
+        id: assistantId,
+        role: 'assistant',
+        document: null,
+        hitlCards: [],
+        _streaming: true,
+      },
     ]);
 
     try {
@@ -647,17 +663,17 @@ export function ChatShell() {
         signal: abort.signal,
         onTextDelta: (_delta, accumulated) => {
           hasTextDelta = true;
-          scheduleStreamPreview(accumulated, true);
+          scheduleStreamPreview(accumulated);
         },
         onAnswerDelta: (_delta, accumulated) => {
           hasAnswerDelta = true;
           if (hasTextDelta) return;
-          scheduleStreamPreview(accumulated, false);
+          scheduleStreamPreview(accumulated);
         },
         onFormatterDelta: (_delta, accumulated) => {
           if (hasTextDelta || hasAnswerDelta) return;
           const preview = previewTextFromFormatterJson(accumulated);
-          if (preview) scheduleStreamPreview(preview, false);
+          if (preview) scheduleStreamPreview(preview);
         },
       });
       const hydratedCards = await hydratePendingHitlCards(
@@ -665,36 +681,48 @@ export function ChatShell() {
         userId,
         orgId
       );
-      const assistant = buildAssistantMessage({ ...result, hitl_cards: hydratedCards });
-      setMessages(prev => [...prev, assistant]);
+      lockStreamBubbleHeight();
+      const assistant = buildAssistantMessage(
+        { ...result, hitl_cards: hydratedCards },
+        assistantId
+      );
+      setMessages(prev =>
+        prev.map(msg => (msg.id === assistantId && msg.role === 'assistant' ? assistant : msg))
+      );
       // Industry chat pattern (ChatGPT/Claude/Gemini): composer is staging only.
       // After a successful send the file lives on the user message; ready chips
       // leave the composer. Failed chips stay so the user can see why / retry.
       setAttachments(prev => prev.filter(chip => chip.status !== 'ready'));
+      requestAnimationFrame(() => clearStreamBubbleHeight());
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
+        setMessages(prev => prev.filter(msg => msg.id !== assistantId));
         return;
       }
       // Сообщение уже humanized в `errorDetail` (см. client.ts).
       const message = err instanceof Error ? err.message : t('error.requestFailed');
-      setMessages(prev => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          document: null,
-          hitlCards: [],
-          _requiresReview: false,
-          _pendingReview: false,
-          error: message,
-          status: 'failure',
-        },
-      ]);
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === assistantId && msg.role === 'assistant'
+            ? {
+                id: assistantId,
+                role: 'assistant',
+                document: null,
+                hitlCards: [],
+                _requiresReview: false,
+                _pendingReview: false,
+                error: message,
+                status: 'failure',
+              }
+            : msg
+        )
+      );
       // Keep ready chips on failure so the user can retry without re-upload.
     } finally {
       if (streamAbortRef.current === abort) {
         streamAbortRef.current = null;
       }
+      streamingAssistantIdRef.current = null;
       clearStreamPreview();
       setBusy(false);
     }
@@ -718,6 +746,8 @@ export function ChatShell() {
       );
       setBusy(true);
       clearStreamPreview();
+      clearStreamBubbleHeight();
+      streamingAssistantIdRef.current = messageId;
       streamAbortRef.current?.abort();
       const abort = new AbortController();
       streamAbortRef.current = abort;
@@ -734,17 +764,17 @@ export function ChatShell() {
             signal: abort.signal,
             onTextDelta: (_delta, accumulated) => {
               hasTextDelta = true;
-              scheduleStreamPreview(accumulated, true);
+              scheduleStreamPreview(accumulated);
             },
             onAnswerDelta: (_delta, accumulated) => {
               hasAnswerDelta = true;
               if (hasTextDelta) return;
-              scheduleStreamPreview(accumulated, false);
+              scheduleStreamPreview(accumulated);
             },
             onFormatterDelta: (_delta, accumulated) => {
               if (hasTextDelta || hasAnswerDelta) return;
               const preview = previewTextFromFormatterJson(accumulated);
-              if (preview) scheduleStreamPreview(preview, false);
+              if (preview) scheduleStreamPreview(preview);
             },
           }
         );
@@ -753,6 +783,7 @@ export function ChatShell() {
           userId,
           orgId
         );
+        lockStreamBubbleHeight();
         const assistant = buildAssistantMessage(
           { ...result, hitl_cards: hydratedCards },
           messageId
@@ -760,9 +791,17 @@ export function ChatShell() {
         setMessages(prev =>
           prev.map(msg => (msg.id === messageId && msg.role === 'assistant' ? assistant : msg))
         );
+        requestAnimationFrame(() => clearStreamBubbleHeight());
         toast.success(t('toast.regenerated'));
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') {
+          setMessages(prev =>
+            prev.map(msg =>
+              msg.id === messageId && msg.role === 'assistant'
+                ? { ...msg, _regenerating: false }
+                : msg
+            )
+          );
           return;
         }
         setMessages(prev =>
@@ -781,11 +820,21 @@ export function ChatShell() {
         if (streamAbortRef.current === abort) {
           streamAbortRef.current = null;
         }
+        streamingAssistantIdRef.current = null;
         clearStreamPreview();
         setBusy(false);
       }
     },
-    [messages, threadId, userId, orgId, clearStreamPreview, scheduleStreamPreview]
+    [
+      messages,
+      threadId,
+      userId,
+      orgId,
+      clearStreamPreview,
+      scheduleStreamPreview,
+      lockStreamBubbleHeight,
+      clearStreamBubbleHeight,
+    ]
   );
 
   const handleFeedback = useCallback(
@@ -951,11 +1000,44 @@ export function ChatShell() {
             ? displaySourceRefs(message.document.meta.source_refs)
             : [];
 
+          const isStreamingBubble =
+            Boolean(message._streaming) ||
+            (Boolean(message._regenerating) && streamingAssistantIdRef.current === message.id);
+          const showStreamPreview = isStreamingBubble && !message.document;
+
           return (
-            <div key={message.id} className="msg assistant fade-in">
+            <div
+              key={message.id}
+              className={`msg assistant fade-in${showStreamPreview ? ' pending' : ''}`}
+              style={
+                streamBubbleMinHeight && streamingAssistantIdRef.current === message.id
+                  ? { minHeight: streamBubbleMinHeight }
+                  : undefined
+              }
+            >
               <div className="avatar">P</div>
-              <div className="bubble">
-                {showHitl ? (
+              <div
+                className="bubble"
+                ref={
+                  showStreamPreview || streamingAssistantIdRef.current === message.id
+                    ? streamBubbleRef
+                    : undefined
+                }
+              >
+                {showStreamPreview ? (
+                  streamPreview ? (
+                    <StreamMarkdownPreview markdown={streamPreview} />
+                  ) : (
+                    <>
+                      <span className="typing-dots">
+                        <span>.</span>
+                        <span>.</span>
+                        <span>.</span>
+                      </span>
+                      <span>{t('msg.agentsWorking')}</span>
+                    </>
+                  )
+                ) : showHitl ? (
                   <HitlCards
                     cards={pendingHitl}
                     userId={userId}
@@ -1047,27 +1129,6 @@ export function ChatShell() {
             </div>
           );
         })}
-
-        {busy && !messages.some(m => m.role === 'assistant' && m._regenerating) && (
-          <div className="msg assistant pending fade-in">
-            {streamPreview ? (
-              streamPreviewIsMarkdown ? (
-                <StreamMarkdownPreview markdown={streamPreview} />
-              ) : (
-                <p className="stream-preview">{streamPreview}</p>
-              )
-            ) : (
-              <>
-                <span className="typing-dots">
-                  <span>.</span>
-                  <span>.</span>
-                  <span>.</span>
-                </span>
-                <span>{t('msg.agentsWorking')}</span>
-              </>
-            )}
-          </div>
-        )}
         <div ref={messageEndRef} />
       </main>
 

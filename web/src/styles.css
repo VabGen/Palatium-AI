@@ -304,9 +304,6 @@ textarea {
 }
 
 .msg.pending {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   color: var(--text-muted);
 }
 
@@ -315,10 +312,6 @@ textarea {
   color: var(--text);
   line-height: 1.45;
   max-width: 100%;
-}
-
-.msg.pending .stream-preview:not(.stream-preview--md) {
-  white-space: pre-wrap;
 }
 
 .msg.pending .stream-preview--md {
