@@ -31,6 +31,7 @@ class LLMPort(Protocol):
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMCompletion:
         """Выполняет синхронную генерацию текста."""
         ...
@@ -44,6 +45,7 @@ class LLMPort(Protocol):
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         """Возвращает поток частичных ответов."""
         ...

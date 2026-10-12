@@ -231,6 +231,7 @@ class LiteLLMAdapter:
         max_tokens: int | None,
         response_format: LLMResponseFormat | None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         """Shared LiteLLM kwargs (``stream`` passed as a Literal at the call site)."""
         resolved_model = resolve_litellm_model(
@@ -245,9 +246,10 @@ class LiteLLMAdapter:
             "api_key": self._api_key,
             "api_base": self._base_url,
         }
-        if self._timeout_seconds is not None:
-            # Forward the provider timeout so a hung completion cannot outlive the agent (020/050).
-            params["timeout"] = self._timeout_seconds
+        # Per-call dynamic timeout wins over provider default (Phase 4).
+        effective_timeout = timeout_seconds if timeout_seconds is not None else self._timeout_seconds
+        if effective_timeout is not None:
+            params["timeout"] = effective_timeout
         if temperature is not None:
             params["temperature"] = temperature
         if max_tokens is not None:
@@ -266,6 +268,7 @@ class LiteLLMAdapter:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMCompletion:
         """Выполняет синхронную генерацию текста."""
         params = self._build_params(
@@ -274,6 +277,7 @@ class LiteLLMAdapter:
             max_tokens=max_tokens,
             response_format=response_format,
             response_model=response_model,
+            timeout_seconds=timeout_seconds,
         )
         params["messages"] = _to_litellm_messages(messages)
         logger.debug(
@@ -308,6 +312,7 @@ class LiteLLMAdapter:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         """Возвращает поток частичных ответов."""
         from time import perf_counter
@@ -320,6 +325,7 @@ class LiteLLMAdapter:
             max_tokens=max_tokens,
             response_format=response_format,
             response_model=response_model,
+            timeout_seconds=timeout_seconds,
         )
         # OpenAI-compatible: last chunk carries usage (and LiteLLM may attach cost).
         params["stream_options"] = {"include_usage": True}

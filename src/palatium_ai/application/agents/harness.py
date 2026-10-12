@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from palatium_ai.application.services.context_builder import ContextBuilder
 from palatium_ai.application.services.cost_budget import CostBudgetExceededError
+from palatium_ai.core.context.tokens import count_tokens
 from palatium_ai.core.exceptions import AgentExecutionError
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -34,6 +35,7 @@ from palatium_ai.domain.llm.models import (
 )
 from palatium_ai.domain.llm.structured_output import assert_json_schema_model
 from palatium_ai.domain.memory.compact import CompactRequest
+from palatium_ai.domain.policies.llm_timeout import compute_llm_timeout_seconds
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -46,6 +48,27 @@ if TYPE_CHECKING:
 DeltaCallback = Callable[[str], object]
 
 logger = get_logger(__name__)
+
+_DEFAULT_MAX_TOKENS = 2048
+
+
+def _prompt_token_estimate(messages: list[ChatMessage]) -> int:
+    """JIT token estimate for dynamic timeout (065 tokenizer helper)."""
+    return sum(count_tokens(message.content) for message in messages)
+
+
+def _resolve_call_timeout_seconds(
+    config: AgentConfig,
+    messages: list[ChatMessage],
+    *,
+    max_tokens: int | None,
+) -> float:
+    """Dynamic provider timeout capped by agent budget (Phase 4)."""
+    dynamic = compute_llm_timeout_seconds(
+        prompt_tokens=_prompt_token_estimate(messages),
+        max_tokens=max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS,
+    )
+    return min(dynamic, float(config.timeout_seconds))
 
 
 def _with_system_prompt_cache(messages: list[ChatMessage]) -> list[ChatMessage]:
@@ -263,6 +286,9 @@ class Harness:
                 if self._cost_budget is not None:
                     self._cost_budget.assert_turn_allows_call()
                 cached_messages = _with_system_prompt_cache(messages)
+                call_timeout = _resolve_call_timeout_seconds(
+                    config, cached_messages, max_tokens=max_tokens
+                )
                 completion = await asyncio.wait_for(
                     llm.generate(
                         cached_messages,
@@ -271,8 +297,9 @@ class Harness:
                         max_tokens=max_tokens,
                         response_format=response_format,
                         response_model=response_model,
+                        timeout_seconds=call_timeout,
                     ),
-                    timeout=config.timeout_seconds,
+                    timeout=call_timeout,
                 )
                 self._record_llm_usage(
                     config=config,
@@ -317,6 +344,9 @@ class Harness:
             self._cost_budget.assert_turn_allows_call()
 
         cached_messages = _with_system_prompt_cache(messages)
+        call_timeout = _resolve_call_timeout_seconds(
+            config, cached_messages, max_tokens=max_tokens
+        )
         initial_model = (resolved_model or "").strip() or "unknown"
         try:
             completion = await asyncio.wait_for(
@@ -328,15 +358,16 @@ class Harness:
                         max_tokens=max_tokens,
                         response_format=response_format,
                         response_model=response_model,
+                        timeout_seconds=call_timeout,
                     ),
                     on_delta=on_delta,
                     initial_model=initial_model,
                 ),
-                timeout=config.timeout_seconds,
+                timeout=call_timeout,
             )
         except TimeoutError as exc:
             raise AgentExecutionError(
-                f"LLM stream timed out after {config.timeout_seconds}s",
+                f"LLM stream timed out after {call_timeout:g}s",
             ) from exc
         except StructuredOutputUnsupportedError:
             raise

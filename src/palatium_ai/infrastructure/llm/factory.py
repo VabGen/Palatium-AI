@@ -160,6 +160,7 @@ class _AgentModelLLMAdapter:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMCompletion:
         return await self._inner.generate(
             messages,
@@ -168,6 +169,7 @@ class _AgentModelLLMAdapter:
             max_tokens=max_tokens,
             response_format=response_format,
             response_model=response_model,
+            timeout_seconds=timeout_seconds,
         )
 
     async def generate_stream(
@@ -179,6 +181,7 @@ class _AgentModelLLMAdapter:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         async for delta in self._inner.generate_stream(
             messages,
@@ -187,6 +190,7 @@ class _AgentModelLLMAdapter:
             max_tokens=max_tokens,
             response_format=response_format,
             response_model=response_model,
+            timeout_seconds=timeout_seconds,
         ):
             yield delta
 
@@ -289,6 +293,7 @@ class _FallbackChainLLMAdapter:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMCompletion:
         errors: list[str] = []
         open_circuits: list[tuple[str, float]] = []
@@ -307,6 +312,7 @@ class _FallbackChainLLMAdapter:
                     max_tokens=max_tokens,
                     response_format=response_format,
                     response_model=response_model,
+                    timeout_seconds=timeout_seconds,
                 )
             except Exception as exc:
                 self._capture_provider_failure(provider, exc, errors, unsupported)
@@ -339,6 +345,7 @@ class _FallbackChainLLMAdapter:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         errors: list[str] = []
         open_circuits: list[tuple[str, float]] = []
@@ -357,6 +364,7 @@ class _FallbackChainLLMAdapter:
                     max_tokens=max_tokens,
                     response_format=response_format,
                     response_model=response_model,
+                    timeout_seconds=timeout_seconds,
                 )
                 async for delta in stream:
                     yield delta

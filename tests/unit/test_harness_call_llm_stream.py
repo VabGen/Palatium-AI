@@ -30,8 +30,9 @@ class _StreamingLLM:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
+        timeout_seconds: float | None = None,
     ) -> LLMCompletion:
-        _ = messages, temperature, max_tokens, response_format, response_model
+        _ = messages, temperature, max_tokens, response_format, response_model, timeout_seconds
         return LLMCompletion(content="{}", model=model or "m")
 
     async def generate_stream(
@@ -43,8 +44,9 @@ class _StreamingLLM:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
-        _ = messages, model, temperature, max_tokens, response_format, response_model
+        _ = messages, model, temperature, max_tokens, response_format, response_model, timeout_seconds
         for piece in ('{"a":', "1}"):
             yield LLMStreamDelta(content=piece)
         yield LLMStreamDelta(

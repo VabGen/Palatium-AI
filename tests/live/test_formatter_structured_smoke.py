@@ -190,6 +190,7 @@ class _GarbageThenReal:
         max_tokens: int | None = None,
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMCompletion:
         self.calls += 1
         self.formats.append(response_format)
@@ -202,6 +203,7 @@ class _GarbageThenReal:
             max_tokens=max_tokens,
             response_format=response_format,
             response_model=response_model,
+            timeout_seconds=timeout_seconds,
         )
 
 
