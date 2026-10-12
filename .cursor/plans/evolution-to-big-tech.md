@@ -1,12 +1,13 @@
 # Evolution Palatium AI → Big Tech 2026
 
 Обновлено: 2026-10-12. Автор входа: VabGen.
-Статус: **Phase 1 + Phase 4 done on master** (норматив — 000/020/030/040/060/065/070/075/080/084;
-при противоречии **правила побеждают**). Следующие: Phase 3 (FinOps) → Phase 2 (Latency).
+Статус: **Phase 1 + 4 + 3 done on master** (норматив — 000/020/030/040/060/065/070/075/080/084;
+при противоречии **правила побеждают**). Следующая: Phase 2 (Latency).
 
 Ветка Phase 1: `big-tech-evolution/phase-1` (merged).
 PR Phase 1: план + тонкое правило + полная реализация Hybrid Streaming Markdown.
 Phase 4: Neo4j schema bootstrap + dynamic LLM timeouts + DTZ audit (уже UTC).
+Phase 3: LiteLLM tier registration + CostTracker + gen_ai.* spans.
 
 ---
 
@@ -227,7 +228,7 @@ HITL XML tags в preview: strip или render as muted placeholders; клика�
 | Phase | Цель | SoT-адаптация vs исходный черновик |
 |---|---|---|
 | **2** Parallel + fast-path | `Send()` fan-out; Formatter fallback stream >8s; chit-chat skip | Cache = Redis L1 + LiteLLM semantic; **no Qdrant** |
-| **3** FinOps | `register_model` tiers; OTel `gen_ai.*`; CostTracker | `datetime.now(UTC)`; reuse `cost_budget.py` |
+| **3** FinOps ✅ | `register_model` tiers; OTel `gen_ai.*`; CostTracker | `datetime.now(UTC)`; reuse `cost_budget.py` — **done 2026-10-12** |
 | **4** Data hygiene ✅ | Neo4j index bootstrap; dynamic timeouts | Cypher in bootstrap/factory, not Alembic — **done 2026-10-12** |
 | **5** Safety | Presidio scrubber; constitutional critic; nightly red-team | HITL/020; PII не в traces |
 | **6** Evals | golden dataset + deepeval on prompt PRs | не ослаблять 075 |

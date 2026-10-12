@@ -26,11 +26,11 @@
 prompt contract, HITL resumed payload) unrelated to Phase 4; Phase 4 unit tests green.
 
 ### Phase 3
-- [ ] 2.1 Tier cost registration
-- [ ] 2.2 Cost extraction from LLM responses
-- [ ] 2.3 CostTracker (Redis)
-- [ ] 2.4 gen_ai.* span attributes
-- [ ] 2.5 Tests + gates + mark Phase 3 done
+- [x] 2.1 Tier cost registration
+- [x] 2.2 Cost extraction from LLM responses
+- [x] 2.3 CostTracker (Redis)
+- [x] 2.4 gen_ai.* span attributes
+- [x] 2.5 Tests + gates + mark Phase 3 done
 
 ### Phase 2
 - [ ] 3.1 Parallel embeddings
