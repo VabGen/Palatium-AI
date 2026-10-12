@@ -65,6 +65,28 @@ test.describe('запросы к API', () => {
   });
 
   /**
+   * Path C / streaming stability: placeholder assistant is one node (``.pending``),
+   * then the same ``.msg.assistant`` loses ``.pending`` — never a second bubble.
+   */
+  test('стриминг: один assistant-узел от pending до готового ответа', async ({ page }) => {
+    const server = defaultApi();
+    server.reply('intents.process', { ...answer(), delayMs: 700 });
+    await stubSessionSocket(page);
+    await server.install(page);
+    await openWidget(page);
+
+    await ask(page, 'Составь письмо');
+
+    await expect(page.locator('.msg.assistant')).toHaveCount(1);
+    await expect(page.locator('.msg.assistant.pending')).toHaveCount(1);
+
+    await expectAnswer(page);
+
+    await expect(page.locator('.msg.assistant')).toHaveCount(1);
+    await expect(page.locator('.msg.assistant.pending')).toHaveCount(0);
+  });
+
+  /**
    * Tenant и права — не дело клиента (020, Zero Trust).
    *
    * Соблазн передать их заголовком возникает при первой же интеграции («а как
