@@ -150,6 +150,11 @@ try:  # pragma: no cover - optional dependency
         "Attachment parse outcomes by extraction source (closed label sets).",
         ["extraction_source", "media_kind"],
     )
+    _palatium_attachment_read_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_attachment_read_total",
+        "On-demand attachment reads (platform.read_attachment).",
+        ["kind", "ocr_applied", "ocr_engine", "ocr_cached"],
+    )
     _palatium_turn_duration_seconds: _PromHistogram | _NoopMetric = _PromHistogram(
         "palatium_turn_duration_seconds",
         "End-to-end intent process turn duration (seconds).",
@@ -199,6 +204,7 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_audit_write_failures_total = _NoopMetric()
     _palatium_secret_redactions_total = _NoopMetric()
     _palatium_attachment_parse_total = _NoopMetric()
+    _palatium_attachment_read_total = _NoopMetric()
     _palatium_turn_duration_seconds = _NoopMetric()
     _palatium_llm_ttft_seconds = _NoopMetric()
     _palatium_sse_ttft_seconds = _NoopMetric()
@@ -219,6 +225,10 @@ class AgentMetrics:
     _context_tokens: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _secret_redactions: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _attachment_parses: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
+    _attachment_reads: dict[tuple[str, str, str, str], int] = field(
+        default_factory=lambda: defaultdict(int),
+        repr=False,
+    )
 
     def record_node_execution(
         self,
@@ -342,6 +352,41 @@ class AgentMetrics:
     def attachment_parse_count(self, extraction_source: str, media_kind: str) -> int:
         with self._lock:
             return self._attachment_parses[(extraction_source, media_kind)]
+
+    def record_attachment_read(
+        self,
+        *,
+        kind: str,
+        ocr_applied: bool,
+        ocr_engine: str,
+        ocr_cached: bool,
+    ) -> None:
+        """Count ``platform.read_attachment`` outcomes (closed label sets, 040)."""
+        safe_kind = (kind or "unknown").strip()[:32] or "unknown"
+        applied = "true" if ocr_applied else "false"
+        safe_engine = (ocr_engine or "none").strip()[:32] or "none"
+        cached = "true" if ocr_cached else "false"
+        with self._lock:
+            self._attachment_reads[(safe_kind, applied, safe_engine, cached)] += 1
+        _palatium_attachment_read_total.labels(
+            kind=safe_kind,
+            ocr_applied=applied,
+            ocr_engine=safe_engine,
+            ocr_cached=cached,
+        ).inc()
+
+    def attachment_read_count(
+        self,
+        *,
+        kind: str,
+        ocr_applied: bool,
+        ocr_engine: str,
+        ocr_cached: bool,
+    ) -> int:
+        applied = "true" if ocr_applied else "false"
+        cached = "true" if ocr_cached else "false"
+        with self._lock:
+            return self._attachment_reads[(kind, applied, ocr_engine, cached)]
 
     def record_memory_query_duration(self, duration_seconds: float) -> None:
         _palatium_memory_query_duration_seconds.observe(max(0.0, duration_seconds))

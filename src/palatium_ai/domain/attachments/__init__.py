@@ -2,7 +2,12 @@
 
 """Attachment contracts: aggregate, axis types, policies and derived content (000, 020)."""
 
-from .content import AttachmentContent, AttachmentScanSummary
+from .content import (
+    AttachmentContent,
+    AttachmentContentMetadata,
+    AttachmentOcrEngine,
+    AttachmentScanSummary,
+)
 from .context import AttachmentContextBlock, AttachmentTurnContext
 from .errors import (
     AttachmentChunkedUploadError,
@@ -73,6 +78,7 @@ __all__ = [
     "AttachmentChunkedUploadError",
     "AttachmentConnectorUnavailableError",
     "AttachmentContent",
+    "AttachmentContentMetadata",
     "AttachmentContentMissingError",
     "AttachmentContextBlock",
     "AttachmentError",
@@ -85,6 +91,7 @@ __all__ = [
     "AttachmentModeMismatchError",
     "AttachmentNotFoundError",
     "AttachmentNotUsableError",
+    "AttachmentOcrEngine",
     "AttachmentProjectRef",
     "AttachmentReadRequest",
     "AttachmentReadResult",

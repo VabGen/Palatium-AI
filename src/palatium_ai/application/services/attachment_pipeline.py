@@ -23,12 +23,17 @@ from palatium_ai.core.security.prompt_injection import (
 )
 from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text
 from palatium_ai.domain.attachments.active_content import ooxml_contains_active_content
-from palatium_ai.domain.attachments.content import AttachmentContent, AttachmentScanSummary
+from palatium_ai.domain.attachments.content import (
+    AttachmentContent,
+    AttachmentContentMetadata,
+    AttachmentScanSummary,
+)
 from palatium_ai.domain.attachments.pii_policy import (
     AttachmentPiiPolicyMode,
     apply_attachment_pii_policy,
 )
 from palatium_ai.domain.attachments.policies import AttachmentIntakePolicy
+from palatium_ai.domain.attachments.read import extraction_source_to_ocr_engine
 from palatium_ai.domain.attachments.sniff import sniff_media_type
 from palatium_ai.domain.attachments.types import AttachmentRejectionReason, AttachmentStatus
 from palatium_ai.domain.memory.pii import mask_pii_in_text
@@ -101,6 +106,42 @@ class AttachmentPipeline:
         blob or row exists, instead of after a wasted upload + scan round-trip.
         """
         return self._parser.supports(mime_type)
+
+    async def reparse_bytes(
+        self,
+        attachment: Attachment,
+        data: bytes,
+        *,
+        mime_type: str,
+    ) -> AttachmentContent | None:
+        """Re-extract derived text without mutating row status (lazy read path).
+
+        Returns ``None`` when parse or post-parse gates refuse — caller surfaces
+        a soft ``notice`` instead of flipping ``ready`` → ``rejected`` (035).
+        """
+        if not self._parser.supports(mime_type):
+            return None
+        try:
+            parsed = await self._parser.parse(data, mime_type=mime_type, filename=attachment.filename)
+        except DocumentParseError:
+            logger.warning(
+                "attachment.reparse refused",
+                attachment_id=str(attachment.id),
+                mime_type=mime_type,
+            )
+            return None
+        agent_metrics.record_attachment_parse(
+            extraction_source=parsed.extraction_source,
+            media_kind=_media_kind(mime_type),
+        )
+        outcome = self._admit_extracted(
+            attachment=attachment,
+            parsed=parsed,
+            effective_mime=mime_type,
+            size_bytes=len(data),
+            force_mask_injection=False,
+        )
+        return outcome.content if outcome.admitted else None
 
     async def run(
         self,
@@ -440,6 +481,10 @@ def _content_outcome(
         page_count=parsed.page_count,
         truncated=parsed.truncated,
         contains_pii=contains_pii,
+        metadata=AttachmentContentMetadata(
+            ocr_engine=extraction_source_to_ocr_engine(parsed.extraction_source),
+            extraction_source=parsed.extraction_source,
+        ),
     )
     return AttachmentPipelineOutcome(
         status="ready",

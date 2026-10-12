@@ -12,10 +12,24 @@ page-addressed extraction, for ``mask`` it is the redacted flow text, and for
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.policies.types import UntrustedContentAction
 from palatium_ai.domain.ports.document_parser import ParsedPage
+
+#: Parser engine that produced ``safe_text`` (detail; row uses ``extract_status``).
+AttachmentOcrEngine = Literal["tesseract", "llm_vision"]
+
+
+class AttachmentContentMetadata(BaseModel):
+    """Parser-detail sidecar; not duplicated as SQL columns (010)."""
+
+    model_config = {"frozen": True}
+
+    ocr_engine: AttachmentOcrEngine | None = None
+    extraction_source: str | None = Field(default=None, max_length=32)
 
 
 class AttachmentScanSummary(BaseModel):
@@ -47,6 +61,8 @@ class AttachmentContent(BaseModel):
     #: Heuristic PII on extracted flow text (060); tier via ``ATTACHMENTS_PII_POLICY``
     #: (``tag`` / ``mask`` / ``reject``). Does not block under default ``tag``.
     contains_pii: bool = False
+    #: Additive parser metadata (``ocr_engine`` etc.); absent on pre-migration blobs.
+    metadata: AttachmentContentMetadata = Field(default_factory=AttachmentContentMetadata)
 
     @property
     def is_prompt_eligible(self) -> bool:
@@ -54,4 +70,9 @@ class AttachmentContent(BaseModel):
         return self.scan.action in ("allow", "mask") and bool(self.safe_text)
 
 
-__all__ = ["AttachmentContent", "AttachmentScanSummary"]
+__all__ = [
+    "AttachmentContent",
+    "AttachmentContentMetadata",
+    "AttachmentOcrEngine",
+    "AttachmentScanSummary",
+]

@@ -54,6 +54,7 @@ from palatium_ai.domain.attachments import (
     AttachmentTurnContext,
     AttachmentUploadTooLargeError,
     IntakeDecision,
+    extraction_source_to_extract_status,
 )
 from palatium_ai.domain.attachments.fence_source import attachment_fence_source
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
@@ -469,7 +470,18 @@ class AttachmentService:
         if outcome.content is not None:
             derived_key = AttachmentIntakePolicy.derived_text_key(attachment.id)
             await self._write_content(derived_key, outcome.content)
-            updated = attachment.model_copy(update={"derived_text_key": derived_key})
+            text_chars = len(outcome.content.safe_text)
+            updated = attachment.model_copy(
+                update={
+                    "derived_text_key": derived_key,
+                    "ocr_applied": outcome.content.metadata.ocr_engine is not None,
+                    "extract_status": extraction_source_to_extract_status(
+                        outcome.content.metadata.extraction_source,
+                        text_chars=text_chars,
+                    ),
+                    "extracted_chars": text_chars,
+                },
+            )
         row_update: dict[str, object] = {
             "status": outcome.status,
             "size_bytes": outcome.stored_size_bytes,
