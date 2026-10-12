@@ -15,7 +15,12 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .policies import AttachmentRetentionPolicy
-from .types import AttachmentMode, AttachmentRejectionReason, AttachmentStatus
+from .types import (
+    AttachmentExtractStatus,
+    AttachmentMode,
+    AttachmentRejectionReason,
+    AttachmentStatus,
+)
 
 _TERMINAL_REFUSALS: frozenset[str] = frozenset({"rejected", "quarantined"})
 _USABLE_STATUSES: frozenset[str] = frozenset({"ready", "indexed"})
@@ -42,6 +47,10 @@ class Attachment(BaseModel):
     project_id: str | None = Field(default=None, max_length=64)
     #: Extracted-text PII classification (G06); mirrored from derived content on complete.
     contains_pii: bool = False
+    #: Extraction metadata for DoD SQL / reingest filters (text SoT = derived blob).
+    ocr_applied: bool | None = None
+    extract_status: AttachmentExtractStatus | None = None
+    extracted_chars: int | None = Field(default=None, ge=0)
     created_at: datetime
     expires_at: datetime | None = None
 

@@ -24,6 +24,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 
 from palatium_ai.domain.attachments import Attachment
 from palatium_ai.domain.attachments.types import (
+    AttachmentExtractStatus,
     AttachmentMode,
     AttachmentRejectionReason,
     AttachmentStatus,
@@ -65,6 +66,9 @@ def _attachment_from_orm(entity: AttachmentORM) -> Attachment:
         error=entity.error,
         project_id=entity.project_id,
         contains_pii=bool(entity.contains_pii),
+        ocr_applied=entity.ocr_applied,
+        extract_status=cast("AttachmentExtractStatus | None", entity.extract_status),
+        extracted_chars=entity.extracted_chars,
         created_at=entity.created_at,
         expires_at=entity.expires_at,
     )
@@ -123,6 +127,9 @@ class PostgresAttachmentRepository:
             error=attachment.error,
             project_id=attachment.project_id,
             contains_pii=attachment.contains_pii,
+            ocr_applied=attachment.ocr_applied,
+            extract_status=attachment.extract_status,
+            extracted_chars=attachment.extracted_chars,
             created_at=attachment.created_at,
             expires_at=attachment.expires_at,
         )
@@ -199,6 +206,9 @@ class PostgresAttachmentRepository:
                     error=attachment.error,
                     project_id=attachment.project_id,
                     contains_pii=attachment.contains_pii,
+                    ocr_applied=attachment.ocr_applied,
+                    extract_status=attachment.extract_status,
+                    extracted_chars=attachment.extracted_chars,
                     expires_at=attachment.expires_at,
                 )
                 .returning(AttachmentORM)

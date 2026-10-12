@@ -59,4 +59,8 @@ class AttachmentORM(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=False,
         server_default=sa.text("false"),
     )
+    #: Extraction metadata (nullable; text SoT is ``derived_text_key`` blob).
+    ocr_applied: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    extract_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
