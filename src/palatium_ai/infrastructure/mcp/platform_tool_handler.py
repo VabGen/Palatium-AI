@@ -297,7 +297,7 @@ def _parse_int_arg(raw: object, *, default: int, lo: int, hi: int) -> int | None
         return default
     try:
         value = int(str(raw).strip())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if value < lo or value > hi:
         return None

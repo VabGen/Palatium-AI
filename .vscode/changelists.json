@@ -3,9 +3,18 @@
     {
       "name": "Default",
       "files": [
-        "pyproject.toml",
-        ".vscode/changelists.json",
-        "scripts/install-tesseract.ps1"
+        ".cursor/hooks/mcp-rbac-guard.sh",
+        ".cursor/permissions.json",
+        ".cursor/rules/020-security-hitl.mdc",
+        ".cursor/rules/070-mcp-tools.mdc",
+        "src/palatium_ai/application/agents/researcher/config.py",
+        "src/palatium_ai/domain/mcp/platform_schemas.py",
+        "src/palatium_ai/domain/mcp/tool_policy.py",
+        "src/palatium_ai/infrastructure/mcp/platform_tool_handler.py",
+        "tests/unit/test_attachment_service.py",
+        ".cursor/plans/attachment-read-tool.md",
+        "tests/unit/test_platform_read_attachment_tool.py",
+        ".vscode/changelists.json"
       ]
     }
   ],

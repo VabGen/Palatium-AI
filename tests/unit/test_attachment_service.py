@@ -27,7 +27,6 @@ from palatium_ai.domain.attachments import (
     Attachment,
     AttachmentChunkedUploadError,
     AttachmentContent,
-    AttachmentContentMissingError,
     AttachmentIntakePolicy,
     AttachmentIntakeRejectedError,
     AttachmentLimits,
