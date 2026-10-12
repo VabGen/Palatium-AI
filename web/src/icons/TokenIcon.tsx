@@ -55,17 +55,50 @@ const LOTTIE_BY_TOKEN: Partial<Record<IconToken, object>> = {
   check: successAnim,
 };
 
+/** Default when LLM invents a name outside the allow-list — never render raw tags. */
+const FALLBACK_ICON: LucideIcon = Info;
+const FALLBACK_TOKEN: IconToken = 'info';
+
 type TokenIconProps = {
-  token?: IconToken | null;
+  /** Known IconToken, or raw string from stream (unknown → fallback + warn). */
+  token?: IconToken | string | null;
   className?: string;
   size?: number;
   animated?: boolean;
+  /** Optional turn correlation for warn logs (Path C). */
+  turnId?: string | null;
 };
 
-export function TokenIcon({ token, className, size = 18, animated = false }: TokenIconProps) {
-  if (!token) return null;
+function resolveToken(
+  token: IconToken | string | null | undefined
+): { known: IconToken | null; raw: string | null } {
+  if (token == null || token === '') return { known: null, raw: null };
+  const raw = String(token).trim().toLowerCase();
+  if (!raw) return { known: null, raw: null };
+  if (raw in TOKEN_MAP) return { known: raw as IconToken, raw };
+  return { known: null, raw };
+}
 
-  const lottieData = animated ? LOTTIE_BY_TOKEN[token] : undefined;
+export function TokenIcon({
+  token,
+  className,
+  size = 18,
+  animated = false,
+  turnId = null,
+}: TokenIconProps) {
+  const { known, raw } = resolveToken(token);
+  if (raw == null && known == null) return null;
+
+  const resolved: IconToken = known ?? FALLBACK_TOKEN;
+  if (!known && raw) {
+    console.warn('[TokenIcon] unknown icon name; using fallback', {
+      name: raw,
+      turnId,
+      fallback: FALLBACK_TOKEN,
+    });
+  }
+
+  const lottieData = animated ? LOTTIE_BY_TOKEN[resolved] : undefined;
   if (lottieData) {
     return (
       <span
@@ -84,8 +117,7 @@ export function TokenIcon({ token, className, size = 18, animated = false }: Tok
     );
   }
 
-  const Icon = TOKEN_MAP[token];
-  if (!Icon) return null;
+  const Icon = TOKEN_MAP[resolved] ?? FALLBACK_ICON;
   return (
     <Icon
       size={size}

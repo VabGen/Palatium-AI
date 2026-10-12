@@ -88,11 +88,20 @@ export function coerceIconToken(raw: string | null | undefined): IconToken | nul
 
 /**
  * Parse ``palatium-icon:NAME`` from a markdown image ``src`` produced by
- * {@link prepareStreamMarkdown}.
+ * {@link iconTokensToMarkdownImages}. Returns the raw name (may be unknown).
+ */
+export function iconNameFromMdSrc(src: string | undefined): string | null {
+  if (!src?.startsWith(ICON_MD_SCHEME)) return null;
+  const name = src.slice(ICON_MD_SCHEME.length).trim().toLowerCase();
+  return name || null;
+}
+
+/**
+ * @deprecated Prefer {@link iconNameFromMdSrc} + TokenIcon fallback.
+ * Returns a known IconToken or null.
  */
 export function iconTokenFromMdSrc(src: string | undefined): IconToken | null {
-  if (!src?.startsWith(ICON_MD_SCHEME)) return null;
-  return coerceIconToken(src.slice(ICON_MD_SCHEME.length));
+  return coerceIconToken(iconNameFromMdSrc(src));
 }
 
 /** Remove icon tokens (defense-in-depth / non-preview paths). Accepts name= and x=. */

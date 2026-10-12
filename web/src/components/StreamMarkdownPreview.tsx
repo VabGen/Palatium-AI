@@ -2,11 +2,7 @@ import type { Components } from 'react-markdown';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { TokenIcon } from '../icons/TokenIcon';
-import {
-  ICON_MD_SCHEME,
-  iconTokenFromMdSrc,
-  sanitizeStreamMarkdown,
-} from '../lib/markdown';
+import { ICON_MD_SCHEME, iconNameFromMdSrc, sanitizeStreamMarkdown } from '../lib/markdown';
 
 type Props = {
   markdown: string;
@@ -38,14 +34,11 @@ const previewComponents: Components = {
   a: ({ children }) => <span>{children}</span>,
   // Icon tokens are rewritten to ``![icon](palatium-icon:NAME)`` in sanitize.
   img: ({ src }) => {
-    const token = iconTokenFromMdSrc(src);
-    if (token) {
-      return <TokenIcon token={token} size={16} className="stream-md-icon" />;
+    const name = iconNameFromMdSrc(src);
+    if (name) {
+      return <TokenIcon token={name} size={16} className="stream-md-icon" />;
     }
-    // Unknown / non-icon images: never fetch remote URLs in stream preview.
-    if (src?.startsWith('palatium-icon:')) {
-      return <TokenIcon token={undefined} size={16} className="stream-md-icon" />;
-    }
+    // Non-icon images: never fetch remote URLs in stream preview.
     return null;
   },
 };
