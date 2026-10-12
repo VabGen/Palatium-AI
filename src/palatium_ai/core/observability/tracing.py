@@ -6,18 +6,46 @@ from __future__ import annotations
 
 import inspect
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from functools import wraps
-from typing import ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
 
 import structlog
 
 from palatium_ai.core.observability.otel import get_tracer
 
+if TYPE_CHECKING:
+    from palatium_ai.domain.llm.models import LLMUsage
+
 logger = structlog.get_logger(__name__)
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+
+def add_gen_ai_attributes(
+    span: object,
+    *,
+    model: str,
+    usage: LLMUsage,
+    cost_usd: float,
+    finish_reason: str | None,
+) -> None:
+    """Add OpenTelemetry GenAI Semantic Conventions attributes (Phase 3)."""
+    set_attributes = getattr(span, "set_attributes", None)
+    if not callable(set_attributes):
+        return
+    reasons: Sequence[str] = (finish_reason,) if finish_reason else ()
+    set_attributes(
+        {
+            "gen_ai.system": "litellm",
+            "gen_ai.request.model": model,
+            "gen_ai.usage.input_tokens": usage.prompt_tokens,
+            "gen_ai.usage.output_tokens": usage.completion_tokens,
+            "gen_ai.usage.cost_usd": cost_usd,
+            "gen_ai.response.finish_reasons": list(reasons),
+        }
+    )
 
 
 def traceable(*, name: str | None = None) -> Callable[[Callable[P, R]], Callable[P, R]]:
