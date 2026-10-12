@@ -27,6 +27,7 @@ from palatium_ai.application.services.session_timeline_service import SessionTim
 from palatium_ai.application.wiring import (
     AttachmentPorts,
     build_attachment_ports,
+    build_attachment_read_service,
     build_attachment_service,
     build_hitl_service,
     build_intent_service,
@@ -269,6 +270,7 @@ def _wire_platform_handler(
     graph_write: GraphWritePort | None = None,
     web_search_port: WebSearchPort,
     skill_catalog: object | None = None,
+    attachment_read: object | None = None,
 ) -> None:
     """Wire the platform handler."""
     # Track B: platform is always-on Host-local capability (no MCP_SERVERS URL required).
@@ -282,9 +284,10 @@ def _wire_platform_handler(
             graph_write=graph_write,
             web_search_port=web_search_port,
             skill_catalog=skill_catalog,  # type: ignore[arg-type]  # object|None → Protocol (017)
+            attachment_read=attachment_read,  # type: ignore[arg-type]  # object|None → Protocol (017)
         ),
     )
-    logger.info("Platform MCP: local knowledge+memory+graph+web+skills handler registered")
+    logger.info("Platform MCP: local knowledge+memory+graph+web+skills+attachments handler registered")
 
 
 def _resolve_mcp_source(
@@ -372,6 +375,7 @@ async def startup(settings: Settings) -> AppResources:
     await _ensure_neo4j_memory_schema(graph_ports)
     attachment_ports = await build_attachment_ports(settings, session_factory)
     attachment_service: AttachmentService | None = None
+    attachment_read_service = None
     if attachment_ports is not None:
         attachment_service = build_attachment_service(
             settings,
@@ -381,6 +385,7 @@ async def startup(settings: Settings) -> AppResources:
             redis_client=redis_client,
             mcp_tool_call_repository=mcp_tool_call_repository,
         )
+        attachment_read_service = build_attachment_read_service(settings, attachment_ports)
     intent_service, memory_extract, capability_index, document_ingest_service = build_intent_service(
         settings,
         mcp_registry,
@@ -416,6 +421,7 @@ async def startup(settings: Settings) -> AppResources:
         graph_write=graph_ports.write,
         web_search_port=web_search_port,
         skill_catalog=skill_catalog,
+        attachment_read=attachment_read_service,
     )
     mcp_registry.assert_local_handlers_wired()
 

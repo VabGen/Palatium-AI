@@ -28,6 +28,7 @@ from palatium_ai.application.agents.text_ingestor import TEXT_INGESTOR_CONFIG, T
 from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.attachment_pipeline import AttachmentPipeline
+from palatium_ai.application.services.attachment_read_service import AttachmentReadService
 from palatium_ai.application.services.attachment_service import AttachmentService
 from palatium_ai.application.services.context_builder import ContextBuilder
 from palatium_ai.application.services.cost_budget import CostBudgetService
@@ -574,5 +575,25 @@ def build_attachment_service(
         document_ingest_service=document_ingest_service,
         analysis=analysis,
         connector=DisabledAttachmentConnector(),
+        limits=limits,
+    )
+
+
+def build_attachment_read_service(
+    settings: Settings,
+    ports: AttachmentPorts,
+) -> AttachmentReadService:
+    """Owner-scoped on-demand read with lazy OCR via DocumentParserPort (070)."""
+    limits = build_attachment_limits(settings)
+    pipeline = AttachmentPipeline(
+        blob_store=ports.blob_store,
+        malware_scanner=ports.malware_scanner,
+        document_parser=ports.document_parser,
+        pii_policy=settings.attachments.pii_policy,
+    )
+    return AttachmentReadService(
+        repository=ports.repository,
+        blob_store=ports.blob_store,
+        pipeline=pipeline,
         limits=limits,
     )
