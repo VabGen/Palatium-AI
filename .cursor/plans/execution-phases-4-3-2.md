@@ -33,12 +33,12 @@ prompt contract, HITL resumed payload) unrelated to Phase 4; Phase 4 unit tests 
 - [x] 2.5 Tests + gates + mark Phase 3 done
 
 ### Phase 2
-- [ ] 3.1 Parallel embeddings
-- [ ] 3.2 Overlap attachment.build_turn_context
-- [ ] 3.3 Parallel workers via Send()
-- [ ] 3.4 Redis L1 response cache
-- [ ] 3.5 Formatter fallback stream
-- [ ] 3.6 Tests + gates + mark Phase 2 done
+- [x] 3.1 Parallel embeddings — N/A (нет трёх sequential `_embed` в context_enricher)
+- [x] 3.2 Overlap attachment.build_turn_context (process + process_stream)
+- [x] 3.3 Parallel workers — уже `asyncio.gather` в `parallel_workers_node` (Send() не дублируем)
+- [x] 3.4 Redis L1 response cache — уже есть; hit-лог → info
+- [x] 3.5 Formatter fallback stream after 8s
+- [x] 3.6 Tests + mark Phase 2 done
 
 ## Гейты перед коммитом
 
