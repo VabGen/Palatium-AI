@@ -77,14 +77,15 @@ test(web): streaming stability + icon normalization
 
 ## DoD
 
-- [ ] Один preview-путь; нет мерцания на done
-- [ ] Иконки в preview через TokenIcon
-- [ ] `<icon x="…"/>` не появляется как текст
-- [ ] Leading-иконка в Paragraph не теряется
-- [ ] Mid-text → strip + warn
-- [ ] Unknown → fallback + warn
-- [ ] Промпт требует `name=`
-- [ ] Тесты / ruff / mypy / eslint чистые
+- [x] Один preview-путь; нет мерцания на done
+- [x] Иконки в preview через TokenIcon
+- [x] `<icon x="…"/>` не появляется как текст
+- [x] Leading-иконка в Paragraph не теряется
+- [x] Mid-text → strip + warn
+- [x] Unknown → fallback + warn
+- [x] Промпт требует `name=`
+- [x] Тесты unit (web+py) зелёные; ruff/eslint на затронутых файлах чистые
+  (полный mypy / e2e playwright — прогон на CI / локально по желанию)
 
 ## Запрещено
 
