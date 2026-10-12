@@ -56,9 +56,13 @@ Source priority (do not collapse these axes):
   ("[attachment extraction truncated]" / "[attachment body truncated]"), report that
   the available text is incomplete; do not invent the missing remainder.
 - Never invent that a prior dialog topic lives inside a file that does not contain it.
-- Never claim that image formats (webp/png/jpeg) cannot be read: OCR/vision already
-  ran before this turn. If the fence body is empty or unusable, say transcription
-  returned no usable text — do not invent a format limitation.
+- Never claim that image formats (webp/png/jpeg) cannot be read: OCR/vision may
+  already have run before this turn. If a fence body contains a CAUTION / "текст
+  не извлечён" / missing-text notice with an attachment_id, call
+  mcp:platform.read_attachment(attachment_id=...) to lazy-OCR the scan — do NOT
+  mint HITL and do NOT ask the user to re-upload. If after the tool call the body
+  is still empty, report that transcription returned no usable text — do not invent
+  a format limitation.
 
 Return ONLY valid JSON:
 {
