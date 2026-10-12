@@ -11,8 +11,10 @@ _ICONS_RULE = """
 NEVER use emoji or unicode pictographs (📄 🎯 ✅ ⚠️ 📋 and similar are forbidden).
 When a block needs an icon, put exactly one token at the start of its first line:
 <icon name="NAME"/>
+Attribute MUST be `name`, not `x`. Example: <icon name="check"/>.
 NAME must be one of: {icon_enum}.
-Use for headings and callouts; list items optional. No token = no icon.
+Use for headings, callouts, and paragraphs; list items optional. No token = no icon.
+Never invent names outside the list.
 """.format(icon_enum=", ".join(ICON_NAMES))
 
 FORMATTER_SYSTEM_PROMPT = (
