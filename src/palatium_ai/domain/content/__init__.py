@@ -1,6 +1,8 @@
 """Универсальный UI/presentation-контракт ответа платформы (не агенты, не MCP)."""
 
 from .content_document import (
+    ICON_NAME_SET,
+    ICON_NAMES,
     ActionKind,
     ActionSpec,
     ActionStyle,
@@ -14,8 +16,6 @@ from .content_document import (
     DocumentMeta,
     FormulaBlock,
     HeadingBlock,
-    ICON_NAMES,
-    ICON_NAME_SET,
     IconToken,
     KeyValueBlock,
     ListBlock,
@@ -29,6 +29,8 @@ from .content_document import (
 from .markdown_blocks import count_ordered_markers, prose_to_blocks
 
 __all__ = [
+    "ICON_NAMES",
+    "ICON_NAME_SET",
     "ActionKind",
     "ActionSpec",
     "ActionStyle",
@@ -42,8 +44,6 @@ __all__ = [
     "DocumentMeta",
     "FormulaBlock",
     "HeadingBlock",
-    "ICON_NAMES",
-    "ICON_NAME_SET",
     "IconToken",
     "KeyValueBlock",
     "ListBlock",

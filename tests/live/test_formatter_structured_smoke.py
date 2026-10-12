@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -26,6 +27,9 @@ from palatium_ai.core.config.llm.qwen import QwenLLMConfig
 from palatium_ai.domain.content import CalloutBlock, ContentDocument, HeadingBlock, KeyValueBlock, ListBlock
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion, LLMResponseFormat
 from palatium_ai.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+if TYPE_CHECKING:
+    from palatium_ai.domain.agents.formatter import FormatterInput
 
 pytestmark = [
     pytest.mark.live,
