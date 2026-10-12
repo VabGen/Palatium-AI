@@ -322,6 +322,10 @@ async def startup(settings: Settings) -> AppResources:
     ensure_psycopg_compatible_loop()
     setup_logging(settings)
     setup_observability(settings)
+    # FinOps: register tier price cards before any LLM client is built (Phase 3).
+    from palatium_ai.core.finops.pricing import register_tier_costs
+
+    register_tier_costs()
     # `environment` уже добавляется в контекстvars в `setup_logging`, поэтому не дублируем поле `env`.
     logger.info(f"{settings.app.name} starting...")
 
