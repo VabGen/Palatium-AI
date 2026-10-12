@@ -24,13 +24,23 @@ describe('StreamMarkdownPreview', () => {
     expect(screen.queryByText(/###/)).toBeNull();
   });
 
-  it('strips icon tokens and emoji from preview', () => {
-    render(
+  it('renders icon tokens via TokenIcon and strips emoji', () => {
+    const { container } = render(
       <StreamMarkdownPreview markdown={'<icon name="document"/> Note 📄'} />
     );
     expect(screen.getByText(/Note/)).toBeInTheDocument();
-    expect(screen.queryByText(/icon/)).toBeNull();
+    expect(screen.queryByText(/<icon/)).toBeNull();
     expect(screen.queryByText(/📄/)).toBeNull();
+    expect(container.querySelector('svg')).not.toBeNull();
+  });
+
+  it('renders legacy x= icon attribute the same as name=', () => {
+    const { container } = render(
+      <StreamMarkdownPreview markdown={'<icon x="check"/> Done'} />
+    );
+    expect(screen.getByText(/Done/)).toBeInTheDocument();
+    expect(screen.queryByText(/<icon/)).toBeNull();
+    expect(container.querySelector('svg')).not.toBeNull();
   });
 
   it('sanitizeStreamMarkdown closes dangling bold', () => {

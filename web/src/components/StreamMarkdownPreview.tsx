@@ -1,13 +1,24 @@
 import type { Components } from 'react-markdown';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { sanitizeStreamMarkdown } from '../lib/markdown';
+import { TokenIcon } from '../icons/TokenIcon';
+import {
+  ICON_MD_SCHEME,
+  iconTokenFromMdSrc,
+  sanitizeStreamMarkdown,
+} from '../lib/markdown';
 
 type Props = {
   markdown: string;
 };
 
-/** Lightweight element map — headings / lists / tables / code only. */
+/** Allow our opaque icon scheme; keep default sanitization for everything else. */
+function streamUrlTransform(url: string): string {
+  if (url.startsWith(ICON_MD_SCHEME)) return url;
+  return defaultUrlTransform(url);
+}
+
+/** Lightweight element map — headings / lists / tables / code + TokenIcon. */
 const previewComponents: Components = {
   h1: ({ children }) => <h3 className="stream-md-h">{children}</h3>,
   h2: ({ children }) => <h3 className="stream-md-h">{children}</h3>,
@@ -25,11 +36,23 @@ const previewComponents: Components = {
     className ? <code className={className}>{children}</code> : <code>{children}</code>,
   // Never make stream XML look clickable — HITL only from result cards (020).
   a: ({ children }) => <span>{children}</span>,
+  // Icon tokens are rewritten to ``![icon](palatium-icon:NAME)`` in sanitize.
+  img: ({ src }) => {
+    const token = iconTokenFromMdSrc(src);
+    if (token) {
+      return <TokenIcon token={token} size={16} className="stream-md-icon" />;
+    }
+    // Unknown / non-icon images: never fetch remote URLs in stream preview.
+    if (src?.startsWith('palatium-icon:')) {
+      return <TokenIcon token={undefined} size={16} className="stream-md-icon" />;
+    }
+    return null;
+  },
 };
 
 /**
- * Progressive GFM preview during SSE (Hybrid Phase 1 / hotfix 1.1).
- * Icon tokens and emoji are stripped; final UI uses BlockRenderer + library icons.
+ * Progressive GFM preview during SSE (Path C).
+ * Icon tokens render via TokenIcon (same as BlockRenderer); HITL/emoji stripped.
  */
 export function StreamMarkdownPreview({ markdown }: Props) {
   const cleaned = sanitizeStreamMarkdown(markdown);
@@ -38,7 +61,11 @@ export function StreamMarkdownPreview({ markdown }: Props) {
   }
   return (
     <div className="stream-preview stream-preview--md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={previewComponents}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={streamUrlTransform}
+        components={previewComponents}
+      >
         {cleaned}
       </ReactMarkdown>
     </div>

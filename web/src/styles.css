@@ -258,7 +258,7 @@ textarea {
   padding: 4px 6px;
   border-radius: 6px;
   transition:
-    background var(--duration-base) var(--ease-out),
+    background-color var(--duration-base) var(--ease-out),
     color var(--duration-base) var(--ease-out),
     transform var(--duration-press) var(--ease-out);
   display: inline-flex;
@@ -324,6 +324,12 @@ textarea {
 
 .msg.pending .stream-preview--md > *:last-child {
   margin-bottom: 0;
+}
+
+.msg.pending .stream-md-icon {
+  display: inline-block;
+  vertical-align: -0.2em;
+  margin-right: 0.3em;
 }
 
 .msg.pending .stream-md-h {
