@@ -74,6 +74,24 @@ class AttachmentRepositoryPort(Protocol):
         """Remove an attachment row owned by ``user_id``."""
         ...
 
+    async def update_extraction_state(
+        self,
+        attachment_id: UUID,
+        *,
+        user_id: str,
+        ocr_applied: bool,
+        extract_status: str,
+        extracted_chars: int,
+        derived_text_key: str | None = None,
+        page_count: int | None = None,
+        contains_pii: bool | None = None,
+    ) -> Attachment:
+        """Stamp extraction metadata after lazy OCR / Vision write-through.
+
+        Raises ``LookupError`` when the row is not visible to ``user_id`` (060).
+        """
+        ...
+
     async def list_reclaimable(
         self,
         cutoff: datetime,

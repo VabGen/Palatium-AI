@@ -266,6 +266,46 @@ class PostgresAttachmentRepository:
             )
             await session.commit()
 
+    async def update_extraction_state(
+        self,
+        attachment_id: UUID,
+        *,
+        user_id: str,
+        ocr_applied: bool,
+        extract_status: str,
+        extracted_chars: int,
+        derived_text_key: str | None = None,
+        page_count: int | None = None,
+        contains_pii: bool | None = None,
+    ) -> Attachment:
+        """Stamp extraction metadata after lazy OCR / Vision write-through."""
+        values: dict[str, object] = {
+            "ocr_applied": ocr_applied,
+            "extract_status": extract_status,
+            "extracted_chars": extracted_chars,
+        }
+        if derived_text_key is not None:
+            values["derived_text_key"] = derived_text_key
+        if page_count is not None:
+            values["page_count"] = page_count
+        if contains_pii is not None:
+            values["contains_pii"] = contains_pii
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, user_id)
+            stmt = (
+                update(AttachmentORM)
+                .where(AttachmentORM.id == attachment_id, AttachmentORM.user_id == user_id)
+                .values(**values)
+                .returning(AttachmentORM)
+            )
+            result = await session.execute(stmt)
+            entity = result.scalar_one_or_none()
+            await session.commit()
+            if entity is None:
+                msg = f"attachment {attachment_id} not found for the acting user"
+                raise LookupError(msg)
+            return _attachment_from_orm(entity)
+
     async def list_reclaimable(
         self,
         cutoff: datetime,
