@@ -97,11 +97,13 @@ def ensure_routing_intent(state: AgentGraphState) -> EffectiveRoutingIntent:
         return existing
     ctx = state.get("contextualization")
     classification = state.get("classification")
+    user_text = state.get("user_text")
     return ContinuityPolicy.resolve(
         contextualizer=ctx.output if ctx is not None else None,
         dialog=state.get("dialog_window"),
         raw_intent=classification.output if classification is not None else None,
         has_turn_attachments=bool((state.get("untrusted_context") or "").strip()),
+        user_text=user_text if isinstance(user_text, str) else None,
     )
 
 

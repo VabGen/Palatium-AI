@@ -26,6 +26,9 @@ Source polarity for prior_context (workers):
   intents over the dump so workers see the referent, not the intervening topic.
 - False clarify recovery: Contextualizer `clarify` with resolvable history
   (excerpt, refers_to_prior, or topic-switch user intents) → treat as `answer`.
+- False new_topic recovery: Contextualizer `new_topic` while rewrite quotes prior
+  or injects prior tokens absent from the raw ask → treat as `answer`
+  (meta / anaphora mislabeled as independence).
 
 Что ContinuityPolicy НЕ делает:
 - Не переписывает task_kind в knowledge_request «потому что есть диалог».
@@ -75,6 +78,9 @@ _USER_OVER_ASSISTANT_RATIO = 2
 _MAX_SHORT_USER_INTENTS = 4
 _PRIOR_CAP = DEFAULT_PROMPT_BUDGET.worker_summary_max_chars
 _HITL_RESUME_MARKER = "HITL_CHOICE_RESUME"
+# Rewrite enrichment beyond typo/whitespace cleanup → depends on prior (055 structural).
+_REWRITE_ENRICHMENT_MIN_CHARS = 24
+_REWRITE_NOVEL_TOKEN_MIN_CHARS = 4
 
 
 class EffectiveRoutingIntent(BaseModel):
@@ -242,6 +248,59 @@ class ContinuityPolicy:
         return cls.topic_switch_user_prior(dialog, assistant_prior) is not None
 
     @classmethod
+    def should_recover_false_new_topic(
+        cls,
+        *,
+        contextualizer: ContextualizerOutput | None,
+        dialog: DialogTurnWindow | None,
+        assistant_prior: str | None,
+        user_text: str | None = None,
+    ) -> bool:
+        """True when Contextualizer claimed new_topic but the ask still depends on prior.
+
+        Structural only (055): quoted prior excerpt, or a rewrite that injects prior
+        tokens absent from the raw user turn (meta / anaphora mislabeled as new_topic).
+        """
+        if contextualizer is None or contextualizer.continuation_kind != "new_topic":
+            return False
+        has_history = assistant_prior is not None or cls.prior_user_content(dialog, min_chars=1) is not None
+        if not has_history:
+            return False
+        if contextualizer.refers_to_prior:
+            return True
+        if (contextualizer.prior_assistant_excerpt or "").strip():
+            return True
+        if user_text is None or not assistant_prior:
+            return False
+        return cls._rewrite_depends_on_prior(
+            user_text=user_text,
+            rewritten=contextualizer.rewritten_query,
+            prior=assistant_prior,
+        )
+
+    @staticmethod
+    def _rewrite_depends_on_prior(*, user_text: str, rewritten: str, prior: str) -> bool:
+        """True when rewritten_query adds prior material beyond mechanical cleanup."""
+        raw = " ".join(user_text.lower().split())
+        rw = " ".join(rewritten.lower().split())
+        if not raw or not rw:
+            return False
+        if rw == raw:
+            return False
+        if raw in rw and len(rw) - len(raw) < _REWRITE_ENRICHMENT_MIN_CHARS:
+            return False
+        raw_tokens = set(raw.split())
+        novel = [
+            token
+            for token in rw.split()
+            if token not in raw_tokens and len(token) >= _REWRITE_NOVEL_TOKEN_MIN_CHARS
+        ]
+        if not novel:
+            return False
+        prior_n = " ".join(prior.lower().split())
+        return any(token in prior_n for token in novel)
+
+    @classmethod
     def resolve_worker_prior(
         cls,
         *,
@@ -348,6 +407,7 @@ class ContinuityPolicy:
         dialog: DialogTurnWindow | None,
         raw_intent: IntentClassifierOutput | None,
         has_turn_attachments: bool = False,
+        user_text: str | None = None,
     ) -> EffectiveRoutingIntent:
         """Сводит continuity + Intent в один EffectiveRoutingIntent.
 
@@ -355,6 +415,9 @@ class ContinuityPolicy:
         workers must NOT bind prior assistant content, false ``discrete_choice``
         is cleared for every continuation kind, and callers should pin
         ``effective_user_text`` via ``resolve_effective_user_text`` (055).
+
+        ``user_text``: raw turn ask (pre-rewrite). Used only to detect false
+        ``new_topic`` when Contextualizer enriched the query from prior.
         """
         snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
         assistant_prior = cls.prior_assistant_content(contextualizer, dialog)
@@ -362,40 +425,19 @@ class ContinuityPolicy:
             snap.requires_user_choice = False
             snap.underspec = "none"
 
-        recovered_false_clarify = False
-        if snap.kind == "clarify" and cls.should_recover_false_clarify(
+        recovery_label = cls._recover_false_continuation(
+            snap=snap,
             contextualizer=contextualizer,
             dialog=dialog,
             assistant_prior=assistant_prior,
-        ):
-            snap.kind = "answer"
-            snap.refers_to_prior = True
-            recovered_false_clarify = True
-        elif snap.kind == "clarify" and snap.ctx_confidence < CLARIFY_MIN_CONFIDENCE:
-            # A guessed clarify costs the user a round-trip: classify from Intent alone.
-            snap.kind = "new_topic"
-            snap.refers_to_prior = False
-
-        # New upload on this turn owns file-oriented asks; format/answer-of-prior
-        # would summarize the previous document and may skip the researcher (055).
-        # Contextualizer/Intent discrete_choice on a grounded upload ("дай сводку",
-        # "дай текст из файла") is false clarify for *any* continuation_kind — the
-        # fenced OCR already supplies the referent. Clearing choice only for
-        # clarify left answer/format/new_topic uploads minting HITL menus about the
-        # prior dialog topic (cross-file bleed via option synthesizer).
-        # Drop assistant_prior entirely: otherwise fallthrough still injects the
-        # previous file's answer into Researcher/Formatter.
+            user_text=user_text,
+        )
+        # New upload owns file asks; drop assistant prior to avoid cross-file bleed (055).
         if has_turn_attachments:
-            if snap.kind in {"format", "clarify"}:
-                snap.kind = "answer"
-            snap.refers_to_prior = False
-            assistant_prior = None
-            snap.requires_user_choice = False
-            snap.underspec = "none"
-            snap.caps = tuple(c for c in snap.caps if c != "user_choice")
-            if snap.raw_task == "clarification_needed":
-                snap.raw_task = "knowledge_request"
-            recovered_false_clarify = True
+            assistant_prior, recovery_label = cls._apply_attachment_turn(
+                snap=snap,
+                recovery_label=recovery_label,
+            )
 
         # False Contextualizer ``format`` (PDF dump in dialog) must not override an
         # Intent clarify-slot or self-contained social ask — sticky rehydrate poison (055).
@@ -410,7 +452,7 @@ class ContinuityPolicy:
             snap=snap,
             assistant_prior=assistant_prior,
             dialog=dialog,
-            recovered_false_clarify=recovered_false_clarify,
+            recovery_label=recovery_label,
         )
         if answered is not None:
             return answered
@@ -442,6 +484,58 @@ class ContinuityPolicy:
             reasoning=f"continuity={snap.kind}; trust intent: {snap.intent_reasoning}",
             confidence=snap.confidence,
         )
+
+    @classmethod
+    def _recover_false_continuation(
+        cls,
+        *,
+        snap: _ResolveSnapshot,
+        contextualizer: ContextualizerOutput | None,
+        dialog: DialogTurnWindow | None,
+        assistant_prior: str | None,
+        user_text: str | None,
+    ) -> str | None:
+        """Remap history-blind Contextualizer kinds; return recovery label if any."""
+        if snap.kind == "clarify" and cls.should_recover_false_clarify(
+            contextualizer=contextualizer,
+            dialog=dialog,
+            assistant_prior=assistant_prior,
+        ):
+            snap.kind = "answer"
+            snap.refers_to_prior = True
+            return "recovered false clarify"
+        if snap.kind == "clarify" and snap.ctx_confidence < CLARIFY_MIN_CONFIDENCE:
+            # Guessed clarify costs a round-trip: classify from Intent alone.
+            snap.kind = "new_topic"
+            snap.refers_to_prior = False
+            return None
+        if snap.kind == "new_topic" and cls.should_recover_false_new_topic(
+            contextualizer=contextualizer,
+            dialog=dialog,
+            assistant_prior=assistant_prior,
+            user_text=user_text,
+        ):
+            snap.kind = "answer"
+            snap.refers_to_prior = True
+            return "recovered false new_topic"
+        return None
+
+    @staticmethod
+    def _apply_attachment_turn(
+        *,
+        snap: _ResolveSnapshot,
+        recovery_label: str | None,
+    ) -> tuple[None, str]:
+        """Clear prior binding for a fenced upload turn; return (assistant_prior, label)."""
+        if snap.kind in {"format", "clarify"}:
+            snap.kind = "answer"
+        snap.refers_to_prior = False
+        snap.requires_user_choice = False
+        snap.underspec = "none"
+        snap.caps = tuple(c for c in snap.caps if c != "user_choice")
+        if snap.raw_task == "clarification_needed":
+            snap.raw_task = "knowledge_request"
+        return None, recovery_label or "attachment turn"
 
     @staticmethod
     def _demote_false_format(snap: _ResolveSnapshot) -> None:
@@ -515,7 +609,7 @@ class ContinuityPolicy:
         snap: _ResolveSnapshot,
         assistant_prior: str | None,
         dialog: DialogTurnWindow | None,
-        recovered_false_clarify: bool,
+        recovery_label: str | None,
     ) -> EffectiveRoutingIntent | None:
         # Answer continuity: enrich with prior; correct only history-blind false clarify.
         # Do NOT remapa social / capability / tool / workflow → knowledge_request.
@@ -527,7 +621,7 @@ class ContinuityPolicy:
             return None
         task_kind, effective_caps, reasoning = _map_answer_task(
             snap=snap,
-            recovered_false_clarify=recovered_false_clarify,
+            recovery_label=recovery_label,
         )
         prior = cls.resolve_worker_prior(
             assistant_prior=assistant_prior,
@@ -591,7 +685,7 @@ class _ResolveSnapshot:
 def _map_answer_task(
     *,
     snap: _ResolveSnapshot,
-    recovered_false_clarify: bool,
+    recovery_label: str | None,
 ) -> tuple[TaskKind, tuple[str, ...], str]:
     if snap.choice_slot_filled and snap.raw_task == "clarification_needed":
         caps = tuple(c for c in snap.caps if c != "user_choice") or ("summarize",)
@@ -599,13 +693,15 @@ def _map_answer_task(
         return "knowledge_request", caps, reasoning
     if snap.raw_task == "clarification_needed" and not snap.requires_user_choice and snap.underspec != "discrete_choice":
         caps = snap.caps or ("summarize",)
-        if recovered_false_clarify:
-            reasoning = f"continuity=answer; recovered false clarify → knowledge_request; {snap.intent_reasoning}"
+        if recovery_label is not None:
+            reasoning = f"continuity=answer; {recovery_label} → knowledge_request; {snap.intent_reasoning}"
         else:
             reasoning = f"continuity=answer; corrected history-blind clarify → knowledge_request; {snap.intent_reasoning}"
         return "knowledge_request", caps, reasoning
-    if recovered_false_clarify:
-        reasoning = f"continuity=answer; recovered false clarify; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
+    if recovery_label is not None:
+        reasoning = (
+            f"continuity=answer; {recovery_label}; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
+        )
     else:
         reasoning = f"continuity=answer; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
     return snap.raw_task, snap.caps, reasoning

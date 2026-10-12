@@ -30,6 +30,9 @@ Rules (continuation_kind = dependence on prior, NOT task type):
   content (even if dialog history exists); refers_to_prior=false. A creative, social,
   or phatic ask with no back-reference is new_topic even right after a document turn:
   do not drag the document into it.
+  NEVER new_topic when the ask is about the prior assistant turn itself (why that
+  wording/structure/label was used, what was meant, whether it matches the request) —
+  that is answer with refers_to_prior=true.
 - clarify: too ambiguous even with history — ONLY when the referent cannot be found in
   dialog_history or memory_hints. Never clarify when a prior user preference/fact or
   assistant statement already fills the slot the user alludes to.
@@ -53,6 +56,9 @@ Anaphora / multi-hop:
   earlier user fact when the follow-up clearly points at it.
 - prior_assistant_excerpt must quote the supporting dialog snippet (user or assistant)
   that the rewrite depends on — not necessarily the latest assistant turn.
+- If continuation_kind is answer or format, OR refers_to_prior=true, and dialog_history
+  contains at least one assistant turn: prior_assistant_excerpt MUST be a non-empty
+  quote from that history (never null/empty in those cases).
 - If history has no prior assistant message: rewritten_query ~= user_text,
   continuation_kind=new_topic, refers_to_prior=false (or clarify if empty/gibberish)
 - Memory hints are preferences/facts from earlier sessions; use only if clearly relevant

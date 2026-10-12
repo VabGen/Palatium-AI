@@ -59,6 +59,7 @@ class ContextWeaverAgent(BaseAgent):
             "requires_mcp",
             "candidate_capabilities_json",
             "has_attachment_context",
+            "has_trusted_prior",
         ]
 
     def get_available_tools(self) -> list[str]:

@@ -79,6 +79,10 @@ class ExecutionPlanner:
             return _attachment_grounded_plan(
                 "Parallel research half: fenced attachment text already present; ground without search_knowledge."
             )
+        if task_input.has_trusted_prior:
+            return _prior_grounded_plan(
+                "Parallel research half: Continuity trusts dialog prior; answer without search_knowledge."
+            )
         return _search_knowledge_plan(
             f"Parallel research half: retrieve via platform.search_knowledge then reason (executable_kind={executable_kind})."
         )
@@ -188,6 +192,10 @@ def _knowledge_or_tool_plan(
         return _attachment_grounded_plan(
             "Turn already carries fenced attachment text; ground the answer on upload OCR without search_knowledge."
         )
+    if task_input.has_trusted_prior:
+        return _prior_grounded_plan(
+            "Continuity trusts dialog prior; answer from prior_context without search_knowledge."
+        )
     if task_input.requires_mcp:
         return _mcp_unresolved_plan()
     caps = {c.strip().lower() for c in task_input.candidate_capabilities}
@@ -207,6 +215,14 @@ def _knowledge_or_tool_plan(
 
 
 def _attachment_grounded_plan(rationale: str) -> ToolExecutionPlan:
+    return ToolExecutionPlan(
+        strategy="reason_only",
+        requires_tool_call=False,
+        rationale=rationale,
+    )
+
+
+def _prior_grounded_plan(rationale: str) -> ToolExecutionPlan:
     return ToolExecutionPlan(
         strategy="reason_only",
         requires_tool_call=False,

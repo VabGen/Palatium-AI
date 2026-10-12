@@ -348,6 +348,7 @@ def context_weaver_to_agent_input(
             "requires_mcp": "true" if task_input.requires_mcp else "false",
             "candidate_capabilities_json": json.dumps(list(task_input.candidate_capabilities), ensure_ascii=False),
             "has_attachment_context": "true" if task_input.has_attachment_context else "false",
+            "has_trusted_prior": "true" if task_input.has_trusted_prior else "false",
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },

@@ -168,17 +168,26 @@ async def continuation_node(
         output = getattr(result, "output", None)
         rewritten = output.rewritten_query if output is not None else selectors.resolved_user_text(state)
         entry_has_attachments = bool((state.get("untrusted_context") or "").strip())
+        raw_user = state.get("user_text")
         routing_intent = resolve_routing_intent(
             contextualizer=output,
             dialog=window,
             raw_intent=raw_intent,
             has_turn_attachments=entry_has_attachments,
+            user_text=raw_user if isinstance(raw_user, str) else None,
         )
         # SB2: rehydrate dialog-bound attachments after Continuity (not sticky poison).
+        # Prefer Continuity trust over raw Contextualizer refers_to_prior — recovery of
+        # false new_topic sets trust without rewriting the frozen Contextualizer output.
         untrusted_context = state.get("untrusted_context") or ""
+        rehydrate_refers = (
+            routing_intent.trust_prior_for_workers
+            if routing_intent.continuation_kind in {"answer", "format"}
+            else bool(output.refers_to_prior if output is not None else False)
+        )
         rehydrate = AttachmentStickinessPolicy.decide_rehydrate(
             continuation_kind=routing_intent.continuation_kind,
-            refers_to_prior=bool(output.refers_to_prior if output is not None else routing_intent.trust_prior_for_workers),
+            refers_to_prior=rehydrate_refers,
             has_turn_attachments=entry_has_attachments,
             dialog=window,
             prior_context=routing_intent.prior_context,
@@ -194,7 +203,6 @@ async def continuation_node(
                 untrusted_context = fenced
                 agent_metrics.record_attachment_sticky(action="rehydrate_applied")
 
-        raw_user = state.get("user_text")
         effective_user_text = ContinuityPolicy.resolve_effective_user_text(
             raw_user_text=raw_user if isinstance(raw_user, str) else "",
             rewritten_query=rewritten,
@@ -735,6 +743,9 @@ def route_after_context(
 
 def route_after_critic(state: AgentGraphState) -> Literal["quality_revision", "formatter"]:
     """Critic → worker revision loop (bounded) or Formatter (HITL/finalize)."""
+    # Terminal MCP empty/error cannot improve by re-calling the same tool (RC-4).
+    if _terminal_mcp_worker_failure(state):
+        return GRAPH_NODE_FORMATTER
     critic = state.get("critic")
     if critic is not None and critic.requires_review:
         count = int(state.get("revisions_count") or 0)
@@ -745,6 +756,17 @@ def route_after_critic(state: AgentGraphState) -> Literal["quality_revision", "f
             if ParallelWorkerPolicy.decide_from_steps(selectors.execution_plan_steps(state)).parallel:
                 return GRAPH_NODE_QUALITY_REVISION
     return GRAPH_NODE_FORMATTER
+
+
+def _terminal_mcp_worker_failure(state: AgentGraphState) -> bool:
+    """True when Researcher already failed closed on empty/error MCP — no revise."""
+    from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, MCP_TOOL_ERROR
+
+    execution = state.get("execution")
+    if execution is None or execution.status != "failure":
+        return False
+    reason = execution.error
+    return isinstance(reason, str) and reason in {MCP_EMPTY_RESULT, MCP_TOOL_ERROR}
 
 
 def route_after_quality_revision(

@@ -23,6 +23,8 @@ from palatium_ai.domain.attachments.policies import (
 from palatium_ai.domain.attachments.read import (
     AttachmentReadRequest,
     AttachmentReadResult,
+    ExtractStatus,
+    OcrEngine,
     extraction_source_to_extract_status,
     extraction_source_to_ocr_engine,
 )
@@ -221,7 +223,7 @@ class AttachmentReadService:
         attachment: Attachment,
         request: AttachmentReadRequest,
         *,
-        ocr_engine: str | None = None,
+        ocr_engine: OcrEngine | None = None,
     ) -> AttachmentReadResult:
         return AttachmentReadResult(
             attachment_id=attachment.id,
@@ -233,7 +235,7 @@ class AttachmentReadService:
             total_chars=0,
             ocr_applied=True,
             ocr_cached=False,
-            ocr_engine=ocr_engine if ocr_engine in ("tesseract", "llm_vision") else None,
+            ocr_engine=ocr_engine,
             extract_status="empty",
             notice=_EMPTY_NOTICE,
         )
@@ -247,16 +249,14 @@ class AttachmentReadService:
         request: AttachmentReadRequest,
         ocr_applied: bool,
         ocr_cached: bool,
-        ocr_engine: str | None,
-        extract_status: str | None,
+        ocr_engine: OcrEngine | None,
+        extract_status: ExtractStatus | None,
     ) -> AttachmentReadResult:
         total = len(text)
         start = min(request.offset, total)
         end = min(start + request.max_chars, total)
         sliced = text[start:end]
         truncated = truncated_source or end < total or start > 0
-        engine = ocr_engine if ocr_engine in ("tesseract", "llm_vision") else None
-        status = extract_status if extract_status in ("text_ok", "ocr_ok", "vision_ok", "empty") else None
         return AttachmentReadResult(
             attachment_id=attachment.id,
             filename=attachment.filename,
@@ -267,8 +267,8 @@ class AttachmentReadService:
             total_chars=total,
             ocr_applied=ocr_applied,
             ocr_cached=ocr_cached,
-            ocr_engine=engine,
-            extract_status=status,
+            ocr_engine=ocr_engine,
+            extract_status=extract_status,
             notice=None,
         )
 

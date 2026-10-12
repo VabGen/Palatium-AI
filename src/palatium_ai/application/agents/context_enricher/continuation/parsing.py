@@ -16,6 +16,7 @@ from palatium_ai.domain.policies import ContinuityPolicy
 _EXCERPT_MAX_CHARS = 1500
 _QUERY_MAX_CHARS = 32_000
 _CONTINUATIONS = frozenset({"format", "answer", "new_topic", "clarify"})
+_PRIOR_BOUND_KINDS = frozenset({"answer", "format"})
 
 
 def coerce_bool(value: object) -> bool:
@@ -65,14 +66,47 @@ def parse_contextualizer_output(
     if not rewritten:
         raise ValueError("rewritten_query empty")
 
-    excerpt = payload.get("prior_assistant_excerpt")
-    excerpt_text = str(excerpt)[:_EXCERPT_MAX_CHARS] if excerpt else None
+    refers_to_prior = coerce_bool(payload.get("refers_to_prior", False))
+    excerpt_text = _resolve_excerpt(
+        payload.get("prior_assistant_excerpt"),
+        dialog_window=dialog_window,
+        kind=kind,
+        refers_to_prior=refers_to_prior,
+    )
+    slot_filled = coerce_bool(payload.get("slot_filled_by_prior", False))
+    # Slot fill is only meaningful for prior-bound answers (false_clarify contract).
+    choice_slot_filled = slot_filled and kind == "answer" and refers_to_prior
 
     return ContextualizerOutput(
         rewritten_query=rewritten[:_QUERY_MAX_CHARS],
         continuation_kind=kind,
         confidence=coerce_confidence(payload.get("confidence"), default=0.5),
-        refers_to_prior=coerce_bool(payload.get("refers_to_prior", False)),
+        refers_to_prior=refers_to_prior,
         prior_assistant_excerpt=excerpt_text,
         reasoning=coerce_reasoning(payload.get("reasoning")),
+        choice_slot_filled=choice_slot_filled,
     )
+
+
+def _resolve_excerpt(
+    excerpt: object,
+    *,
+    dialog_window: DialogTurnWindow | None,
+    kind: ContinuationKind,
+    refers_to_prior: bool,
+) -> str | None:
+    """Prefer LLM excerpt; backfill dialog prior only when the ask is prior-bound.
+
+    Never backfill for ``new_topic`` — an empty LLM excerpt there is intentional
+    independence and must not poison Continuity false-new_topic recovery (055).
+    """
+    if isinstance(excerpt, str) and excerpt.strip():
+        return excerpt.strip()[:_EXCERPT_MAX_CHARS]
+    if excerpt not in (None, "") and not isinstance(excerpt, str):
+        text = str(excerpt).strip()
+        if text:
+            return text[:_EXCERPT_MAX_CHARS]
+    if kind not in _PRIOR_BOUND_KINDS and not refers_to_prior:
+        return None
+    prior = ContinuityPolicy.prior_assistant_content(None, dialog_window)
+    return prior[:_EXCERPT_MAX_CHARS] if prior else None

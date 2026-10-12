@@ -21,4 +21,5 @@ def decode_context_weaver_input(input_context: dict[str, str], *, instruction: s
         requires_mcp=input_context.get("requires_mcp", "false").lower() == "true",
         candidate_capabilities=capabilities,
         has_attachment_context=input_context.get("has_attachment_context", "false").lower() == "true",
+        has_trusted_prior=input_context.get("has_trusted_prior", "false").lower() == "true",
     )

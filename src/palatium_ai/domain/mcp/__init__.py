@@ -4,11 +4,39 @@
 
 Lazy ``__getattr__`` so stubs can import ``external_schemas`` / ``platform_schemas``
 without pulling models / auth (Docker lean image — Phase 4).
+``TYPE_CHECKING`` mirrors ``__all__`` for basedpyright ``reportUnsupportedDunderAll``.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .auth_policy import (
+        DEFAULT_MCP_JWT_ALGORITHM,
+        DEFAULT_MCP_JWT_ISSUER,
+        DEFAULT_MCP_JWT_TTL_SECONDS,
+        mcp_audience,
+    )
+    from .execution_policy import (
+        LOCAL_EXECUTION_SERVERS,
+        has_local_capability,
+        requires_local_handler,
+    )
+    from .models import (
+        ExecutionPlanBundle,
+        ExecutionStrategy,
+        JsonRpcError,
+        JsonRpcRequest,
+        JsonRpcResponse,
+        MCPCapabilityBinding,
+        MCPServerDescriptor,
+        MCPToolCall,
+        MCPToolDescriptor,
+        MCPToolResult,
+        MCPToolSummary,
+        ToolExecutionPlan,
+    )
 
 __all__ = [
     "DEFAULT_MCP_JWT_ALGORITHM",

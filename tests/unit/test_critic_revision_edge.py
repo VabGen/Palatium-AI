@@ -106,6 +106,27 @@ def test_route_after_critic_exhausts_to_formatter() -> None:
         assert route_after_critic(state) == NODE_FORMATTER  # type: ignore[arg-type]
 
 
+def test_route_after_critic_skips_revision_on_mcp_empty() -> None:
+    """Terminal mcp_empty_result must not loop Researcher via quality_revision."""
+    from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, ResearcherTaskResult
+
+    execution = ResearcherTaskResult(
+        task_id="t1",
+        agent_role="researcher",
+        status="failure",
+        confidence=0.0,
+        requires_review=False,
+        error=MCP_EMPTY_RESULT,
+        output=None,
+    )
+    state = {
+        "critic": _critic(requires_review=True),
+        "revisions_count": 0,
+        "execution": execution,
+    }
+    assert route_after_critic(state) == NODE_FORMATTER  # type: ignore[arg-type]
+
+
 def test_route_after_quality_revision_by_strategy() -> None:
     state: dict = {}
     with patch(

@@ -40,3 +40,21 @@ async def test_knowledge_without_attachment_still_retrieves() -> None:
     bundle = await planner.build(task_input)
     assert bundle.selected_strategy == "retrieve_then_reason"
     assert bundle.requires_tool_call is True
+
+
+@pytest.mark.asyncio()
+async def test_trusted_prior_skips_search_knowledge() -> None:
+    planner = ExecutionPlanner(capability_index=None)
+    task_input = ContextWeaverInput(
+        task_id="t1",
+        user_text="причем здесь тезисный анализ?",
+        task_kind="knowledge_request",
+        route="researcher",
+        route_plan="answer from dialog prior",
+        requires_mcp=False,
+        has_attachment_context=False,
+        has_trusted_prior=True,
+    )
+    bundle = await planner.build(task_input)
+    assert bundle.selected_strategy == "reason_only"
+    assert bundle.requires_tool_call is False

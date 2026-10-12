@@ -789,6 +789,112 @@ def test_true_clarify_without_history_still_clarifies() -> None:
     assert effective.trust_prior_for_workers is False
 
 
+def test_false_new_topic_recovers_when_rewrite_injects_prior() -> None:
+    """Meta/anaphora mislabeled as new_topic: rewrite adds prior tokens → answer."""
+    prior = (
+        "Тезисный анализ обращения МБОО «Доброе дело»: 1) предмет 2) сроки 3) стороны."
+    )
+    dialog = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t1",
+                role="user",
+                content="сравни файлы",
+                seq=0,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t1",
+                role="assistant",
+                content=prior,
+                seq=1,
+                created_at=datetime.now(UTC),
+            ),
+        ),
+        limit=12,
+    )
+    user_text = "причем здесь тезисный анализ?"
+    ctx = ContextualizerOutput(
+        rewritten_query="причем здесь тезисный анализ обращения МБОО «Доброе дело»?",
+        continuation_kind="new_topic",
+        confidence=0.9,
+        refers_to_prior=False,
+        prior_assistant_excerpt=None,
+        reasoning="treated as standalone",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=("summarize",),
+        confidence=0.85,
+        reasoning="looks like a knowledge ask",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=dialog,
+        raw_intent=raw,
+        user_text=user_text,
+    )
+    assert effective.continuation_kind == "answer"
+    assert effective.trust_prior_for_workers is True
+    assert effective.prior_context is not None
+    assert "тезисный" in effective.prior_context.lower() or "доброе" in effective.prior_context.lower()
+    assert "recovered false new_topic" in effective.reasoning
+
+
+def test_true_new_topic_with_prior_dialog_stays_independent() -> None:
+    """Self-contained ask after a document turn must not sticky-bind prior."""
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="Какая погода в Минске сегодня?",
+        continuation_kind="new_topic",
+        confidence=0.95,
+        refers_to_prior=False,
+        prior_assistant_excerpt=None,
+        reasoning="weather is independent",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=("summarize",),
+        confidence=0.9,
+        reasoning="weather",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=dialog,
+        raw_intent=raw,
+        user_text="Какая погода в Минске сегодня?",
+    )
+    assert effective.continuation_kind == "new_topic"
+    assert effective.trust_prior_for_workers is False
+
+
+def test_false_new_topic_recovers_on_quoted_excerpt() -> None:
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="почему такой план?",
+        continuation_kind="new_topic",
+        confidence=0.8,
+        refers_to_prior=False,
+        prior_assistant_excerpt="План\n• Завершение встречи (15:00–15:15)",
+        reasoning="quoted prior but kind wrong",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.8,
+        reasoning="ask",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.continuation_kind == "answer"
+    assert effective.trust_prior_for_workers is True
+
+
 def test_prior_context_clipped_to_worker_budget() -> None:
     from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
 

@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { TokenIcon } from '../icons/TokenIcon';
+import { InlineMarkdown } from './InlineMarkdown';
 import { WidgetEmbed } from './WidgetEmbed';
 import type {
   CalloutBlock,
@@ -24,7 +25,11 @@ type BlockRendererProps = {
 export const BlockRenderer = memo(({ document }: BlockRendererProps) => {
   return (
     <article className="doc" lang={document.locale}>
-      {document.title && <header className="doc-title">{document.title}</header>}
+      {document.title && (
+        <header className="doc-title">
+          <InlineMarkdown text={document.title} />
+        </header>
+      )}
       <div className="doc-blocks">
         {document.blocks.map((block, index) => (
           <BlockView key={`${block.type}-${index}`} block={block} />
@@ -71,7 +76,9 @@ const HeadingView = memo(({ block }: { block: HeadingBlock }) => {
   return (
     <Tag className={`block-heading level-${block.level}`}>
       <TokenIcon token={block.icon} size={block.level === 1 ? 22 : 18} />
-      <span>{block.text}</span>
+      <span>
+        <InlineMarkdown text={block.text} />
+      </span>
     </Tag>
   );
 });
@@ -79,7 +86,9 @@ const HeadingView = memo(({ block }: { block: HeadingBlock }) => {
 const ParagraphView = memo(({ block }: { block: ParagraphBlock }) => (
   <p className="block-paragraph">
     <TokenIcon token={block.icon} size={16} />
-    <span>{block.text}</span>
+    <span>
+      <InlineMarkdown text={block.text} />
+    </span>
   </p>
 ));
 
@@ -93,7 +102,7 @@ const ListView = memo(({ block }: { block: ListBlock }) => {
           <span>
             {item.emphasis && <strong>{item.emphasis}</strong>}
             {item.emphasis && ' — '}
-            {item.text}
+            <InlineMarkdown text={item.text} />
           </span>
         </li>
       ))}
@@ -107,7 +116,9 @@ const TableView = memo(({ block }: { block: TableBlock }) => (
       <thead>
         <tr>
           {block.columns.map(col => (
-            <th key={col}>{col}</th>
+            <th key={col}>
+              <InlineMarkdown text={col} />
+            </th>
           ))}
         </tr>
       </thead>
@@ -115,7 +126,9 @@ const TableView = memo(({ block }: { block: TableBlock }) => (
         {block.rows.map((row, ri) => (
           <tr key={ri}>
             {row.map((cell, ci) => (
-              <td key={ci}>{cell}</td>
+              <td key={ci}>
+                <InlineMarkdown text={cell} />
+              </td>
             ))}
           </tr>
         ))}
@@ -138,8 +151,14 @@ const CalloutView = memo(({ block }: { block: CalloutBlock }) => {
     <aside className={`block-callout tone-${block.tone}`}>
       <TokenIcon token={icon} size={18} animated />
       <div>
-        {block.title && <strong>{block.title}</strong>}
-        <p>{block.body}</p>
+        {block.title && (
+          <strong>
+            <InlineMarkdown text={block.title} />
+          </strong>
+        )}
+        <p>
+          <InlineMarkdown text={block.body} />
+        </p>
       </div>
     </aside>
   );
@@ -163,9 +182,11 @@ const KeyValueView = memo(({ block }: { block: KeyValueBlock }) => (
       <div className="kv-row" key={`${item.label}-${item.value}`}>
         <dt>
           <TokenIcon token={item.icon} size={14} />
-          {item.label}
+          <InlineMarkdown text={item.label} />
         </dt>
-        <dd>{item.value}</dd>
+        <dd>
+          <InlineMarkdown text={item.value} />
+        </dd>
       </div>
     ))}
   </dl>
@@ -179,8 +200,12 @@ const StepsView = memo(({ block }: { block: StepsBlock }) => (
           <TokenIcon token={item.icon ?? 'check'} size={16} />
         </div>
         <div className="step-body">
-          <strong>{item.title}</strong>
-          <p>{item.body}</p>
+          <strong>
+            <InlineMarkdown text={item.title} />
+          </strong>
+          <p>
+            <InlineMarkdown text={item.body} />
+          </p>
         </div>
       </li>
     ))}

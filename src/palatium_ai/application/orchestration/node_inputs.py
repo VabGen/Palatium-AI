@@ -37,6 +37,7 @@ def build_context_weaver_input(
     state: AgentGraphState,
 ) -> ContextWeaverInput:
     """Собирает вход для ContextWeaver."""
+    routing = selectors.routing_intent(state)
     return ContextWeaverInput(
         task_id=snapshot.task_id,
         user_text=snapshot.user_text,
@@ -46,6 +47,7 @@ def build_context_weaver_input(
         requires_mcp=snapshot.requires_mcp,
         candidate_capabilities=snapshot.candidate_capabilities,
         has_attachment_context=bool((state.get("untrusted_context") or "").strip()),
+        has_trusted_prior=bool(routing is not None and routing.trust_prior_for_workers),
     )
 
 
