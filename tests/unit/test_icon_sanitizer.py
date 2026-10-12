@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from palatium_ai.application.agents.formatter.icon_sanitizer import (
     flush_stream_tail,
+    normalize_icon_markup,
     sanitize_markdown_buffer,
     split_stream_chunk,
     strip_emoji,
@@ -73,3 +74,16 @@ def test_strip_emoji_defense() -> None:
     assert "✅" not in cleaned
     assert "x" in cleaned
     assert "y" in cleaned
+
+
+def test_normalize_icon_markup_rewrites_x_attr() -> None:
+    out = normalize_icon_markup('<icon x="check"/> done')
+    assert out == '<icon name="check"/> done'
+    assert strip_icon_tokens(out) == " done"
+
+
+def test_split_stream_accepts_x_attr_in_buffer() -> None:
+    preview, buffered, _ = split_stream_chunk('<icon x="document"/> Report', "")
+    assert '<icon name="document"/>' in buffered
+    assert "<icon" not in preview
+    assert "Report" in preview

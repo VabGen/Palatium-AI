@@ -5,7 +5,7 @@ from __future__ import annotations
 from palatium_ai.application.agents.formatter.markdown_parser import markdown_to_content_document
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.formatter import FormatterInput
-from palatium_ai.domain.content import CalloutBlock, HeadingBlock, ListBlock
+from palatium_ai.domain.content import CalloutBlock, HeadingBlock, ListBlock, ParagraphBlock
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
 
 
@@ -74,3 +74,29 @@ def test_emoji_absent_from_document_text() -> None:
     assert "📋" not in prose
     assert "⚠" not in prose
     assert "✅" not in prose
+
+
+def test_paragraph_preserves_leading_icon() -> None:
+    md = '<icon name="info"/> Hello paragraph.\n'
+    doc = markdown_to_content_document(md, _task())
+    paragraph = next(b for b in doc.blocks if isinstance(b, ParagraphBlock))
+    assert paragraph.icon == "info"
+    assert "<icon" not in paragraph.text
+    assert "Hello paragraph" in paragraph.text
+
+
+def test_x_attr_normalized_on_heading() -> None:
+    md = '# <icon x="check"/> Done\n\nBody.\n'
+    doc = markdown_to_content_document(md, _task())
+    heading = next(b for b in doc.blocks if isinstance(b, HeadingBlock))
+    assert heading.icon == "check"
+    assert "<icon" not in heading.text
+
+
+def test_mid_text_icon_stripped_not_left_as_raw() -> None:
+    md = "See the <icon name=\"check\"/> mark.\n"
+    doc = markdown_to_content_document(md, _task())
+    paragraph = next(b for b in doc.blocks if isinstance(b, ParagraphBlock))
+    assert paragraph.icon is None
+    assert "<icon" not in paragraph.text
+    assert "mark" in paragraph.text

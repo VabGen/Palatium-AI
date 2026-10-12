@@ -17,10 +17,14 @@ from pydantic import ValidationError
 
 from palatium_ai.application.agents.formatter.icon_sanitizer import (
     coerce_icon_name,
+    count_icon_tokens,
+    normalize_icon_markup,
     strip_emoji,
     strip_icon_tokens,
 )
 from palatium_ai.application.agents.formatter.parsing import parse_formatter_document
+from palatium_ai.core.logging import get_logger
+from palatium_ai.core.logging.context import turn_id_var
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content.content_document import (
     ActionKind,
@@ -55,7 +59,12 @@ _CALLOUT_START = re.compile(r"^>\s*\[!(NOTE|WARNING|DANGER|SUCCESS|INFO)\]\s*$",
 _CALLOUT_BODY = re.compile(r"^>\s?(.*)$")
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
 _FENCE = re.compile(r"^\s*```")
-_LEADING_ICON = re.compile(r'^\s*<icon\s+name="([a-z_]+)"\s*/>\s*', re.IGNORECASE)
+_LEADING_ICON = re.compile(
+    r'^\s*<icon\s+(?:name|x)="([a-z_]+)"\s*/>\s*',
+    re.IGNORECASE,
+)
+
+logger = get_logger(__name__)
 
 _CALLOUT_TONE: dict[str, CalloutTone] = {
     "NOTE": "info",
@@ -296,8 +305,8 @@ def _enrich_block(block: ContentBlock) -> ContentBlock:
             icon, text = _pop_leading_icon(block.text)
             return block.model_copy(update={"text": text, "icon": icon or block.icon})
         case ParagraphBlock():
-            _icon, text = _pop_leading_icon(block.text)
-            return block.model_copy(update={"text": text})
+            icon, text = _pop_leading_icon(block.text)
+            return block.model_copy(update={"text": text, "icon": icon or block.icon})
         case CalloutBlock():
             icon, body = _pop_leading_icon(block.body)
             title = _clean_text_field(block.title) if block.title else None
@@ -326,19 +335,28 @@ def _enrich_list_item(item: ListItem) -> ListItem:
 
 
 def _pop_leading_icon(text: str) -> tuple[IconToken | None, str]:
-    """Pull a leading ``<icon name="…"/>`` into a typed icon; drop invalid / leftover tokens."""
-    match = _LEADING_ICON.match(text)
+    """Pull a leading ``<icon name|x="…"/>`` into a typed icon; drop invalid / leftover tokens."""
+    normalized = normalize_icon_markup(text)
+    match = _LEADING_ICON.match(normalized)
     if match is None:
-        return None, _clean_text_field(text) or " "
+        return None, _clean_text_field(normalized) or " "
     icon = coerce_icon_name(match.group(1))
-    rest = text[match.end() :]
+    rest = normalized[match.end() :]
     return icon, _clean_text_field(rest) or " "
 
 
 def _clean_text_field(text: str | None) -> str | None:
     if text is None:
         return None
-    cleaned = strip_emoji(strip_icon_tokens(text)).strip()
+    normalized = normalize_icon_markup(text)
+    mid_count = count_icon_tokens(normalized)
+    if mid_count:
+        logger.warning(
+            "icon_mid_text_stripped",
+            icon_count=mid_count,
+            turn_id=turn_id_var.get(),
+        )
+    cleaned = strip_emoji(strip_icon_tokens(normalized)).strip()
     return cleaned or None
 
 

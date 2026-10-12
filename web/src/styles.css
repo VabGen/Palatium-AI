@@ -260,7 +260,7 @@ textarea {
   transition:
     background-color var(--duration-base) var(--ease-out),
     color var(--duration-base) var(--ease-out),
-    transform var(--duration-press) var(--ease-out);
+    transform var(--duration-base) var(--ease-out);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -946,6 +946,9 @@ textarea {
 }
 
 .block-paragraph {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   margin: 0;
   line-height: 1.55;
   color: #d5dde8;

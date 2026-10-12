@@ -77,7 +77,10 @@ const HeadingView = memo(({ block }: { block: HeadingBlock }) => {
 });
 
 const ParagraphView = memo(({ block }: { block: ParagraphBlock }) => (
-  <p className="block-paragraph">{block.text}</p>
+  <p className="block-paragraph">
+    <TokenIcon token={block.icon} size={16} />
+    <span>{block.text}</span>
+  </p>
 ));
 
 const ListView = memo(({ block }: { block: ListBlock }) => {

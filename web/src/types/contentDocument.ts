@@ -37,6 +37,7 @@ export type HeadingBlock = {
 export type ParagraphBlock = {
   type: 'paragraph';
   text: string;
+  icon?: IconToken | null;
 };
 
 export type ListItem = {

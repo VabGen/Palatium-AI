@@ -65,6 +65,7 @@ class ParagraphBlock(BaseModel):
 
     type: Literal["paragraph"] = "paragraph"
     text: str = Field(min_length=1, max_length=8000)
+    icon: IconToken | None = None
 
 
 class ListItem(BaseModel):

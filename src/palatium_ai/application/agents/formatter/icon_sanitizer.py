@@ -4,6 +4,8 @@
 
 SSE preview must never show emoji or icon tokens. The parse buffer keeps mapped
 ``<icon name="…"/>`` tokens and drops unmapped pictographs.
+
+LLM slips (``x=`` instead of ``name=``) are normalized to ``name=`` with a warning.
 """
 
 from __future__ import annotations
@@ -12,7 +14,11 @@ import re
 
 from typing import cast
 
+from palatium_ai.core.logging import get_logger
+from palatium_ai.core.logging.context import turn_id_var
 from palatium_ai.domain.content.content_document import ICON_NAME_SET, IconToken
+
+logger = get_logger(__name__)
 
 # Longest-first replacement order so composite pictographs win over single points.
 EMOJI_TO_ICON: dict[str, IconToken] = {
@@ -41,12 +47,33 @@ EMOJI_TO_ICON: dict[str, IconToken] = {
     "🎉": "success",
 }
 
-_ICON_TOKEN_RE = re.compile(r'<icon\s+name="([a-z_]+)"\s*/>', re.IGNORECASE)
+# Accept ``name=`` (canonical) and ``x=`` (LLM slip); always emit ``name=``.
+_ICON_TOKEN_RE = re.compile(
+    r'<icon\s+(?P<attr>name|x)\s*=\s*"(?P<name>[a-z_]+)"\s*/>',
+    re.IGNORECASE,
+)
 _EMOJI_RE = re.compile(
     "[\U0001f300-\U0001faff\U00002700-\U000027bf\U00002600-\U000026ff\U0000fe0f\U0000200d]+",
     flags=re.UNICODE,
 )
 _MAX_TAIL = 4
+
+
+def normalize_icon_markup(text: str) -> str:
+    """Rewrite ``<icon x="…"/>`` → ``<icon name="…"/>``; warn once per slip."""
+
+    def _repl(match: re.Match[str]) -> str:
+        attr = match.group("attr").lower()
+        name = match.group("name").lower()
+        if attr == "x":
+            logger.warning(
+                "icon_attr_x_normalized",
+                icon_name=name,
+                turn_id=turn_id_var.get(),
+            )
+        return f'<icon name="{name}"/>'
+
+    return _ICON_TOKEN_RE.sub(_repl, text)
 
 
 def split_stream_chunk(chunk: str, tail: str) -> tuple[str, str, str]:
@@ -79,7 +106,7 @@ def flush_stream_tail(tail: str) -> tuple[str, str]:
 
 
 def strip_icon_tokens(text: str) -> str:
-    """Remove ``<icon name="…"/>`` tokens (preview / defense-in-depth)."""
+    """Remove ``<icon name|x="…"/>`` tokens (preview / defense-in-depth)."""
     return _ICON_TOKEN_RE.sub("", text)
 
 
@@ -101,10 +128,15 @@ def sanitize_markdown_buffer(text: str) -> str:
     return _emoji_to_icon_tokens(text)
 
 
+def count_icon_tokens(text: str) -> int:
+    """Count icon tokens (either attribute form) remaining in ``text``."""
+    return len(_ICON_TOKEN_RE.findall(normalize_icon_markup(text)))
+
+
 def _emoji_to_icon_tokens(text: str) -> str:
     if not text:
         return ""
-    out = text
+    out = normalize_icon_markup(text)
     for emoji in sorted(EMOJI_TO_ICON.keys(), key=len, reverse=True):
         icon = EMOJI_TO_ICON[emoji]
         out = out.replace(emoji, f'<icon name="{icon}"/>')
