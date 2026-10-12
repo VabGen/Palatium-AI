@@ -2,9 +2,9 @@
 
 """Formatter — BaseAgent implementation (030).
 
-Pipeline: minimal payload → cacheable system + XML user → stream LLM →
-align meta → optional locale repair. On hard failure: deterministic fallback
-(better than empty/red UI). Truncation (finish_reason=length) bumps repair budget.
+Pipeline: minimal payload → cacheable system + XML user → stream GFM Markdown →
+parse to ContentDocument → align meta → optional locale repair.
+On hard failure: deterministic fallback (better than empty/red UI).
 """
 
 from __future__ import annotations
@@ -22,18 +22,20 @@ from palatium_ai.application.agents.formatter.config import (
     LOCALE_REPAIR_ATTEMPTS,
     REPAIR_ERROR_HEAD,
 )
+from palatium_ai.application.agents.formatter.icon_sanitizer import sanitize_markdown_buffer
+from palatium_ai.application.agents.formatter.markdown_parser import markdown_to_content_document
 from palatium_ai.application.agents.formatter.parsing import (
     align_formatter_meta,
     build_formatter_user_message,
     build_formatter_user_payload,
     decode_formatter_input,
-    parse_formatter_document,
 )
 from palatium_ai.application.agents.formatter.prompts import (
     FORMATTER_LOCALE_REPAIR_PROMPT,
     FORMATTER_REPAIR_PROMPT,
     FORMATTER_SYSTEM_PROMPT,
 )
+from palatium_ai.application.agents.formatter.stream_delta import FormatterMarkdownEmitter
 from palatium_ai.core.context.tokens import count_tokens
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.hop_timings import get_hop_collector
@@ -43,9 +45,8 @@ from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.formatter import FORMATTER_OUTPUT_INVALID, FormatterInput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.content import ContentDocument
-from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.json_codec import LLMJSONError
-from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion, LLMResponseFormat
+from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
@@ -78,7 +79,7 @@ def _was_truncated(completion: LLMCompletion) -> bool:
 
 
 class FormatterAgent(BaseAgent):
-    """Компилирует ContentDocument для UI-рендера (presentation LLM)."""
+    """Compiles ContentDocument for UI render from a streamed Markdown draft."""
 
     @property
     def config(self) -> AgentConfig:
@@ -112,7 +113,11 @@ class FormatterAgent(BaseAgent):
         max_tokens = formatter_max_tokens(user_message)
 
         try:
-            document = await self._generate_document(messages, max_tokens=max_tokens)
+            document = await self._generate_document(
+                messages,
+                task_input=task_input,
+                max_tokens=max_tokens,
+            )
             document = align_formatter_meta(document, task_input)
             document = await self._maybe_repair_locale_gated(
                 messages,
@@ -130,7 +135,7 @@ class FormatterAgent(BaseAgent):
         agent_metrics.record_node_execution(self._config.role, "emit:llm")
         logger.info(
             "formatter.llm_path",
-            formatter_mode="llm",
+            formatter_mode="llm_markdown",
             task_id=str(input.task_id),
             max_tokens=max_tokens,
             final_text_chars=len(str(user_payload.get("final_text") or "")),
@@ -157,52 +162,53 @@ class FormatterAgent(BaseAgent):
         self,
         messages: list[ChatMessage],
         *,
+        task_input: FormatterInput,
         max_tokens: int,
     ) -> ContentDocument:
-        completion = await self._call_formatter_llm(messages, max_tokens=max_tokens)
+        completion, markdown = await self._call_formatter_llm(messages, max_tokens=max_tokens)
         truncated = _was_truncated(completion)
         try:
-            return parse_formatter_document(completion.content)
+            return markdown_to_content_document(markdown or completion.content, task_input)
         except _PARSE_ERRORS as first_error:
             if _hop_skip_repairs():
                 agent_metrics.record_node_execution(self._config.role, "hop_budget_skip_schema_repair")
                 raise
             repair_tokens = _repair_max_tokens(max_tokens, truncated=truncated)
             logger.warning(
-                "formatter output invalid, attempting repair",
+                "formatter markdown invalid, attempting repair",
                 error=str(first_error)[:300],
                 truncated=truncated,
                 repair_max_tokens=repair_tokens,
             )
             repair_messages = [
                 *messages,
-                ChatMessage(role="assistant", content=completion.content),
+                ChatMessage(role="assistant", content=markdown or completion.content),
                 ChatMessage(
                     role="user",
                     content=FORMATTER_REPAIR_PROMPT.format(error=str(first_error)[:REPAIR_ERROR_HEAD]),
                 ),
             ]
-            repair = await self._complete(repair_messages, max_tokens=repair_tokens)
-            return parse_formatter_document(repair.content)
+            repair, repair_md = await self._complete(repair_messages, max_tokens=repair_tokens)
+            return markdown_to_content_document(repair_md or repair.content, task_input)
 
     async def _call_formatter_llm(
         self,
         messages: list[ChatMessage],
         *,
         max_tokens: int,
-    ) -> LLMCompletion:
-        """Primary formatter LLM. Raw JSON deltas only when debug streaming is on."""
-        from palatium_ai.application.services.turn_sse_bridge import get_turn_sse_bridge
-        from palatium_ai.core.config import get_settings
-
-        bridge = get_turn_sse_bridge()
-        if bridge is None or not get_settings().formatter.debug_stream_deltas:
+    ) -> tuple[LLMCompletion, str]:
+        """Stream GFM when an SSE bridge is bound; otherwise one-shot text completion."""
+        emitter = FormatterMarkdownEmitter.bind()
+        if emitter is None:
             return await self._complete(messages, max_tokens=max_tokens)
 
-        async def _on_delta(chunk: str) -> None:
-            await bridge.emit({"event": "formatter_delta", "delta": chunk})
-
-        return await self._complete(messages, max_tokens=max_tokens, on_delta=_on_delta)
+        completion, _ = await self._complete(
+            messages,
+            max_tokens=max_tokens,
+            on_delta=emitter.on_delta,
+        )
+        markdown = emitter.finish() or sanitize_markdown_buffer(completion.content)
+        return completion, markdown
 
     async def _complete(
         self,
@@ -210,23 +216,10 @@ class FormatterAgent(BaseAgent):
         *,
         max_tokens: int,
         on_delta: _Delta | None = None,
-    ) -> LLMCompletion:
-        """json_schema first. Fall back to json_object only when the provider refuses the mode."""
-        try:
-            return await self._dispatch(
-                messages,
-                max_tokens=max_tokens,
-                on_delta=on_delta,
-                response_format="json_schema",
-            )
-        except StructuredOutputUnsupportedError:
-            logger.warning("provider dropped json_schema, falling back to json_object")
-            return await self._dispatch(
-                messages,
-                max_tokens=max_tokens,
-                on_delta=on_delta,
-                response_format="json_object",
-            )
+    ) -> tuple[LLMCompletion, str]:
+        """Always request plain text; Markdown is parsed after the stream."""
+        completion = await self._dispatch(messages, max_tokens=max_tokens, on_delta=on_delta)
+        return completion, sanitize_markdown_buffer(completion.content)
 
     async def _dispatch(
         self,
@@ -234,22 +227,20 @@ class FormatterAgent(BaseAgent):
         *,
         max_tokens: int,
         on_delta: _Delta | None,
-        response_format: LLMResponseFormat,
     ) -> LLMCompletion:
-        response_model = ContentDocument if response_format == "json_schema" else None
         if on_delta is None:
             return await self._harness.call_llm(
                 self._config,
                 messages,
-                response_format=response_format,
-                response_model=response_model,
+                response_format="text",
+                response_model=None,
                 max_tokens=max_tokens,
             )
         return await self._harness.call_llm_stream(
             self._config,
             messages,
-            response_format=response_format,
-            response_model=response_model,
+            response_format="text",
+            response_model=None,
             on_delta=on_delta,
             max_tokens=max_tokens,
         )
@@ -295,14 +286,17 @@ class FormatterAgent(BaseAgent):
         for _ in range(LOCALE_REPAIR_ATTEMPTS):
             repair_messages = [
                 *messages,
-                ChatMessage(role="assistant", content=current.model_dump_json()),
+                ChatMessage(role="assistant", content=current.plain_text()),
                 ChatMessage(
                     role="user",
                     content=FORMATTER_LOCALE_REPAIR_PROMPT.format(locale=locale),
                 ),
             ]
-            repair = await self._complete(repair_messages, max_tokens=max_tokens)
-            current = align_formatter_meta(parse_formatter_document(repair.content), task_input)
+            repair, repair_md = await self._complete(repair_messages, max_tokens=max_tokens)
+            current = align_formatter_meta(
+                markdown_to_content_document(repair_md or repair.content, task_input),
+                task_input,
+            )
             if ReplyLocalePolicy.prose_matches_locale(
                 ReplyLocalePolicy.document_prose(current),
                 locale,
@@ -312,7 +306,7 @@ class FormatterAgent(BaseAgent):
         return current
 
     def _invalid_output(self, input: AgentInput, task_input: FormatterInput) -> AgentOutput:
-        """Model JSON that stays invalid after repair is a failure, not a synthetic document."""
+        """Model output that stays invalid after repair is a failure, not a synthetic document."""
         logger.exception("formatter document invalid after repair", task_id=str(input.task_id))
         agent_metrics.record_error(self._config.role, "llm_stage_failure")
         return AgentOutput(
