@@ -14,3 +14,4 @@ class GraphPort(Protocol):
 
     async def query(self, command: GraphQueryCommand) -> GraphQueryResult:
         """Run parameterized Cypher; implementations must reject write clauses."""
+        ...

@@ -14,6 +14,7 @@ class SessionStore(Protocol):
 
     async def get_by_thread_id(self, *, thread_id: str) -> SessionRecord | None:
         """Find a session by its stable thread identifier."""
+        ...
 
     async def touch_session(
         self,
@@ -25,6 +26,7 @@ class SessionStore(Protocol):
         status: str = "active",
     ) -> SessionRecord:
         """Create or update a session identified by `thread_id`."""
+        ...
 
     async def list_sessions(
         self,
@@ -34,3 +36,4 @@ class SessionStore(Protocol):
         user_id: str | None = None,
     ) -> list[SessionRecord]:
         """Return recently updated sessions (optionally scoped to one user)."""
+        ...

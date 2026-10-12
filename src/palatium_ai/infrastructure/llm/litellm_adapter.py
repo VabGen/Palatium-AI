@@ -151,7 +151,7 @@ def _parse_response_cost(response: object) -> float | None:
         import litellm
 
         computed = litellm.completion_cost(completion_response=response)
-    except (TypeError, ValueError, AttributeError, KeyError, RuntimeError):
+    except TypeError, ValueError, AttributeError, KeyError, RuntimeError:
         return from_hidden
     from_table = _coerce_cost_usd(computed)
     if from_table is not None and from_table > 0.0:

@@ -29,36 +29,26 @@ repos:
       - id: end-of-file-fixer
         exclude: ^(\.cursor/|web/src/)
       - id: trailing-whitespace
-        # Markdown uses two trailing spaces as a hard line break — stripping them
-        # silently joins paragraph lines and changes rendered docs.
         exclude: ^(\.cursor/|web/src/)|\.md$
       - id: detect-private-key
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Keep in sync with the `ruff` version in pyproject.toml (dev group).
     rev: v0.16.8
     hooks:
       - id: ruff
         name: ruff check (includes S/security selectors)
-        # `--force-exclude`: pre-commit passes files explicitly, and ruff only applies
-        # the repo's `exclude`/`respect-gitignore` rules to *discovered* paths — so
-        # without this flag the hook lints files `ruff check .` (CI) never sees.
         args: ["--fix", "--exit-non-zero-on-fix", "--force-exclude"]
       - id: ruff-format
         args: ["--force-exclude"]
 
   - repo: local
     hooks:
-      # Rule 086 — debt markers must carry owner/ticket/date. Fast, repo-wide, same script
-      # as CI: a bare note is cheapest to fix while it is being written.
       - id: check-debt-markers
         name: debt markers (086)
         entry: python scripts/check_todos.py
         language: system
         pass_filenames: false
 
-      # Rule 000 hexagonal contract — same checker CI runs, no extra dependency
-      # (import-linter cannot currently be installed; see the script docstring).
       - id: check-import-layers
         name: import layers (000-architecture)
         entry: python scripts/check_import_layers.py
@@ -66,7 +56,6 @@ repos:
         pass_filenames: false
         files: ^src/palatium_ai/.*\.py$
 
-      # `--strict` on the platform package + MCP stubs (pyproject: mypy_path).
       - id: mypy-strict
         name: mypy --strict (src/palatium_ai)
         entry: mypy --strict src/palatium_ai
@@ -74,3 +63,37 @@ repos:
         pass_filenames: false
         files: \.py$
         stages: [pre-push]
+
+      # ── Basedpyright ─────────────────────────────────────────────────────────
+      # pip install basedpyright
+      # Ловит ошибки, которые mypy пропускает (Protocol ellipsis, redis overloads,
+      # awaitable mismatches). Требует отдельной установки:
+      #   pip install basedpyright  ||  npm install -g basedpyright
+      # Запускается на pre-push (как mypy): ~30-60s, не на каждый коммит.
+      - id: basedpyright
+        name: basedpyright (IDE parity, pre-push)
+        entry: basedpyright --project .
+        language: system
+        pass_filenames: false
+        files: \.py$
+        stages: [pre-push]
+
+
+
+# Проверить весь проект
+# basedpyright --project .
+
+# Только src/ (быстрее)
+# basedpyright src/palatium_ai
+
+# Конкретный файл
+# basedpyright src/palatium_ai/core/observability/cost_tracker.py
+
+# С JSON-выводом (для скриптов)
+# basedpyright --outputjson src/palatium_ai > errors.json
+
+# Только pre-commit hooks (быстрые: ruff + debt markers)
+# poetry run pre-commit run --all-files
+
+# Все hooks включая pre-push (mypy + basedpyright)
+# poetry run pre-commit run --all-files --hook-stage pre-push

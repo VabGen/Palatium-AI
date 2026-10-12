@@ -368,7 +368,7 @@ class PptxParser:
         from zipfile import BadZipFile, ZipFile
 
         try:
-            from lxml import etree
+            import lxml.etree as etree  # pyright: ignore[reportMissingImports]
         except ImportError as exc:  # pragma: no cover - install-dependent
             msg = "lxml is required to parse .pptx; install it with `poetry install --with attachments`"
             raise DocumentParseError(msg) from exc
@@ -457,10 +457,8 @@ class HtmlParser:
 
     def _parse_sync(self, data: bytes) -> ParsedDocument:
         try:
-            from lxml import (
-                etree,
-                html as lxml_html,
-            )
+            import lxml.etree as etree  # pyright: ignore[reportMissingImports]
+            import lxml.html as lxml_html  # pyright: ignore[reportMissingImports]
         except ImportError as exc:  # pragma: no cover - install-dependent
             msg = "lxml is required to parse HTML; install it with `poetry install --with attachments`"
             raise DocumentParseError(msg) from exc

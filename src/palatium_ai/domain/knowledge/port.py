@@ -19,6 +19,8 @@ class KnowledgePort(Protocol):
 
     async def ingest_document(self, command: IngestDocumentCommand) -> IngestDocumentResult:
         """Write document chunks with embeddings; idempotent per user+source_document_id optional."""
+        ...
 
     async def search_knowledge(self, query: SearchKnowledgeQuery) -> KnowledgeSearchResult:
         """Hybrid retrieve: pgvector cosine + Postgres FTS over ``knowledge.chunks``."""
+        ...

@@ -262,8 +262,7 @@ async def main() -> int:
         rows.append(row)
         kind = (row.get("output") or {}).get("continuation_kind")
         print(
-            f"  kind={kind} expect={case['expect_kind']} "
-            f"match={row['kind_match']} latency_ms={row['latency_ms']}",
+            f"  kind={kind} expect={case['expect_kind']} match={row['kind_match']} latency_ms={row['latency_ms']}",
             flush=True,
         )
 

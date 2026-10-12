@@ -34,6 +34,7 @@ class GraphitiTransport(Protocol):
         source_description: str,
     ) -> str | None:
         """Ingest one episode; returns episode/node id if available."""
+        ...
 
     async def search(
         self,
@@ -43,9 +44,11 @@ class GraphitiTransport(Protocol):
         limit: int,
     ) -> list[dict[str, object]]:
         """Hybrid search; returns normalized hit dicts with text/score."""
+        ...
 
     async def aclose(self) -> None:
         """Close driver / SDK resources."""
+        ...
 
 
 def namespace_to_group_id(namespace: tuple[str, ...]) -> str:
@@ -71,7 +74,7 @@ class GraphitiSdkTransport:
         password: str,
     ) -> None:
         try:
-            from graphiti_core import Graphiti
+            from graphiti_core import Graphiti  # pyright: ignore[reportMissingImports]
         except ImportError as exc:
             raise ImportError(
                 "MEMORY_BACKEND=graphiti requires graphiti-core (poetry add graphiti-core) and a reachable Neo4j"
@@ -90,7 +93,7 @@ class GraphitiSdkTransport:
         source_description: str,
     ) -> str | None:
         """Add text episode into the temporal graph."""
-        from graphiti_core.nodes import EpisodeType
+        from graphiti_core.nodes import EpisodeType  # pyright: ignore[reportMissingImports]
 
         result = await self._graphiti.add_episode(
             name=name,

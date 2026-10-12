@@ -336,9 +336,7 @@ class Harness:
                 if self._cost_budget is not None:
                     self._cost_budget.assert_turn_allows_call()
                 cached_messages = _with_system_prompt_cache(messages)
-                call_timeout = _resolve_call_timeout_seconds(
-                    config, cached_messages, max_tokens=max_tokens
-                )
+                call_timeout = _resolve_call_timeout_seconds(config, cached_messages, max_tokens=max_tokens)
                 completion = await asyncio.wait_for(
                     llm.generate(
                         cached_messages,
@@ -399,9 +397,7 @@ class Harness:
             self._cost_budget.assert_turn_allows_call()
 
         cached_messages = _with_system_prompt_cache(messages)
-        call_timeout = _resolve_call_timeout_seconds(
-            config, cached_messages, max_tokens=max_tokens
-        )
+        call_timeout = _resolve_call_timeout_seconds(config, cached_messages, max_tokens=max_tokens)
         initial_model = (resolved_model or "").strip() or "unknown"
         try:
             completion = await asyncio.wait_for(

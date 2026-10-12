@@ -80,14 +80,15 @@ def main() -> int:
         token = _mint_dev_token(base_url=args.base_url, user_id=user_id)
         first = _post_intent(base_url=args.base_url, text="привет", thread_id=thread_id, token=token)
         second = _post_intent(base_url=args.base_url, text="как дела", thread_id=thread_id, token=token)
+    except urllib.error.HTTPError as exc:
+        # HTTPError is a URLError subclass — catch it before the broader handler.
+        detail = exc.read().decode("utf-8", errors="replace")
+        print(f"HTTP {exc.code}: {detail[:500]}", file=sys.stderr)
+        return 1
     except urllib.error.URLError as exc:
         print(f"API unavailable at {args.base_url}: {exc}", file=sys.stderr)
         print("Start the stack (scripts/dev-up.ps1 or debug launch) and retry.", file=sys.stderr)
         return 2
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        print(f"HTTP {exc.code}: {detail[:500]}", file=sys.stderr)
-        return 1
 
     print(
         json.dumps(

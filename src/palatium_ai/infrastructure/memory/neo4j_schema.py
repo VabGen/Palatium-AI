@@ -19,8 +19,7 @@ _BATCH = 5000
 
 _INDEX_STATEMENTS: tuple[LiteralString, ...] = (
     "CREATE INDEX memory_fact_expiry IF NOT EXISTS FOR (f:MemoryFact) ON (f.expired_at)",
-    "CREATE INDEX memory_fact_user_thread IF NOT EXISTS "
-    "FOR (f:MemoryFact) ON (f.user_id, f.thread_id, f.valid_at, f.invalid_at)",
+    "CREATE INDEX memory_fact_user_thread IF NOT EXISTS FOR (f:MemoryFact) ON (f.user_id, f.thread_id, f.valid_at, f.invalid_at)",
 )
 
 

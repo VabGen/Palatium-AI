@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import base64
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
@@ -122,7 +122,8 @@ class GatewayImageOcrParser:
         }
         logger.debug("image OCR request", model=self._model, image_bytes=len(data), media_type=mime_type)
         try:
-            response = await acompletion(**params)
+            # litellm stubs reject ``dict[str, object]`` kwargs unpack (017 TOOL_LIMITATION).
+            response = await acompletion(**cast("Any", params))
         except Exception as exc:
             # The exception text may embed the request (and thus image bytes); log the
             # type only, and surface a stable message to the pipeline (020).

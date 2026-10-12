@@ -22,9 +22,11 @@ class DialogTurnStore(Protocol):
         payload: dict[str, Any] | None = None,
     ) -> DialogTurn:
         """Append one turn; returns persisted turn with seq."""
+        ...
 
     async def list_recent_turns(self, *, thread_id: str, limit: int = 12) -> DialogTurnWindow:
         """Load last-K turns for a thread (oldest → newest)."""
+        ...
 
 
 class MemoryPort(Protocol):
@@ -38,9 +40,11 @@ class MemoryPort(Protocol):
         value: dict[str, object],
     ) -> None:
         """Upsert a memory item under namespace/key."""
+        ...
 
     async def get(self, *, namespace: tuple[str, ...], key: str) -> dict[str, object] | None:
         """Fetch one item or None."""
+        ...
 
     async def search(
         self,
@@ -50,6 +54,8 @@ class MemoryPort(Protocol):
         limit: int = 8,
     ) -> list[dict[str, object]]:
         """Keyword/hybrid search within a namespace (budgeted)."""
+        ...
 
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         """Delete one memory item; returns True when a row was removed."""
+        ...

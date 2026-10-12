@@ -230,9 +230,7 @@ def _hitl_choice_resume_output(
         confidence=1.0,
         refers_to_prior=True,
         prior_assistant_excerpt=(prior[:_EXCERPT_MAX_CHARS] if prior else None),
-        reasoning=(
-            f"deterministic HITL choice resume kind={parsed.resume_kind} action_id={parsed.action_id}; slot filled."
-        ),
+        reasoning=(f"deterministic HITL choice resume kind={parsed.resume_kind} action_id={parsed.action_id}; slot filled."),
         choice_slot_filled=True,
     )
     return AgentOutput(

@@ -12,7 +12,7 @@ import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
+from pydantic import HttpUrl, SecretStr, TypeAdapter
 
 from palatium_ai.core.config.observability import ObservabilityConfig
 from palatium_ai.core.config.security import SecurityConfig
@@ -125,7 +125,7 @@ def test_rs_auth_requires_hitl_signing_secret() -> None:
         jwt_algorithm="RS256",
         jwt_secret=None,
         hitl_signing_secret=None,
-        jwks_url="https://example.com/.well-known/jwks.json",
+        jwks_url=TypeAdapter(HttpUrl).validate_python("https://example.com/.well-known/jwks.json"),
         cors_origins="http://127.0.0.1:8000",
     )
     with pytest.raises(RuntimeError, match="HITL_SIGNING_SECRET"):

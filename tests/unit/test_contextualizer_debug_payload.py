@@ -93,7 +93,9 @@ async def test_debug_payload_logs_request_and_response_when_flag_on() -> None:
     log_mock = await _run(debug=True)
     events = [call.args[0] for call in log_mock.info.call_args_list if call.args]
     assert events.count("contextualizer.debug_payload") == 2
-    kwargs_list = [call.kwargs for call in log_mock.info.call_args_list if call.args and call.args[0] == "contextualizer.debug_payload"]
+    kwargs_list = [
+        call.kwargs for call in log_mock.info.call_args_list if call.args and call.args[0] == "contextualizer.debug_payload"
+    ]
     phases = {item["phase"] for item in kwargs_list}
     assert phases == {"llm_request", "llm_response"}
     request = next(item for item in kwargs_list if item["phase"] == "llm_request")

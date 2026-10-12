@@ -14,3 +14,4 @@ class WebSearchPort(Protocol):
 
     async def search(self, query: WebSearchQuery) -> WebSearchResult:
         """Return tagged external hits (empty list is a valid outcome)."""
+        ...

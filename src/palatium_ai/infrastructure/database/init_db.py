@@ -33,7 +33,7 @@ async def ensure_database_and_schema(settings: Settings) -> None:
         user=db_cfg.user,
         password=db_cfg.password.get_secret_value(),
         database="postgres",
-        timeout=db_cfg.connect_timeout_seconds,
+        timeout=int(db_cfg.connect_timeout_seconds),
     )
 
     try:

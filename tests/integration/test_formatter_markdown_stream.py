@@ -144,9 +144,7 @@ async def test_formatter_stream_strips_emoji_from_sse_and_document() -> None:
     while not bridge.queue.empty():
         events.append(bridge.queue.get_nowait())
     sse_blob = "".join(
-        str(e.get("content") or e.get("delta") or "")
-        for e in events
-        if e.get("event") in {"text_delta", "answer_delta"}
+        str(e.get("content") or e.get("delta") or "") for e in events if e.get("event") in {"text_delta", "answer_delta"}
     )
     assert "⚠" not in sse_blob
     assert "📞" not in sse_blob

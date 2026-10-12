@@ -33,6 +33,7 @@ class Mem0Transport(Protocol):
         metadata: dict[str, object],
     ) -> str | None:
         """Enqueue ADD; returns event/memory id if present."""
+        ...
 
     async def search_memories(
         self,
@@ -42,9 +43,11 @@ class Mem0Transport(Protocol):
         limit: int,
     ) -> list[dict[str, object]]:
         """Search within entity scope; returns normalized hit dicts."""
+        ...
 
     async def aclose(self) -> None:
         """Close underlying HTTP resources."""
+        ...
 
 
 def namespace_to_scope(namespace: tuple[str, ...]) -> dict[str, str]:

@@ -9,7 +9,7 @@ import json
 import logging
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from jsonschema import Draft202012Validator
 
@@ -189,8 +189,9 @@ def _validate_arguments_against_schema(
     schema: dict[str, object],
 ) -> None:
     """Проверяет LLM-сгенерированные аргументы по JSON Schema."""
-    validator = Draft202012Validator(schema)
-    errors = sorted(validator.iter_errors(arguments), key=str)
+    # jsonschema stubs type schema/instance more narrowly than dict[str, object] (017).
+    validator = Draft202012Validator(cast("Any", schema))
+    errors = sorted(validator.iter_errors(cast("Any", arguments)), key=str)
     if not errors:
         return
 

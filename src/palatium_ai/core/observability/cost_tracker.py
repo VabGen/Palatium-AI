@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from palatium_ai.core.logging import get_logger
 
@@ -39,12 +40,22 @@ class CostTracker:
         safe_role = (agent_role or "unknown").strip() or "unknown"
 
         org_key = f"cost:{safe_org}:{day}"
-        await self._redis.hincrbyfloat(org_key, safe_role, cost_usd)
-        await self._redis.expire(org_key, _TTL_SECONDS)
+        # redis-py stubs: basedpyright sees ``T | Awaitable[T]``; mypy already narrows
+        # to Awaitable — cast is for pyright only (017 TOOL_LIMITATION).
+        await cast(  # type: ignore[redundant-cast]
+            "Awaitable[float]", self._redis.hincrbyfloat(org_key, safe_role, cost_usd)
+        )
+        await cast(  # type: ignore[redundant-cast]
+            "Awaitable[bool]", self._redis.expire(org_key, _TTL_SECONDS)
+        )
 
         user_key = f"cost:user:{safe_user}:{day}"
-        await self._redis.hincrbyfloat(user_key, "total", cost_usd)
-        await self._redis.expire(user_key, _TTL_SECONDS)
+        await cast(  # type: ignore[redundant-cast]
+            "Awaitable[float]", self._redis.hincrbyfloat(user_key, "total", cost_usd)
+        )
+        await cast(  # type: ignore[redundant-cast]
+            "Awaitable[bool]", self._redis.expire(user_key, _TTL_SECONDS)
+        )
 
         logger.debug(
             "cost_tracker.record",

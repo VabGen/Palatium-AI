@@ -14,6 +14,7 @@ class HitlCardStore(Protocol):
 
     async def save(self, card: HITLCardView, *, idempotency_key: str | None = None) -> None:
         """Создаёт или обновляет карточку (non-CAS; prefer compare_and_set for transitions)."""
+        ...
 
     async def compare_and_set(
         self,
@@ -23,6 +24,7 @@ class HitlCardStore(Protocol):
         idempotency_key: str | None = None,
     ) -> bool:
         """Atomically write card only when stored status matches expected_status."""
+        ...
 
     async def resolve_pending(
         self,
@@ -32,15 +34,19 @@ class HitlCardStore(Protocol):
         idempotency_key: str,
     ) -> bool:
         """Atomically transition pending → resolved. Return False on race/conflict."""
+        ...
 
     async def get(self, card_id: str) -> HITLCardView | None:
         """Возвращает карточку или None."""
+        ...
 
     async def get_idempotency_key(self, card_id: str) -> str | None:
         """Ключ успешного ответа (для идемпотентного replay)."""
+        ...
 
     async def list_cards(self) -> list[HITLCardView]:
         """Все известные карточки (для TTL sweep)."""
+        ...
 
 
 class HitlDenyResumePort(Protocol):
@@ -58,3 +64,4 @@ class HitlDenyResumePort(Protocol):
         reason: str,
     ) -> None:
         """Command(resume=reject) when a tool-approval interrupt is still open."""
+        ...

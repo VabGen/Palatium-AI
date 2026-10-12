@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
@@ -263,7 +263,8 @@ class GatewayPdfVisionParser:
             ],
         }
         try:
-            response = await acompletion(**params)
+            # litellm stubs reject ``dict[str, object]`` kwargs unpack (017 TOOL_LIMITATION).
+            response = await acompletion(**cast("Any", params))
         except Exception as exc:
             logger.warning("pdf vision call failed", error_type=type(exc).__name__)
             msg = "pdf vision model call failed"

@@ -88,5 +88,6 @@ def resolve_settings_bearer(settings: Settings, server_name: str) -> str | None:
     (rule 000 layer contract, enforced by ``scripts/check_import_layers.py``).
     """
     resolver = getattr(settings, "mcp_jwt_signing_secret", None)
-    signing_secret = resolver() if callable(resolver) else None
+    raw_secret = resolver() if callable(resolver) else None
+    signing_secret = raw_secret if isinstance(raw_secret, str) else None
     return resolve_mcp_bearer(settings.mcp, server_name, signing_secret=signing_secret)

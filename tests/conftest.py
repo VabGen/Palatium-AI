@@ -73,12 +73,33 @@ class PlatformKnowledgeMcpRegistry:
     def __init__(self, handler: object) -> None:
         self._handler = handler
 
-    async def call_tool(self, server_name: str, call: MCPToolCall, *, allow_unpinned: bool = False) -> MCPToolResult:
+    def list_servers(self) -> list[str]:
+        return ["platform"]
+
+    async def list_tools(self, server_name: str) -> list[MCPToolDescriptor]:
+        _ = server_name
+        return []
+
+    async def list_tool_summaries(self, server_name: str) -> list[MCPToolSummary]:
+        _ = server_name
+        return []
+
+    async def get_tool(self, server_name: str, tool_name: str) -> MCPToolDescriptor | None:
+        _ = server_name, tool_name
+        return None
+
+    async def call_tool(
+        self,
+        server_name: str,
+        tool_call: MCPToolCall,
+        *,
+        allow_unpinned: bool = False,
+    ) -> MCPToolResult:
         _ = allow_unpinned
         if server_name != "platform":
             msg = f"unexpected MCP server: {server_name}"
             raise ValueError(msg)
-        return await self._handler.call_tool(call.name, call.arguments)  # type: ignore[union-attr]
+        return await self._handler.call_tool(tool_call.name, tool_call.arguments)  # type: ignore[union-attr]
 
 
 def make_platform_mcp_registry(
@@ -113,9 +134,7 @@ def make_document_ingest_stack(
 
     resolved_knowledge = knowledge_port or InMemoryKnowledgePort()
     handler = PlatformToolHandler(knowledge_port=resolved_knowledge)  # type: ignore[arg-type]
-    harness = Harness(
-        llm=FakeLLMPort('{"prefixes": ["Intro section about onboarding.", "Security section about passwords."]}')
-    )
+    harness = Harness(llm=FakeLLMPort('{"prefixes": ["Intro section about onboarding.", "Security section about passwords."]}'))
     hitl = HitlService(InMemoryHitlCardStore(), signing_secret="unit-test-hitl-hmac-key-32bytes!!")
     ingest = DocumentIngestService(
         harness=harness,
@@ -351,7 +370,7 @@ class FakeMCPRegistry:
                 MCPToolDescriptor(
                     name="search_documents",
                     description="Search EDMS documents by query string.",
-                    inputSchema=EDMS_SEARCH_DOCUMENTS_SCHEMA,
+                    input_schema=EDMS_SEARCH_DOCUMENTS_SCHEMA,
                     annotations={"readOnlyHint": True},
                 )
             ]
@@ -388,7 +407,7 @@ class FakeMCPRegistry:
         self.calls.append((server_name, tool_call))
         return MCPToolResult(
             content=[{"type": "text", "text": f"Stub MCP result for {tool_call.arguments.get('query', '')}"}],
-            isError=False,
+            is_error=False,
         )
 
 
@@ -705,7 +724,5 @@ def _assert_async_tests_are_marked(items: list[pytest.Item]) -> None:
     ]
     if unmarked:
         listing = "\n".join(f"  - {nodeid}" for nodeid in unmarked)
-        message = (
-            'Async tests must be decorated with @pytest.mark.asyncio (asyncio_mode = "strict", see 075):\n' + listing
-        )
+        message = 'Async tests must be decorated with @pytest.mark.asyncio (asyncio_mode = "strict", see 075):\n' + listing
         raise pytest.UsageError(message)

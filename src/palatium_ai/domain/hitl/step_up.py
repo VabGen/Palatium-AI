@@ -28,6 +28,7 @@ class HitlStepUpVerifierPort(Protocol):
         assertion: str,
     ) -> bool:
         """Return True when assertion proves recent step-up for this card+subject."""
+        ...
 
 
 class HitlStepUpProviderPort(Protocol):
@@ -36,9 +37,11 @@ class HitlStepUpProviderPort(Protocol):
     @property
     def method(self) -> HitlStepUpMethod:
         """Configured ceremony method for this deployment."""
+        ...
 
     def issue_challenge(self, *, card_id: str, subject: str) -> HitlStepUpChallenge:
         """Return challenge metadata (and HMAC assertion only for local stub)."""
+        ...
 
     def verify(
         self,
@@ -48,6 +51,7 @@ class HitlStepUpProviderPort(Protocol):
         assertion: str,
     ) -> bool:
         """Return True when assertion proves recent step-up for this card+subject."""
+        ...
 
 
 class HitlStepUpChallenge(BaseModel):

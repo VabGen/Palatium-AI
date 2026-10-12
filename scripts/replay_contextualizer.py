@@ -179,8 +179,7 @@ async def _async_main(
         row = await _run_once(agent, fixture, run_idx=idx)
         rows.append(row)
         print(
-            f"  kind={row['continuation_kind']} confidence={row['confidence']} "
-            f"latency_ms={row['latency_ms']}",
+            f"  kind={row['continuation_kind']} confidence={row['confidence']} latency_ms={row['latency_ms']}",
             flush=True,
         )
 

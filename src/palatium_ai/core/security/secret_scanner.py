@@ -77,9 +77,10 @@ def scan_text_fields(values: dict[str, str], *, prefix: str = "context") -> None
 
 def extract_string_fields(payload: object) -> dict[str, str]:
     """Collect top-level string fields from a pydantic model dump for scanning."""
-    if not hasattr(payload, "model_dump"):
+    dump = getattr(payload, "model_dump", None)
+    if not callable(dump):
         return {}
-    raw = payload.model_dump(mode="python")
+    raw = dump(mode="python")
     if not isinstance(raw, dict):
         return {}
     return {str(k): v for k, v in raw.items() if isinstance(v, str) and v.strip()}

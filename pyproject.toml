@@ -220,12 +220,17 @@ init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
 
-# ── Pyright ─────────────────────────────────────────────────────────────────────
+# ── Pyright / basedpyright ──────────────────────────────────────────────────────
+# Scope matches mypy: production + scripts, not tests (test doubles / loose helpers
+# are gated by pytest, not the type checker — 075). IDE still opens test files;
+# full test typing is a separate campaign, not a tox pyright blocker.
 [tool.pyright]
 pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
 extraPaths = ["src", ".cursor/hooks"]
-include = ["src", "tests", "scripts"]
-exclude = ["**/node_modules", "**/__pycache__", ".venv", "mcp_servers"]
+include = ["src", "scripts"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "mcp_servers", "tests"]
 typeCheckingMode = "standard"
 
 # ── pytest ──────────────────────────────────────────────────────────────────────

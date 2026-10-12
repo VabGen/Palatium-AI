@@ -46,7 +46,7 @@ def _request_json(
             payload = json.loads(resp.read().decode("utf-8"))
             if not isinstance(payload, dict):
                 raise RuntimeError(f"unexpected JSON type: {type(payload)}")
-            return resp.status, payload
+            return resp.status, {str(k): v for k, v in payload.items()}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         try:
@@ -55,7 +55,7 @@ def _request_json(
             payload = {"detail": detail[:800]}
         if not isinstance(payload, dict):
             payload = {"detail": detail[:800]}
-        return exc.code, payload
+        return exc.code, {str(k): v for k, v in payload.items()}
 
 
 def _as_object_list(value: object) -> list[object]:

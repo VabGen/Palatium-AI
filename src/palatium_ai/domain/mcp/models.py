@@ -57,8 +57,16 @@ class MCPToolSummary(BaseModel):
     name: str = Field(min_length=1)
     description: str = Field(default="", min_length=0)
     side_effect: Literal["read", "write", "unknown"] | None = None
-    risk_tier: Literal["low", "medium", "high"] | None = Field(default=None, alias="riskTier")
-    property_names: tuple[str, ...] = Field(default=(), alias="propertyNames")
+    risk_tier: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("risk_tier", "riskTier"),
+        serialization_alias="riskTier",
+    )
+    property_names: tuple[str, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices("property_names", "propertyNames"),
+        serialization_alias="propertyNames",
+    )
 
 
 class MCPToolDescriptor(BaseModel):

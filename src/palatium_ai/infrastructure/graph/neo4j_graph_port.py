@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 
-from typing import Protocol
+from typing import LiteralString, Protocol, cast
 
 from palatium_ai.domain.graph.cypher_safety import TENANT_SCOPE_PARAM, assert_graph_query_safe
 from palatium_ai.domain.graph.types import GraphQueryCommand, GraphQueryResult, GraphQueryRow
@@ -23,9 +23,11 @@ class Neo4jGraphTransport(Protocol):
         limit: int,
     ) -> list[dict[str, object]]:
         """Execute parameterized Cypher and return up to ``limit`` flat row dicts."""
+        ...
 
     async def aclose(self) -> None:
         """Close driver / pool resources."""
+        ...
 
 
 class Neo4jDriverTransport:
@@ -60,7 +62,12 @@ class Neo4jDriverTransport:
         # Read path runs on a READ_ACCESS session: write clauses fail structurally, so the
         # regex guard stays defense-in-depth rather than the only barrier (020/070).
         async with self._driver.session(default_access_mode=READ_ACCESS) as session:
-            result = await session.run(cypher, params)
+            # Domained Cypher arrives as ``str``; neo4j stubs require LiteralString.
+            # mypy accepts ``str`` here — cast is for basedpyright only (017).
+            result = await session.run(
+                cast("LiteralString", cypher),  # type: ignore[redundant-cast]
+                params,
+            )
             async for record in result:
                 rows.append(record.data())
                 if len(rows) >= limit:

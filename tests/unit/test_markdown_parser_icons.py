@@ -50,7 +50,7 @@ def test_invalid_icon_name_dropped() -> None:
 
 
 def test_callout_leading_icon_overrides_default() -> None:
-    md = "> [!WARNING]\n> <icon name=\"warning\"/> Watch out.\n"
+    md = '> [!WARNING]\n> <icon name="warning"/> Watch out.\n'
     doc = markdown_to_content_document(md, _task())
     assert isinstance(doc.blocks[0], CalloutBlock)
     assert doc.blocks[0].icon == "warning"

@@ -192,7 +192,8 @@ class MCPJsonRpcClient:
         mcp = self._settings.mcp
         resolver = getattr(mcp, "resolve_tool_timeout", None)
         if tool_name is not None and self._server_name is not None and callable(resolver):
-            return float(resolver(self._server_name, tool_name))
+            resolved = resolver(self._server_name, tool_name)
+            return float(resolved) if isinstance(resolved, (int, float, str)) else float(mcp.timeout_seconds)
         return float(mcp.timeout_seconds)
 
     async def _list_tools_once(self) -> list[MCPToolDescriptor]:
