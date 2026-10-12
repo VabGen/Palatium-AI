@@ -1,6 +1,6 @@
 # SSE streaming
 
-Актуально на 2026-10-09. Транспорт — `StreamingResponse` в
+Актуально на 2026-10-11. Транспорт — `StreamingResponse` в
 `presentation/api/routers/intents.py`, не `sse-starlette`. Кадр:
 
 ```text
@@ -9,31 +9,42 @@ data: {json.dumps(payload)}
 
 ```
 
-`data` — один JSON-объект. Перевод строки внутри строки `delta` закодирован
-JSON и не является границей события.
+`data` — один JSON-объект. Перевод строки внутри строки `delta`/`content`
+закодирован JSON и не является границей события.
+
+Канон Hybrid: `.cursor/plans/evolution-to-big-tech.md` (Phase 1).
 
 ## События, которые доходят до клиента
 
 | Событие | Кто эмитит | Полезная нагрузка | Клиент (React) |
 |---|---|---|---|
-| `hop` | `IntentGraphRunner` | `{node, task_id, thread_id}` | `onHop` |
-| `answer_delta` | `emit_answer_deltas` | `{delta, replace?}` | `onAnswerDelta`; `replace: true` сбрасывает аккумулятор |
-| `formatter_delta` | `FormatterAgent`, только если `FORMATTER_DEBUG_STREAM_DELTAS=true` | `{delta}` — сырые JSON-токены | `onFormatterDelta`, и только пока не было `answer_delta` |
-| `result` | `IntentService.process_stream` | `{task_id, thread_id, result: FormatterTaskResult}` | финальный документ |
+| `hop` | `IntentGraphRunner` | `{node, task_id, thread_id}` | `onHop` (имя события зафиксировано) |
+| `answer_delta` | workers / fast-path / dual от Formatter | `{delta, replace?}` | fallback preview; TTFT metric |
+| `text_delta` | `FormatterMarkdownEmitter` | `{content}` | **primary** stream preview (GFM) |
+| `result` | `IntentService.process_stream` | `{task_id, thread_id, result: FormatterTaskResult}` | финальный `ContentDocument` |
 | `done` | роутер `intents.py` | `{}` | не используется |
-| `error` | `process_stream` или роутер | `{message, task_id, thread_id}` либо `{detail, status_code}` | исключение на клиенте |
+| `error` | `process_stream` или роутер | `{message, …}` либо `{detail, status_code}` | исключение на клиенте |
 
 `final_state` и `_values` остаются внутри графа и в SSE не попадают.
+
+Deprecated: `formatter_delta` (debug JSON tokens) — больше не эмитится; Formatter
+стримит `text` + `text_delta`.
 
 ## Ход без ошибки
 
 1. `hop` — узел графа отдал update.
-2. `answer_delta` — готовая plain-prose работника (и позже замена того же черновика с `replace`). Первый такой чанк пишет `palatium_sse_ttft_seconds`.
-3. `formatter_delta` — только при включённом debug-флаге.
-4. `result` — `FormatterTaskResult`, внутри него `ContentDocument`.
-5. `done` — поток закрыт. При обрыве клиента `done` не шлётся, генератор закрывается.
+2. `answer_delta` — готовая prose работника (и позже замена черновика с `replace`).
+   Первый user-visible чанк пишет `palatium_sse_ttft_seconds`.
+3. `text_delta` — токены GFM от Formatter. На первом чанке после worker draft —
+   dual `answer_delta` с `replace: true` **один раз**; далее dual без `replace`.
+4. `result` — `FormatterTaskResult`; `ContentDocument` собран
+   `markdown_to_content_document` из финального markdown (JSON ContentDocument —
+   fallback совместимости).
+5. `done` — поток закрыт. При обрыве клиента `done` не шлётся.
 
-Formatter в проде не стримит свой JSON. Это компилятор блоков: пользователь видит prose через `answer_delta`, а типизированный документ целиком в `result`. Тот же приём у Claude Artifacts и ChatGPT Canvas: текст идёт потоком, структурированный артефакт появляется целиком.
+HITL: кликабельные карточки только из серверного `result` / minted cards.
+XML-теги `<hitl-action>` / `<hitl-choice>` в стриме — не интерактивны на клиенте
+(парсятся на сервере после стрима).
 
 ## Fast path
 
@@ -44,5 +55,6 @@ Formatter в проде не стримит свой JSON. Это компиля
 
 ## Новым агентам
 
-- Структурированный выход не стримить чанками. Отдавать его в `result`.
-- Plain text для раннего показа — только через `emit_answer_deltas`.
+- Структурированный `ContentDocument` не стримить чанками. Он появляется в `result`.
+- Early prose — `emit_answer_deltas`.
+- Formatter markdown tokens — только через `FormatterMarkdownEmitter` (`text_delta` + dual).

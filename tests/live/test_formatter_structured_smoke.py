@@ -95,13 +95,39 @@ def _agent() -> FormatterAgent:
     return FormatterAgent(Harness(llm=adapter), config)
 
 
+def _task_input() -> FormatterInput:
+    from palatium_ai.domain.agents.context_packet import ContextPacket
+    from palatium_ai.domain.agents.formatter import FormatterInput
+    from palatium_ai.domain.mcp.models import ToolExecutionPlan
+
+    return FormatterInput(
+        task_id="live",
+        context_packet=ContextPacket(
+            task_id="live",
+            user_text="hi",
+            task_kind="knowledge_request",
+            route="researcher",
+            route_plan="answer",
+            requires_mcp=False,
+            execution_plan=ToolExecutionPlan(
+                strategy="reason_only",
+                requires_tool_call=False,
+                rationale="r",
+            ),
+            context_summary="s",
+        ),
+        worker_summary="Done.",
+        response_locale="en-US",
+    )
+
+
 async def _compile(agent: FormatterAgent, payload: dict[str, object]) -> ContentDocument:
     user = build_formatter_user_message(payload)
     messages = [
         ChatMessage(role="system", content=FORMATTER_SYSTEM_PROMPT),
         ChatMessage(role="user", content=user),
     ]
-    return await agent._generate_document(messages, max_tokens=2048)
+    return await agent._generate_document(messages, task_input=_task_input(), max_tokens=2048)
 
 
 @pytest.mark.asyncio()
@@ -194,6 +220,6 @@ async def test_live_repair_accepts_a_schema_document() -> None:
             content=build_formatter_user_message(_payload("Done. No errors.", style_hint="brand_sections_icons")),
         ),
     ]
-    document = await agent._generate_document(messages, max_tokens=2048)
+    document = await agent._generate_document(messages, task_input=_task_input(), max_tokens=2048)
     assert document.blocks
-    assert port.formats == ["json_schema", "json_schema"]
+    assert port.formats == ["text", "text"] or port.formats == ["text"]

@@ -339,7 +339,7 @@ def _clean_text_field(text: str | None) -> str | None:
     if text is None:
         return None
     cleaned = strip_emoji(strip_icon_tokens(text)).strip()
-    return cleaned if cleaned else None
+    return cleaned or None
 
 
 def _looks_like_table_header(lines: list[str], index: int) -> bool:

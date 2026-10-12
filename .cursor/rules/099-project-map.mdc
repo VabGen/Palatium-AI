@@ -27,6 +27,8 @@ alwaysApply: true
   волнами (W0–W6 закрыты 2026-09-30: от дрейфа индекса до spec-driven `005`).
   Канонический индекс выше обновляется ПО МЕРЕ мержа; ссылки на ещё не созданные файлы
   здесь не появляются.
+- **Evolution Big Tech:** план `.cursor/plans/evolution-to-big-tech.md`, принципы —
+  `evolution-to-big-tech.mdc` (agent-requestable). Phase 1 = Hybrid Streaming Markdown.
 - **Git-договор и поставка:** шаблон PR — `.github/pull_request_template.md`, владельцы
   путей — `.github/CODEOWNERS` (088); branch protection и commitlint — осознанно НЕ вводим
   (решение 2026-09-30). Гейты: CI-jobs `quality` / `security` / `compose` / `frontend`,

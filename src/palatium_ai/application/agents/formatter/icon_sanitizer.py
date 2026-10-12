@@ -20,8 +20,8 @@ EMOJI_TO_ICON: dict[str, IconToken] = {
     "⚠": "warning",
     "🛑": "danger",
     "⛔": "danger",
-    "ℹ️": "info",
-    "ℹ": "info",
+    "\u2139\ufe0f": "info",  # information source + VS16
+    "\u2139": "info",
     "✅": "check",
     "❌": "x",
     "✓": "check",
