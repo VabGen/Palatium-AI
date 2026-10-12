@@ -297,6 +297,11 @@ def build_intent_service(
         daily_budget_usd=settings.observability.daily_cost_budget_usd,
         redis_client=redis_client,
     )
+    cost_tracker = None
+    if redis_client is not None:
+        from palatium_ai.core.observability.cost_tracker import CostTracker
+
+        cost_tracker = CostTracker(redis_client)
 
     resolved_checkpointer = checkpointer if checkpointer is not None else MemorySaver(serde=build_checkpoint_serde())
     compact_summarizer = LlmDialogSummarizer(
@@ -321,6 +326,7 @@ def build_intent_service(
         llm_factory=llm_factory,
         cost_budget=cost_budget,
         cost_estimator=estimate_completion_cost_usd,
+        cost_tracker=cost_tracker,
     )
     intent_agent = IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG)
     continuation = ContextualizerAgent(harness, CONTEXTUALIZER_CONFIG)

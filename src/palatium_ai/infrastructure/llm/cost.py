@@ -28,11 +28,11 @@ def estimate_completion_cost_usd(
     """Return USD cost for prompt+completion tokens, or 0.0 if unknown."""
     if not model or (prompt_tokens <= 0 and completion_tokens <= 0):
         return 0.0
-    # Gateway tier aliases (``tier-small``) are not in LiteLLM's price table —
-    # skip the lookup to avoid BadRequestError log spam (040). Prefer
-    # ``LLMCompletion.cost_usd`` from the gateway when present.
-    if model.strip().lower().startswith("tier-"):
-        return 0.0
+    # Bare gateway aliases (``tier-small``) are registered as ``openai/tier-*``
+    # at startup (Phase 3); try the qualified id before giving up.
+    lookup_model = model.strip()
+    if lookup_model.lower().startswith("tier-"):
+        lookup_model = f"openai/{lookup_model}"
     try:
         from litellm import cost_per_token
     except ImportError:  # pragma: no cover
@@ -40,7 +40,7 @@ def estimate_completion_cost_usd(
 
     try:
         prompt_cost, completion_cost = cost_per_token(
-            model=model,
+            model=lookup_model,
             prompt_tokens=max(0, prompt_tokens),
             completion_tokens=max(0, completion_tokens),
         )

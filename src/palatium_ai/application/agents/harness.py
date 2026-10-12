@@ -15,8 +15,9 @@ from palatium_ai.application.services.cost_budget import CostBudgetExceededError
 from palatium_ai.core.context.tokens import count_tokens
 from palatium_ai.core.exceptions import AgentExecutionError
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.logging.context import user_id_var
 from palatium_ai.core.observability.metrics import agent_metrics
-from palatium_ai.core.observability.tracing import traceable
+from palatium_ai.core.observability.tracing import add_gen_ai_attributes, traceable
 from palatium_ai.core.observability.turn_tokens import get_turn_token_collector
 from palatium_ai.core.resilience import CircuitOpenError
 from palatium_ai.core.security.secret_scanner import (
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from palatium_ai.application.services.cost_budget import CostBudgetService
+    from palatium_ai.core.observability.cost_tracker import CostTracker
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.ports.llm import LlmCostEstimatorPort, LLMPort
     from palatium_ai.infrastructure.llm.factory import LLMClientFactory
@@ -202,12 +204,14 @@ class Harness:
         llm: LLMPort | None = None,
         cost_budget: CostBudgetService | None = None,
         cost_estimator: LlmCostEstimatorPort | None = None,
+        cost_tracker: CostTracker | None = None,
     ) -> None:
         self._context_builder = context_builder or ContextBuilder()
         self._llm_factory = llm_factory
         self._llm = llm
         self._cost_budget = cost_budget
         self._cost_estimator = cost_estimator
+        self._cost_tracker = cost_tracker
 
     def _resolve_llm(self, config: AgentConfig) -> LLMPort:
         if self._llm is not None:
@@ -223,7 +227,7 @@ class Harness:
         config: AgentConfig,
         completion: LLMCompletion,
         fallback_model: str,
-    ) -> None:
+    ) -> float:
         usage = completion.usage
         cost_usd = _resolve_cost_usd(
             completion=completion,
@@ -252,6 +256,52 @@ class Harness:
                 completion_tokens=usage.completion_tokens,
                 cost_usd=cost_usd,
             )
+        self._stamp_gen_ai_span(
+            completion=completion,
+            fallback_model=fallback_model,
+            cost_usd=cost_usd,
+        )
+        return cost_usd
+
+    def _stamp_gen_ai_span(
+        self,
+        *,
+        completion: LLMCompletion,
+        fallback_model: str,
+        cost_usd: float,
+    ) -> None:
+        try:
+            from opentelemetry import trace
+        except ImportError:  # pragma: no cover
+            return
+        span = trace.get_current_span()
+        if span is None or not span.is_recording():
+            return
+        model = (completion.model or fallback_model or "unknown").strip() or "unknown"
+        add_gen_ai_attributes(
+            span,
+            model=model,
+            usage=completion.usage,
+            cost_usd=cost_usd,
+            finish_reason=completion.finish_reason,
+        )
+
+    async def _track_cost_if_needed(
+        self,
+        *,
+        config: AgentConfig,
+        completion: LLMCompletion,
+        cost_usd: float,
+    ) -> None:
+        if self._cost_tracker is None or cost_usd <= 0.0:
+            return
+        await self._cost_tracker.record(
+            org_id="default",
+            user_id=user_id_var.get() or "anonymous",
+            agent_role=config.role,
+            model=completion.model or "unknown",
+            cost_usd=cost_usd,
+        )
 
     @traceable(name="harness.call_llm")
     async def call_llm(
@@ -301,10 +351,15 @@ class Harness:
                     ),
                     timeout=call_timeout,
                 )
-                self._record_llm_usage(
+                cost_usd = self._record_llm_usage(
                     config=config,
                     completion=completion,
                     fallback_model=resolved_model or "",
+                )
+                await self._track_cost_if_needed(
+                    config=config,
+                    completion=completion,
+                    cost_usd=cost_usd,
                 )
                 return completion
             except CostBudgetExceededError:
@@ -374,10 +429,15 @@ class Harness:
         except CircuitOpenError as exc:
             raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
 
-        self._record_llm_usage(
+        cost_usd = self._record_llm_usage(
             config=config,
             completion=completion,
             fallback_model=resolved_model or "",
+        )
+        await self._track_cost_if_needed(
+            config=config,
+            completion=completion,
+            cost_usd=cost_usd,
         )
         return completion
 

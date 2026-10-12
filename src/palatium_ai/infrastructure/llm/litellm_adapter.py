@@ -125,24 +125,38 @@ def _parse_usage(usage_obj: object | None) -> LLMUsage:
     )
 
 
-def _parse_response_cost(response: object) -> float | None:
-    """Provider-reported USD cost for the call, or None when none was reported.
-
-    LiteLLM surfaces the gateway's ``x-litellm-response-cost`` through ``_hidden_params``.
-    A gateway routing opaque tier aliases is the only component that can price the call,
-    so this value is authoritative over any local price table. Absent, non-numeric or
-    negative values mean "not reported" — never invent a rate (050).
-    """
-    hidden = getattr(response, "_hidden_params", None)
-    if not isinstance(hidden, dict):
-        return None
-    raw = hidden.get("response_cost")
+def _coerce_cost_usd(raw: object) -> float | None:
+    """Normalize a numeric cost; reject bool/NaN/negative."""
     if isinstance(raw, bool) or not isinstance(raw, int | float):
         return None
     cost = float(raw)
     if not math.isfinite(cost) or cost < 0.0:
         return None
     return cost
+
+
+def _parse_response_cost(response: object) -> float | None:
+    """Provider-reported USD cost for the call, or None when none was reported.
+
+    LiteLLM surfaces the gateway's ``x-litellm-response-cost`` through ``_hidden_params``.
+    Fallback: ``litellm.completion_cost`` after tier registration (Phase 3). Absent,
+    non-numeric or negative values mean "not reported" — never invent a rate (050).
+    """
+    hidden = getattr(response, "_hidden_params", None)
+    from_hidden = _coerce_cost_usd(hidden.get("response_cost")) if isinstance(hidden, dict) else None
+    if from_hidden is not None and from_hidden > 0.0:
+        return from_hidden
+
+    try:
+        import litellm
+
+        computed = litellm.completion_cost(completion_response=response)
+    except (TypeError, ValueError, AttributeError, KeyError, RuntimeError):
+        return from_hidden
+    from_table = _coerce_cost_usd(computed)
+    if from_table is not None and from_table > 0.0:
+        return from_table
+    return from_hidden if from_hidden is not None else from_table
 
 
 def _parse_completion(response: object) -> LLMCompletion:
