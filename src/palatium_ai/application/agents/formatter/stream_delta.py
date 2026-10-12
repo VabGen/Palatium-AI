@@ -60,6 +60,27 @@ class FormatterMarkdownEmitter:
             self._emit_preview(preview)
         return self.buffer
 
+    def emit_fallback_prose(self, prose: str) -> None:
+        """Emit worker-summary fallback before first Formatter token (Phase 2)."""
+        text = prose.strip()
+        if not text:
+            return
+        self.bridge.emit_nowait({"event": "text_delta", "content": text})
+        self.bridge.emit_nowait(
+            {
+                "event": "answer_delta",
+                "delta": text,
+                "replace": True,
+                "fallback": True,
+            }
+        )
+        self.replace_pending = True  # real Formatter tokens should replace fallback
+        if not self.bridge.sse_ttft_recorded:
+            self.bridge.sse_ttft_recorded = True
+            agent_metrics.record_sse_ttft(time.perf_counter() - self.bridge.started_at)
+        self.bridge.has_emitted_answer = True
+        agent_metrics.record_node_execution("formatter", "emit:fallback_stream")
+
     def _emit_preview(self, preview: str) -> None:
         self.bridge.emit_nowait({"event": "text_delta", "content": preview})
         answer: dict[str, object] = {"event": "answer_delta", "delta": preview}

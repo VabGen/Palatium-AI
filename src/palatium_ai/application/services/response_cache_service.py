@@ -93,7 +93,12 @@ class ResponseCacheService:
         except Exception as exc:
             logger.warning("response_cache.decode_failed", error=str(exc))
             return None
-        logger.debug("response_cache.hit", strategy=str(strategy), key_suffix=key[-12:])
+        logger.info(
+            "response_cache.hit",
+            strategy=str(strategy),
+            key_suffix=key[-12:],
+            user_text=user_text[:50],
+        )
         return result
 
     async def put_if_cacheable(

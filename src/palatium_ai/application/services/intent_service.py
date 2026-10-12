@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from collections.abc import AsyncGenerator, Sequence
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -455,27 +457,41 @@ class IntentService:
             thread_id=thread_id,
             restore_pending=True,
         )
-        await self._session_service.touch_session(
-            thread_id=thread_id,
-            user_id=user_id,
-            title=_derive_session_title(text),
-            context_patch={
-                "last_operation": "process",
-                "last_task_id": resolved_task_id,
-                "last_user_text": session_user_text_preview(text),
-                "org_id": org_id or "",
-                **self._attachment_context_patch(resolved_attachments),
-            },
-        )
-        if self._dialog_turn_store is not None:
-            payload = attachment_ids_payload(tuple(resolved_attachments)) if resolved_attachments else None
-            await self._dialog_turn_store.append_turn(
+        # Overlap attachment fence build with session/dialog I/O (Phase 2 latency).
+        attachment_task = asyncio.create_task(
+            self._turn_untrusted_context(
+                resolved_attachments,
                 thread_id=thread_id,
-                role="user",
-                content=text,
-                task_id=resolved_task_id,
-                payload=payload,
+                user_id=user_id,
             )
+        )
+        try:
+            await self._session_service.touch_session(
+                thread_id=thread_id,
+                user_id=user_id,
+                title=_derive_session_title(text),
+                context_patch={
+                    "last_operation": "process",
+                    "last_task_id": resolved_task_id,
+                    "last_user_text": session_user_text_preview(text),
+                    "org_id": org_id or "",
+                    **self._attachment_context_patch(resolved_attachments),
+                },
+            )
+            if self._dialog_turn_store is not None:
+                payload = attachment_ids_payload(tuple(resolved_attachments)) if resolved_attachments else None
+                await self._dialog_turn_store.append_turn(
+                    thread_id=thread_id,
+                    role="user",
+                    content=text,
+                    task_id=resolved_task_id,
+                    payload=payload,
+                )
+            untrusted_context = await attachment_task
+        except BaseException:
+            if not attachment_task.done():
+                attachment_task.cancel()
+            raise
 
         cache_ctx = TurnResponseCacheContext(
             cache=self._response_cache,
@@ -491,11 +507,7 @@ class IntentService:
                 user_id=user_id,
                 org_id=org_id,
                 tenant_key=tenant_key,
-                untrusted_context=await self._turn_untrusted_context(
-                    resolved_attachments,
-                    thread_id=thread_id,
-                    user_id=user_id,
-                ),
+                untrusted_context=untrusted_context,
             )
         interrupted = _extract_interrupt(final_state)
         if interrupted is not None:
@@ -619,33 +631,41 @@ class IntentService:
             thread_id=thread_id,
             restore_pending=True,
         )
-        await self._session_service.touch_session(
-            thread_id=thread_id,
-            user_id=user_id,
-            title=_derive_session_title(text),
-            context_patch={
-                "last_operation": "process_stream",
-                "last_task_id": resolved_task_id,
-                "last_user_text": session_user_text_preview(text),
-                "org_id": org_id or "",
-                **self._attachment_context_patch(resolved_attachments),
-            },
-        )
-        if self._dialog_turn_store is not None:
-            payload = attachment_ids_payload(tuple(resolved_attachments)) if resolved_attachments else None
-            await self._dialog_turn_store.append_turn(
+        # Overlap attachment fence build with session/dialog I/O (Phase 2 latency).
+        attachment_task = asyncio.create_task(
+            self._turn_untrusted_context(
+                resolved_attachments,
                 thread_id=thread_id,
-                role="user",
-                content=text,
-                task_id=resolved_task_id,
-                payload=payload,
+                user_id=user_id,
             )
-
-        untrusted = await self._turn_untrusted_context(
-            resolved_attachments,
-            thread_id=thread_id,
-            user_id=user_id,
         )
+        try:
+            await self._session_service.touch_session(
+                thread_id=thread_id,
+                user_id=user_id,
+                title=_derive_session_title(text),
+                context_patch={
+                    "last_operation": "process_stream",
+                    "last_task_id": resolved_task_id,
+                    "last_user_text": session_user_text_preview(text),
+                    "org_id": org_id or "",
+                    **self._attachment_context_patch(resolved_attachments),
+                },
+            )
+            if self._dialog_turn_store is not None:
+                payload = attachment_ids_payload(tuple(resolved_attachments)) if resolved_attachments else None
+                await self._dialog_turn_store.append_turn(
+                    thread_id=thread_id,
+                    role="user",
+                    content=text,
+                    task_id=resolved_task_id,
+                    payload=payload,
+                )
+            untrusted = await attachment_task
+        except BaseException:
+            if not attachment_task.done():
+                attachment_task.cancel()
+            raise
         final_state: AgentGraphState | None = None
         cache_ctx = TurnResponseCacheContext(
             cache=self._response_cache,

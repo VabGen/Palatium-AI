@@ -9,9 +9,11 @@ On hard failure: deterministic fallback (better than empty/red UI).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import ValidationError
@@ -58,6 +60,8 @@ logger = get_logger(__name__)
 _PARSE_ERRORS = (ValidationError, ValueError, json.JSONDecodeError, TypeError, LLMJSONError)
 _LENGTH_FINISH = frozenset({"length", "max_tokens"})
 _Delta = Callable[[str], object]
+_FIRST_TOKEN_FALLBACK_SECONDS = 8.0
+_FALLBACK_PROSE_CHARS = 200
 
 
 def formatter_max_tokens(payload_text: str) -> int:
@@ -117,6 +121,7 @@ class FormatterAgent(BaseAgent):
                 messages,
                 task_input=task_input,
                 max_tokens=max_tokens,
+                worker_summary=task_input.worker_summary or "",
             )
             document = align_formatter_meta(document, task_input)
             document = await self._maybe_repair_locale_gated(
@@ -164,8 +169,13 @@ class FormatterAgent(BaseAgent):
         *,
         task_input: FormatterInput,
         max_tokens: int,
+        worker_summary: str = "",
     ) -> ContentDocument:
-        completion, markdown = await self._call_formatter_llm(messages, max_tokens=max_tokens)
+        completion, markdown = await self._call_formatter_llm(
+            messages,
+            max_tokens=max_tokens,
+            worker_summary=worker_summary,
+        )
         truncated = _was_truncated(completion)
         try:
             return markdown_to_content_document(markdown or completion.content, task_input)
@@ -196,17 +206,25 @@ class FormatterAgent(BaseAgent):
         messages: list[ChatMessage],
         *,
         max_tokens: int,
+        worker_summary: str = "",
     ) -> tuple[LLMCompletion, str]:
         """Stream GFM when an SSE bridge is bound; otherwise one-shot text completion."""
         emitter = FormatterMarkdownEmitter.bind()
         if emitter is None:
             return await self._complete(messages, max_tokens=max_tokens)
 
-        completion, _ = await self._complete(
-            messages,
-            max_tokens=max_tokens,
-            on_delta=emitter.on_delta,
+        on_delta, cancel_watch = _first_token_fallback_watch(
+            emitter,
+            worker_summary=worker_summary,
         )
+        try:
+            completion, _ = await self._complete(
+                messages,
+                max_tokens=max_tokens,
+                on_delta=on_delta,
+            )
+        finally:
+            await cancel_watch()
         markdown = emitter.finish() or sanitize_markdown_buffer(completion.content)
         return completion, markdown
 
@@ -347,6 +365,47 @@ class FormatterAgent(BaseAgent):
             output=_empty_document(task_input.response_locale),
             error_message=FORMATTER_OUTPUT_INVALID,
         )
+
+
+def _first_token_fallback_watch(
+    emitter: FormatterMarkdownEmitter,
+    *,
+    worker_summary: str,
+) -> tuple[_Delta, Callable[[], Awaitable[None]]]:
+    """Emit worker prose if Formatter first token exceeds 8s (Phase 2)."""
+    first_token = asyncio.Event()
+    prose = (worker_summary or "").strip()[:_FALLBACK_PROSE_CHARS]
+
+    async def _watch() -> None:
+        if not prose:
+            return
+        try:
+            await asyncio.wait_for(first_token.wait(), timeout=_FIRST_TOKEN_FALLBACK_SECONDS)
+        except TimeoutError:
+            if not first_token.is_set():
+                emitter.emit_fallback_prose(prose)
+                logger.info(
+                    "formatter.fallback_stream",
+                    chars=len(prose),
+                    budget_seconds=_FIRST_TOKEN_FALLBACK_SECONDS,
+                )
+
+    watch_task = asyncio.create_task(_watch())
+
+    def on_delta(chunk: str) -> None:
+        if chunk and not first_token.is_set():
+            first_token.set()
+        emitter.on_delta(chunk)
+
+    async def cancel() -> None:
+        if not first_token.is_set():
+            first_token.set()
+        if not watch_task.done():
+            watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch_task
+
+    return on_delta, cancel
 
 
 def _hop_skip_repairs() -> bool:
