@@ -18,9 +18,12 @@
 
 ### Phase 4
 - [x] 1.1 Neo4j runtime schema bootstrap + write-port sentinel
-- [ ] 1.2 Dynamic LLM timeouts
-- [ ] 1.3 UTC / DTZ audit
-- [ ] 1.4 Tests + gates + `docs(plan): mark Phase 4 done`
+- [x] 1.2 Dynamic LLM timeouts
+- [x] 1.3 UTC / DTZ audit (`ruff --select DTZ` clean; no utcnow/naive now)
+- [x] 1.4 Tests + gates + `docs(plan): mark Phase 4 done`
+
+**Note:** full pytest suite has pre-existing failures on master (env parity, formatter
+prompt contract, HITL resumed payload) unrelated to Phase 4; Phase 4 unit tests green.
 
 ### Phase 3
 - [ ] 2.1 Tier cost registration
