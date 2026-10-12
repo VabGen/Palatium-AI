@@ -36,7 +36,9 @@ const CEM_ARTIFACT = join(DIST, 'custom-elements.json');
  * W1/W7): 150 KB gzip — это то, что реально отдаётся в браузер СЭД.
  * Поднять бюджет = осознанное решение с обновлением плана, а не правка «чтобы CI был зелёным».
  */
-const BUDGET_KIB = 150;
+// Hotfix 1.1: react-markdown + remark-gfm in stream preview (DoD, evolution plan).
+// Raise only with plan note (084).
+const BUDGET_KIB = 210;
 
 /** Кибибайт, а не «kB»: бюджет считаем в KiB, отчёт сборки печатает kB (10^3) — числа близки, но единицы разные. */
 const KIB = 1024;
