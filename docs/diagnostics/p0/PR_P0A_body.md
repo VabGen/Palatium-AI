@@ -18,9 +18,9 @@ Rehydrate из dialog prior резолвит UUID attachment из чужого �
 
 ### Non-goals
 - Dialog write path (H5a: PASS, не требуется)
-- Contextualizer / memory recall (P0-B, отдельный PR)
+- Contextualizer / memory recall — закрыто в P0-B (kind-gate на `dev`)
 - Источник pollution dialog prior (non-blocker, фикс блокирует усилитель)
-- A.2d / `test_p0_scratchpad_leak_to_attachment.py` — P0-B, намеренно вне этого PR
+- A.2d — восстановлен и зелёный после P0-B
 
 ### Evidence
 - Before: A.2a FAIL, A.2e H5b FAIL
