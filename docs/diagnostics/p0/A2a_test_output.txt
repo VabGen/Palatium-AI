@@ -1,0 +1,19 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.0, pytest-9.1.1, pluggy-1.6.0 -- D:\project\palatium-ai\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: D:\project\palatium-ai
+configfile: pyproject.toml
+plugins: anyio-4.15.1, langsmith-0.14.8, platformdirs-4.13.0, asyncio-1.4.0, cov-7.1.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/unit/test_p0_get_many_thread_isolation.py::test_get_many_filters_by_thread_id_not_only_user FAILED [100%]
+
+================================== FAILURES ===================================
+______________ test_get_many_filters_by_thread_id_not_only_user _______________
+tests\unit\test_p0_get_many_thread_isolation.py:109: in test_get_many_filters_by_thread_id_not_only_user
+    found = await repository.get_many(
+E   TypeError: PostgresAttachmentRepository.get_many() got an unexpected keyword argument 'thread_id'
+=========================== short test summary info ===========================
+FAILED tests/unit/test_p0_get_many_thread_isolation.py::test_get_many_filters_by_thread_id_not_only_user
+============================== 1 failed in 3.89s ==============================

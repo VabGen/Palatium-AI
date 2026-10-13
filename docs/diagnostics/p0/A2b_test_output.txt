@@ -1,0 +1,31 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.0, pytest-9.1.1, pluggy-1.6.0 -- D:\project\palatium-ai\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: D:\project\palatium-ai
+configfile: pyproject.toml
+plugins: anyio-4.15.1, langsmith-0.14.8, platformdirs-4.13.0, asyncio-1.4.0, cov-7.1.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/integration/test_p0_attachment_turn_isolation.py::test_p0_followup_untrusted_context_stays_on_thread_attachment PASSED [100%]
+
+============================= 1 passed in 35.05s ==============================
+
+================================================================================
+DIAGNOSTIC VERDICT (A.2b) — 2026-10-13
+================================================================================
+A.2b не воспроизводит thread leakage на уровне графа.
+
+Facts:
+- Turn 2/3 state['untrusted_context'] contains A1 (otziv_SED_NCPI_RB.pdf)
+- Turn 2/3 do NOT contain A2 (unrelated.pdf) or A2 body marker
+- Rehydrate fired correctly from T1 dialog prior; get_many was only asked for A1 UUID
+
+Implication for A.4:
+- SQL get_many(user_id-only) is a real contract gap (A.2a TypeError proves missing thread_id),
+  but it is NOT the production path that injects foreign-thread UUIDs into T1 by itself.
+- Foreign UUID must already be in the id list (dialog/pending/client) for get_many to resolve it.
+- Next: A.2c (invariant refs == untrusted_context) OR revise A.4 toward stickiness /
+  wrong-id-in-dialog / defect-2 (refs vs content divergence) as primary hypothesis.
+
+STOP — do not proceed to A.3/A.4/C.1 without this review.
