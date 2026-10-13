@@ -51,6 +51,7 @@ for _key, _value in _TEST_ENV_DEFAULTS.items():
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -65,6 +66,15 @@ from palatium_ai.domain.llm.models import (
 from palatium_ai.domain.mcp.external_schemas import EDMS_SEARCH_DOCUMENTS_SCHEMA
 from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolDescriptor, MCPToolResult, MCPToolSummary
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
+
+if TYPE_CHECKING:
+    from palatium_ai.application.agents.analyst import AnalystAgent
+    from palatium_ai.application.agents.coder import CoderAgent
+    from palatium_ai.application.agents.context_enricher import ContextualizerAgent, ContextWeaverAgent
+    from palatium_ai.application.agents.critic import CriticAgent
+    from palatium_ai.application.agents.formatter import FormatterAgent
+    from palatium_ai.application.agents.researcher import ResearcherAgent
+    from palatium_ai.application.agents.supervisor import SupervisorAgent
 
 
 class PlatformKnowledgeMcpRegistry:
@@ -502,7 +512,7 @@ async def run_supervisor(task_input: object):
     )
 
 
-def make_supervisor_agent(harness: object | None = None) -> object:
+def make_supervisor_agent(harness: object | None = None) -> SupervisorAgent:
     """SupervisorAgent bound to harness (no LLM calls)."""
     from palatium_ai.application.agents.harness import Harness
     from palatium_ai.application.agents.supervisor import SUPERVISOR_CONFIG, SupervisorAgent
@@ -511,7 +521,9 @@ def make_supervisor_agent(harness: object | None = None) -> object:
     return SupervisorAgent(resolved, SUPERVISOR_CONFIG)  # type: ignore[arg-type]
 
 
-def make_critic_agent(llm: FakeLLMPort | SequentialFakeLLMPort, harness: object | None = None) -> object:
+def make_critic_agent(
+    llm: FakeLLMPort | SequentialFakeLLMPort, harness: object | None = None
+) -> CriticAgent:
     from palatium_ai.application.agents.critic import CRITIC_CONFIG, CriticAgent
     from palatium_ai.application.agents.harness import Harness
 
@@ -519,7 +531,9 @@ def make_critic_agent(llm: FakeLLMPort | SequentialFakeLLMPort, harness: object 
     return CriticAgent(resolved, CRITIC_CONFIG)  # type: ignore[arg-type]
 
 
-def make_formatter_agent(llm: FakeLLMPort | SequentialFakeLLMPort, harness: object | None = None) -> object:
+def make_formatter_agent(
+    llm: FakeLLMPort | SequentialFakeLLMPort, harness: object | None = None
+) -> FormatterAgent:
     from palatium_ai.application.agents.formatter import FORMATTER_CONFIG, FormatterAgent
     from palatium_ai.application.agents.harness import Harness
 
@@ -598,7 +612,7 @@ def make_researcher_agent(
     mcp_registry: object | None = None,
     *,
     harness: object | None = None,
-) -> object:
+) -> ResearcherAgent:
     from palatium_ai.application.agents.harness import Harness
     from palatium_ai.application.agents.researcher import RESEARCHER_CONFIG, ResearcherAgent
 
@@ -611,7 +625,7 @@ def make_researcher_agent(
     )
 
 
-def make_coder_agent(*, harness: object | None = None) -> object:
+def make_coder_agent(*, harness: object | None = None) -> CoderAgent:
     from palatium_ai.application.agents.coder import CODER_CONFIG, CoderAgent
     from palatium_ai.application.agents.harness import Harness
 
@@ -619,7 +633,7 @@ def make_coder_agent(*, harness: object | None = None) -> object:
     return CoderAgent(resolved, CODER_CONFIG)  # type: ignore[arg-type]
 
 
-def make_analyst_agent(*, harness: object | None = None) -> object:
+def make_analyst_agent(*, harness: object | None = None) -> AnalystAgent:
     from palatium_ai.application.agents.analyst import ANALYST_CONFIG, AnalystAgent
     from palatium_ai.application.agents.harness import Harness
 
@@ -627,7 +641,7 @@ def make_analyst_agent(*, harness: object | None = None) -> object:
     return AnalystAgent(resolved, ANALYST_CONFIG)  # type: ignore[arg-type]
 
 
-def make_continuation_agent(*, harness: object | None = None) -> object:
+def make_continuation_agent(*, harness: object | None = None) -> ContextualizerAgent:
     from palatium_ai.application.agents.context_enricher import CONTEXTUALIZER_CONFIG, ContextualizerAgent
     from palatium_ai.application.agents.harness import Harness
 
@@ -639,7 +653,7 @@ def make_weaving_agent(
     mcp_registry: object | None = None,
     *,
     harness: object | None = None,
-) -> object:
+) -> ContextWeaverAgent:
     from palatium_ai.application.agents.context_enricher import CONTEXT_WEAVER_CONFIG, ContextWeaverAgent
     from palatium_ai.application.agents.harness import Harness
 

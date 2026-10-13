@@ -347,7 +347,7 @@ class ContinuityPolicy:
     @staticmethod
     def _prior_source_label(*, prior: str | None, assistant_prior: str | None) -> str:
         clipped_asst = ContinuityPolicy._clip_prior(assistant_prior)
-        if prior and prior != clipped_asst:
+        if prior is not None and prior and prior != clipped_asst:
             return "user_payload" if len(prior) >= SUBSTANTIVE_USER_PAYLOAD_CHARS else "user_intents"
         return "assistant"
 
@@ -369,7 +369,10 @@ class ContinuityPolicy:
     ) -> EffectiveRoutingIntent:
         """Apply UserChoiceIntentPolicy (sole choice-axis owner) then build routing intent."""
         if clarify_underspec_default and underspec == "none":
-            underspec = "discrete_choice" if requires_user_choice else "open_text"
+            clarified: UnderspecificationKind = (
+                "discrete_choice" if requires_user_choice else "open_text"
+            )
+            underspec = clarified
 
         normalized = ClarificationGatePolicy.apply(
             UserChoiceIntentPolicy.normalize(

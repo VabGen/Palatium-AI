@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from palatium_ai.application.orchestration import node_inputs, selectors
 from palatium_ai.application.orchestration.agent_bridge import (
@@ -260,10 +260,11 @@ async def _maybe_deferred_durable_recall(
     if ctx is None or ctx.memory_port is None:
         return existing
 
+    recall_query: str = (query or "").strip() or ctx.query
     return await recall_for_thread(
         ctx.memory_port,
         thread_id=ctx.thread_id,
-        query=(query or "").strip() or ctx.query,
+        query=recall_query,
         user_id=ctx.user_id,
         org_id=ctx.org_id,
         limit=ctx.limit,
@@ -305,7 +306,7 @@ async def intent_classifier_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
-        return {"classification": result}, result
+        return cast("AgentGraphState", {"classification": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_INTENT, state=state, run=run)
 
@@ -330,7 +331,7 @@ async def supervisor_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
-        return {"routing": result}, result
+        return cast("AgentGraphState", {"routing": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_SUPERVISOR, state=state, run=run)
 
@@ -362,13 +363,16 @@ async def weaving_node(
             hop = get_hop_collector()
             if hop is not None:
                 hop.apply_strategy_budget(strategy)
-            return {"context_bundle": result}, result
+            return cast("AgentGraphState", {"context_bundle": result}), result
         except ClarifyError as exc:
             logger.info("Context weaver requires clarification", question=str(exc))
-            return {
-                "requires_clarification": True,
-                "clarification_question": str(exc),
-            }, TaskResultStub()
+            return cast(
+                "AgentGraphState",
+                {
+                    "requires_clarification": True,
+                    "clarification_question": str(exc),
+                },
+            ), TaskResultStub()
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_WEAVING, state=state, run=run)
 
@@ -409,7 +413,7 @@ async def critic_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
-        return {"critic": result}, result
+        return cast("AgentGraphState", {"critic": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_CRITIC, state=state, run=run)
 
@@ -437,7 +441,7 @@ async def researcher_node(
             agent_role=agent.config.role,
         )
         _emit_worker_answer_deltas(result)
-        return {"execution": result}, result
+        return cast("AgentGraphState", {"execution": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_RESEARCHER, state=state, run=run)
 
@@ -463,7 +467,7 @@ async def coder_node(
             agent_role=agent.config.role,
         )
         _emit_worker_answer_deltas(result)
-        return {"execution": result}, result
+        return cast("AgentGraphState", {"execution": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_CODER, state=state, run=run)
 
@@ -489,7 +493,7 @@ async def analyst_node(
             agent_role=agent.config.role,
         )
         _emit_worker_answer_deltas(result)
-        return {"execution": result}, result
+        return cast("AgentGraphState", {"execution": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_ANALYST, state=state, run=run)
 
@@ -570,7 +574,7 @@ async def parallel_workers_node(
         research_result, analyst_result = await asyncio.gather(_run_researcher(), _run_analyst())
         merged = merge_parallel_worker_results(research_result, analyst_result)  # type: ignore[arg-type]
         _emit_worker_answer_deltas(merged)
-        return {"execution": merged}, merged
+        return cast("AgentGraphState", {"execution": merged}), merged
 
     return await run_logged_node(
         agent=researcher,
@@ -619,7 +623,7 @@ async def formatter_node(
 
             if cached.output is not None:
                 emit_answer_deltas(cached.output.plain_text())
-            return {"formatted": cached}, cached
+            return cast("AgentGraphState", {"formatted": cached}), cached
         fast = try_formatter_fast_path(
             task_input=task_input,
             task_kind=snapshot.task_kind,
@@ -628,7 +632,7 @@ async def formatter_node(
             worker_confidence=selectors.resolved_worker_confidence(state),
         )
         if fast is not None:
-            return {"formatted": fast}, fast
+            return cast("AgentGraphState", {"formatted": fast}), fast
         # Early TTFT: stream worker prose while Formatter LLM compiles ContentDocument.
         from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
 
@@ -644,7 +648,7 @@ async def formatter_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
-        return {"formatted": result}, result
+        return cast("AgentGraphState", {"formatted": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_FORMATTER, state=state, run=run)
 
@@ -660,7 +664,9 @@ def _mcp_failure_formatter_result(
 
     execution = state.get("execution")
     reason = execution.error if execution is not None else None
-    if not isinstance(reason, str) or reason not in {MCP_EMPTY_RESULT, MCP_TOOL_ERROR}:
+    if not isinstance(reason, str):
+        return None
+    if reason not in {MCP_EMPTY_RESULT, MCP_TOOL_ERROR}:
         return None
     snapshot = OrchestrationSnapshot.from_state(state)
     task_input = node_inputs.build_formatter_input(snapshot, state)
@@ -681,7 +687,7 @@ def _mcp_failure_formatter_result(
         requires_review=False,
         output=document,
     )
-    return {"formatted": result}, result
+    return cast("AgentGraphState", {"formatted": result}), result
 
 
 def _formatter_clarification_result(
@@ -713,7 +719,7 @@ def _formatter_clarification_result(
         requires_review=False,
         output=doc,
     )
-    return {"formatted": result}, result
+    return cast("AgentGraphState", {"formatted": result}), result
 
 
 def route_after_context(

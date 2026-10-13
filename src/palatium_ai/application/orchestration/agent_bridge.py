@@ -584,14 +584,15 @@ def merge_parallel_worker_results(
     if analyst.output is not None:
         sources.extend(analyst.output.sources_used)
     statuses = {research.status, analyst.status}
+    status: Literal["success", "failure", "partial"]
     if "failure" in statuses and "success" not in statuses and "partial" not in statuses:
-        status: Literal["success", "failure", "partial"] = "failure"
+        status = "failure"
     elif "failure" in statuses or "partial" in statuses:
         status = "partial"
     else:
         status = "success"
     confidence = min(research.confidence, analyst.confidence)
-    errors = [e for e in (research.error, analyst.error) if e]
+    errors: list[str] = [e for e in (research.error, analyst.error) if isinstance(e, str) and e]
     return ResearcherTaskResult(
         task_id=research.task_id,
         agent_role="parallel_workers",

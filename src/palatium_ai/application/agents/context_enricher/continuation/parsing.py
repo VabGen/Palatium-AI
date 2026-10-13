@@ -15,8 +15,14 @@ from palatium_ai.domain.policies import ContinuityPolicy
 
 _EXCERPT_MAX_CHARS = 1500
 _QUERY_MAX_CHARS = 32_000
-_CONTINUATIONS = frozenset({"format", "answer", "new_topic", "clarify"})
-_PRIOR_BOUND_KINDS = frozenset({"answer", "format"})
+_CONTINUATIONS: frozenset[ContinuationKind] = cast(
+    "frozenset[ContinuationKind]",
+    frozenset({"format", "answer", "new_topic", "clarify"}),
+)
+_PRIOR_BOUND_KINDS: frozenset[ContinuationKind] = cast(
+    "frozenset[ContinuationKind]",
+    frozenset({"answer", "format"}),
+)
 
 
 def coerce_bool(value: object) -> bool:
@@ -56,6 +62,7 @@ def parse_contextualizer_output(
         raise ValueError("Contextualizer JSON must be an object")
 
     kind_raw = str(payload.get("continuation_kind", "new_topic"))
+    kind: ContinuationKind
     if kind_raw in _CONTINUATIONS:
         kind = cast("ContinuationKind", kind_raw)
     else:

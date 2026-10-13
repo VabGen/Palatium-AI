@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
@@ -19,7 +19,10 @@ if TYPE_CHECKING:
 
 _CODE_CAPS: frozenset[str] = frozenset({"code", "coding", "sandbox", "code_exec"})
 _ANALYST_CAPS: frozenset[str] = frozenset({"analytics", "analysis", "metrics", "trends", "stats", "statistics"})
-_KNOWLEDGE_KINDS: frozenset[TaskKind] = frozenset({"knowledge_request", "tool_execution"})
+_KNOWLEDGE_KINDS = cast(
+    "frozenset[TaskKind]",
+    frozenset({"knowledge_request", "tool_execution"}),
+)
 
 
 class ExecutionPlanner:
