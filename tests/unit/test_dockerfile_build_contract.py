@@ -100,10 +100,11 @@ def test_install_run_asserts_the_root_package_imports() -> None:
 
 
 def test_graphiti_extra_is_verified_when_requested() -> None:
-    """`WITH_GRAPHITI=1` promises a working graph backend; an unverified pip install breaks it."""
+    """`WITH_GRAPHITI=1` must install via uv extra (no pip) and assert the import."""
     install = _install_run()
 
-    assert "graphiti-core" in install, "the graphiti extra is no longer installed"
+    assert "--extra graphiti" in install, "graphiti must come from uv sync --extra, not pip"
+    assert "/app/.venv/bin/pip" not in install, "uv venvs have no pip — that path exits 127"
     assert "import graphiti_core" in install, "graphiti is installed but never verified"
 
 
@@ -117,6 +118,9 @@ def test_attachments_runtime_installs_tesseract_when_requested() -> None:
     runtime_block = text.split("FROM base AS runtime", 1)[1].split("FROM builder AS test", 1)[0]
     assert "WITH_ATTACHMENTS" in runtime_block
     assert "tesseract-ocr" in runtime_block
+    # Fail the build if apt claimed success but eng/rus tessdata is missing.
+    assert "tesseract --list-langs" in runtime_block
+    assert "test -x /usr/bin/tesseract" in runtime_block
 
 
 def test_attachments_builder_verifies_ocr_python_extras() -> None:

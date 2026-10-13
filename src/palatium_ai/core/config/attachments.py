@@ -185,7 +185,8 @@ class AttachmentConfig(BaseConfig):
         validation_alias="ATTACHMENTS_PDF_MIN_AVG_CHARS_PER_PAGE",
     )
     #: Absolute path to the ``tesseract`` binary when it is not on ``PATH``
-    #: (Windows portable install, custom container layout). Empty → system PATH.
+    #: (Windows portable install, custom container layout). Empty → factory
+    #: resolves PATH / OS defaults; missing binary skips local OCR (Vision escalate).
     tesseract_cmd: str | None = Field(
         default=None,
         validation_alias="ATTACHMENTS_TESSERACT_CMD",

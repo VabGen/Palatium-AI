@@ -107,22 +107,24 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 
 # Lean image = no default (dev) groups. `minio` / `neo4j` are core deps.
-# Optional `attachments` extra = parsing/OCR (pypdf / python-docx / …).
+# Optional extras: `attachments` (OCR/parsing), `graphiti` (MEMORY_BACKEND=graphiti).
+# Install only via ``uv sync --extra …`` — uv venvs do not ship ``pip`` by default
+# (``/app/.venv/bin/pip`` → exit 127 broke WITH_GRAPHITI=1 builds).
 #
 # The import assertions below are not decoration. A failed root install used to be
 # swallowed by a trailing `|| true` — the image built while shipping a venv without
 # `palatium_ai`. Asserting imports converts that into a build failure (035).
 # Pinned by tests/unit/test_dockerfile_build_contract.py.
 RUN --mount=type=cache,target=/tmp/uv_cache \
-    if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
-        uv sync --frozen --no-default-groups --extra attachments \
-        && /app/.venv/bin/python -c "import PIL, pytesseract, fitz"; \
-    else \
-        uv sync --frozen --no-default-groups; \
-    fi \
+    set -- --frozen --no-default-groups \
+    && if [ "${WITH_ATTACHMENTS}" = "1" ]; then set -- "$@" --extra attachments; fi \
+    && if [ "${WITH_GRAPHITI}" = "1" ]; then set -- "$@" --extra graphiti; fi \
+    && uv sync "$@" \
+    && if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
+         /app/.venv/bin/python -c "import PIL, pytesseract, fitz"; \
+       fi \
     && if [ "${WITH_GRAPHITI}" = "1" ]; then \
-         /app/.venv/bin/pip install --no-cache-dir "graphiti-core>=0.11.0,<1.0.0" \
-         && /app/.venv/bin/python -c "import graphiti_core"; \
+         /app/.venv/bin/python -c "import graphiti_core"; \
        fi \
     && /app/.venv/bin/python -c "import palatium_ai; print('palatium_ai ->', palatium_ai.__file__)"
 
@@ -173,7 +175,10 @@ RUN groupadd --system --gid 999 app \
               tesseract-ocr-eng \
               tesseract-ocr-rus \
          && rm -rf /var/lib/apt/lists/* \
-         && apt-get clean; \
+         && apt-get clean \
+         && test -x /usr/bin/tesseract \
+         && tesseract --list-langs 2>&1 | grep -q eng \
+         && tesseract --list-langs 2>&1 | grep -q rus; \
        fi
 
 WORKDIR /app

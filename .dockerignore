@@ -36,9 +36,13 @@ logs
 *.log
 scripts/.dev
 
-# Справочник СЭД / Java — не часть API-образа
-#mcp_servers
-JavaEdms
+# Справочник СЭД / Java / junior-assistant — не часть runtime-образов.
+# mcp_servers/edms/ COPY в MCP-образ тащит весь каталог; без этих строк
+# контекст раздувается до гигабайтов (edms-ai-assistant ~1.4GiB) и bake зависает.
+**/JavaEdms
+**/JavaEdms/**
+**/edms-ai-assistant
+**/edms-ai-assistant/**
 docs
 deploy
 

@@ -28,6 +28,7 @@ from palatium_ai.infrastructure.parsing.image_ocr import GatewayImageOcrParser
 from palatium_ai.infrastructure.parsing.pdf_ocr import TesseractPdfOcrParser
 from palatium_ai.infrastructure.parsing.pdf_vision import GatewayPdfVisionParser
 from palatium_ai.infrastructure.parsing.routed_parser import RoutedDocumentParser
+from palatium_ai.infrastructure.parsing.tesseract_cmd import resolve_tesseract_cmd
 from palatium_ai.infrastructure.parsing.tesseract_ocr import FallbackImageOcrParser, TesseractImageOcrParser
 
 if TYPE_CHECKING:
@@ -60,14 +61,24 @@ def _module_available(module_name: str) -> bool:
 def build_document_parser(settings: Settings) -> DocumentParserPort:
     """Build the composite parser with the limits from configuration."""
     config = settings.attachments
+    tesseract_cmd = _resolve_tesseract_or_log(config)
     parsers, rejected = _collect_leaf_parsers(config)
 
-    image_parser, vision_available = _build_image_ocr_parser(settings, config)
+    image_parser, vision_available = _build_image_ocr_parser(
+        settings,
+        config,
+        tesseract_cmd=tesseract_cmd,
+    )
     if image_parser is not None:
         parsers.append(image_parser)
 
     leaf = CompositeDocumentParser(parsers)
-    pdf_ocr, pdf_vision = _build_pdf_backends(settings, config, model_supports_vision=vision_available)
+    pdf_ocr, pdf_vision = _build_pdf_backends(
+        settings,
+        config,
+        model_supports_vision=vision_available,
+        tesseract_cmd=tesseract_cmd,
+    )
 
     logger.info(
         "DocumentParserPort: local",
@@ -77,7 +88,7 @@ def build_document_parser(settings: Settings) -> DocumentParserPort:
         pdf_vision=pdf_vision is not None,
         vision=vision_available,
         image_ocr_backend=config.image_ocr_backend,
-        tesseract_cmd=bool((config.tesseract_cmd or "").strip()),
+        tesseract_cmd=tesseract_cmd,
     )
     return RoutedDocumentParser(
         inner=leaf,
@@ -90,6 +101,19 @@ def build_document_parser(settings: Settings) -> DocumentParserPort:
         ocr_min_printable_ratio=config.ocr_min_printable_ratio,
         ocr_min_confidence=config.ocr_min_confidence,
     )
+
+
+def _resolve_tesseract_or_log(config: AttachmentConfig) -> str | None:
+    """Resolve binary once; warn when Python OCR extras cannot find a system binary."""
+    cmd = resolve_tesseract_cmd(config.tesseract_cmd)
+    if cmd is not None:
+        return cmd
+    if _module_available("pytesseract"):
+        logger.warning(
+            "tesseract binary not found; local OCR disabled "
+            "(set ATTACHMENTS_TESSERACT_CMD, install tesseract-ocr, or use Docker WITH_ATTACHMENTS=1)",
+        )
+    return None
 
 
 def _collect_leaf_parsers(config: AttachmentConfig) -> tuple[list[DocumentParserPort], list[str]]:
@@ -129,12 +153,12 @@ def _build_pdf_backends(
     config: AttachmentConfig,
     *,
     model_supports_vision: bool,
+    tesseract_cmd: str | None,
 ) -> tuple[DocumentParserPort | None, GatewayPdfVisionParser | None]:
     """Optional PDF OCR / vision backends layered by RoutedDocumentParser."""
     pdf_ocr: DocumentParserPort | None = None
     pdf_vision: GatewayPdfVisionParser | None = None
-    tesseract_cmd = (config.tesseract_cmd or "").strip() or None
-    if _module_available("fitz") and _module_available("pytesseract"):
+    if tesseract_cmd is not None and _module_available("fitz") and _module_available("pytesseract"):
         pdf_ocr = TesseractPdfOcrParser(
             max_chars=config.max_parsed_chars,
             max_pages=min(config.max_parsed_pages, 10),
@@ -157,11 +181,16 @@ def _build_pdf_backends(
     return pdf_ocr, pdf_vision
 
 
-def _optional_tesseract_image(config: AttachmentConfig) -> DocumentParserPort | None:
-    """Local Tesseract image OCR when pytesseract + Pillow are importable."""
+def _optional_tesseract_image(
+    config: AttachmentConfig,
+    *,
+    tesseract_cmd: str | None,
+) -> DocumentParserPort | None:
+    """Local Tesseract image OCR when binary + pytesseract + Pillow are available."""
+    if tesseract_cmd is None:
+        return None
     if not (_module_available("pytesseract") and _module_available("PIL")):
         return None
-    tesseract_cmd = (config.tesseract_cmd or "").strip() or None
     return TesseractImageOcrParser(
         max_chars=config.max_parsed_chars,
         max_bytes=config.image_ocr_max_bytes,
@@ -251,6 +280,8 @@ def _wire_auto_image_ocr(
 def _build_image_ocr_parser(
     settings: Settings,
     config: AttachmentConfig,
+    *,
+    tesseract_cmd: str | None,
 ) -> tuple[DocumentParserPort | None, bool]:
     """Wire progressive image OCR (Tesseract → Vision) per ``image_ocr_backend``.
 
@@ -261,14 +292,16 @@ def _build_image_ocr_parser(
     if config.image_ocr_backend == "disabled":
         return None, False
 
-    tesseract = _optional_tesseract_image(config)
+    tesseract = _optional_tesseract_image(config, tesseract_cmd=tesseract_cmd)
     vision = _optional_vision_image(settings, config)
     model = (config.image_ocr_model or "").strip()
     backend = config.image_ocr_backend
 
     if backend == "tesseract":
         if tesseract is None:
-            logger.warning("ATTACHMENTS_IMAGE_OCR_BACKEND=tesseract but pytesseract/Pillow missing")
+            logger.warning(
+                "ATTACHMENTS_IMAGE_OCR_BACKEND=tesseract but binary/pytesseract/Pillow unavailable",
+            )
         return tesseract, False
     if backend == "gateway":
         return _wire_gateway_image_ocr(tesseract=tesseract, vision=vision, config=config, model=model)
