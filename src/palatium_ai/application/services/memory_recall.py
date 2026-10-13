@@ -36,6 +36,9 @@ _DEFAULT_MIN_CONFIDENCE = 0.7
 _GRAPH_OVERFETCH = 3
 # Preferences shape *how* to answer regardless of the ask; facts must match the ask.
 _QUERY_INDEPENDENT_KINDS = frozenset({"preference"})
+# Hot-path Select: user_namespace is profile prefs only (060). Cross-thread
+# fact/episode/incident bleed (P0-B / A.2d) must not enter memory_hits.
+_USER_NS_HOT_PATH_KINDS = frozenset({"preference"})
 
 
 async def recall_for_thread(
@@ -173,6 +176,10 @@ async def _select_durable_hits(
     bump = getattr(memory_port, "bump_access", None)
     ranked = sorted(raw, key=lambda pair: _item_score(pair[1]), reverse=True)
     for idx, (namespace, item) in enumerate(ranked):
+        if _is_user_namespace(namespace):
+            kind = str(item.get("kind", "fact")).strip().lower() or "fact"
+            if kind not in _USER_NS_HOT_PATH_KINDS:
+                continue
         hit = _durable_hit_from_item(
             item,
             idx=idx,
@@ -190,6 +197,10 @@ async def _select_durable_hits(
         if len(pinned) + len(durable) >= limit:
             break
     return durable
+
+
+def _is_user_namespace(namespace: tuple[str, ...]) -> bool:
+    return bool(namespace) and namespace[0] == "user"
 
 
 async def _select_graph_hits(

@@ -151,3 +151,36 @@ async def test_recall_merges_org_namespace_entities() -> None:
     )
     assert with_org.hits
     assert "ivanova" in with_org.hits[0].text.lower() or "acme" in with_org.hits[0].text.lower()
+
+
+@pytest.mark.asyncio()
+async def test_recall_skips_user_namespace_facts_on_hot_path() -> None:
+    """P0-B: user-ns attachment-like facts must not bleed into another thread's hits."""
+    port = InMemoryMemoryPort()
+    marker = "P0D_USER_NS_FOREIGN_ATTACHMENT"
+    await port.put(
+        namespace=user_namespace("user-1"),
+        key="foreign-file",
+        value={
+            "text": f"{marker} past session asked about unrelated.pdf id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "kind": "fact",
+            "confidence": 0.95,
+        },
+    )
+    await port.put(
+        namespace=user_namespace("user-1"),
+        key="pref",
+        value={"text": "User prefers concise answers", "kind": "preference", "confidence": 0.95},
+    )
+    bundle = await recall_for_thread(
+        port,
+        thread_id="thread-other",
+        user_id="user-1",
+        query="unrelated.pdf concise answers preference",
+        limit=4,
+    )
+    texts = " ".join(hit.text for hit in bundle.hits)
+    assert marker not in texts
+    assert "unrelated.pdf" not in texts
+    assert any(hit.kind == "preference" for hit in bundle.hits)
+    assert "concise" in texts.lower()
