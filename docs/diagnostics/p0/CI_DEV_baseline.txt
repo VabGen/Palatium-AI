@@ -1,0 +1,66 @@
+........................................................................ [  4%]
+........................................................................ [  8%]
+........................................................................ [ 12%]
+.....................................F.F................................ [ 16%]
+....................................................................s... [ 20%]
+........................................................................ [ 24%]
+........................................................................ [ 29%]
+.....................................................................FFF [ 33%]
+FFFF..F................................................................. [ 37%]
+.....................F.FFFF.FFF.........FFFFF........................... [ 41%]
+.....................F............FFF................................... [ 45%]
+......F................................................................. [ 49%]
+........................................................................ [ 54%]
+........................................................................ [ 58%]
+........................................................................ [ 62%]
+...............................................................sssssssss [ 66%]
+........................................................................ [ 70%]
+........................................................................ [ 74%]
+........................................................................ [ 78%]
+........................................................................ [ 83%]
+........................................................................ [ 87%]
+........................................................................ [ 91%]
+................................FFF..................................... [ 95%]
+................................................................sF.F.sss [ 99%]
+.....                                                                    [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\unit\test_blob_store_adapters.py:94: minio installed Ч the missing-package path is not reachable
+SKIPPED [9] tests\unit\test_mcp_rbac_guard.py:54: mcp-rbac-guard hook tests require bash + jq (hook is fail-closed without jq)
+SKIPPED [1] tests\integration\test_knowledge_postgres_search.py:16: DATABASE_URL not set Ч skip Postgres integration
+SKIPPED [1] tests\integration\test_memory_postgres_search.py:16: DATABASE_URL not set Ч skip Postgres integration
+SKIPPED [1] tests\integration\test_neo4j_graph_query.py:13: GRAPHITI_NEO4J_URI/PASSWORD not set Ч skip Neo4j integration
+SKIPPED [1] tests\integration\test_neo4j_graph_query.py:36: GRAPHITI_NEO4J_URI/PASSWORD not set Ч skip Neo4j integration
+FAILED tests/unit/test_attachment_turn_injection.py::test_fenced_attachment_reaches_researcher_and_formatter_payloads
+FAILED tests/unit/test_attachment_turn_injection.py::test_turn_without_attachments_sends_an_empty_context_slot
+FAILED tests/unit/test_database_resilience.py::test_retry_helper_repeats_transient_failure_then_returns
+FAILED tests/unit/test_database_resilience.py::test_retry_helper_does_not_retry_permanent_failure
+FAILED tests/unit/test_database_resilience.py::test_retry_helper_reraises_last_failure_when_budget_exhausted
+FAILED tests/unit/test_database_resilience.py::test_session_retries_checkout_then_enters
+FAILED tests/unit/test_database_resilience.py::test_session_maps_exhausted_budget_to_typed_unavailable
+FAILED tests/unit/test_database_resilience.py::test_session_does_not_mask_permanent_failure_as_unavailable
+FAILED tests/unit/test_database_resilience.py::test_pool_starvation_becomes_unavailable_without_retry
+FAILED tests/unit/test_database_resilience.py::test_session_records_retry_metric
+FAILED tests/unit/test_env_template_parity.py::test_every_template_declares_every_setting[.env.cloud.example]
+FAILED tests/unit/test_env_template_parity.py::test_every_template_declares_every_setting[.env.local.example]
+FAILED tests/unit/test_env_template_parity.py::test_every_template_declares_every_setting[.env.prod.example]
+FAILED tests/unit/test_env_template_parity.py::test_every_template_declares_every_setting[.env.staging.example]
+FAILED tests/unit/test_env_template_parity.py::test_every_template_declares_the_full_canon[.env.cloud.example]
+FAILED tests/unit/test_env_template_parity.py::test_every_template_declares_the_full_canon[.env.local.example]
+FAILED tests/unit/test_env_template_parity.py::test_every_template_declares_the_full_canon[.env.prod.example]
+FAILED tests/unit/test_env_template_parity.py::test_every_template_declares_the_full_canon[.env.staging.example]
+FAILED tests/unit/test_env_template_parity.py::test_working_profiles_match_their_template
+FAILED tests/unit/test_env_template_parity.py::test_working_profile_declares_every_setting[.env]
+FAILED tests/unit/test_env_template_parity.py::test_working_profile_declares_every_setting[.env.dev]
+FAILED tests/unit/test_env_template_parity.py::test_working_profile_declares_every_setting[.env.staging]
+FAILED tests/unit/test_env_template_parity.py::test_working_profile_declares_every_setting[.env.prod]
+FAILED tests/unit/test_formatter_action_contract.py::test_formatter_prompt_keeps_behavior_and_drops_format_rules
+FAILED tests/unit/test_formatter_debug_stream.py::test_formatter_one_shot_text_without_bridge
+FAILED tests/unit/test_formatter_debug_stream.py::test_formatter_streams_text_delta_and_dual_answer_delta
+FAILED tests/unit/test_formatter_debug_stream.py::test_formatter_replace_once_after_worker_draft
+FAILED tests/unit/test_frontend_widget_delivery.py::test_widget_build_stays_single_file_with_hashed_name
+FAILED tests/unit/test_structured_output.py::test_formatter_complete_uses_text_format
+FAILED tests/unit/test_structured_output.py::test_formatter_repair_stays_on_text
+FAILED tests/unit/test_structured_output.py::test_formatter_does_not_fall_back_on_timeout
+FAILED tests/integration/test_memory_consolidate_hitl_e2e.py::test_memory_extract_approve_runs_worker_then_search
+FAILED tests/integration/test_memory_hitl_e2e.py::test_memory_save_approve_search_then_forget_approve
+33 failed, 1686 passed, 14 skipped in 445.68s (0:07:25)

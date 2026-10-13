@@ -1,9 +1,9 @@
 # Evolution Palatium AI → Big Tech 2026
 
 Обновлено: 2026-10-13. Автор входа: VabGen.
-Статус: **Phase 1 + 4 + 3 + 2 done on master**; **Pre-Phase 5 hardening in progress**
+Статус: **Phase 1 + 4 + 3 + 2 done**; **Pre-Phase 5 hardening in progress on `dev`**
 (норматив — 000/020/030/040/060/065/070/075/080/084; при противоречии **правила побеждают**).
-Следующие: Pre-Phase 5 SRP → Phase 5+.
+Следующие: Pre-Phase 5 SRP → Phase 5+; promotion `dev → master` отдельным шагом.
 
 Ветка Phase 1: `big-tech-evolution/phase-1` (merged).
 PR Phase 1: план + тонкое правило + полная реализация Hybrid Streaming Markdown.
@@ -11,12 +11,17 @@ Phase 4: Neo4j schema bootstrap + dynamic LLM timeouts + DTZ audit (уже UTC).
 Phase 3: LiteLLM tier registration + CostTracker + gen_ai.* spans.
 Phase 2: attachment overlap + Formatter 8s fallback; parallel workers/L1 cache уже были.
 
-**Pre-Phase 5 (не Phase-N):** SRP split `researcher` (~641 LOC) и `formatter` (~452 LOC)
+**P0 attachment isolation (2026-10-13, на `dev`):** P0-A `get_many(thread_id)` +
+P0-B user_ns kind-gate + A.2d + C.2 smoke (`scripts/smoke_p0_attachment.py`) —
+закрыты. SoT ветка — `dev` (uv); см. `.cursor/rules/branching.mdc`.
+
+**Pre-Phase 5 (не Phase-N):** SRP split `researcher` / `formatter`
 внутри существующих пакетов; граф и контракты `BaseAgent`/registry не меняются.
 Branch/PR tag: `big-tech-evolution/pre-phase-5-srp`. Phase 5 (Presidio / constitutional
 critic / red-team) стартует только после зелёного SRP.
 
-**Tooling:** poetry → uv; lock = `uv.lock` (025).
+**Tooling:** poetry → uv на `dev` (`uv.lock`, 025); `master` может ещё держать Poetry
+до promotion.
 
 ---
 
