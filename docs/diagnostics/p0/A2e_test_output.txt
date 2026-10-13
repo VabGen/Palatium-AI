@@ -1,0 +1,293 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.0, pytest-9.1.1, pluggy-1.6.0 -- D:\project\palatium-ai\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: D:\project\palatium-ai
+configfile: pyproject.toml
+plugins: anyio-4.15.1, langsmith-0.14.8, platformdirs-4.13.0, asyncio-1.4.0, cov-7.1.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 3 items
+
+tests/integration/test_p0_dialog_prior_attachment.py::test_p0e_h5a_dialog_write_and_h6_pending_isolation PASSED [ 33%]
+tests/integration/test_p0_dialog_prior_attachment.py::test_p0e_h5b_polluted_dialog_prior_must_not_fence_foreign FAILED [ 66%]
+tests/integration/test_p0_dialog_prior_attachment.py::test_p0e_scratchpad_uuid_does_not_become_attachment_refs PASSED [100%]
+
+================================== FAILURES ===================================
+__________ test_p0e_h5b_polluted_dialog_prior_must_not_fence_foreign __________
+tests\integration\test_p0_dialog_prior_attachment.py:450: in test_p0e_h5b_polluted_dialog_prior_must_not_fence_foreign
+    assert _A2_NAME not in ctx, (
+E   AssertionError: H5b CONFIRMED: polluted dialog prior retargeted fence to A2; untrusted_context='<<<UNTRUSTED_TOOL_OUTPUT source=attachment:23595c0e-f62a-46da-861f-a7d87b29df3d:contract.pdf>>>\nMARKER_A2_CONTRACT_BODY\n<<<END_UNTRUSTED_TOOL_OUTPUT>>>' refs=('contract.pdf',)
+E   assert 'contract.pdf' not in '<<<UNTRUSTE...OL_OUTPUT>>>'
+E     
+E     'contract.pdf' is contained here:
+E       <<<UNTRUSTED_TOOL_OUTPUT source=attachment:23595c0e-f62a-46da-861f-a7d87b29df3d:contract.pdf>>>
+E     ?                                                                                 ++++++++++++
+E       MARKER_A2_CONTRACT_BODY
+E       <<<END_UNTRUSTED_TOOL_OUTPUT>>>
+---------------------------- Captured stdout call -----------------------------
+2026-10-13 18:22:48 [debug    ] trace.start                    func=init_upload run_name=attachment.init_upload
+2026-10-13 18:22:48 [info     ] attachment.init                attachment_id=ed0cc645-de79-47f6-8f36-1607563e3957 mode=attach thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=init_upload run_name=attachment.init_upload
+2026-10-13 18:22:48 [debug    ] trace.start                    func=get run_name=attachment.get
+2026-10-13 18:22:48 [debug    ] trace.end                      func=get run_name=attachment.get
+2026-10-13 18:22:48 [debug    ] trace.start                    func=complete_upload run_name=attachment.complete_upload
+2026-10-13 18:22:48 [info     ] attachment.pipeline_persist    attachment_id=ed0cc645-de79-47f6-8f36-1607563e3957 audit_event=attachment_completed page_count=1 status=ready
+2026-10-13 18:22:48 [debug    ] trace.end                      func=complete_upload run_name=attachment.complete_upload
+2026-10-13 18:22:48 [debug    ] trace.start                    func=init_upload run_name=attachment.init_upload
+2026-10-13 18:22:48 [info     ] attachment.init                attachment_id=23595c0e-f62a-46da-861f-a7d87b29df3d mode=attach thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.end                      func=init_upload run_name=attachment.init_upload
+2026-10-13 18:22:48 [debug    ] trace.start                    func=get run_name=attachment.get
+2026-10-13 18:22:48 [debug    ] trace.end                      func=get run_name=attachment.get
+2026-10-13 18:22:48 [debug    ] trace.start                    func=complete_upload run_name=attachment.complete_upload
+2026-10-13 18:22:48 [info     ] attachment.pipeline_persist    attachment_id=23595c0e-f62a-46da-861f-a7d87b29df3d audit_event=attachment_completed page_count=1 status=ready
+2026-10-13 18:22:48 [debug    ] trace.end                      func=complete_upload run_name=attachment.complete_upload
+2026-10-13 18:22:48 [debug    ] trace.start                    func=process run_name=intent_service.process
+2026-10-13 18:22:48 [info     ] agent.turn.start               task_id=p0e-h5b-t1-1 text_chars=6 thread_id=thread-p0e-T1 user_id=user-p0-dialog
+2026-10-13 18:22:48 [debug    ] trace.start                    func=build_turn_context run_name=attachment.build_turn_context
+2026-10-13 18:22:48 [debug    ] trace.end                      func=build_turn_context run_name=attachment.build_turn_context
+2026-10-13 18:22:48 [debug    ] trace.start                    func=intent_classifier_node run_name=graph.node.intent_classifier
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=intent_classifier agent_role=intent_classifier node=intent_classifier task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=intent_classifier.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=intent_classifier agent_role=intent_classifier attempt=1 max_retries=3 model=None response_format=json_object
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=intent_classifier.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=intent_classifier agent_role=intent_classifier confidence=0.95 duration_ms=2 node=intent_classifier requires_review=False status=success task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=intent_classifier_node run_name=graph.node.intent_classifier
+2026-10-13 18:22:48 [debug    ] trace.start                    func=continuation_node run_name=graph.node.context_enricher.continuation
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=context_enricher_continuation agent_role=context_enricher node=context_enricher_continuation task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=context_enricher.continuation.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=context_enricher.continuation.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=context_enricher_continuation agent_role=context_enricher confidence=1.0 duration_ms=2 node=context_enricher_continuation requires_review=False status=success task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=continuation_node run_name=graph.node.context_enricher.continuation
+2026-10-13 18:22:48 [debug    ] trace.start                    func=supervisor_node run_name=graph.node.supervisor
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=supervisor agent_role=supervisor node=supervisor task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=supervisor.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=supervisor.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=supervisor agent_role=supervisor confidence=0.95 duration_ms=1 node=supervisor requires_review=False status=success task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=supervisor_node run_name=graph.node.supervisor
+2026-10-13 18:22:48 [debug    ] trace.start                    func=weaving_node run_name=graph.node.context_enricher.weaving
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=context_enricher_weaving agent_role=context_enricher node=context_enricher_weaving task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=context_enricher.weaving.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=context_enricher.weaving.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=context_enricher_weaving agent_role=context_enricher confidence=1.0 duration_ms=1 node=context_enricher_weaving requires_review=False status=success task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=weaving_node run_name=graph.node.context_enricher.weaving
+2026-10-13 18:22:48 [debug    ] trace.start                    func=researcher_node run_name=graph.node.researcher
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=researcher agent_role=researcher node=researcher task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=researcher.run
+2026-10-13 18:22:48 [debug    ] researcher MCP path skipped by policy reason=requires_mcp_false strategy=reason_only task_id=db83ddea-12b5-514b-9b48-f85487a7c10a
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=researcher agent_role=researcher attempt=1 max_retries=3 model=None response_format=json_object
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=researcher.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=researcher agent_role=researcher confidence=0.9 duration_ms=3 node=researcher requires_review=False status=success task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=researcher_node run_name=graph.node.researcher
+2026-10-13 18:22:48 [debug    ] trace.start                    func=critic_node run_name=graph.node.critic
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=critic agent_role=critic node=critic task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=critic.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=critic agent_role=critic attempt=1 max_retries=3 model=None response_format=json_object
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=critic.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=critic agent_role=critic confidence=0.9 duration_ms=2 node=critic requires_review=False status=success task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=critic_node run_name=graph.node.critic
+2026-10-13 18:22:48 [debug    ] trace.start                    func=formatter_node run_name=graph.node.formatter
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=formatter agent_role=formatter node=formatter task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=formatter.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=formatter agent_role=formatter attempt=1 max_retries=3 model=None response_format=text
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [info     ] formatter.llm_path             final_text_chars=19 formatter_mode=llm_markdown max_tokens=2048 style_hint=plain_text task_id=db83ddea-12b5-514b-9b48-f85487a7c10a user_payload_chars=301
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=formatter.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=formatter agent_role=formatter confidence=0.95 duration_ms=3 node=formatter requires_review=False status=success task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=formatter_node run_name=graph.node.formatter
+2026-10-13 18:22:48 [info     ] agent.turn.hops                cost_usd_total=0 hop_budget_exceeded=False hop_budget_ms=15000 hop_count=7 hop_ms={'intent_classifier': 2, 'context_enricher_continuation': 2, 'supervisor': 1, 'context_enricher_weaving': 1, 'researcher': 3, 'critic': 2, 'formatter': 3} hop_slowest_ms=3 hop_slowest_node=researcher hop_total_ms=14 llm_calls=0 task_id=p0e-h5b-t1-1 thread_id=thread-p0e-T1 token_by_agent={} token_completion_total=0 token_prompt_total=0 token_total=0 trace_id=p0e-h5b-t1-1
+2026-10-13 18:22:48 [info     ] hitl.interaction_plan          choice_actions=0 force_structural=False invalid=False menu_shaped=False mint_quality_review=False promoted_from=none reason=attachment_grounds_ask required_choice=False requires_user_choice=False selected_strategy=reason_only strip_exclusive_menu=False task_id=p0e-h5b-t1-1 task_kind=knowledge_request thread_id=thread-p0e-T1 underspecification_kind=none
+2026-10-13 18:22:48 [info     ] agent.turn.reasoning           attachment_refs=['otziv_SED_NCPI_RB.pdf'] continuation_confidence=1.0 continuation_kind=new_topic formatter_status=success has_prior_context=False hitl_cards=[] intent_confidence=0.95 intent_requires_user_choice=False intent_status=success intent_task_kind=knowledge_request intent_underspecification_kind=none memory_hits=[] refers_to_prior=False requires_user_choice=False routing_reasoning='continuity=new_topic; trust intent: p0e knowledge' selected_strategy=reason_only slot_filled_by_prior=False suppress_intent_hitl=False task_kind=knowledge_request thread_id=thread-p0e-T1 trust_prior_for_workers=False turn_id=p0e-h5b-t1-1 underspecification_kind=none
+2026-10-13 18:22:48 [debug    ] trace.end                      func=process run_name=intent_service.process
+2026-10-13 18:22:48 [debug    ] trace.start                    func=process run_name=intent_service.process
+2026-10-13 18:22:48 [info     ] agent.turn.start               task_id=p0e-h5b-t2-1 text_chars=6 thread_id=thread-p0e-T2 user_id=user-p0-dialog
+2026-10-13 18:22:48 [debug    ] trace.start                    func=build_turn_context run_name=attachment.build_turn_context
+2026-10-13 18:22:48 [debug    ] trace.end                      func=build_turn_context run_name=attachment.build_turn_context
+2026-10-13 18:22:48 [debug    ] trace.start                    func=intent_classifier_node run_name=graph.node.intent_classifier
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=intent_classifier agent_role=intent_classifier node=intent_classifier task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=intent_classifier.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=intent_classifier agent_role=intent_classifier attempt=1 max_retries=3 model=None response_format=json_object
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=intent_classifier.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=intent_classifier agent_role=intent_classifier confidence=0.95 duration_ms=1 node=intent_classifier requires_review=False status=success task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.end                      func=intent_classifier_node run_name=graph.node.intent_classifier
+2026-10-13 18:22:48 [debug    ] trace.start                    func=continuation_node run_name=graph.node.context_enricher.continuation
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=context_enricher_continuation agent_role=context_enricher node=context_enricher_continuation task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=context_enricher.continuation.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=context_enricher.continuation.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=context_enricher_continuation agent_role=context_enricher confidence=1.0 duration_ms=1 node=context_enricher_continuation requires_review=False status=success task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.end                      func=continuation_node run_name=graph.node.context_enricher.continuation
+2026-10-13 18:22:48 [debug    ] trace.start                    func=supervisor_node run_name=graph.node.supervisor
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=supervisor agent_role=supervisor node=supervisor task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=supervisor.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=supervisor.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=supervisor agent_role=supervisor confidence=0.95 duration_ms=1 node=supervisor requires_review=False status=success task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.end                      func=supervisor_node run_name=graph.node.supervisor
+2026-10-13 18:22:48 [debug    ] trace.start                    func=weaving_node run_name=graph.node.context_enricher.weaving
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=context_enricher_weaving agent_role=context_enricher node=context_enricher_weaving task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=context_enricher.weaving.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=context_enricher.weaving.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=context_enricher_weaving agent_role=context_enricher confidence=1.0 duration_ms=1 node=context_enricher_weaving requires_review=False status=success task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.end                      func=weaving_node run_name=graph.node.context_enricher.weaving
+2026-10-13 18:22:48 [debug    ] trace.start                    func=researcher_node run_name=graph.node.researcher
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=researcher agent_role=researcher node=researcher task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=researcher.run
+2026-10-13 18:22:48 [debug    ] researcher MCP path skipped by policy reason=requires_mcp_false strategy=reason_only task_id=8cfea153-b757-5ba5-bfff-528459943012
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=researcher agent_role=researcher attempt=1 max_retries=3 model=None response_format=json_object
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=researcher.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=researcher agent_role=researcher confidence=0.9 duration_ms=2 node=researcher requires_review=False status=success task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.end                      func=researcher_node run_name=graph.node.researcher
+2026-10-13 18:22:48 [debug    ] trace.start                    func=critic_node run_name=graph.node.critic
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=critic agent_role=critic node=critic task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=critic.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=critic agent_role=critic attempt=1 max_retries=3 model=None response_format=json_object
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=critic.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=critic agent_role=critic confidence=0.9 duration_ms=2 node=critic requires_review=False status=success task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.end                      func=critic_node run_name=graph.node.critic
+2026-10-13 18:22:48 [debug    ] trace.start                    func=formatter_node run_name=graph.node.formatter
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=formatter agent_role=formatter node=formatter task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=formatter.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=formatter agent_role=formatter attempt=1 max_retries=3 model=None response_format=text
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [info     ] formatter.llm_path             final_text_chars=19 formatter_mode=llm_markdown max_tokens=2048 style_hint=plain_text task_id=8cfea153-b757-5ba5-bfff-528459943012 user_payload_chars=301
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=formatter.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=formatter agent_role=formatter confidence=0.95 duration_ms=4 node=formatter requires_review=False status=success task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2
+2026-10-13 18:22:48 [debug    ] trace.end                      func=formatter_node run_name=graph.node.formatter
+2026-10-13 18:22:48 [info     ] agent.turn.hops                cost_usd_total=0 hop_budget_exceeded=False hop_budget_ms=15000 hop_count=7 hop_ms={'intent_classifier': 1, 'context_enricher_continuation': 1, 'supervisor': 1, 'context_enricher_weaving': 1, 'researcher': 2, 'critic': 2, 'formatter': 4} hop_slowest_ms=4 hop_slowest_node=formatter hop_total_ms=12 llm_calls=0 task_id=p0e-h5b-t2-1 thread_id=thread-p0e-T2 token_by_agent={} token_completion_total=0 token_prompt_total=0 token_total=0 trace_id=p0e-h5b-t2-1
+2026-10-13 18:22:48 [info     ] hitl.interaction_plan          choice_actions=0 force_structural=False invalid=False menu_shaped=False mint_quality_review=False promoted_from=none reason=attachment_grounds_ask required_choice=False requires_user_choice=False selected_strategy=reason_only strip_exclusive_menu=False task_id=p0e-h5b-t2-1 task_kind=knowledge_request thread_id=thread-p0e-T2 underspecification_kind=none
+2026-10-13 18:22:48 [info     ] agent.turn.reasoning           attachment_refs=['contract.pdf'] continuation_confidence=1.0 continuation_kind=new_topic formatter_status=success has_prior_context=False hitl_cards=[] intent_confidence=0.95 intent_requires_user_choice=False intent_status=success intent_task_kind=knowledge_request intent_underspecification_kind=none memory_hits=[] refers_to_prior=False requires_user_choice=False routing_reasoning='continuity=new_topic; trust intent: p0e knowledge' selected_strategy=reason_only slot_filled_by_prior=False suppress_intent_hitl=False task_kind=knowledge_request thread_id=thread-p0e-T2 trust_prior_for_workers=False turn_id=p0e-h5b-t2-1 underspecification_kind=none
+2026-10-13 18:22:48 [debug    ] trace.end                      func=process run_name=intent_service.process
+2026-10-13 18:22:48 [debug    ] trace.start                    func=process run_name=intent_service.process
+2026-10-13 18:22:48 [info     ] agent.turn.start               task_id=p0e-h5b-t1-2 text_chars=25 thread_id=thread-p0e-T1 user_id=user-p0-dialog
+2026-10-13 18:22:48 [debug    ] trace.start                    func=intent_classifier_node run_name=graph.node.intent_classifier
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=intent_classifier agent_role=intent_classifier node=intent_classifier task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=intent_classifier.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=intent_classifier agent_role=intent_classifier attempt=1 max_retries=3 model=None response_format=json_object
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=intent_classifier.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=intent_classifier agent_role=intent_classifier confidence=0.92 duration_ms=2 node=intent_classifier requires_review=False status=success task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=intent_classifier_node run_name=graph.node.intent_classifier
+2026-10-13 18:22:48 [debug    ] trace.start                    func=continuation_node run_name=graph.node.context_enricher.continuation
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=context_enricher_continuation agent_role=context_enricher node=context_enricher_continuation task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [info     ] memory_recall.skipped          reason=skip:response_formatting
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=context_enricher.continuation.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=context_enricher_continuation agent_role=context_enricher attempt=1 max_retries=2 model=None response_format=json_object
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=context_enricher.continuation.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=build_turn_context run_name=attachment.build_turn_context
+2026-10-13 18:22:48 [debug    ] trace.end                      func=build_turn_context run_name=attachment.build_turn_context
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=context_enricher_continuation agent_role=context_enricher confidence=0.93 duration_ms=3 node=context_enricher_continuation requires_review=False status=success task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=continuation_node run_name=graph.node.context_enricher.continuation
+2026-10-13 18:22:48 [debug    ] trace.start                    func=supervisor_node run_name=graph.node.supervisor
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=supervisor agent_role=supervisor node=supervisor task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=supervisor.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=supervisor.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=supervisor agent_role=supervisor confidence=0.92 duration_ms=1 node=supervisor requires_review=False status=success task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=supervisor_node run_name=graph.node.supervisor
+2026-10-13 18:22:48 [debug    ] trace.start                    func=weaving_node run_name=graph.node.context_enricher.weaving
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=context_enricher_weaving agent_role=context_enricher node=context_enricher_weaving task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=context_enricher.weaving.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=context_enricher.weaving.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=context_enricher_weaving agent_role=context_enricher confidence=1.0 duration_ms=1 node=context_enricher_weaving requires_review=False status=success task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=weaving_node run_name=graph.node.context_enricher.weaving
+2026-10-13 18:22:48 [debug    ] trace.start                    func=formatter_node run_name=graph.node.formatter
+2026-10-13 18:22:48 [debug    ] agent.node.start               agent=formatter agent_role=formatter node=formatter task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.start                    func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] trace.start                    func=run run_name=formatter.run
+2026-10-13 18:22:48 [debug    ] trace.start                    func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [debug    ] harness.llm_call               agent=formatter agent_role=formatter attempt=1 max_retries=3 model=None response_format=text
+2026-10-13 18:22:48 [debug    ] trace.end                      func=call_llm run_name=harness.call_llm
+2026-10-13 18:22:48 [info     ] formatter.llm_path             final_text_chars=18 formatter_mode=llm_markdown max_tokens=2048 style_hint=restructure_sections_icons task_id=e09f3eca-6559-55e0-ba1b-d51b10b8961e user_payload_chars=318
+2026-10-13 18:22:48 [debug    ] trace.end                      func=run run_name=formatter.run
+2026-10-13 18:22:48 [debug    ] trace.end                      func=execute_with_guardrails run_name=harness.execute_with_guardrails
+2026-10-13 18:22:48 [debug    ] agent.node.end                 agent=formatter agent_role=formatter confidence=0.95 duration_ms=3 node=formatter requires_review=False status=success task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1
+2026-10-13 18:22:48 [debug    ] trace.end                      func=formatter_node run_name=graph.node.formatter
+2026-10-13 18:22:48 [info     ] agent.turn.hops                cost_usd_total=0 hop_budget_exceeded=False hop_budget_ms=9000 hop_count=5 hop_ms={'intent_classifier': 2, 'context_enricher_continuation': 3, 'supervisor': 1, 'context_enricher_weaving': 1, 'formatter': 3} hop_slowest_ms=3 hop_slowest_node=context_enricher_continuation hop_total_ms=10 llm_calls=0 task_id=p0e-h5b-t1-2 thread_id=thread-p0e-T1 token_by_agent={} token_completion_total=0 token_prompt_total=0 token_total=0 trace_id=p0e-h5b-t1-2
+2026-10-13 18:22:48 [info     ] hitl.interaction_plan          choice_actions=0 force_structural=False invalid=False menu_shaped=False mint_quality_review=False promoted_from=none reason=attachment_grounds_ask required_choice=False requires_user_choice=False selected_strategy=format_only strip_exclusive_menu=False task_id=p0e-h5b-t1-2 task_kind=response_formatting thread_id=thread-p0e-T1 underspecification_kind=none
+2026-10-13 18:22:48 [info     ] agent.turn.reasoning           attachment_refs=['contract.pdf'] continuation_confidence=0.93 continuation_kind=format formatter_status=success has_prior_context=True hitl_cards=[] intent_confidence=0.92 intent_requires_user_choice=False intent_status=success intent_task_kind=response_formatting intent_underspecification_kind=none memory_hits=[] refers_to_prior=True requires_user_choice=False routing_reasoning='continuity=format; prior=assistant; intent was response_formatting' selected_strategy=format_only slot_filled_by_prior=False suppress_intent_hitl=True task_kind=response_formatting thread_id=thread-p0e-T1 trust_prior_for_workers=True turn_id=p0e-h5b-t1-2 underspecification_kind=none
+2026-10-13 18:22:48 [debug    ] trace.end                      func=process run_name=intent_service.process
+=========================== short test summary info ===========================
+FAILED tests/integration/test_p0_dialog_prior_attachment.py::test_p0e_h5b_polluted_dialog_prior_must_not_fence_foreign
+======================== 1 failed, 2 passed in 24.10s =========================
+
+================================================================================
+DIAGNOSTIC VERDICT (A.2e) — 2026-10-13
+================================================================================
+RESULT: 1 failed, 2 passed (H5b FAIL is the decisive signal)
+
+| Test | Result | Meaning |
+|---|---|---|
+| H5a dialog write + H6 pending | PASSED | T1 payload=[A1], T2=[A2]; foreign pending does NOT select fence |
+| H5b polluted dialog prior | FAILED | dialog payload A2 on T1 → fence retargeted to contract.pdf |
+| scratchpad → attachment_refs | PASSED | T1 scratchpad with A2 uuid; fence/refs stay A1-only |
+
+Split outcome:
+1. H5a REFUTED as write bug — normal seed does not cross-write UUIDs between threads.
+2. H5b CONFIRMED as live attack path:
+   dialog.payload.attachment_ids → StickinessPolicy.attachment_ids_for_prior
+   → rehydrate → get_many(ids, user_id) [no thread filter]
+   → untrusted_context = foreign file; attachment_refs=['contract.pdf']
+3. H6 REFUTED — pending_attachment_ids is not the fence selector (SB1/SB2 dialogue-bound).
+4. «attachment_refs from scratchpad» REFUTED — citation_refs only from fence (A.1 holds).
+   Closing P0-B alone will NOT leave attachment_refs polluted via scratchpad.
+
+ONE FIX vs TWO PRs (decisive):
+- P0-A fence immunity: need get_many(+rehydrate) thread-scope OR validate dialog ids
+  belong to thread — otherwise any wrong UUID in dialog prior retargets the fence (H5b).
+- P0-B memory_hints / Contextualizer noise: user_namespace recall scope (A.2d) — separate.
+- Closing ONLY P0-B leaves H5b open. Closing ONLY get_many leaves A.2d bleed.
+→ TWO PRs if both symptoms matter. get_many is second-line for P0-A; recall is P0-B.
+
+Prod implication:
+- If agent.turn.reasoning.attachment_refs shows the wrong filename → fence path (H5b class).
+- If attachment_refs correct but text/reasoning mentions foreign files → memory bleed (A.2d).
+- Next: A.4_root_cause.md with this matrix; then C.1 split commits.

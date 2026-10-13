@@ -709,13 +709,14 @@ class AttachmentService:
         *,
         attachment_ids: Sequence[UUID],
         user_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
     ) -> AttachmentTurnContext:
         """Resolve the fenced blocks that may enter this dialog turn.
 
         This is the *only* accessor that returns attachment text to the dialog
         path. It fails closed: a quarantined, expired or re-flagged attachment
-        aborts the turn instead of silently contributing nothing.
+        aborts the turn instead of silently contributing nothing. Cross-thread
+        ids for the same user do not resolve (``get_many`` + ``thread_id``, P0-A).
         """
         if not attachment_ids:
             return AttachmentTurnContext()
@@ -723,7 +724,11 @@ class AttachmentService:
             msg = f"too many attachments for one turn ({len(attachment_ids)})"
             raise ValueError(msg)
 
-        found = await self._repository.get_many(list(attachment_ids), user_id=user_id)
+        found = await self._repository.get_many(
+            list(attachment_ids),
+            user_id=user_id,
+            thread_id=thread_id,
+        )
         by_id = {item.id: item for item in found}
         blocks: list[AttachmentContextBlock] = []
         for attachment_id in attachment_ids:

@@ -47,6 +47,7 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.attachments.errors import AttachmentNotFoundError
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.memory.turns import attachment_ids_payload
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
@@ -235,11 +236,22 @@ class IntentService:
         """Callbacks for continuation_node rehydrate / clear sticky (SB2)."""
 
         async def _rehydrate(ids: Sequence[UUID]) -> str:
-            return await self._turn_untrusted_context(
-                list(ids),
-                thread_id=thread_id,
-                user_id=user_id,
-            )
+            # P0-A: cross-thread UUID in dialog prior must not fence foreign text.
+            # Entry-path explicit ids still raise AttachmentNotFoundError to the API.
+            try:
+                return await self._turn_untrusted_context(
+                    list(ids),
+                    thread_id=thread_id,
+                    user_id=user_id,
+                )
+            except AttachmentNotFoundError:
+                logger.warning(
+                    "attachment.rehydrate_skipped",
+                    thread_id=thread_id,
+                    reason="not_in_thread_or_missing",
+                    attachment_count=len(ids),
+                )
+                return ""
 
         async def _clear() -> None:
             await self._clear_pending_attachments(thread_id=thread_id)

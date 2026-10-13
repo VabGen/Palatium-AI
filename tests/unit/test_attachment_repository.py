@@ -188,7 +188,7 @@ async def test_get_many_short_circuits_on_empty_ids(rls_calls: list[tuple[object
     factory = _SessionFactory()
     repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
 
-    assert await repository.get_many([], user_id=_USER) == []
+    assert await repository.get_many([], user_id=_USER, thread_id="thread-1") == []
     assert factory.opened == 0
     assert rls_calls == []
 
@@ -197,11 +197,17 @@ async def test_get_many_binds_rls_scope_when_ids_are_present(rls_calls: list[tup
     factory = _SessionFactory(_Result(many=[_orm(), _orm()]))
     repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
 
-    found = await repository.get_many([UUID(int=1), UUID(int=2)], user_id=_USER)
+    found = await repository.get_many(
+        [UUID(int=1), UUID(int=2)],
+        user_id=_USER,
+        thread_id="thread-1",
+    )
 
     assert len(found) == 2
     assert rls_calls == [(factory.session, _USER)]
-    assert "user_id" in str(factory.session.execute.await_args.args[0])
+    statement = str(factory.session.execute.await_args.args[0])
+    assert "user_id" in statement
+    assert "thread_id" in statement
 
 
 async def test_list_for_thread_binds_rls_scope_and_scopes_by_user(rls_calls: list[tuple[object, str]]) -> None:
@@ -331,7 +337,7 @@ async def test_every_operation_binds_the_rls_scope(rls_calls: list[tuple[object,
     await repository.create(_attachment())
     await repository.save(_attachment())
     await repository.get(uuid4(), user_id=_USER)
-    await repository.get_many([UUID(int=3)], user_id=_USER)
+    await repository.get_many([UUID(int=3)], user_id=_USER, thread_id="thread-1")
     await repository.list_for_thread("thread-1", user_id=_USER)
     await repository.create_under_upload_quota(_attachment(), limit=5, pending_cutoff=_CREATED_AT)
     await repository.delete(uuid4(), user_id=_USER)
