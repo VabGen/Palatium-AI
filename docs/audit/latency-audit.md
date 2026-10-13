@@ -149,7 +149,7 @@ P2.13–14 = **документация + чеклист**; runtime на corpora
 ### 5.1 Offline L1
 
 ```text
-poetry run python scripts/benchmark_latency.py
+uv run python scripts/benchmark_latency.py
 # L1 cache get (offline): n=200 P50=0.1ms P95=0.1ms mean=0.1ms
 ```
 
@@ -164,7 +164,7 @@ poetry run python scripts/benchmark_latency.py
 Прогон B (повтор после прогрева; `--stream --complex`):
 
 ```text
-poetry run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 --stream --complex
+uv run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 --stream --complex
 # simple turn 1: 679ms
 # simple turn 2: 647ms (warm >> L1 — check RESPONSE_CACHE_ENABLED / Redis / image)
 # simple /intents/process: n=2 P50=663.0ms P95=677.1ms mean=663.0ms
@@ -258,6 +258,6 @@ poetry run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 
 **Повторить замер:**
 
 ```powershell
-poetry run python scripts/benchmark_latency.py
-poetry run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 --stream --complex
+uv run python scripts/benchmark_latency.py
+uv run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 --stream --complex
 ```

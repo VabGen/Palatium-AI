@@ -116,7 +116,7 @@ class PdfParser:
             from pypdf import PdfReader
             from pypdf.errors import PdfReadError
         except ImportError as exc:  # pragma: no cover - install-dependent
-            msg = "pypdf is required to parse PDFs; install it with `poetry install --with attachments`"
+            msg = "pypdf is required to parse PDFs; install it with `uv sync --frozen --extra attachments`"
             raise DocumentParseError(msg) from exc
 
         try:
@@ -195,7 +195,7 @@ class DocxParser:
             from docx import Document
             from docx.opc.exceptions import PackageNotFoundError
         except ImportError as exc:  # pragma: no cover - install-dependent
-            msg = "python-docx is required to parse .docx; install it with `poetry install --with attachments`"
+            msg = "python-docx is required to parse .docx; install it with `uv sync --frozen --extra attachments`"
             raise DocumentParseError(msg) from exc
 
         # The zip directory is read first so a decompression bomb is refused
@@ -273,7 +273,7 @@ class XlsxParser:
             from openpyxl import load_workbook
             from openpyxl.utils.exceptions import InvalidFileException
         except ImportError as exc:  # pragma: no cover - install-dependent
-            msg = "openpyxl is required to parse .xlsx; install it with `poetry install --with attachments`"
+            msg = "openpyxl is required to parse .xlsx; install it with `uv sync --frozen --extra attachments`"
             raise DocumentParseError(msg) from exc
 
         self._assert_archive_within_budget(data)
@@ -370,7 +370,7 @@ class PptxParser:
         try:
             import lxml.etree as etree  # pyright: ignore[reportMissingImports]
         except ImportError as exc:  # pragma: no cover - install-dependent
-            msg = "lxml is required to parse .pptx; install it with `poetry install --with attachments`"
+            msg = "lxml is required to parse .pptx; install it with `uv sync --frozen --extra attachments`"
             raise DocumentParseError(msg) from exc
 
         self._assert_archive_within_budget(data)
@@ -460,7 +460,7 @@ class HtmlParser:
             import lxml.etree as etree  # pyright: ignore[reportMissingImports]
             import lxml.html as lxml_html  # pyright: ignore[reportMissingImports]
         except ImportError as exc:  # pragma: no cover - install-dependent
-            msg = "lxml is required to parse HTML; install it with `poetry install --with attachments`"
+            msg = "lxml is required to parse HTML; install it with `uv sync --frozen --extra attachments`"
             raise DocumentParseError(msg) from exc
 
         try:

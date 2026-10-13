@@ -2,7 +2,7 @@
 description: Supply chain — lockfile, SCA-триаж, образы, Actions, обновления (OWASP A03/A08)
 globs:
   - "pyproject.toml"
-  - "poetry.lock"
+  - "uv.lock"
   - "Dockerfile"
   - "docker-compose*.yml"
   - "deploy/**"
@@ -23,12 +23,14 @@ Git/PR-процесс — `088`. Секреты и RBAC — **020**; верси�
 
 ## Lockfile
 
-- `poetry.lock` обязателен, коммитится и **синхронен** `pyproject.toml`.
-  Гейт — `poetry check --lock` (`scripts/ci_security.py`, шаг supply-chain).
+- `uv.lock` обязателен, коммитится и **синхронен** `pyproject.toml`.
+  Гейт — `uv lock --check` (`scripts/ci_security.py`, шаг supply-chain).
 - Расхождение lock и манифеста — блокирующая ошибка, а не «догоним потом»:
   воспроизводимость сборки держится именно на этой связке.
-- Установка в CI — только из lock (`poetry install --with <group>`), не `poetry add`
+- Установка в CI — только из lock (`uv sync --frozen`), не `uv add`
   на лету и не `pip install` версий «по памяти».
+- Poetry (`poetry.lock` / `poetry.toml`) — legacy; не восстанавливать и не держать
+  параллельно с uv (два менеджера = рассинхрон).
 
 ## Диапазоны версий
 
@@ -87,7 +89,7 @@ Git/PR-процесс — `088`. Секреты и RBAC — **020**; верси�
 
 | Гейт | Где | Что роняет |
 |---|---|---|
-| `poetry check --lock` | `scripts/ci_security.py` | lock рассинхронен манифесту |
+| `uv lock --check` | `scripts/ci_security.py` | lock рассинхронен манифесту |
 | Pin-drift Actions | `scripts/ci_security.py` | `uses:` без SHA / без версии |
 | Pin-drift base image | `scripts/ci_security.py` | `FROM` без `@sha256:` (нет пина по digest) |
 | `pip-audit` + триаж | `scripts/ci_security.py`, `security/pip-audit-ignore.txt` | нетриаженная advisory |

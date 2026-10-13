@@ -61,7 +61,7 @@ copy env\.env.staging.example env\.env.staging
 ```powershell
 # обычный запуск
 $env:ENV_FILE = "env/.env.dev"
-poetry run python -m palatium_ai.main
+uv run python -m palatium_ai.main
 ```
 
 ---
@@ -178,7 +178,7 @@ docker compose -f deploy/compose.secrets.example.yml up --build
 ```
 
 Poetry намеренно отсутствует в `runtime`: меньше CVE-поверхность, меньше образ,
-immutable runtime. Сборка зависимостей — только в stage `builder` по `poetry.lock`.
+immutable runtime. Сборка зависимостей — только в stage `builder` по `uv.lock`.
 
 Образ **не содержит** `env/.env*` с секретами (см. `.dockerignore`).
 

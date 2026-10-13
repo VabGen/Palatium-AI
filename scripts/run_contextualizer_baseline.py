@@ -3,7 +3,7 @@
 Writes ``artifacts/baseline_contextualizer_<YYYY-MM-DD>.jsonl``.
 
 Usage:
-  poetry run python scripts/run_contextualizer_baseline.py
+  uv run python scripts/run_contextualizer_baseline.py
 """
 
 from __future__ import annotations

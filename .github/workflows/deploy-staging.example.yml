@@ -25,11 +25,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install Poetry
-        run: pip install poetry
+      - name: Install uv
+        run: pip install uv
 
       - name: Install deps
-        run: poetry install --with dev
+        run: uv sync --frozen
 
       - name: Health / migrate (пример)
         env:
@@ -41,5 +41,5 @@ jobs:
           LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
         run: |
-          poetry run alembic upgrade head
-          # дальше: poetry run pytest … или curl health после deploy
+          uv run alembic upgrade head
+          # дальше: uv run pytest … или curl health после deploy

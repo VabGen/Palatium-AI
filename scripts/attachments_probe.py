@@ -1,13 +1,13 @@
 """Attachments stack probe: object store, AV engine, API, and S3 image preflight.
 
 Usage:
-  poetry run python scripts/attachments_probe.py                # all reachable checks
-  poetry run python scripts/attachments_probe.py --preflight-image
-  poetry run python scripts/attachments_probe.py --s3 --clamav
-  poetry run python scripts/attachments_probe.py --mode         # which backend the API uses
-  poetry run python scripts/attachments_probe.py --compose-args # flags for a full-stack `up`
-  poetry run python scripts/attachments_probe.py --mode --full  # ...and the backends it wires
-  poetry run python scripts/attachments_probe.py --wait 300     # block until the stack answers
+  uv run python scripts/attachments_probe.py                # all reachable checks
+  uv run python scripts/attachments_probe.py --preflight-image
+  uv run python scripts/attachments_probe.py --s3 --clamav
+  uv run python scripts/attachments_probe.py --mode         # which backend the API uses
+  uv run python scripts/attachments_probe.py --compose-args # flags for a full-stack `up`
+  uv run python scripts/attachments_probe.py --mode --full  # ...and the backends it wires
+  uv run python scripts/attachments_probe.py --wait 300     # block until the stack answers
 
 Why this exists: the attachment pipeline is fail-closed, so a wrong address shows up
 as ``quarantined``/``scan_failed`` rows rather than an error at boot. This script

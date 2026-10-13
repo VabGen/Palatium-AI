@@ -1,8 +1,8 @@
 """Smoke: social turn against a running local API.
 
 Usage:
-  poetry run python scripts/smoke_social_turn.py
-  poetry run python scripts/smoke_social_turn.py --base-url http://127.0.0.1:8000
+  uv run python scripts/smoke_social_turn.py
+  uv run python scripts/smoke_social_turn.py --base-url http://127.0.0.1:8000
 """
 
 from __future__ import annotations

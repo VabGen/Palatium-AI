@@ -1,7 +1,7 @@
 # Local quality gates that mirror `scripts/ci_quality.py` (rules 000 / 050 / 075).
 #
-# Install once:  poetry run pre-commit install
-# Run on all files: poetry run pre-commit run --all-files
+# Install once:  uv run pre-commit install
+# Run on all files: uv run pre-commit run --all-files
 #
 # Scope note: this file mirrors *fast* CI gates only. The full pytest suite +
 # coverage floors stay in CI (`ci_quality.py`) because they are too slow for a
@@ -93,7 +93,7 @@ repos:
 # basedpyright --outputjson src/palatium_ai > errors.json
 
 # Только pre-commit hooks (быстрые: ruff + debt markers)
-# poetry run pre-commit run --all-files
+# uv run pre-commit run --all-files
 
 # Все hooks включая pre-push (mypy + basedpyright)
-# poetry run pre-commit run --all-files --hook-stage pre-push
+# uv run pre-commit run --all-files --hook-stage pre-push

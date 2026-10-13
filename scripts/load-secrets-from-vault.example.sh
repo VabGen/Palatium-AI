@@ -6,7 +6,7 @@
 #   export VAULT_ADDR=https://vault.example.com
 #   export VAULT_TOKEN=...
 #   source scripts/load-secrets-from-vault.example.sh staging
-#   ENV_FILE=env/.env.staging poetry run python -m palatium_ai.main
+#   ENV_FILE=env/.env.staging uv run python -m palatium_ai.main
 
 set -euo pipefail
 

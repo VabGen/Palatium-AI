@@ -3,7 +3,7 @@
 """Opt-in live API SLA sample against a running server (real LLM path).
 
 Usage:
-  poetry run python scripts/eval_api_live.py --base-url http://127.0.0.1:8000 --limit 8
+  uv run python scripts/eval_api_live.py --base-url http://127.0.0.1:8000 --limit 8
 
 Requires development AUTH (POST /api/auth/dev-token) and a healthy stack.
 Exits 0 only when success-rate gate passes (default min 0.85).

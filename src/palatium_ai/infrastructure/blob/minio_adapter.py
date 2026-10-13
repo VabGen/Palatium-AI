@@ -82,7 +82,7 @@ class MinIOAdapter:
         except ImportError as exc:  # pragma: no cover - depends on install extras
             msg = (
                 "minio package is required for ATTACHMENTS_BLOB_BACKEND=minio; "
-                "install it with `poetry install --with attachments`"
+                "install it with `uv sync --frozen --extra attachments`"
             )
             raise RuntimeError(msg) from exc
         self._client: Minio = _Minio(

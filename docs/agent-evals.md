@@ -14,8 +14,8 @@
 ## PR CI (deterministic)
 
 ```powershell
-poetry run python scripts/run_agent_evals.py
-poetry run pytest tests/eval/test_agent_eval_assets.py -q
+uv run python scripts/run_agent_evals.py
+uv run pytest tests/eval/test_agent_eval_assets.py -q
 ```
 
 - Baseline: `application/agents/evals/baseline.json` (score per agent + per task).
@@ -31,7 +31,7 @@ poetry run pytest tests/eval/test_agent_eval_assets.py -q
 ## Nightly (llm_judge)
 
 ```powershell
-poetry run python scripts/run_agent_evals_nightly.py
+uv run python scripts/run_agent_evals_nightly.py
 ```
 
 - Задачи: `application/agents/evals/nightly_tasks.json`.
@@ -54,11 +54,11 @@ poetry run python scripts/run_agent_evals_nightly.py
 $env:PALATIUM_EVAL_LIVE_JUDGE = "1"
 $env:PALATIUM_EVAL_JUDGE_PROVIDER = "anthropic"
 $env:PALATIUM_EVAL_AGENT_PROVIDER = "openai"
-poetry run pytest tests/eval/test_agent_evals_llm_live.py -m llm_live -q
+uv run pytest tests/eval/test_agent_evals_llm_live.py -m llm_live -q
 
 # полный nightly с live judge (дорого):
 $env:PALATIUM_EVAL_LIVE_NIGHTLY = "1"
-poetry run pytest tests/eval/test_agent_evals_llm_live.py::test_nightly_suite_with_live_judge -q
+uv run pytest tests/eval/test_agent_evals_llm_live.py::test_nightly_suite_with_live_judge -q
 ```
 
 Каждая nightly-задача:
@@ -88,7 +88,7 @@ $env:PALATIUM_EVAL_LIVE_JUDGE = "1"
 $env:PALATIUM_EVAL_JUDGE_PROVIDER = "anthropic"
 $env:PALATIUM_EVAL_AGENT_PROVIDER = "openai"
 $env:ANTHROPIC_API_KEY = "<from-vault>"
-poetry run python scripts/run_agent_evals_judge_smoke.py
+uv run python scripts/run_agent_evals_judge_smoke.py
 ```
 
 ## Структура cassette

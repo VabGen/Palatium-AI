@@ -1,14 +1,22 @@
 # Evolution Palatium AI → Big Tech 2026
 
-Обновлено: 2026-10-12. Автор входа: VabGen.
-Статус: **Phase 1 + 4 + 3 + 2 done on master** (норматив — 000/020/030/040/060/065/070/075/080/084;
-при противоречии **правила побеждают**). Следующие: Phase 5+.
+Обновлено: 2026-10-13. Автор входа: VabGen.
+Статус: **Phase 1 + 4 + 3 + 2 done on master**; **Pre-Phase 5 hardening in progress**
+(норматив — 000/020/030/040/060/065/070/075/080/084; при противоречии **правила побеждают**).
+Следующие: Pre-Phase 5 SRP → Phase 5+.
 
 Ветка Phase 1: `big-tech-evolution/phase-1` (merged).
 PR Phase 1: план + тонкое правило + полная реализация Hybrid Streaming Markdown.
 Phase 4: Neo4j schema bootstrap + dynamic LLM timeouts + DTZ audit (уже UTC).
 Phase 3: LiteLLM tier registration + CostTracker + gen_ai.* spans.
 Phase 2: attachment overlap + Formatter 8s fallback; parallel workers/L1 cache уже были.
+
+**Pre-Phase 5 (не Phase-N):** SRP split `researcher` (~641 LOC) и `formatter` (~452 LOC)
+внутри существующих пакетов; граф и контракты `BaseAgent`/registry не меняются.
+Branch/PR tag: `big-tech-evolution/pre-phase-5-srp`. Phase 5 (Presidio / constitutional
+critic / red-team) стартует только после зелёного SRP.
+
+**Tooling:** poetry → uv; lock = `uv.lock` (025).
 
 ---
 
@@ -197,7 +205,7 @@ HITL XML tags в preview: strip или render as muted placeholders; клика�
 | unit parser cases | callouts, lists, hitl tags, cite `[N]`, JSON fallback |
 | existing `test_answer_delta.py` / SSE lifecycle | не сломаны |
 | `web/` vitest + Playwright E2E | stream preview + final BlockRenderer |
-| `poetry run ruff/mypy/pytest` + `npm run verify` | PR checklist |
+| `uv run ruff/mypy/pytest` + `npm run verify` | PR checklist |
 
 ### 6.5 Тонкое правило
 
@@ -231,11 +239,13 @@ HITL XML tags в preview: strip или render as muted placeholders; клика�
 | **2** Parallel + fast-path ✅ | gather fan-out; Formatter fallback >8s; attachment overlap | Cache = Redis L1 + LiteLLM semantic; **no Qdrant** — **done 2026-10-12** |
 | **3** FinOps ✅ | `register_model` tiers; OTel `gen_ai.*`; CostTracker | `datetime.now(UTC)`; reuse `cost_budget.py` — **done 2026-10-12** |
 | **4** Data hygiene ✅ | Neo4j index bootstrap; dynamic timeouts | Cypher in bootstrap/factory, not Alembic — **done 2026-10-12** |
-| **5** Safety | Presidio scrubber; constitutional critic; nightly red-team | HITL/020; PII не в traces |
+| **Pre-5** SRP hardening | Split `researcher`/`formatter` into sibling modules (`mcp_path`, `llm_research`, `llm_stream`, `repair`); no new graph nodes | in-process only (000/030); not a Phase-N |
+| **5** Safety | Presidio scrubber; constitutional critic; nightly red-team | HITL/020; PII не в traces; hooks on SRP module boundaries |
 | **6** Evals | golden dataset + deepeval on prompt PRs | не ослаблять 075 |
 | **7** Canvas / vision | Yjs CRDT; multimodal messages | отдельный ADR при необходимости |
 
 Каждая фаза: PR tag `big-tech-evolution/phase-N`, review @VabGen.
+Pre-Phase 5: tag `big-tech-evolution/pre-phase-5-srp`.
 
 ---
 
@@ -268,9 +278,9 @@ HITL XML tags в preview: strip или render as muted placeholders; клика�
 ## 11. Чеклист агента перед merge Phase 1
 
 ```text
-poetry run ruff check .
-poetry run mypy .
-poetry run pytest -m "not live and not llm_live and not slow"
+uv run ruff check .
+uv run mypy .
+uv run pytest -m "not live and not llm_live and not slow"
 cd web && npm run verify
 ```
 

@@ -9,7 +9,7 @@
     • контейнеры (с профилями docker-mcp + docker-api), сети, volumes, образы
     • занятость портов проекта
     • логи api / mcp-edms / mcp-analytics / litellm
-    • секции [tool.poetry] и dockerfile: из compose-файлов
+    • секции [project] и dockerfile: из compose-файлов
 
   ПЕРЕД записью в файл вывод прогоняется через redaction
   (Bearer/sk-*/password/api_key/secret/token/PEM) — см. правило 020.
@@ -134,7 +134,7 @@ Add-Section -Title "mcp-edms logs"    -Body { docker compose @composeArgs @Profi
 Add-Section -Title "mcp-analytics logs" -Body { docker compose @composeArgs @Profiles logs mcp-analytics --tail $Tail }
 Add-Section -Title "litellm logs"     -Body { docker compose @composeArgs logs litellm --tail $Tail }
 
-Add-Section -Title "pyproject.toml [tool.poetry]" -Body {
+Add-Section -Title "pyproject.toml [project]" -Body {
     (Select-String -Path (Join-Path $RepoRoot "pyproject.toml") -Pattern "\[tool\.poetry\]" -Context 0,10).Context.PostContext -join "`n"
 }
 

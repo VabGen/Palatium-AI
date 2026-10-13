@@ -27,8 +27,8 @@
 <!-- Команда + результат. «Прогнал линтер» без команды проверкой не считается. -->
 
 ```bash
-poetry run python scripts/ci_quality.py   # ruff, mypy --strict, pytest + coverage, evals
-poetry run python scripts/ci_security.py  # lock, action-пины, digest-пины, pip-audit
+uv run python scripts/ci_quality.py   # ruff, mypy --strict, pytest + coverage, evals
+uv run python scripts/ci_security.py  # lock, action-пины, digest-пины, pip-audit
 cd web && npm run verify                  # типы, ESLint, Prettier, Vitest (084)
 ```
 

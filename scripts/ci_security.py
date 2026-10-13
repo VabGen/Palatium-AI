@@ -3,7 +3,7 @@
 
 Four blocking gates, cheapest first (rule 025):
 
-1. ``poetry check --lock`` — the lockfile must match ``pyproject.toml``. A drifted
+1. ``uv lock --check`` — the lockfile must match ``pyproject.toml``. A drifted
    lock means CI installs something other than what was reviewed.
 2. Action pin drift — every third-party ``uses:`` in ``.github/workflows`` must be
    pinned to a commit SHA carrying its release version. A mutable tag would let
@@ -61,12 +61,12 @@ def _load_ignored_vulns() -> list[str]:
 
 
 def check_lockfile() -> None:
-    """Fail if ``poetry.lock`` is out of sync with ``pyproject.toml`` (rule 025)."""
-    print("== poetry check --lock ==")
-    # `poetry` resolves through PATH on purpose: CI installs it with pipx, and a
+    """Fail if ``uv.lock`` is out of sync with ``pyproject.toml`` (rule 025)."""
+    print("== uv lock --check ==")
+    # `uv` resolves through PATH on purpose: CI installs it with pipx, and a
     # hardcoded venv path would break on a developer machine.
     completed = subprocess.run(
-        ["poetry", "check", "--lock"],  # noqa: S607  # PATH-resolved interpreter wrapper
+        ["uv", "lock", "--check"],  # noqa: S607  # PATH-resolved interpreter wrapper
         cwd=_ROOT,
         check=False,
     )
@@ -160,7 +160,7 @@ def check_dependency_audit() -> None:
     # PyPI, so pip-audit's lookup for it always 404s/503s on the index. Without the
     # flag a transient index hiccup fails the gate for no security reason; the
     # project's own code is not an SCA target anyway (see rule 040/050).
-    argv = ["poetry", "run", "pip-audit", "--skip-editable"]
+    argv = ["uv", "run", "pip-audit", "--skip-editable"]
     for vuln_id in ignored:
         argv += ["--ignore-vuln", vuln_id]
 

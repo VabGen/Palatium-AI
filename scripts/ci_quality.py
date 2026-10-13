@@ -54,7 +54,7 @@ def _assert_pyjwt_not_shadowed() -> None:
     if "jwt" in names and "pyjwt" in names:
         raise SystemExit(
             "Conflicting package 'jwt' is installed alongside PyJWT. "
-            "Remove it (`poetry remove jwt` then `poetry sync`). Use PyJWT only."
+            "Remove it (`uv remove jwt` then `uv sync`). Use PyJWT only."
         )
     from jwt import PyJWKClient  # noqa: F401
 
@@ -118,20 +118,20 @@ def main() -> int:
     """Run lint, typing, full test suite + coverage gates, SLA math and agent evals."""
     # Whole repo, matching `tox -e lint`. Linting only src/scripts/tests would let
     # mcp_servers/ (shipped code, see mcp_servers/Dockerfile) drift out of the gate.
-    _run("ruff check", ["poetry", "run", "ruff", "check", "."])
-    # Formatting is part of the standard (pyproject: "poetry run ruff format .").
+    _run("ruff check", ["uv", "run", "ruff", "check", "."])
+    # Formatting is part of the standard (pyproject: "uv run ruff format .").
     # Enforced so it cannot silently drift between waves.
-    _run("ruff format --check", ["poetry", "run", "ruff", "format", "--check", "."])
+    _run("ruff format --check", ["uv", "run", "ruff", "format", "--check", "."])
     # Rule 086: a debt marker without owner/ticket/date is not a record. Cheap, whole-repo,
     # and it fails only on malformed markers — age is reported, not gated (see the script).
-    _run("debt markers (086)", ["poetry", "run", "python", "scripts/check_todos.py"])
+    _run("debt markers (086)", ["uv", "run", "python", "scripts/check_todos.py"])
     # Rule 000: application/ must not import infrastructure/, core/ imports nothing, etc.
     # Standalone checker instead of import-linter — see scripts/check_import_layers.py.
-    _run("import layers (000)", ["poetry", "run", "python", "scripts/check_import_layers.py"])
+    _run("import layers (000)", ["uv", "run", "python", "scripts/check_import_layers.py"])
     _run(
         "mypy --strict (src/palatium_ai)",
         [
-            "poetry",
+            "uv",
             "run",
             "mypy",
             "--strict",
@@ -144,7 +144,7 @@ def main() -> int:
     _run(
         "pytest (tests/ minus live/slow + coverage)",
         [
-            "poetry",
+            "uv",
             "run",
             "pytest",
             "tests",
@@ -158,8 +158,8 @@ def main() -> int:
     )
     _enforce_coverage()
 
-    _run("SLA math gate", ["poetry", "run", "python", "scripts/run_sla_gates.py", "--check-math"])
-    _run("agent evals baseline", ["poetry", "run", "python", "scripts/run_agent_evals.py"])
+    _run("SLA math gate", ["uv", "run", "python", "scripts/run_sla_gates.py", "--check-math"])
+    _run("agent evals baseline", ["uv", "run", "python", "scripts/run_agent_evals.py"])
     # Live --load-health (incl. concurrency=1000) is ops/staging only — not PR CI.
     _assert_pyjwt_not_shadowed()
     print("ci_quality: PASS")

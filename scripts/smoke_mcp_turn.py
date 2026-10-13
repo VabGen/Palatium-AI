@@ -1,9 +1,9 @@
 """Smoke: live /api/intents/process that should hit EDMS MCP stub.
 
 Usage:
-  poetry run python scripts/smoke_mcp_turn.py
-  poetry run python scripts/smoke_mcp_turn.py --mode archive
-  poetry run python scripts/smoke_mcp_turn.py --base-url http://127.0.0.1:8000
+  uv run python scripts/smoke_mcp_turn.py
+  uv run python scripts/smoke_mcp_turn.py --mode archive
+  uv run python scripts/smoke_mcp_turn.py --base-url http://127.0.0.1:8000
 
 Expects MCP stubs with Bearer (scripts/dev-up.ps1 -SkipApi) and a running API.
 Checks session mcp-tool-calls for edms.search_documents when the path succeeds,

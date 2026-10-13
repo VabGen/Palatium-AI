@@ -43,9 +43,9 @@ prompt contract, HITL resumed payload) unrelated to Phase 4; Phase 4 unit tests 
 ## Гейты перед коммитом
 
 ```bash
-poetry run ruff check .
-poetry run mypy .
-poetry run pytest -m "not live and not llm_live and not slow"
+uv run ruff check .
+uv run mypy .
+uv run pytest -m "not live and not llm_live and not slow"
 # если затронут web/:
 cd web && npm run verify
 ```

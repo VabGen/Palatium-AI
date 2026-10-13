@@ -30,15 +30,15 @@ esac
 STATUS=0
 RAN_ANYTHING=0
 
-if command -v poetry >/dev/null 2>&1; then
+if command -v uv >/dev/null 2>&1; then
   RAN_ANYTHING=1
 
-  if ! poetry run ruff check --fix "$FILE_PATH"; then
+  if ! uv run ruff check --fix "$FILE_PATH"; then
     echo "❌ ruff failed for $FILE_PATH" >&2
     STATUS=1
   fi
 
-  if ! poetry run mypy --strict "$FILE_PATH"; then
+  if ! uv run mypy --strict "$FILE_PATH"; then
     echo "❌ mypy --strict failed for $FILE_PATH — см. 010-typing-strict.mdc" >&2
     STATUS=1
   fi
@@ -65,7 +65,7 @@ else
 fi
 
 if [[ "$RAN_ANYTHING" -eq 0 ]]; then
-  echo "⚠️  Ни poetry, ни ruff, ни mypy не найдены в PATH — quality-gate НЕ запускался для $FILE_PATH." >&2
+  echo "⚠️  Ни uv, ни ruff, ни mypy не найдены в PATH — quality-gate НЕ запускался для $FILE_PATH." >&2
 fi
 
 exit "$STATUS"

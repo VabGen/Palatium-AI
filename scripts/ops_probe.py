@@ -1,8 +1,8 @@
 """Ops readiness probe against a running API (automated portion of ops-readiness.md).
 
 Usage:
-  poetry run python scripts/ops_probe.py
-  poetry run python scripts/ops_probe.py --base-url http://127.0.0.1:8000 --with-admin
+  uv run python scripts/ops_probe.py
+  uv run python scripts/ops_probe.py --base-url http://127.0.0.1:8000 --with-admin
 
 Checks (non-destructive by default):
   - GET /health

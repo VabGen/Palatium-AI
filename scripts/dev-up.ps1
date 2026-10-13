@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Start palatium-ai app and remote MCP stubs for development (Poetry-host profile).
+  Start palatium-ai app and remote MCP stubs for development (uv-host profile).
 
 .DESCRIPTION
   Локальный запуск (НЕ в Docker):
@@ -19,7 +19,7 @@
     • читает env/.env → POSTGRES_PUBLISH_PORT / REDIS_PUBLISH_PORT / LITELLM_PUBLISH_PORT;
     • проверяет, что Docker-стек доступен на этих портах;
     • выставляет ENV_FILE, MCP_SERVERS, PALATIUM_GATEWAY_URL для хоста;
-    • запускает MCP stubs и API через Poetry;
+    • запускает MCP stubs и API через uv;
     • сохраняет PID в scripts/.dev/processes.json.
 
   Поведение при занятых портах:
@@ -112,11 +112,11 @@ function Test-PortListening {
     return [bool](Get-PortListener -Port $Port)
 }
 
-function Get-PoetryExe {
-    if (-not (Test-CommandAvailable "poetry")) {
-        throw "poetry not found in PATH. Install Poetry and run from repo root."
+function Get-UvExe {
+    if (-not (Test-CommandAvailable "uv")) {
+        throw "uv not found in PATH. Install uv (https://docs.astral.sh/uv/) and run from repo root."
     }
-    return (Get-Command poetry).Source
+    return (Get-Command uv).Source
 }
 
 function Read-DotEnv {
@@ -286,10 +286,11 @@ function Start-DevService {
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$Arguments,
         [Parameter(Mandatory = $true)][int]$Port,
-        [Parameter(Mandatory = $true)][string]$PoetryExe,
+        [Parameter(Mandatory = $true)][string]$UvExe,
         [string]$HealthPath = "/docs",
         [hashtable]$Environment = @{},
-        [int]$StartupTimeoutSeconds = 30
+        # Cold `uv run` can reinstall the editable package; prefer --no-sync + preflight sync.
+        [int]$StartupTimeoutSeconds = 60
     )
 
     $existing = Get-PortListener -Port $Port
@@ -346,7 +347,7 @@ function Start-DevService {
 
     try {
         $proc = Start-Process `
-            -FilePath $PoetryExe `
+            -FilePath $UvExe `
             -ArgumentList $Arguments `
             -WorkingDirectory $RepoRoot `
             -PassThru `
@@ -394,8 +395,20 @@ function Start-DevService {
 # Preflight
 # =============================================================================
 Assert-EnvFileExists
-$PoetryExe = Get-PoetryExe
+$UvExe = Get-UvExe
 $DotEnv = Read-DotEnv -Path $EnvPath
+
+# Windows + different filesystems: hardlinks often fail and uv falls back to full copy
+# on every `uv run`, burning the MCP bind timeout. Sync once here, then `--no-sync`.
+if (-not $env:UV_LINK_MODE) {
+    $env:UV_LINK_MODE = "copy"
+}
+Write-Host ""
+Write-Host "uv sync --frozen (once, before host services)..." -ForegroundColor Cyan
+& $UvExe sync --frozen
+if ($LASTEXITCODE -ne 0) {
+    throw "uv sync --frozen failed (exit $LASTEXITCODE). Fix the env, then re-run."
+}
 
 $dockerPorts = [pscustomobject]@{
     PostgresPort = Get-DotEnvInt -Map $DotEnv -Key "POSTGRES_PUBLISH_PORT" -Default 5432
@@ -469,7 +482,7 @@ if ($WithGateway) {
 # Запуск
 # =============================================================================
 Write-Host ""
-Write-Host "palatium-ai dev stack (Poetry host profile)" -ForegroundColor Cyan
+Write-Host "palatium-ai dev stack (uv host profile)" -ForegroundColor Cyan
 Write-Host "repo:         $RepoRoot"
 Write-Host "env file:     $EnvFile"
 Write-Host "postgres:     localhost:$($dockerPorts.PostgresPort) (Docker)"
@@ -487,9 +500,9 @@ $services = @()
 # --- 1. MCP EDMS (upstream) ---
 $edms = Start-DevService `
     -Name "mcp-edms" `
-    -Arguments "run uvicorn mcp_servers.edms.edms_mcp_server:app --host 127.0.0.1 --port 8080" `
+    -Arguments "run --no-sync uvicorn mcp_servers.edms.edms_mcp_server:app --host 127.0.0.1 --port 8080" `
     -Port 8080 `
-    -PoetryExe $PoetryExe `
+    -UvExe $UvExe `
     -HealthPath "/health" `
     -Environment $mcpEnv
 $services += $edms
@@ -497,9 +510,9 @@ $services += $edms
 # --- 2. MCP Analytics (upstream) ---
 $analytics = Start-DevService `
     -Name "mcp-analytics" `
-    -Arguments "run uvicorn mcp_servers.analytics.analytics_mcp_server:app --host 127.0.0.1 --port 8081" `
+    -Arguments "run --no-sync uvicorn mcp_servers.analytics.analytics_mcp_server:app --host 127.0.0.1 --port 8081" `
     -Port 8081 `
-    -PoetryExe $PoetryExe `
+    -UvExe $UvExe `
     -HealthPath "/health" `
     -Environment $mcpEnv
 $services += $analytics
@@ -513,9 +526,9 @@ if ($WithGateway) {
 
     $gwEdms = Start-DevService `
         -Name "mcp-gateway-edms" `
-        -Arguments "run uvicorn mcp_servers.gateway.gateway_mcp_server:app --host 127.0.0.1 --port 8090" `
+        -Arguments "run --no-sync uvicorn mcp_servers.gateway.gateway_mcp_server:app --host 127.0.0.1 --port 8090" `
         -Port 8090 `
-        -PoetryExe $PoetryExe `
+        -UvExe $UvExe `
         -HealthPath "/health" `
         -Environment $gwEdmsEnv
     $services += $gwEdms
@@ -532,7 +545,7 @@ if ($WithGateway) {
         -Name "mcp-gateway-analytics" `
         -Arguments "run uvicorn mcp_servers.gateway.gateway_mcp_server:app --host 127.0.0.1 --port 8091" `
         -Port 8091 `
-        -PoetryExe $PoetryExe `
+        -UvExe $UvExe `
         -HealthPath "/health" `
         -Environment $gwAnalyticsEnv
     $services += $gwAnalytics
@@ -544,7 +557,7 @@ if ($WithPlatformStub) {
         -Name "mcp-platform" `
         -Arguments "run uvicorn mcp_servers.platform.platform_mcp_server:app --host 127.0.0.1 --port 8082" `
         -Port 8082 `
-        -PoetryExe $PoetryExe `
+        -UvExe $UvExe `
         -HealthPath "/health" `
         -Environment $mcpEnv
     $services += $platform
@@ -556,7 +569,7 @@ if (-not $SkipApi) {
         -Name "palatium-ai" `
         -Arguments "run python -m palatium_ai.main" `
         -Port 8000 `
-        -PoetryExe $PoetryExe `
+        -UvExe $UvExe `
         -HealthPath "/docs" `
         -Environment $apiEnv `
         -StartupTimeoutSeconds 90
@@ -619,10 +632,10 @@ if ($WithGateway) {
     Write-Host "Mode: direct — API обращается к MCP stubs напрямую." -ForegroundColor Cyan
 }
 Write-Host ""
-Write-Host "Smoke auth:  poetry run python scripts/smoke_mcp_auth.py --skip-api"
+Write-Host "Smoke auth:  uv run python scripts/smoke_mcp_auth.py --skip-api"
 Write-Host ""
 Write-Host "Logs:   $LogDir"
 Write-Host "State:  $StateFile"
 Write-Host ""
 Write-Host "Остановить:  .\scripts\dev-down.ps1" -ForegroundColor DarkGray
-Write-Host ""
+Wri

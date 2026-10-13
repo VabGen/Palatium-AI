@@ -9,7 +9,7 @@ LangGraph orders latest by checkpoint_id DESC and expects time-ordered
 uuid6 ids (not uuid4).
 
 Usage:
-  poetry run python scripts/bakeoff_checkpointer_workers.py
+  uv run python scripts/bakeoff_checkpointer_workers.py
 
 Requires LANGGRAPH_CHECKPOINT_POSTGRES=true and reachable Postgres.
 """

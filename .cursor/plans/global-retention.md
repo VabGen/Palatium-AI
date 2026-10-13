@@ -237,7 +237,7 @@ backup job обязан re-apply (корпоративный anti-resurrection p
 | CLI skeleton dry-run | `jobs/retention.py` (`python -m palatium_ai.jobs.retention`) |
 | Index | `docs/README.md`, runbook §17 |
 
-**DoD:** `poetry run python -m palatium_ai.jobs.retention --help` и dry-run → exit 0; ADR accepted.
+**DoD:** `uv run python -m palatium_ai.jobs.retention --help` и dry-run → exit 0; ADR accepted.
 
 **Gate:** unit-тесты pure policy (окна, PII override, hold skip).
 

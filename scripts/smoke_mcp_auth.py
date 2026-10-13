@@ -1,8 +1,8 @@
 """Smoke: MCP stub auth + Streamable HTTP tools/list (local stack).
 
 Usage:
-  poetry run python scripts/smoke_mcp_auth.py
-  poetry run python scripts/smoke_mcp_auth.py --skip-api
+  uv run python scripts/smoke_mcp_auth.py
+  uv run python scripts/smoke_mcp_auth.py --skip-api
 """
 
 from __future__ import annotations

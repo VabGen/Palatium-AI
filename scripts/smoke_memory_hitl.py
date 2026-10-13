@@ -1,8 +1,8 @@
 """Live smoke: off-graph memory HITL save → approve → forget → approve.
 
 Usage (API up, auth/dev-token available):
-  poetry run python scripts/smoke_memory_hitl.py
-  poetry run python scripts/smoke_memory_hitl.py --base-url http://127.0.0.1:8000
+  uv run python scripts/smoke_memory_hitl.py
+  uv run python scripts/smoke_memory_hitl.py --base-url http://127.0.0.1:8000
 
 Flow:
   1) POST /api/auth/dev-token

@@ -1,8 +1,8 @@
 """Smoke: choice menu must return clickable HITL user_choice cards.
 
 Usage:
-  poetry run python scripts/smoke_hitl_choice.py
-  poetry run python scripts/smoke_hitl_choice.py --base-url http://127.0.0.1:8010
+  uv run python scripts/smoke_hitl_choice.py
+  uv run python scripts/smoke_hitl_choice.py --base-url http://127.0.0.1:8010
 """
 
 from __future__ import annotations

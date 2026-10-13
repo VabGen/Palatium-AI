@@ -75,7 +75,7 @@ Rules live in `prometheus/alerts/` and are **contract-tested**: every
 `core/observability/metrics.py`. A typo fails CI instead of silently never firing:
 
 ```bash
-poetry run pytest tests/unit/test_observability_assets.py -q
+uv run pytest tests/unit/test_observability_assets.py -q
 ```
 
 Routing is deliberately inert out of the box — the `default` receiver is

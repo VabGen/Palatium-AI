@@ -1,6 +1,6 @@
 # Ops readiness checklist (post Week 0–8 remediation)
 
-Кодовый ZeroTrust/SLA baseline закрыт (`poetry run python scripts/ci_quality.py`).
+Кодовый ZeroTrust/SLA baseline закрыт (`uv run python scripts/ci_quality.py`).
 Ниже — **операторские** шаги перед staging/prod.
 
 **Перезапустите API** после Weeks 0–8: старый uvicorn без `/api/auth/dev-token` и `/metrics`
@@ -44,47 +44,47 @@
 Offline (CI):
 
 ```powershell
-poetry run python scripts/ci_quality.py
+uv run python scripts/ci_quality.py
 ```
 
 Live health load (API up):
 
 ```powershell
-poetry run python scripts/ops_probe.py --base-url http://127.0.0.1:8000 --with-admin
+uv run python scripts/ops_probe.py --base-url http://127.0.0.1:8000 --with-admin
 # local single-worker uvicorn: keep concurrency modest
-poetry run python scripts/run_sla_gates.py --load-health --concurrency 50 --max-p95-ms 3000
+uv run python scripts/run_sla_gates.py --load-health --concurrency 50 --max-p95-ms 3000
 
 # staging multi-worker: raise concurrency, tighten p95
-poetry run python scripts/run_sla_gates.py --load-health --concurrency 1000 --max-p95-ms 500 --base-url https://staging.example
+uv run python scripts/run_sla_gates.py --load-health --concurrency 1000 --max-p95-ms 500 --base-url https://staging.example
 ```
 
 Deterministic write HITL + local IdP stub (development, `HITL_STEP_UP_REQUIRED=true`, `HITL_STEP_UP_METHOD=idp_acr`):
 
 ```powershell
-poetry run python scripts/smoke_hitl_write_step_up.py --base-url http://127.0.0.1:8000
+uv run python scripts/smoke_hitl_write_step_up.py --base-url http://127.0.0.1:8000
 ```
 
 Off-graph memory HITL (save → approve → forget → approve; no step-up required for medium tier):
 
 ```powershell
-poetry run python scripts/smoke_memory_hitl.py --base-url http://127.0.0.1:8000
+uv run python scripts/smoke_memory_hitl.py --base-url http://127.0.0.1:8000
 ```
 
 Live LLM sample (burns tokens; opt-in):
 
 ```powershell
-poetry run python scripts/eval_api_live.py --limit 8 --base-url http://127.0.0.1:8000
-poetry run python scripts/eval_memory_spine_live.py
+uv run python scripts/eval_api_live.py --limit 8 --base-url http://127.0.0.1:8000
+uv run python scripts/eval_memory_spine_live.py
 ```
 
 Agent evals (см. `docs/agent-evals.md`):
 
 ```powershell
-poetry run python scripts/run_agent_evals.py
-poetry run python scripts/run_agent_evals_nightly.py
+uv run python scripts/run_agent_evals.py
+uv run python scripts/run_agent_evals_nightly.py
 # live judge smoke (staging):
 # $env:PALATIUM_EVAL_LIVE_JUDGE="1"; $env:PALATIUM_EVAL_JUDGE_PROVIDER="anthropic"
-# poetry run python scripts/run_agent_evals_judge_smoke.py
+# uv run python scripts/run_agent_evals_judge_smoke.py
 ```
 
 ## 4. Observability
@@ -134,9 +134,9 @@ poetry run python scripts/run_agent_evals_nightly.py
 
 Полный гайд: [`global-retention.md`](global-retention.md). ADR 0002.
 
-- [ ] `poetry run alembic upgrade head` включает `d4e5f6a7b8c9` + `e5f6a7b8c9d0`
+- [ ] `uv run alembic upgrade head` включает `d4e5f6a7b8c9` + `e5f6a7b8c9d0`
 - [ ] В env задан блок `RETENTION_*` (§10b); `RETENTION_EXECUTE=false` в prod
-- [ ] Dry-run зелёный: `poetry run python -m palatium_ai.jobs.retention`
+- [ ] Dry-run зелёный: `uv run python -m palatium_ai.jobs.retention`
 - [ ] Расписание CronJob / compose one-shot согласовано (W6 манифест — backlog);
       `concurrencyPolicy: Forbid`; сначала dry-run в логах, потом узкий `--execute`
 - [ ] Attachment blob backend job'а совпадает с API (тот же MinIO bucket)

@@ -8,8 +8,8 @@ Modes:
   * --complex: one knowledge-style turn on /process.
 
 Usage:
-  poetry run python scripts/benchmark_latency.py
-  poetry run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 --stream --complex
+  uv run python scripts/benchmark_latency.py
+  uv run python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000 --stream --complex
 """
 
 from __future__ import annotations

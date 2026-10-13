@@ -8,8 +8,8 @@ JavaEdms — read-only reference: референс читается здесь �
 
 Использование::
 
-    poetry run python scripts/gen_edms_authorities.py            # перегенерация
-    poetry run python scripts/gen_edms_authorities.py --check     # гейт дрейфа
+    uv run python scripts/gen_edms_authorities.py            # перегенерация
+    uv run python scripts/gen_edms_authorities.py --check     # гейт дрейфа
 
 ``--check`` требует референс и возвращает 3, если его нет: «не могу проверить» —
 не то же самое, что «проверка прошла». Гейт в CI, который работает без
@@ -48,8 +48,8 @@ _DOCSTRING_TEMPLATE = (
     "Словарь authority СЭД «Канцлер NEXT» — СГЕНЕРИРОВАННЫЙ файл, не править вручную.",
     "",
     "Источник: enum ``Permission`` в JavaEdms (read-only reference, 090).",
-    "Перегенерация: ``poetry run python scripts/gen_edms_authorities.py``.",
-    "Проверка дрейфа: ``poetry run python scripts/gen_edms_authorities.py --check``",
+    "Перегенерация: ``uv run python scripts/gen_edms_authorities.py``.",
+    "Проверка дрейфа: ``uv run python scripts/gen_edms_authorities.py --check``",
     "и ``tests/unit/test_edms_authorities.py`` (внутренняя согласованность).",
     "",
     "В артефакте только имена: ось действия и ресурс выводит ``classify_authority``.",

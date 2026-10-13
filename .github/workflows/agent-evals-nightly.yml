@@ -31,11 +31,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install Poetry
-        run: pipx install poetry
+      - name: Install uv
+        run: pipx install uv
 
       - name: Install dependencies
-        run: poetry install --with dev
+        run: uv sync --frozen
 
       - name: Resolve eval mode
         id: mode
@@ -49,7 +49,7 @@ jobs:
 
       - name: Cassette nightly evals
         if: steps.mode.outputs.value == 'cassette'
-        run: poetry run python scripts/run_agent_evals_nightly.py
+        run: uv run python scripts/run_agent_evals_nightly.py
 
       - name: Validate live judge secrets
         if: steps.mode.outputs.value == 'live_smoke' || steps.mode.outputs.value == 'live_full'
@@ -84,7 +84,7 @@ jobs:
           PALATIUM_EVAL_AGENT_PROVIDER: ${{ secrets.PALATIUM_EVAL_AGENT_PROVIDER }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: poetry run python scripts/run_agent_evals_judge_smoke.py
+        run: uv run python scripts/run_agent_evals_judge_smoke.py
 
       - name: Live full nightly evals
         if: steps.mode.outputs.value == 'live_full'
@@ -95,7 +95,7 @@ jobs:
           PALATIUM_EVAL_AGENT_PROVIDER: ${{ secrets.PALATIUM_EVAL_AGENT_PROVIDER }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: poetry run python scripts/run_agent_evals_nightly.py --live-judge
+        run: uv run python scripts/run_agent_evals_nightly.py --live-judge
 
       - name: Upload nightly eval report
         if: always()

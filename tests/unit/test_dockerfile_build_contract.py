@@ -7,8 +7,8 @@ image built *successfully*, started, and then died in ``docker-entrypoint.sh`` w
 The chain was:
 
 1. ``pyproject.toml`` declares ``license-files = ["LICENSE"]`` for the root package.
-2. ``Dockerfile`` copied ``pyproject.toml poetry.lock README.md`` but not ``LICENSE``.
-3. ``poetry install`` therefore failed while building the root project — which it does
+2. ``Dockerfile`` copied ``pyproject.toml`` + lock + ``README.md`` but not ``LICENSE``.
+3. Install therefore failed while building the root project — which it does
    *last*, after all third-party dependencies are already in the venv.
 4. A ``|| true`` that was meant to make ``__pycache__`` cleanup best-effort also terminated
    the whole ``&&`` chain, so the failed install never failed the build.
@@ -31,9 +31,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOCKERFILE = _REPO_ROOT / "Dockerfile"
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
 
-# The `RUN` that installs the root project. Matched loosely (`poetry install`) so a change of
+# The `RUN` that installs the root project. Matched loosely (`uv sync`) so a change of
 # flags does not silently stop covering the guard, and anchored on the import assertion below.
-_INSTALL_RUN_RE = re.compile(r"poetry install")
+_INSTALL_RUN_RE = re.compile(r"uv sync")
 
 
 def _dockerfile_text() -> str:
@@ -59,19 +59,19 @@ def _logical_lines(text: str) -> list[str]:
 def _install_run() -> str:
     """Return the logical line that installs dependencies and the root project."""
     candidates = [line for line in _logical_lines(_dockerfile_text()) if _INSTALL_RUN_RE.search(line)]
-    assert candidates, "no `poetry install` RUN found in the Dockerfile"
+    assert candidates, "no `uv sync` RUN found in the Dockerfile"
     # The install RUN is the one that also asserts the root import.
     for candidate in candidates:
         if "import palatium_ai" in candidate:
             return candidate
     raise AssertionError(
-        "the `poetry install` RUN never asserts `import palatium_ai`: the root package can "
+        "the `uv sync` RUN never asserts `import palatium_ai`: the root package can "
         "fail to build and the image will still be produced"
     )
 
 
 def test_pyproject_root_package_declares_a_license_file() -> None:
-    """Premise of the whole bug: Poetry refuses to build the root project without it."""
+    """Premise of the whole bug: the build backend refuses to build without it."""
     text = _PYPROJECT.read_text(encoding="utf-8")
 
     assert re.search(r'^license-files\s*=\s*\["LICENSE"\]', text, re.MULTILINE), (
@@ -80,7 +80,7 @@ def test_pyproject_root_package_declares_a_license_file() -> None:
 
 
 def test_dockerfile_copies_every_file_the_root_build_needs() -> None:
-    """`LICENSE` must reach the build stage, or `poetry install` fails building the root."""
+    """`LICENSE` must reach the build stage, or `uv sync` fails building the root."""
     text = _dockerfile_text()
 
     copy_lines = [line for line in text.splitlines() if line.strip().startswith("COPY")]
@@ -88,7 +88,7 @@ def test_dockerfile_copies_every_file_the_root_build_needs() -> None:
         'LICENSE is not COPYed into the image while pyproject declares license-files=["LICENSE"]'
     )
 
-    for required in ("pyproject.toml", "poetry.lock", "README.md", "LICENSE"):
+    for required in ("pyproject.toml", "uv.lock", "README.md", "LICENSE"):
         assert any(required in line for line in copy_lines), f"{required} is not COPYed anywhere"
 
 
@@ -120,9 +120,9 @@ def test_attachments_runtime_installs_tesseract_when_requested() -> None:
 
 
 def test_attachments_builder_verifies_ocr_python_extras() -> None:
-    """Poetry ``attachments`` group must actually expose Pillow/pytesseract/pymupdf."""
+    """Optional ``attachments`` extra must actually expose Pillow/pytesseract/pymupdf."""
     install = _install_run()
-    assert "import PIL, pytesseract, fitz" in install, "WITH_ATTACHMENTS=1 installs the group but never asserts OCR Python extras"
+    assert "import PIL, pytesseract, fitz" in install, "WITH_ATTACHMENTS=1 installs the extra but never asserts OCR Python extras"
 
 
 def test_no_bare_trailing_or_true_can_hide_a_failed_install() -> None:
@@ -132,7 +132,7 @@ def test_no_bare_trailing_or_true_can_hide_a_failed_install() -> None:
     wrapped in `{ ... || true; }`, or when it lives in its own `RUN`.
     """
     for run in _logical_lines(_dockerfile_text()):
-        if "poetry install" not in run:
+        if "uv sync" not in run:
             continue
         ungrouped = [
             segment.strip()
@@ -141,7 +141,7 @@ def test_no_bare_trailing_or_true_can_hide_a_failed_install() -> None:
             if not segment.rstrip().endswith("; }")
         ]
         assert len(ungrouped) <= 1, (
-            f"a `|| true` is still chained onto the install RUN and can swallow a failed `poetry install`: {run}"
+            f"a `|| true` is still chained onto the install RUN and can swallow a failed `uv sync`: {run}"
         )
 
 

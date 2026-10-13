@@ -7,8 +7,8 @@ When isolated Contextualizer does not reproduce draft→format, run the next lay
 3. ContinuityPolicy.resolve → EffectiveRoutingIntent
 
 Usage:
-  poetry run python scripts/replay_continuity_intent.py
-  poetry run python scripts/replay_continuity_intent.py --runs 3
+  uv run python scripts/replay_continuity_intent.py
+  uv run python scripts/replay_continuity_intent.py --runs 3
 """
 
 from __future__ import annotations

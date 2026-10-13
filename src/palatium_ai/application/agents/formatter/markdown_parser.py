@@ -136,7 +136,7 @@ def _try_json_document(raw: str) -> ContentDocument | None:
         return None
     try:
         return parse_formatter_document(stripped)
-    except ValueError, TypeError, json.JSONDecodeError, ValidationError:
+    except (ValueError, TypeError, json.JSONDecodeError, ValidationError):  # fmt: skip
         return None
 
 

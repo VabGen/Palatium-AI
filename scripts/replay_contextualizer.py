@@ -7,8 +7,8 @@ Runs the same fixture N times against a live LLM and classifies stability:
   mixed — both kinds (or other) appeared
 
 Usage:
-  poetry run python scripts/replay_contextualizer.py
-  poetry run python scripts/replay_contextualizer.py
+  uv run python scripts/replay_contextualizer.py
+  uv run python scripts/replay_contextualizer.py
     --fixture tests/fixtures/contextualizer_replay/turn1_draft_reply.json
     --runs 5
 """

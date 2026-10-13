@@ -690,7 +690,7 @@ docker compose --env-file env/.env up -d --force-recreate
 docker compose exec api alembic upgrade head
 
 # На хосте
-poetry run alembic upgrade head
+uv run alembic upgrade head
 ```
 
 ### Прочие проблемы
@@ -703,7 +703,7 @@ poetry run alembic upgrade head
 | MCP tools пустые | stubs не в сети с API | Docker-профиль: сервис `mcp-edms`; Host-профиль: `dev-up.ps1` |
 | `OSError: Read-only file system: '/.cursor'` | audit писал в `/.cursor/logs` | путь `/app/logs/audit-chain.log` (`AUDIT_LOG_FILE`) |
 | `The option "--no-update" does not exist` | Poetry 2.x | в Dockerfile `poetry lock` без `--no-update` |
-| `pyproject.toml changed significantly... poetry.lock` | content-hash | убрать `License ::` classifier, `poetry lock` |
+| `pyproject.toml changed significantly... uv.lock` | content-hash | убрать `License ::` classifier, `poetry lock` |
 | Permission / read-only | Compose `read_only: true` | tmpfs на `/app/tmp`, `/app/logs` |
 
 ---

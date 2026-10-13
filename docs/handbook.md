@@ -14,7 +14,7 @@
 2. [Требования](#2-требования)
 3. [Клонирование](#3-клонирование)
 4. [Конфигурация окружения](#4-конфигурация-окружения)
-5. [Запуск локально (Poetry)](#5-запуск-локально-poetry)
+5. [Запуск локально (uv)](#5-запуск-локально-uv-)
 6. [Запуск: три режима](#6-запуск-три-режима)
 7. [MCP stubs](#7-mcp-stubs)
 8. [Проверка и первое использование API](#8-проверка-и-первое-использование-api)
@@ -52,7 +52,7 @@
 |-----------|------------------|
 | Git | любой актуальный |
 | Python | **3.14** (`>=3.14,<3.15`) |
-| Poetry | 2.x |
+| uv | 0.9.x |
 | PostgreSQL | локально или remote |
 | Redis | локально или remote |
 | LLM | Ollama local/cloud, OpenAI и др. (см. `env/`) |
@@ -78,7 +78,7 @@ cd palatium-ai
 Установите зависимости Python:
 
 ```bash
-poetry install --with dev
+uv sync --frozen
 ```
 
 ---
@@ -144,7 +144,7 @@ MCP_SERVERS='{"edms":"http://localhost:8080","analytics":"http://localhost:8081"
 
 ```powershell
 $env:ENV_FILE = "env/.env.dev"
-poetry run python -m palatium_ai.main
+uv run python -m palatium_ai.main
 ```
 
 По умолчанию приложение читает `env/.env` (см. `BaseConfig`).
@@ -153,22 +153,22 @@ poetry run python -m palatium_ai.main
 
 ---
 
-## 5. Запуск локально (Poetry)
+## 5. Запуск локально (uv)
 
 ### 5.1. Миграции БД
 
 ```bash
-poetry run alembic upgrade head
+uv run alembic upgrade head
 ```
 
 ### 5.2. Старт API
 
 ```bash
 # вариант A
-poetry run python -m palatium_ai.main
+uv run python -m palatium_ai.main
 
 # вариант B
-poetry run uvicorn palatium_ai.main:app --reload --host 127.0.0.1 --port 8000
+uv run uvicorn palatium_ai.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 API: http://127.0.0.1:8000  
@@ -191,9 +191,9 @@ Health: http://127.0.0.1:8000/health
 
 | Режим | Где MCP | Где API | Gateway | Когда использовать |
 |---|---|---|---|---|
-| **Host** | Poetry (host) | Poetry (host) | — | Ежедневная разработка (hot-reload) |
+| **Host** | uv (host) | uv (host) | — | Ежедневная разработка (hot-reload) |
 | **Docker** | Docker | Docker | — | CI / демо / prod-like |
-| **Gateway** | Poetry (host) | Poetry (host) | :8090/8091 | Тест политик MCP |
+| **Gateway** | uv (host) | uv (host) | :8090/8091 | Тест политик MCP |
 
 > **Про `docker compose` ниже.** Команды предполагают, что в `$PROFILE` задано
 > `$env:COMPOSE_ENV_FILES = "env/.env"` (см. [`../START.md`](../START.md) §3).
@@ -206,7 +206,7 @@ Health: http://127.0.0.1:8000/health
 # 1. Docker только для инфраструктуры
 docker compose up -d postgres redis neo4j litellm
 
-# 2. MCP stubs + API через Poetry
+# 2. MCP stubs + API через uv
 .\scripts\dev-up.ps1
 
 # 3. Проверка
@@ -214,9 +214,9 @@ docker compose up -d postgres redis neo4j litellm
 ```
 
 **Что запустится:**
-- API :8000 — Poetry (hot-reload)
-- MCP EDMS :8080 — Poetry
-- MCP Analytics :8081 — Poetry
+- API :8000 — uv (hot-reload)
+- MCP EDMS :8080 — uv
+- MCP Analytics :8081 — uv
 
 **Остановка:** `.\scripts\dev-down.ps1 -Force` — снимает только host-процессы. Если
 8080/8081 держат контейнеры (видно по `[skip] ... not a repo process`), Docker не
@@ -262,7 +262,7 @@ API ходит на gateway :8090/8091 → gateway проксирует на ups
 
 > Профили и режимы — см. §6. Ниже — оба варианта.
 
-### Вариант A — Host (Poetry) — рекомендуется
+### Вариант A — Host (uv) — рекомендуется
 
 ```powershell
 .\scripts\dev-up.ps1               # API + MCP stubs (direct)
@@ -281,9 +281,9 @@ Dockerfile stubs: [`mcp_servers/Dockerfile`](../mcp_servers/Dockerfile).
 
 ```powershell
 $env:MCP_AUTH_TOKEN = "dev-mcp-local-token"
-poetry run python scripts/smoke_mcp_auth.py --skip-api
-poetry run python scripts/smoke_mcp_registry.py
-poetry run python scripts/smoke_mcp_turn.py
+uv run python scripts/smoke_mcp_auth.py --skip-api
+uv run python scripts/smoke_mcp_registry.py
+uv run python scripts/smoke_mcp_turn.py
 ```
 
 Stubs **fail-closed**: без `MCP_AUTH_TOKEN` JSON-RPC отклоняется (401),
@@ -294,7 +294,7 @@ Progressive disclosure: клиент discovery шлёт `tools/list` с
 `omitInputSchema: true`; stubs отвечают карточками (`propertyNames`) без полного
 `inputSchema`. Полная schema грузится только на `list_tools` / `get_tool` / call.
 
-В `MCP_SERVERS` для локального Poetry:
+В `MCP_SERVERS` для локального uv:
 
 ```json
 {"edms":"http://localhost:8080","analytics":"http://localhost:8081"}
@@ -398,7 +398,7 @@ markdown-fallback поля нет.
 
 ```powershell
 # API (терминал 1)
-poetry run python -m palatium_ai.main
+uv run python -m palatium_ai.main
 
 # UI (терминал 2)
 cd web
@@ -612,7 +612,7 @@ Ops checklist before staging/prod: [`ops-readiness.md`](ops-readiness.md).
 Полный локальный/CI baseline (ruff + mypy --strict на `src/palatium_ai` + remediation tests + SLA math + PyJWT check):
 
 ```powershell
-poetry run python scripts/ci_quality.py
+uv run python scripts/ci_quality.py
 ```
 
 CI: `.github/workflows/ci.yml` гоняет тот же baseline на push/PR (включая offline 100-task FakeLLM benchmark).
@@ -620,11 +620,11 @@ CI: `.github/workflows/ci.yml` гоняет тот же baseline на push/PR (�
 Точечно:
 
 ```powershell
-poetry run ruff check .
-poetry run ruff format .
-poetry run mypy --strict src/palatium_ai
-poetry run pytest -q -m "not live and not llm_live and not slow"
-poetry run python scripts/run_sla_gates.py --check-math
+uv run ruff check .
+uv run ruff format .
+uv run mypy --strict src/palatium_ai
+uv run pytest -q -m "not live and not llm_live and not slow"
+uv run python scripts/run_sla_gates.py --check-math
 ```
 
 `slow` — нагрузочный гейт сложности hot-path (счёт инструкций байткода, правило 080):
@@ -646,10 +646,10 @@ Cursor hooks (quality / secret-scan) — в `.cursor/hooks/` (`python-quality-ga
 ### 15.1. Global data retention (CronJob / CLI)
 
 ```powershell
-poetry run alembic upgrade head   # d4e5f6a7b8c9 + e5f6a7b8c9d0
-poetry run python -m palatium_ai.jobs.retention --list-classes
-poetry run python -m palatium_ai.jobs.retention   # dry-run всех classes
-# poetry run python -m palatium_ai.jobs.retention --execute --class memory_medium
+uv run alembic upgrade head   # d4e5f6a7b8c9 + e5f6a7b8c9d0
+uv run python -m palatium_ai.jobs.retention --list-classes
+uv run python -m palatium_ai.jobs.retention   # dry-run всех classes
+# uv run python -m palatium_ai.jobs.retention --execute --class memory_medium
 ```
 
 - Env: `RETENTION_*` в `env/.env.example` §10b (и ваш `env/.env`).
@@ -669,17 +669,17 @@ poetry run python -m palatium_ai.jobs.retention   # dry-run всех classes
 
 ```bash
 # preview archive
-poetry run python scripts/archive_mcp_tool_calls.py --days 90
+uv run python scripts/archive_mcp_tool_calls.py --days 90
 
 # execute
-poetry run python scripts/archive_mcp_tool_calls.py --days 90 --execute
+uv run python scripts/archive_mcp_tool_calls.py --days 90 --execute
 
 # purge preview / execute
-poetry run python scripts/purge_archived_mcp_tool_calls.py --years 3
-poetry run python scripts/purge_archived_mcp_tool_calls.py --years 3 --execute
+uv run python scripts/purge_archived_mcp_tool_calls.py --years 3
+uv run python scripts/purge_archived_mcp_tool_calls.py --years 3 --execute
 
 # report
-poetry run python scripts/mcp_tool_calls_retention_report.py --purge-years 3
+uv run python scripts/mcp_tool_calls_retention_report.py --purge-years 3
 ```
 
 Env для scheduler:

@@ -1,9 +1,9 @@
 """Live LongMemEval-lite: Contextualizer + MemoryKeeper against a real LLM.
 
 Opt-in only:
-  PALATIUM_LIVE_EVAL=1 poetry run pytest tests/eval/test_memory_spine_live.py -q
+  PALATIUM_LIVE_EVAL=1 uv run pytest tests/eval/test_memory_spine_live.py -q
   # or
-  poetry run python scripts/eval_memory_spine_live.py
+  uv run python scripts/eval_memory_spine_live.py
 """
 
 from __future__ import annotations

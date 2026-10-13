@@ -127,7 +127,7 @@
 
 **Scope:** зависимости, lockfile, образы, CI-supply-chain.
 
-- `poetry.lock` обязателен и синхронен: гейт `poetry check --lock` в CI.
+- `uv.lock` обязателен и синхронен: гейт `uv lock --check` в CI.
 - Диапазоны версий — с верхней границей (уже практика) и **обоснованием** в
   комментарии при пине (уже делается для `cryptography`/`openai`).
 - SCA: `pip-audit` — блокирующий; единственный путь «принять риск» —
@@ -137,7 +137,7 @@
   (решение 2026-09-30, W2): дрейф ловит `ci_security.py`, бампы — PR dependabot.
 - Обновления: `dependabot.yml` покрывает pip/actions/npm/docker (уже есть).
 - SBOM/provenance — **backlog** (решение 2026-09-30: уровень зрелости ниже текущих гейтов).
-- **Enforcement:** `ci_security.py` (`poetry check --lock` + pin-drift + `pip-audit`)
+- **Enforcement:** `ci_security.py` (`uv lock --check` + pin-drift + `pip-audit`)
   + gitleaks (есть); негативные тесты — `tests/unit/test_ci_security_gates.py`.
 - **DoD:** правило + lock-гейт в CI + таблица трекинга принятых advisory. ✔ W2
 
@@ -192,7 +192,7 @@
 - GitOps/IaC (Argo CD/Terraform/Pulumi) — **решение отдельное**; инструмент не
   добавляется молча (050). До решения — артефакт: `Dockerfile` + compose + workflow.
 - **Enforcement:** workflow + `docker compose config --quiet` (Makefile `validate`).
-- **DoD:** правило + web-job в CI + `poetry check --lock`.
+- **DoD:** правило + web-job в CI + `uv lock --check`.
 
 ### 3.7. `084-frontend-quality.mdc` (новое, 08x) — React 19 + Vite + TS
 
@@ -279,7 +279,7 @@
   image tag, мёртвый TODO, размер функции/вложенность).
 - `.cursor/skills/web-craft/SKILL.md`: снят дрейф React 18 / Tailwind.
 - Сверка `docs/` ↔ правила: расхождений по версиям нет (mypy/ruff упомянуты верно).
-  Единственный найденный, вне scope W0: `docs/runbook.md` содержит `poetry run mypy .`
+  Единственный найденный, вне scope W0: `docs/runbook.md` содержит `uv run mypy .`
   — привести к `mypy --strict src/palatium_ai` в W1.
 - **DoD:** `ci_quality.py` зелёный (`.mdc` не в scope ruff/mypy, но diff чист). ✔
 
@@ -302,7 +302,7 @@
 - **Примечание:** `mypy --strict` в песочнице запустить не удалось (в venv нет
   `type-check`-группы) — проверка выпадет на CI (`scripts/ci_quality.py`).
   Изменение `bootstrap.py` тривиально типобезопасно (`asyncio.to_thread` → `bool`).
-- **Перенос в W3:** `docs/runbook.md` — `poetry run mypy .` → `mypy --strict src/palatium_ai`.
+- **Перенос в W3:** `docs/runbook.md` — `uv run mypy .` → `mypy --strict src/palatium_ai`.
 
 ### W2 — Безопасность и supply chain · **DONE (2026-09-30)**
 - Создано правило `025-supply-chain-security` (lock, диапазоны, SCA-триаж, образы,
@@ -310,7 +310,7 @@
   Top 10:2025** (навигация по владельцам, не второй список запретов — 050);
   `099` — индекс обновлён.
 - Гейты добавлены в `scripts/ci_security.py` (шаг supply-chain, до `pip-audit`):
-  - `poetry check --lock` — рассинхрон lock и манифеста роняет CI;
+  - `uv lock --check` — рассинхрон lock и манифеста роняет CI;
   - pin-drift: любая `uses:` без 40-символьного SHA **и** без комментария версии
     роняет CI (локальный `./…` action исключён — пинить нечего).
 - Actions запинены по commit SHA с комментарием версии: `checkout` v4.4.0,
@@ -353,7 +353,7 @@
   - Ограничение метода зафиксировано в правиле: счёт видит Python-уровень, не C
     (`sorted`/`len`), поэтому «суб-линейный» результат для token-учёта — ожидаемое
     поведение, а не пропуск.
-- Закрыт перенос из W1: `docs/runbook.md` — `poetry run mypy .` →
+- Закрыт перенос из W1: `docs/runbook.md` — `uv run mypy .` →
   `mypy --strict src/palatium_ai` + команды PR-тестов и нагрузочного гейта.
 - `BLE` для `application/`/`infrastructure/` не сужен в этой волне (42 граничных
   broad-catch требуют причины на каждом сайте по 035 — это отдельная работа, 055):
@@ -435,7 +435,7 @@
 | нагрузочный гейт сложности (`tests/perf/`, маркер `slow`) | `tests/perf/` + `Makefile` (`make perf`) + `.github/workflows/perf-nightly.yml` | W3 ✔ |
 | пагинация: потолок из `core/types/pagination.py` + контракт-тест | `src/palatium_ai/core/types/pagination.py`, `tests/unit/test_sessions_pagination.py` | W3 ✔ |
 | сужение `BLE001` по сайтам (application/infrastructure, 42 сайта) | `pyproject.toml` + `.py` сайтов | backlog (после W6) |
-| `poetry check --lock` | `scripts/ci_security.py` | W2 ✔ |
+| `uv lock --check` | `scripts/ci_security.py` | W2 ✔ |
 | pin-drift GitHub Actions (`uses:` без SHA/версии) | `scripts/ci_security.py` + `tests/unit/test_ci_security_gates.py` | W2 ✔ |
 | frontend CI-job (tsc/eslint/prettier/vitest/build/e2e) | `.github/workflows/ci.yml` (`npm run verify`), `web/package.json` | W4 ✔ |
 | TODO-сканер (`MARKER(owner, ticket, date)`, проверка тикет-пути) | `scripts/check_todos.py` + `scripts/ci_quality.py` + `.pre-commit-config.yaml` | W5 ✔ |

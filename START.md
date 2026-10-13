@@ -28,11 +28,11 @@
 |---|---|---|
 | Docker Desktop | Running | `docker version` |
 | Docker Compose | v2+ | `docker compose version` |
-| Poetry | 2.x | `poetry --version` |
-| Python | 3.14 | `poetry env info` |
+| uv | 0.9.x | `uv --version` |
+| Python | 3.14 | `uv python list` |
 
 ```powershell
-docker version; docker compose version; poetry --version
+docker version; docker compose version; uv --version
 ```
 
 ---
@@ -80,7 +80,7 @@ QWEN_DEFAULT_MODEL="generative-model"
 ### 2.3. Установить зависимости
 
 ```powershell
-poetry install --with dev
+uv sync --frozen
 ```
 
 ### 2.4. Разрешить запуск скриптов
@@ -108,7 +108,7 @@ _SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "anthropic", "ollama
 
 MCP stubs — обычные Python-модули в `mcp_servers/` (пакет с `__init__.py` +
 подпапки). Они **намеренно НЕ входят** в пакет `palatium_ai` и **не** указаны
-в `[tool.poetry].packages`: у них отдельный образ
+в `[project] package layout`: у них отдельный образ
 (`mcp_servers/Dockerfile`, `PYTHONPATH=/app/src:/app`), а на хосте они
 запускаются из корня репозитория. См. блок `NOTE` в корневом `Dockerfile`.
 
@@ -134,7 +134,7 @@ Select-String -Path pyproject.toml -Pattern "packages|mcp_servers"
 **Импорт-тест** (запускать из корня репозитория):
 
 ```powershell
-poetry run python -c "import mcp_servers; from mcp_servers.edms import edms_mcp_server; print('OK')"
+uv run python -c "import mcp_servers; from mcp_servers.edms import edms_mcp_server; print('OK')"
 ```
 
 ### 2.7. Выбрать режим работы
@@ -899,7 +899,7 @@ Gateway: gateway-edms :8090 → edms :8080
 
 ```powershell
 Write-Host "=== Poetry ===" -ForegroundColor Cyan
-(Get-Command poetry).Source
+(Get-Command uv).Source
 
 Write-Host "`n=== factory.py: _SUPPORTED_PROVIDERS ===" -ForegroundColor Cyan
 Select-String -Path src\palatium_ai\infrastructure\llm\factory.py -Pattern "_SUPPORTED_PROVIDERS"
@@ -926,7 +926,7 @@ Write-Host "`n=== MCP stubs (пакет) ===" -ForegroundColor Cyan
 }
 
 Write-Host "`n=== Импорт из Poetry venv ===" -ForegroundColor Cyan
-poetry run python -c "
+uv run python -c "
 import sys
 print('python:', sys.executable)
 try:
@@ -1026,7 +1026,7 @@ Get-Content scripts\.dev\logs\palatium-ai.stdout.log -Tail 30
 |---|---|
 | `No usable LLM providers... 'gateway'` | §2.5 |
 | `asyncpg... connect failed` | Сверить `POSTGRES_PUBLISH_PORT` |
-| `ModuleNotFoundError: mcp_servers` | §2.6 + `poetry install --with dev` |
+| `ModuleNotFoundError: mcp_servers` | §2.6 + `uv sync --frozen` |
 | Пусто / висит | Увеличить `-StartupTimeoutSeconds` |
 
 ### ❌ `palatium_dev does not exist`
@@ -1133,9 +1133,9 @@ exclude = ["tests/", "build/", "dist/", ".venv/"]
 
 ```
 [ ] 1.  Docker Desktop — Running
-[ ] 2.  Poetry: poetry --version → 2.x
+[ ] 2.  uv: uv --version → 2.x
 [ ] 3.  env/.env заполнен (POSTGRES_PASSWORD, LITELLM_*, QWEN_*)
-[ ] 4.  poetry install --with dev
+[ ] 4.  uv sync --frozen
 [ ] 5.  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 [ ] 6.  $PROFILE содержит palatium-* + COMPOSE_ENV_FILES=env/.env
 [ ] 7.  factory.py содержит "gateway" в _SUPPORTED_PROVIDERS
@@ -1313,7 +1313,7 @@ palatium-down
 2. Клонировать: `git clone <repo> D:\project\palatium-ai`
 3. Создать `.env`: `Copy-Item env\.env.example env\.env` + заполнить (§2.2)
 4. Проверить порт 5432: если занят — `POSTGRES_PUBLISH_PORT=5433`
-5. `poetry install --with dev`
+5. `uv sync --frozen`
 6. `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 7. Настроить `$PROFILE` (§3)
 8. Проверить `factory.py` — `"gateway"` в `_SUPPORTED_PROVIDERS` (§2.5)

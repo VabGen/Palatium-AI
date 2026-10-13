@@ -40,7 +40,7 @@ LABEL org.opencontainers.image.title="palatium-mcp-${MCP_NAME}" \
 
 WORKDIR /app
 
-# Pin exact versions — mirror poetry.lock.
+# Pin exact versions — mirror root uv.lock / pyproject extras.
 #
 # Required by stubs (verified via AST/import scan):
 #   - fastmcp            : FastMCP, JWTVerifier, FastMCPProxy, ProxyClient

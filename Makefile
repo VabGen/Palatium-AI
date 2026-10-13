@@ -45,12 +45,12 @@ help:  ## Показать эту справку
 # ──────────────────────────────────────────────────────────────────────────────
 # Стек
 # ──────────────────────────────────────────────────────────────────────────────
-init: ## Создать env/.env из шаблона + poetry install
+init: ## Создать env/.env из шаблона + uv sync
 	@python scripts/make_helpers.py init-env --env-file $(ENV_FILE)
-	@poetry install --with dev
+	@uv sync --frozen
 
-install: ## poetry install --with dev
-	@poetry install --with dev
+install: ## uv sync --frozen (dev groups from [tool.uv] default-groups)
+	@uv sync --frozen
 
 # `--wait` on the probe, not on compose: `docker compose up --wait` treats the one-shot
 # `silo-init` container (creates the buckets, exits 0) as a failure, so it rejected a
@@ -129,7 +129,7 @@ validate: ## Валидация docker-compose.yml
 	$(COMPOSE) config --quiet && echo "✅ docker-compose.yml валиден"
 
 perf: ## Нагрузочные тесты сложности hot-path (маркер slow; вне PR-CI, 080)
-	@poetry run pytest tests/perf -q -m slow
+	@uv run pytest tests/perf -q -m slow
 
 list-dbs: ## Список БД + расширений Postgres
 	$(COMPOSE) exec postgres psql -U postgres -c "\l"

@@ -1,5 +1,5 @@
 {
-  // Prefer in-project .venv (see poetry.toml). Create with: poetry install --with dev
+  // Prefer in-project .venv. Create with: uv sync --frozen
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
   "python.analysis.extraPaths": ["src"],
 

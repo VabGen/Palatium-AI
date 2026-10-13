@@ -30,7 +30,7 @@ $failed = 0
 
 if (-not $McpOnly) {
     Write-Host "[1/2] mypy: src/palatium_ai (main)" -ForegroundColor Cyan
-    poetry run mypy .
+    uv run mypy .
     if ($LASTEXITCODE -ne 0) { $failed = 1 }
 }
 
@@ -38,7 +38,7 @@ if (-not $MainOnly) {
     Write-Host ""
     Write-Host "[2/2] mypy: mcp_servers stubs (excl. edms-ai-assistant / JavaEdms)" -ForegroundColor Cyan
     # Explicit stub paths only — walking mcp_servers/ pulls legacy DocsGPT duplicates (017/090).
-    poetry run mypy --config-file mcp_servers/mypy.ini `
+    uv run mypy --config-file mcp_servers/mypy.ini `
         mcp_servers/__init__.py `
         mcp_servers/mcp_stub_auth.py `
         mcp_servers/mcp_stub_hardening.py `

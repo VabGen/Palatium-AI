@@ -1,7 +1,7 @@
 """Manual Formatter smoke against the corporate model.
 
 Run:
-  poetry run pytest -m live_formatter -q
+  uv run pytest -m live_formatter -q
 
 Credentials come from the process environment or env/.env (QWEN_API_KEY, QWEN_BASE_URL).
 CI does not select this marker.

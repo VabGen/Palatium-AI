@@ -3,16 +3,16 @@
 # =============================================================================
 #
 # Targets:
-#   runtime   (default) — prod API image: venv only, no Poetry, no compilers
-#   builder             — Poetry + build toolchain (intermediate)
+#   runtime   (default) — prod API image: venv only, no uv toolchain in final layer
+#   builder             — uv + build toolchain (intermediate)
 #   deps                — cached dependency layer only
 #   test                — runtime + pytest (CI)
-#   devtools            — runtime + Poetry (отладка в контейнере, НЕ для prod)
+#   devtools            — runtime + uv (отладка в контейнере, НЕ для prod)
 #
 # NOTE:
 #   • mcp_servers/ НЕ входит в этот образ. Это отдельные приложения
 #     с собственным Dockerfile (mcp_servers/Dockerfile) и PYTHONPATH=/app.
-#   • В pyproject.toml → [tool.poetry].packages только palatium_ai.
+#   • Корневой пакет — [project] / uv_build; lock = uv.lock (025).
 #
 # Build:
 #   docker build -t palatium-ai:local .
@@ -23,7 +23,7 @@
 # syntax=docker/dockerfile:1.7
 
 ARG PYTHON_VERSION=3.14
-ARG POETRY_VERSION=2.4.1
+ARG UV_VERSION=0.9.4
 ARG UVICORN_WORKERS=1
 ARG APP_VERSION=0.1.0
 ARG VCS_REF=unknown
@@ -66,34 +66,32 @@ RUN apt-get update \
 # ---------------------------------------------------------------------------
 FROM base AS deps
 
-ARG POETRY_VERSION
-ENV POETRY_VERSION=${POETRY_VERSION} \
-    POETRY_HOME=/opt/poetry \
-    POETRY_VIRTUALENVS_IN_PROJECT=true \
-    POETRY_VIRTUALENVS_CREATE=true \
-    POETRY_NO_INTERACTION=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+ARG UV_VERSION
+ENV UV_VERSION=${UV_VERSION} \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_CACHE_DIR=/tmp/uv_cache
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         libpq-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir "poetry==${POETRY_VERSION}"
+    && pip install --no-cache-dir "uv==${UV_VERSION}"
 
 WORKDIR /app
 
-# poetry.lock должен быть в репо и в build context (не в .dockerignore).
-# LICENSE обязателен: pyproject declares `license-files = ["LICENSE"]`, and the root
-# package is built in the *builder* stage — Poetry's backend fails on a declared-but-absent
+# uv.lock must be in the repo and build context (not .dockerignore).
+# LICENSE is required: pyproject declares `license-files = ["LICENSE"]`, and the root
+# package is built in the *builder* stage — uv_build fails on a declared-but-absent
 # license file, which is exactly how the image shipped without `palatium_ai` (see below).
-COPY pyproject.toml poetry.lock README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 
-# poetry check --lock — не пересчитывает lock, только валидирует.
-# Если lock расходится с pyproject → fail fast (reproducible builds).
-RUN --mount=type=cache,target=/tmp/poetry_cache \
-    poetry check --lock \
-    && poetry install --only main --no-root
+# `uv lock --check` validates lock vs pyproject without rewriting; drift → fail fast.
+RUN --mount=type=cache,target=/tmp/uv_cache \
+    uv lock --check \
+    && uv sync --frozen --no-default-groups --no-install-project
 
 # ---------------------------------------------------------------------------
 # Stage: builder
@@ -108,23 +106,20 @@ COPY src ./src
 COPY alembic.ini ./
 COPY alembic ./alembic
 
-# `--only main` keeps the image lean, but the attachment pipeline needs the
-# optional `attachments` group (minio / pypdf / python-docx). Without it an
-# ATTACHMENTS_BLOB_BACKEND=minio container fails closed on boot, and PDF/DOCX
-# parsing raises at request time (see docs/runbook.md §16.2).
+# Lean image = no default (dev) groups. Attachments need the optional `attachments`
+# extra (minio / pypdf / python-docx). Without it ATTACHMENTS_BLOB_BACKEND=minio
+# fails closed on boot (see docs/runbook.md §16.2).
 #
-# The import assertions below are not decoration. `poetry install` builds the root project
-# *last*, and its failure used to be swallowed by a trailing `|| true` — the image built
-# "successfully" while shipping a venv without `palatium_ai`, and the API died at boot with
-# `ModuleNotFoundError: No module named 'palatium_ai'`. Asserting the imports converts that
-# into a build failure, which is where it belongs (035: fail fast, never ship a silently
-# degraded image). Pinned by tests/unit/test_dockerfile_build_contract.py.
-RUN --mount=type=cache,target=/tmp/poetry_cache \
+# The import assertions below are not decoration. A failed root install used to be
+# swallowed by a trailing `|| true` — the image built while shipping a venv without
+# `palatium_ai`. Asserting imports converts that into a build failure (035).
+# Pinned by tests/unit/test_dockerfile_build_contract.py.
+RUN --mount=type=cache,target=/tmp/uv_cache \
     if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
-        poetry install --with attachments \
+        uv sync --frozen --no-default-groups --extra attachments \
         && /app/.venv/bin/python -c "import PIL, pytesseract, fitz"; \
     else \
-        poetry install --only main; \
+        uv sync --frozen --no-default-groups; \
     fi \
     && if [ "${WITH_GRAPHITI}" = "1" ]; then \
          /app/.venv/bin/pip install --no-cache-dir "graphiti-core>=0.11.0,<1.0.0" \
@@ -214,13 +209,13 @@ CMD ["uvicorn"]
 FROM builder AS test
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+    UV_CACHE_DIR=/tmp/uv_cache
 
 COPY tests ./tests
 COPY tox.ini ./tox.ini
 
-RUN --mount=type=cache,target=/tmp/poetry_cache \
-    poetry install --with test
+RUN --mount=type=cache,target=/tmp/uv_cache \
+    uv sync --frozen --group test
 
 USER root
 RUN groupadd --system --gid 999 app 2>/dev/null || true \
@@ -238,7 +233,7 @@ CMD ["pytest", "-q", "--tb=short"]
 FROM builder AS devtools
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+    UV_CACHE_DIR=/tmp/uv_cache
 
 USER root
 RUN groupadd --system --gid 999 app 2>/dev/null || true \

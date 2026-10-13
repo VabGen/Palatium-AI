@@ -2,7 +2,7 @@
 """Run live LongMemEval-lite against the configured LLM.
 
 Usage:
-  poetry run python scripts/eval_memory_spine_live.py
+  uv run python scripts/eval_memory_spine_live.py
 
 Requires a working LLM in env/.env (or ENV_FILE=...).
 Sets PALATIUM_LIVE_EVAL=1 and exits non-zero on failure.
@@ -20,7 +20,7 @@ def main() -> int:
     try:
         import pytest
     except ImportError:
-        print("pytest is required (poetry install --with dev)", file=sys.stderr)
+        print("pytest is required (uv sync --frozen)", file=sys.stderr)
         return 2
 
     return int(

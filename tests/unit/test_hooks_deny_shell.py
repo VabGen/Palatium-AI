@@ -39,7 +39,7 @@ def test_deny_patterns_block_destructive_commands() -> None:
 def test_deny_patterns_allow_pytest() -> None:
     mod = _load_hook_module()
     allowed = [
-        "poetry run pytest -q tests/unit/test_hooks_deny_shell.py",
+        "uv run pytest -q tests/unit/test_hooks_deny_shell.py",
         "python -m pytest tests/unit",
     ]
     for cmd in allowed:
@@ -48,7 +48,7 @@ def test_deny_patterns_allow_pytest() -> None:
 
 def test_main_allows_safe_command(capsys) -> None:
     mod = _load_hook_module()
-    payload = json.dumps({"command": "poetry run pytest -q"})
+    payload = json.dumps({"command": "uv run pytest -q"})
     sys.stdin = io.StringIO(payload)
     mod.main()
     out = capsys.readouterr().out

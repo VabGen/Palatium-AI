@@ -140,13 +140,13 @@ docker compose --env-file env/.env @profiles logs mcp-edms --tail 30 2>&1
 
 #### 3.1.1. `license-files = ["LICENSE"]`, а `LICENSE` не копируется в образ
 
-**Причина:** `pyproject.toml` объявляет `license-files = ["LICENSE"]`. `poetry install`
+**Причина:** `pyproject.toml` объявляет `license-files = ["LICENSE"]`. `uv sync --frozen`
 ставит корневой проект **последним** — уже после всех сторонних зависимостей. Если
 `LICENSE` нет в build-контексте, бэкенд Poetry не может собрать корневой пакет, установка
 обрывается, и в venv остаются зависимости без самого `palatium_ai`.
 
 **Почему это было невидимо:** `|| true`, который делал best-effort очистку `__pycache__`,
-стоял в конце всей `&&`-цепочки и глушил падение `poetry install`. Образ собирался
+стоял в конце всей `&&`-цепочки и глушил падение `uv sync --frozen`. Образ собирался
 «успешно», а падал уже контейнер. Симптом в логе сборки:
 
 ```text
@@ -158,7 +158,7 @@ No files found for license file glob pattern 'LICENSE'
 отдельный `RUN`; кроме того, сборка теперь **проверяет импорт** на этапе build:
 
 ```dockerfile
-COPY pyproject.toml poetry.lock README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 ...
     && /app/.venv/bin/python -c "import palatium_ai; print('palatium_ai ->', palatium_ai.__file__)"
 ```
@@ -170,7 +170,7 @@ LICENSE копируется, импорт проверяется, `graphiti` п
 #### 3.1.2. `mcp_servers` в `[tool.poetry].packages`
 
 **Причина:** `pyproject.toml` когда-то содержал `{ include = "mcp_servers" }`, но корневой
-`Dockerfile` не копирует `mcp_servers/` → `poetry install` падает целиком →
+`Dockerfile` не копирует `mcp_servers/` → `uv sync --frozen` падает целиком →
 `palatium_ai` не устанавливается.
 
 **Статус: ✅ исправлено.** `mcp_servers` исключён из пакетов (`[tool.poetry]`):
@@ -519,7 +519,7 @@ docker compose --env-file env/.env exec api sh
 **Альтернатива (host-режим):** миграции и shell — через Poetry, без Docker:
 
 ```powershell
-poetry run alembic upgrade head
+uv run alembic upgrade head
 ```
 
 ### 3.12. `did not find expected '-' indicator` при любой команде `docker compose`
@@ -1110,19 +1110,19 @@ function palatium-diag {
 [x] core/config/llm/__init__.py: _SUPPORTED_PROVIDERS содержит "gateway"
 [x] core/config/llm/gateway.py: существует, класс GatewayLLMConfig
 [x] src/__init__.py: удалён (не нужен, вызывает конфликт mypy)
-[ ] poetry check → All set!
-[ ] poetry run mypy --strict src/palatium_ai → чисто (гейт scripts/ci_quality.py)
-[ ] poetry run pytest tests -m "not live and not llm_live and not slow" → зелено
-[ ] poetry run pytest tests/perf -m slow → нагрузочный гейт сложности (080)
+[ ] uv lock --check → All set!
+[ ] uv run mypy --strict src/palatium_ai → чисто (гейт scripts/ci_quality.py)
+[ ] uv run pytest tests -m "not live and not llm_live and not slow" → зелено
+[ ] uv run pytest tests/perf -m slow → нагрузочный гейт сложности (080)
 [ ] docker compose --env-file env/.env config --quiet → молчит
 ```
 
 Одной командой:
 
 ```powershell
-poetry check
-poetry run mypy --strict src/palatium_ai
-poetry run pytest tests -m "not live and not llm_live and not slow"
+uv lock --check
+uv run mypy --strict src/palatium_ai
+uv run pytest tests -m "not live and not llm_live and not slow"
 docker compose --env-file env/.env config --quiet
 Select-String -Path docker-compose.yml -Pattern "dockerfile: mcp_servers/Dockerfile"
 Select-String -Path docker-compose.yml -Pattern "MCP_MODULE"
@@ -1228,7 +1228,7 @@ Write-Host "Report saved: diag-report.txt" -ForegroundColor Green
 3. **`--no-cache` после правки Dockerfile, `pyproject.toml`, requirements**.
 4. **`docker rmi` перед `--no-cache build`**, если менялась структура packages.
 5. **Логи — первое, куда смотреть.** `docker compose logs <service> --tail 50`.
-6. **`poetry check` перед build** — ловит ошибки `pyproject.toml` до Docker.
+6. **`uv lock --check` перед build** — ловит ошибки `pyproject.toml` до Docker.
 7. **`docker compose config --quiet`** — валидация compose без запуска.
 
 ---
@@ -1528,7 +1528,7 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 - Явный per-owner проход: `POST /api/attachments/sweep` — **defense in depth** под
   `FORCE ROW LEVEL SECURITY` (app-роль не видит чужие строки).
 - **SoT для глобальной очистки:** CronJob / CLI
-  `poetry run python -m palatium_ai.jobs.retention --class attachment_attach|attachment_index|attachment_pii`
+  `uv run python -m palatium_ai.jobs.retention --class attachment_attach|attachment_index|attachment_pii`
   через SECURITY DEFINER (`palatium_ai.retention_*`, миграция `e5f6a7b8c9d0`) + cascade
   `knowledge.retention_delete_by_attachment` и orphan-класс `knowledge_orphan` (§17).
 - Один проход ограничен `ATTACHMENTS_SWEEP_BATCH_SIZE` / `RETENTION_BATCH_SIZE` (bounded: один
@@ -1811,7 +1811,7 @@ ADR: [`adr/0002-global-retention-scheduler.md`](adr/0002-global-retention-schedu
 
 Кратко:
 
-- Entrypoint: `poetry run python -m palatium_ai.jobs.retention`
+- Entrypoint: `uv run python -m palatium_ai.jobs.retention`
 - Default — **dry-run**. Destructive: `--execute` или `RETENTION_EXECUTE=true`.
 - Окна: `RETENTION_*` в `env/.env.example` §10b (и `env/.env`); SoT —
   `RetentionConfig` / `RetentionWindows` / `RetentionPolicy`.
@@ -1821,16 +1821,16 @@ ADR: [`adr/0002-global-retention-scheduler.md`](adr/0002-global-retention-schedu
 - Attachments: global cron = SoT; lazy/`POST /sweep` (§16.6) — defense.
 
 ```powershell
-# After: poetry run alembic upgrade head
-poetry run python -m palatium_ai.jobs.retention --list-classes
-poetry run python -m palatium_ai.jobs.retention --class report_only
-poetry run python -m palatium_ai.jobs.retention --class memory_medium --class session_transcript
-poetry run python -m palatium_ai.jobs.retention --class checkpointer --class attachment_attach
+# After: uv run alembic upgrade head
+uv run python -m palatium_ai.jobs.retention --list-classes
+uv run python -m palatium_ai.jobs.retention --class report_only
+uv run python -m palatium_ai.jobs.retention --class memory_medium --class session_transcript
+uv run python -m palatium_ai.jobs.retention --class checkpointer --class attachment_attach
 # destructive (staging only after dry-run review):
-# poetry run python -m palatium_ai.jobs.retention --execute --class session_transcript
-# poetry run python -m palatium_ai.jobs.retention --execute --class memory_pii
-# poetry run python -m palatium_ai.jobs.retention --execute --class attachment_index
-# poetry run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
+# uv run python -m palatium_ai.jobs.retention --execute --class session_transcript
+# uv run python -m palatium_ai.jobs.retention --execute --class memory_pii
+# uv run python -m palatium_ai.jobs.retention --execute --class attachment_index
+# uv run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
 ```
 
 ---

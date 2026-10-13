@@ -1,8 +1,8 @@
 """Smoke: knowledge turn + format follow-up (legal rewrite class).
 
 Usage:
-  poetry run python scripts/smoke_format_followup.py
-  poetry run python scripts/smoke_format_followup.py --base-url http://127.0.0.1:8000
+  uv run python scripts/smoke_format_followup.py
+  uv run python scripts/smoke_format_followup.py --base-url http://127.0.0.1:8000
 """
 
 from __future__ import annotations

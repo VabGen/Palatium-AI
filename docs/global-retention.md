@@ -20,7 +20,7 @@ Lazy per-owner sweep (§16.6) и MinIO lifecycle — **defense in depth**, не 
 
 ```powershell
 # Миграции retention RPCs + индексы
-poetry run alembic upgrade head
+uv run alembic upgrade head
 # Ожидаемые ревизии: d4e5f6a7b8c9 (memory) · e5f6a7b8c9d0 (attachments/knowledge/checkpoints)
 ```
 
@@ -84,7 +84,7 @@ Env: скопируйте блок **§10b** из [`env/.env.example`](../env/.e
 | `audit_chain` / `observability_*` / `backup_snapshots` / … | `report_only` или ops | вне app-таблиц | **W5–W6** |
 | `report_only` | noop snapshot | — | всегда |
 
-Список имён в рантайме: `poetry run python -m palatium_ai.jobs.retention --list-classes`.
+Список имён в рантайме: `uv run python -m palatium_ai.jobs.retention --list-classes`.
 
 ## 5. CLI
 
@@ -104,20 +104,20 @@ Exit codes: `0` ok · `2` config · `3` runtime.
 
 ```powershell
 # 1) Миграции
-poetry run alembic upgrade head
+uv run alembic upgrade head
 
 # 2) Только отчёт (безопасно)
-poetry run python -m palatium_ai.jobs.retention --list-classes
-poetry run python -m palatium_ai.jobs.retention
-poetry run python -m palatium_ai.jobs.retention --class memory_medium --class session_transcript
-poetry run python -m palatium_ai.jobs.retention --class checkpointer --class attachment_attach --class knowledge_orphan
+uv run python -m palatium_ai.jobs.retention --list-classes
+uv run python -m palatium_ai.jobs.retention
+uv run python -m palatium_ai.jobs.retention --class memory_medium --class session_transcript
+uv run python -m palatium_ai.jobs.retention --class checkpointer --class attachment_attach --class knowledge_orphan
 
 # 3) После review dry-run — узкий execute
-# poetry run python -m palatium_ai.jobs.retention --execute --class session_transcript
-# poetry run python -m palatium_ai.jobs.retention --execute --class memory_medium
-# poetry run python -m palatium_ai.jobs.retention --execute --class attachment_index
-# poetry run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
-# poetry run python -m palatium_ai.jobs.retention --execute --class checkpointer
+# uv run python -m palatium_ai.jobs.retention --execute --class session_transcript
+# uv run python -m palatium_ai.jobs.retention --execute --class memory_medium
+# uv run python -m palatium_ai.jobs.retention --execute --class attachment_index
+# uv run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
+# uv run python -m palatium_ai.jobs.retention --execute --class checkpointer
 ```
 
 Blob backend для attachment-classes берётся из `ATTACHMENTS_BLOB_BACKEND` /

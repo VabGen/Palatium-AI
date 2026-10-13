@@ -32,8 +32,8 @@ records live next to the code they describe.
 
 Usage::
 
-    poetry run python scripts/check_todos.py
-    poetry run python scripts/check_todos.py --fail-on-stale
+    uv run python scripts/check_todos.py
+    uv run python scripts/check_todos.py --fail-on-stale
 """
 
 from __future__ import annotations

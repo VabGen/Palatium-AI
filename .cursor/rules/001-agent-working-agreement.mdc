@@ -43,7 +43,7 @@ alwaysApply: true
 | Cache / queue | **Valkey 8.x**, протокол **RESP3** | `redis`-клиент + Redis — миграция отдельной задачей |
 | БД | **PostgreSQL 17** | PostgreSQL + pgvector |
 | Python | **3.14** | `requires-python >=3.14,<3.15`, ruff `py314` |
-| Зависимости / env | **uv** (новые проекты) | **Poetry** + `poetry.lock` — действующее решение |
+| Зависимости / env | **uv** | **uv** + `uv.lock` — действующее решение (не Poetry) |
 | Линт / формат | **Ruff** (линтер + форматтер + isort) | Ruff — единственный инструмент (015) |
 | Модели данных | **Pydantic v2** | Pydantic v2 + `pydantic-settings` |
 | API | **FastAPI** | FastAPI |

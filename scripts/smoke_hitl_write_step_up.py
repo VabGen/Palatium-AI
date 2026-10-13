@@ -1,8 +1,8 @@
 """Deterministic write-HITL + IdP step-up smoke (no LLM tool choice).
 
 Usage (API in development with HITL_STEP_UP_REQUIRED=true and idp_acr):
-  poetry run python scripts/smoke_hitl_write_step_up.py
-  poetry run python scripts/smoke_hitl_write_step_up.py --base-url http://127.0.0.1:8000
+  uv run python scripts/smoke_hitl_write_step_up.py
+  uv run python scripts/smoke_hitl_write_step_up.py --base-url http://127.0.0.1:8000
 
 Flow:
   1) POST /api/auth/dev-token

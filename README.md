@@ -101,22 +101,22 @@
 ```bash
 git clone https://github.com/your-org/palatium-ai.git
 cd palatium-ai
-poetry install --with dev
+uv sync --frozen
 cp env/.env.example env/.env   # заполните POSTGRES_*, LLM_*, REDIS_*
-poetry run alembic upgrade head
-poetry run python -m palatium_ai.main
+uv run alembic upgrade head
+uv run python -m palatium_ai.main
 ```
 
 > **Windows PowerShell:** используйте `Copy-Item` вместо `cp`,
-> `.\scripts\dev-up.ps1` вместо `poetry run python -m palatium_ai.main`.
+> `.\scripts\dev-up.ps1` вместо `uv run python -m palatium_ai.main`.
 > Полная инструкция — [START.md](START.md).
 
 ```powershell
 git clone https://github.com/your-org/palatium-ai.git
 cd palatium-ai
-poetry install --with dev
+uv sync --frozen
 Copy-Item env\.env.example env\.env   # заполнить POSTGRES_*, LLM_*, REDIS_*
-poetry run alembic upgrade head
+uv run alembic upgrade head
 .\scripts\dev-up.ps1                   # host-профиль (hot-reload)
 ```
 

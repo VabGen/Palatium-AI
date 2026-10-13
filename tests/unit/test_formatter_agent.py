@@ -165,14 +165,15 @@ def test_valid_table_ok() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_formatter_invalid_json_returns_stable_contract_code() -> None:
-    """Broken LLM JSON → failure with FORMATTER_OUTPUT_INVALID, never a fake document."""
+async def test_formatter_non_json_prose_accepted_as_markdown() -> None:
+    """Hybrid SSE: freeform LLM text is valid GFM, not FORMATTER_OUTPUT_INVALID."""
     from palatium_ai.domain.agents.context_packet import ContextPacket
-    from palatium_ai.domain.agents.formatter import FORMATTER_OUTPUT_INVALID, FormatterInput
+    from palatium_ai.domain.agents.formatter import FormatterInput
+    from palatium_ai.domain.content import ContentDocument
     from palatium_ai.domain.mcp.models import ToolExecutionPlan
     from tests.conftest import SequentialFakeLLMPort, run_formatter
 
-    llm = SequentialFakeLLMPort(["not-json-at-all", "still-broken {"])
+    llm = SequentialFakeLLMPort(["not-json-at-all"])
     packet = ContextPacket(
         task_id="t1",
         user_text="rewrite with citations",
@@ -199,6 +200,6 @@ async def test_formatter_invalid_json_returns_stable_contract_code() -> None:
         ),
         llm,
     )
-    assert result.status == "failure"
-    assert result.output is None
-    assert result.error == FORMATTER_OUTPUT_INVALID
+    assert result.status == "success"
+    assert isinstance(result.output, ContentDocument)
+    assert "not-json-at-all" in result.output.plain_text()
