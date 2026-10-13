@@ -1,0 +1,25 @@
+---
+description: Branching SoT — feature branches from/to dev; master is release-only
+alwaysApply: true
+---
+
+# Branching policy
+
+## SoT
+
+- `dev` — интеграционная ветка (все PR идут сюда)
+- `master` — релизная ветка (только promotion из `dev`)
+- `feature/*`, `fix/*`, `chore/*`, `test/*`, `diagnostics/*` — короткоживущие, всегда от `dev`
+
+## Cursor / agent
+
+- Никогда не создавать ветку от `master`
+- Перед `git checkout -b`: `git checkout dev && git pull`
+- Target PR: `base=dev`, не `master` (без явного разрешения владельца)
+- Не плодить ветки под каждый диагностический шаг — одна `diagnostics/<topic>`
+- Удалять ветку после merge в `dev`
+
+## Tooling (текущее состояние `dev`)
+
+- Локально и в CI на `dev`: **uv** (`uv.lock`, `uv sync --frozen`)
+- `master` может ещё держать Poetry до promotion — не смешивать lockfiles в одном PR
