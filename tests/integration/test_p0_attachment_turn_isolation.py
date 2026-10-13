@@ -227,18 +227,13 @@ def _build_service(
             supervisor_agent=make_supervisor_agent(harness),
             weaving_agent=make_weaving_agent(harness=harness),
             researcher_agent=make_researcher_agent(
-                FakeLLMPort(
-                    '{"summary": "Сводка по вложению.", "confidence": 0.9, '
-                    '"sources_used": ["llm_internal_reasoning"]}'
-                ),
+                FakeLLMPort('{"summary": "Сводка по вложению.", "confidence": 0.9, "sources_used": ["llm_internal_reasoning"]}'),
                 harness=harness,
             ),
             coder_agent=make_coder_agent(harness=harness),
             analyst_agent=make_analyst_agent(harness=harness),
             critic_agent=make_critic_agent(
-                FakeLLMPort(
-                    '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}'
-                )
+                FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
             ),
             formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("Ответ по файлу"))),
         ),
@@ -258,12 +253,8 @@ async def test_p0_followup_untrusted_context_stays_on_thread_attachment() -> Non
     """T1 follow-ups must fence A1 only; A2 from T2 must not appear in untrusted_context."""
     parser = _FakeParser(ParsedDocument(pages=(ParsedPage(number=1, text=_A1_BODY),)))
     att_service, blob, _repo = _stack(parser=parser)
-    a1_id = await _upload_ready(
-        att_service, blob, parser, thread_id=_T1, filename=_A1_NAME, body=_A1_BODY
-    )
-    a2_id = await _upload_ready(
-        att_service, blob, parser, thread_id=_T2, filename=_A2_NAME, body=_A2_BODY
-    )
+    a1_id = await _upload_ready(att_service, blob, parser, thread_id=_T1, filename=_A1_NAME, body=_A1_BODY)
+    a2_id = await _upload_ready(att_service, blob, parser, thread_id=_T2, filename=_A2_NAME, body=_A2_BODY)
 
     dialog = _PayloadDialogStore()
     sessions = _ThreadSessionService()

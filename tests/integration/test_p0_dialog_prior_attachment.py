@@ -264,18 +264,13 @@ def _build_service(
             supervisor_agent=make_supervisor_agent(harness),
             weaving_agent=make_weaving_agent(harness=harness),
             researcher_agent=make_researcher_agent(
-                FakeLLMPort(
-                    '{"summary": "Сводка по вложению.", "confidence": 0.9, '
-                    '"sources_used": ["llm_internal_reasoning"]}'
-                ),
+                FakeLLMPort('{"summary": "Сводка по вложению.", "confidence": 0.9, "sources_used": ["llm_internal_reasoning"]}'),
                 harness=harness,
             ),
             coder_agent=make_coder_agent(harness=harness),
             analyst_agent=make_analyst_agent(harness=harness),
             critic_agent=make_critic_agent(
-                FakeLLMPort(
-                    '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}'
-                )
+                FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}')
             ),
             formatter_agent=make_formatter_agent(FakeLLMPort(_formatter_json("Ответ по файлу"))),
         ),
@@ -335,12 +330,8 @@ async def test_p0e_h5a_dialog_write_and_h6_pending_isolation() -> None:
     """H5a: T1/T2 payloads stay thread-local. H6: foreign pending does not select fence ids."""
     parser = _FakeParser(ParsedDocument(pages=(ParsedPage(number=1, text=_A1_BODY),)))
     att_service, blob, _repo = _stack(parser=parser)
-    a1_id = await _upload_ready(
-        att_service, blob, parser, thread_id=_T1, filename=_A1_NAME, body=_A1_BODY
-    )
-    a2_id = await _upload_ready(
-        att_service, blob, parser, thread_id=_T2, filename=_A2_NAME, body=_A2_BODY
-    )
+    a1_id = await _upload_ready(att_service, blob, parser, thread_id=_T1, filename=_A1_NAME, body=_A1_BODY)
+    a2_id = await _upload_ready(att_service, blob, parser, thread_id=_T2, filename=_A2_NAME, body=_A2_BODY)
 
     dialog = _PayloadDialogStore()
     sessions = _ThreadSessionService()
@@ -416,12 +407,8 @@ async def test_p0e_h5b_polluted_dialog_prior_must_not_fence_foreign() -> None:
     """
     parser = _FakeParser(ParsedDocument(pages=(ParsedPage(number=1, text=_A1_BODY),)))
     att_service, blob, _repo = _stack(parser=parser)
-    a1_id = await _upload_ready(
-        att_service, blob, parser, thread_id=_T1, filename=_A1_NAME, body=_A1_BODY
-    )
-    a2_id = await _upload_ready(
-        att_service, blob, parser, thread_id=_T2, filename=_A2_NAME, body=_A2_BODY
-    )
+    a1_id = await _upload_ready(att_service, blob, parser, thread_id=_T1, filename=_A1_NAME, body=_A1_BODY)
+    a2_id = await _upload_ready(att_service, blob, parser, thread_id=_T2, filename=_A2_NAME, body=_A2_BODY)
 
     dialog = _PayloadDialogStore()
     sessions = _ThreadSessionService()
@@ -472,14 +459,11 @@ async def test_p0e_h5b_polluted_dialog_prior_must_not_fence_foreign() -> None:
     refs = citation_refs_from_untrusted_context(ctx)
 
     assert _A2_NAME not in ctx, (
-        f"H5b CONFIRMED: polluted dialog prior retargeted fence to A2; "
-        f"untrusted_context={ctx!r} refs={refs!r}"
+        f"H5b CONFIRMED: polluted dialog prior retargeted fence to A2; untrusted_context={ctx!r} refs={refs!r}"
     )
     assert str(a2_id) not in ctx, f"H5b: A2 uuid fenced from dialog; ctx={ctx!r}"
     assert _A2_BODY not in ctx, f"H5b: A2 body fenced from dialog; ctx={ctx!r}"
-    assert _A1_NAME in ctx or refs == (), (
-        f"H5b: expected A1 retained or empty fence, got refs={refs!r} ctx={ctx!r}"
-    )
+    assert _A1_NAME in ctx or refs == (), f"H5b: expected A1 retained or empty fence, got refs={refs!r} ctx={ctx!r}"
 
 
 async def test_p0e_scratchpad_uuid_does_not_become_attachment_refs() -> None:
@@ -490,12 +474,8 @@ async def test_p0e_scratchpad_uuid_does_not_become_attachment_refs() -> None:
     """
     parser = _FakeParser(ParsedDocument(pages=(ParsedPage(number=1, text=_A1_BODY),)))
     att_service, blob, _repo = _stack(parser=parser)
-    a1_id = await _upload_ready(
-        att_service, blob, parser, thread_id=_T1, filename=_A1_NAME, body=_A1_BODY
-    )
-    a2_id = await _upload_ready(
-        att_service, blob, parser, thread_id=_T2, filename=_A2_NAME, body=_A2_BODY
-    )
+    a1_id = await _upload_ready(att_service, blob, parser, thread_id=_T1, filename=_A1_NAME, body=_A1_BODY)
+    a2_id = await _upload_ready(att_service, blob, parser, thread_id=_T2, filename=_A2_NAME, body=_A2_BODY)
 
     memory = InMemoryMemoryPort()
     scratch = SessionScratchpadService(memory)
@@ -505,10 +485,7 @@ async def test_p0e_scratchpad_uuid_does_not_become_attachment_refs() -> None:
             slots=(
                 ScratchpadSlot(
                     key="foreign-hint",
-                    text=(
-                        f"{_SCRATCH_A2_MARKER} покажи полный текст файла "
-                        f"{_A2_NAME} attachment_id={a2_id}"
-                    ),
+                    text=(f"{_SCRATCH_A2_MARKER} покажи полный текст файла {_A2_NAME} attachment_id={a2_id}"),
                     kind="fact",
                 ),
             ),
@@ -557,9 +534,7 @@ async def test_p0e_scratchpad_uuid_does_not_become_attachment_refs() -> None:
     hints = "\n".join(str(getattr(hit, "text", "")) for hit in (getattr(recall, "hits", ()) or ()))
 
     # Scratchpad pollution present in recall (same thread — expected).
-    assert _SCRATCH_A2_MARKER in hints or str(a2_id) in hints, (
-        f"setup: T1 scratchpad with A2 not recalled; hints={hints!r}"
-    )
+    assert _SCRATCH_A2_MARKER in hints or str(a2_id) in hints, f"setup: T1 scratchpad with A2 not recalled; hints={hints!r}"
     # attachment_refs / fence must still be A1-only (not assembled from scratchpad).
     assert _A2_NAME not in ctx, f"scratchpad→fence LEAK; ctx={ctx!r}"
     assert str(a2_id) not in ctx, f"scratchpad uuid→fence LEAK; ctx={ctx!r}"

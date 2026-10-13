@@ -253,11 +253,7 @@ class PostgresAttachmentRepository:
             )
             # Defense in depth: drop foreign-thread rows even if a session mock
             # or driver over-returns (contract for unit A.2a / P0-A).
-            return [
-                _attachment_from_orm(row)
-                for row in result.scalars().all()
-                if row.thread_id == thread_id
-            ]
+            return [_attachment_from_orm(row) for row in result.scalars().all() if row.thread_id == thread_id]
 
     async def list_for_thread(self, thread_id: str, *, user_id: str) -> list[Attachment]:
         """List attachments bound to one thread, newest first."""

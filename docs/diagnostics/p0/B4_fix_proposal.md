@@ -50,6 +50,7 @@ for idx, (namespace, item) in enumerate(ranked):
     hit = _durable_hit_from_item(...)
     ...
 
+
 def _is_user_namespace(namespace: tuple[str, ...]) -> bool:
     return bool(namespace) and namespace[0] == "user"
 ```
