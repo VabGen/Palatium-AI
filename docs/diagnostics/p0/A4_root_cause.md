@@ -147,7 +147,7 @@ A.2d: `P0D_USER_NS_FOREIGN_ATTACHMENT` + `unrelated.pdf` + a2 uuid в T1 `memory
 
 1. ~~A.4~~ — locked (этот файл)  
 2. ~~B.4~~ — `B4_fix_proposal.md`  
-3. **PR P0-A** `fix/p0-attachment-thread-isolation` (блокер Phase 5)  
-4. **PR P0-B** `fix/p0-recall-thread-scope` (параллельно)  
-5. C.2 smoke после обоих  
-6. Пометка в `evolution-to-big-tech` — после merge
+3. ~~PR P0-A~~ — влито в `dev` (`get_many` + thread_id)  
+4. ~~PR P0-B~~ — влито в `dev` (user_ns kind-gate)  
+5. ~~C.2 smoke~~ — `uv run python scripts/smoke_p0_attachment.py` → `C2_smoke_post_merge.txt`  
+6. Пометка в `evolution-to-big-tech` / promotion `dev → master` — отдельно

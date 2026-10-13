@@ -1,0 +1,9 @@
+C.2 smoke_p0_attachment — 2026-10-13T18:10:49Z
+cwd=D:\project\palatium-ai
+exit=0
+cmd=D:\project\palatium-ai\.venv\Scripts\python.exe -m pytest tests/unit/test_p0_get_many_thread_isolation.py tests/unit/test_attachment_repository.py tests/unit/test_memory_recall.py tests/integration/test_p0_attachment_turn_isolation.py tests/integration/test_p0_dialog_prior_attachment.py tests/integration/test_p0_scratchpad_leak_to_attachment.py -q --tb=line
+========================================================================
+................................                                         [100%]
+32 passed in 43.75s
+
+
