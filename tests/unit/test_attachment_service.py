@@ -117,11 +117,17 @@ class _FakeAttachmentRepository:
             return None
         return row
 
-    async def get_many(self, attachment_ids: Sequence[UUID], *, user_id: str) -> list[Attachment]:
+    async def get_many(
+        self,
+        attachment_ids: Sequence[UUID],
+        *,
+        user_id: str,
+        thread_id: str,
+    ) -> list[Attachment]:
         found: list[Attachment] = []
         for attachment_id in attachment_ids:
             row = await self.get(attachment_id, user_id=user_id)
-            if row is not None:
+            if row is not None and row.thread_id == thread_id:
                 found.append(row)
         return found
 

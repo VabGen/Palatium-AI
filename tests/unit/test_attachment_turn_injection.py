@@ -73,7 +73,7 @@ class _StubAttachmentService:
         *,
         attachment_ids: list[object],
         user_id: str,
-        thread_id: str | None = None,
+        thread_id: str,
     ) -> AttachmentTurnContext:
         self.calls.append((tuple(attachment_ids), user_id, thread_id))
         if self._error is not None:

@@ -38,8 +38,17 @@ class AttachmentRepositoryPort(Protocol):
         """Fetch one attachment owned by ``user_id``."""
         ...
 
-    async def get_many(self, attachment_ids: Sequence[UUID], *, user_id: str) -> list[Attachment]:
-        """Fetch several attachments at once, skipping ids not owned by ``user_id``."""
+    async def get_many(
+        self,
+        attachment_ids: Sequence[UUID],
+        *,
+        user_id: str,
+        thread_id: str,
+    ) -> list[Attachment]:
+        """Fetch attachments owned by ``user_id`` and bound to ``thread_id``.
+
+        Ids from another thread of the same user must not resolve (P0-A fence isolation).
+        """
         ...
 
     async def list_for_thread(self, thread_id: str, *, user_id: str) -> list[Attachment]:

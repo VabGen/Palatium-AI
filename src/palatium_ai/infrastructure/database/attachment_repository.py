@@ -230,18 +230,34 @@ class PostgresAttachmentRepository:
             entity = await self._get_orm(session, attachment_id, user_id)
             return _attachment_from_orm(entity) if entity is not None else None
 
-    async def get_many(self, attachment_ids: Sequence[UUID], *, user_id: str) -> list[Attachment]:
-        """Fetch several attachments, skipping ids not owned by ``user_id``."""
+    async def get_many(
+        self,
+        attachment_ids: Sequence[UUID],
+        *,
+        user_id: str,
+        thread_id: str,
+    ) -> list[Attachment]:
+        """Fetch attachments owned by ``user_id`` and bound to ``thread_id`` (P0-A)."""
         if not attachment_ids:
             return []
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
             result = await session.execute(
                 select(AttachmentORM)
-                .where(AttachmentORM.id.in_(list(attachment_ids)), AttachmentORM.user_id == user_id)
+                .where(
+                    AttachmentORM.id.in_(list(attachment_ids)),
+                    AttachmentORM.user_id == user_id,
+                    AttachmentORM.thread_id == thread_id,
+                )
                 .order_by(AttachmentORM.created_at.asc())
             )
-            return [_attachment_from_orm(row) for row in result.scalars().all()]
+            # Defense in depth: drop foreign-thread rows even if a session mock
+            # or driver over-returns (contract for unit A.2a / P0-A).
+            return [
+                _attachment_from_orm(row)
+                for row in result.scalars().all()
+                if row.thread_id == thread_id
+            ]
 
     async def list_for_thread(self, thread_id: str, *, user_id: str) -> list[Attachment]:
         """List attachments bound to one thread, newest first."""
