@@ -78,7 +78,18 @@
         "tests/unit/test_dockerfile_build_contract.py",
         "tests/unit/test_edms_authorities.py",
         "tests/unit/test_hooks_deny_shell.py",
-        "tox.ini"
+        "tox.ini",
+        ".github/pull_request_template.md",
+        "README.md",
+        "START.md",
+        "src/palatium_ai/infrastructure/blob/minio_adapter.py",
+        "src/palatium_ai/infrastructure/parsing/document_parser.py",
+        "src/palatium_ai/main.py",
+        "scripts/dev-down.ps1",
+        "scripts/lib/dev-common.ps1",
+        "src/palatium_ai/application/agents/context_enricher/continuation/parsing.py",
+        "src/palatium_ai/infrastructure/graph/neo4j_graph_port.py",
+        "src/palatium_ai/infrastructure/memory/checkpointer.py"
       ]
     }
   ],

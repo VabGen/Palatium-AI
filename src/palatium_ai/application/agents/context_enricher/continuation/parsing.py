@@ -64,7 +64,7 @@ def parse_contextualizer_output(
     kind_raw = str(payload.get("continuation_kind", "new_topic"))
     kind: ContinuationKind
     if kind_raw in _CONTINUATIONS:
-        kind = cast("ContinuationKind", kind_raw)
+        kind = kind_raw
     else:
         prior = ContinuityPolicy.prior_assistant_content(None, dialog_window)
         kind = "answer" if prior is not None else "new_topic"

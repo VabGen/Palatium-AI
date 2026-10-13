@@ -29,6 +29,7 @@ from langgraph.checkpoint.base.id import uuid6
 from palatium_ai.core.config import get_settings
 from palatium_ai.infrastructure.memory.checkpointer import (
     create_checkpointer,
+    create_psycopg_event_loop,
     ensure_psycopg_compatible_loop,
 )
 
@@ -139,5 +140,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    ensure_psycopg_compatible_loop()
-    raise SystemExit(asyncio.run(main()))
+    raise SystemExit(asyncio.run(main(), loop_factory=create_psycopg_event_loop))

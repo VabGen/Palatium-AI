@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import selectors
 import sys
-import warnings
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -36,23 +36,43 @@ class CheckpointerHandle:
     aclose: Callable[[], Awaitable[None]] | None = None
 
 
-def ensure_psycopg_compatible_loop() -> None:
-    """Psycopg async requires SelectorEventLoop on Windows (not Proactor).
+def create_psycopg_event_loop() -> asyncio.AbstractEventLoop:
+    """Zero-arg factory for ``asyncio.run(loop_factory=...)`` / uvicorn ``loop=``.
 
-    Python 3.14 deprecates event-loop policies (removal in 3.16). Prefer
-    ``asyncio.run(..., loop_factory=asyncio.SelectorEventLoop)`` at call
-    sites; keep this policy pin only until uvicorn/bootstrap pass a
-    loop_factory. Warnings are suppressed so ``filterwarnings=error`` in
-    tests does not fail process import on Windows.
+    uvicorn's built-in ``asyncio`` factory returns ``ProactorEventLoop`` on win32,
+    which makes AsyncPostgresSaver / psycopg-pool fail at connect time. Custom
+    ``loop=module:attr`` is passed straight to ``asyncio.run(loop_factory=...)``,
+    so this must return an event loop — not a meta-factory.
     """
     if sys.platform == "win32":
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                policy = asyncio.WindowsSelectorEventLoopPolicy()
-                asyncio.set_event_loop_policy(policy)
-        except Exception as exc:
-            logger.debug("Could not set WindowsSelectorEventLoopPolicy", error=str(exc))
+        return asyncio.SelectorEventLoop(selectors.SelectSelector())
+    return asyncio.SelectorEventLoop()
+
+
+def ensure_psycopg_compatible_loop() -> None:
+    """Diagnose a running Windows loop; do not set deprecated event-loop policies.
+
+    Psycopg async needs ``SelectorEventLoop`` on Windows (not Proactor). Python
+    3.14 deprecates policies (removed in 3.16) — create the loop via
+    ``create_psycopg_event_loop`` (``asyncio.run(..., loop_factory=...)`` or
+    uvicorn ``loop=`` in ``main.py``). Call this after a loop exists to log a
+    warning if the wrong loop type is already running.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if isinstance(loop, asyncio.SelectorEventLoop):
+        return
+    logger.warning(
+        "Running event loop is not SelectorEventLoop; "
+        "AsyncPostgresSaver/psycopg may fail on Windows. "
+        "Pass create_psycopg_event_loop to asyncio.run(loop_factory=...) "
+        "or uvicorn loop=",
+        loop_type=type(loop).__name__,
+    )
 
 
 def _memory_saver() -> MemorySaver:

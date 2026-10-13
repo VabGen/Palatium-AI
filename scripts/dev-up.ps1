@@ -99,18 +99,7 @@ function Test-CommandAvailable {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-function Get-PortListener {
-    param([Parameter(Mandatory = $true)][int]$Port)
-    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if (-not $conn) { return $null }
-    return [pscustomobject]@{ pid = [int]$conn.OwningProcess; port = $Port }
-}
-
-function Test-PortListening {
-    param([Parameter(Mandatory = $true)][int]$Port)
-    return [bool](Get-PortListener -Port $Port)
-}
+# Get-PortListener / Test-PortListening — scripts/lib/dev-common.ps1 (dot-sourced above).
 
 function Get-UvExe {
     if (-not (Test-CommandAvailable "uv")) {
@@ -365,13 +354,26 @@ function Start-DevService {
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 400
         if ($proc.HasExited) {
-            $tail = Get-Content -Path $stderrLog -Tail 30 -ErrorAction SilentlyContinue
-            throw "$Name exited early (code $($proc.ExitCode)). stderr tail:`n$($tail -join [Environment]::NewLine)"
+            # Start-Process redirects are often UTF-16 on Windows; -Raw + strip NULs.
+            $errRaw = (Get-Content -Path $stderrLog -Raw -ErrorAction SilentlyContinue) -replace "`0", ""
+            $outRaw = (Get-Content -Path $stdoutLog -Raw -ErrorAction SilentlyContinue) -replace "`0", ""
+            $errTail = if ($errRaw) { ($errRaw -split "`r?`n" | Select-Object -Last 20) -join [Environment]::NewLine } else { "" }
+            $outTail = if ($outRaw) { ($outRaw -split "`r?`n" | Select-Object -Last 40) -join [Environment]::NewLine } else { "" }
+            $msg = "$Name exited early (code $($proc.ExitCode))."
+            if ($errTail) { $msg += "`nstderr tail:`n$errTail" }
+            if ($outTail) { $msg += "`nstdout tail:`n$outTail" }
+            throw $msg
         }
         if (Test-PortListening -Port $Port) { break }
     }
 
     if (-not (Test-PortListening -Port $Port)) {
+        if (-not $proc.HasExited) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            # Uvicorn --reload leaves a child worker; kill the process tree on Windows.
+            Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" -ErrorAction SilentlyContinue |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        }
         $tail = Get-Content -Path $stderrLog -Tail 30 -ErrorAction SilentlyContinue
         $msg = "$Name did not bind port $Port within ${StartupTimeoutSeconds}s.`n"
         $msg += "See $stderrLog"
@@ -404,10 +406,12 @@ if (-not $env:UV_LINK_MODE) {
     $env:UV_LINK_MODE = "copy"
 }
 Write-Host ""
-Write-Host "uv sync --frozen (once, before host services)..." -ForegroundColor Cyan
-& $UvExe sync --frozen
+Write-Host "uv sync --frozen --extra attachments (once, before host services)..." -ForegroundColor Cyan
+# minio + neo4j are core deps (pyproject). Parsing/OCR (pypdf/docx/…) lives in the
+# optional `attachments` extra — without it init refuses PDF/DOCX as mime_not_allowed.
+& $UvExe sync --frozen --extra attachments
 if ($LASTEXITCODE -ne 0) {
-    throw "uv sync --frozen failed (exit $LASTEXITCODE). Fix the env, then re-run."
+    throw "uv sync --frozen --extra attachments failed (exit $LASTEXITCODE). Fix the env, then re-run."
 }
 
 $dockerPorts = [pscustomobject]@{
@@ -469,6 +473,10 @@ $apiEnv["PALATIUM_GATEWAY_KEY"]   = Get-DotEnvStr -Map $DotEnv -Key "PALATIUM_GA
                                         -Default (Get-DotEnvStr -Map $DotEnv -Key "LITELLM_MASTER_KEY" -Default "")
 $apiEnv["MCP_HTTP_ALLOWED_HOSTS"] = "localhost,127.0.0.1,::1"
 $apiEnv["APP_HOST"]               = "127.0.0.1"
+# Start-Process redirects stdio; uvicorn --reload uses multiprocessing spawn and
+# fails on Windows (WaitNamedPipe / FileNotFoundError) before the worker binds.
+# Interactive `python -m palatium_ai` keeps reload (default PALATIUM_UVICORN_RELOAD=1).
+$apiEnv["PALATIUM_UVICORN_RELOAD"] = "0"
 
 # Выбор MCP_SERVERS: если gateway включён — API ходит на gateway-порты,
 # иначе — напрямую на upstream stubs.
@@ -543,7 +551,7 @@ if ($WithGateway) {
 
     $gwAnalytics = Start-DevService `
         -Name "mcp-gateway-analytics" `
-        -Arguments "run uvicorn mcp_servers.gateway.gateway_mcp_server:app --host 127.0.0.1 --port 8091" `
+        -Arguments "run --no-sync uvicorn mcp_servers.gateway.gateway_mcp_server:app --host 127.0.0.1 --port 8091" `
         -Port 8091 `
         -UvExe $UvExe `
         -HealthPath "/health" `
@@ -555,7 +563,7 @@ if ($WithGateway) {
 if ($WithPlatformStub) {
     $platform = Start-DevService `
         -Name "mcp-platform" `
-        -Arguments "run uvicorn mcp_servers.platform.platform_mcp_server:app --host 127.0.0.1 --port 8082" `
+        -Arguments "run --no-sync uvicorn mcp_servers.platform.platform_mcp_server:app --host 127.0.0.1 --port 8082" `
         -Port 8082 `
         -UvExe $UvExe `
         -HealthPath "/health" `
@@ -567,7 +575,7 @@ if ($WithPlatformStub) {
 if (-not $SkipApi) {
     $app = Start-DevService `
         -Name "palatium-ai" `
-        -Arguments "run python -m palatium_ai.main" `
+        -Arguments "run --no-sync python -m palatium_ai.main" `
         -Port 8000 `
         -UvExe $UvExe `
         -HealthPath "/docs" `
@@ -638,4 +646,4 @@ Write-Host "Logs:   $LogDir"
 Write-Host "State:  $StateFile"
 Write-Host ""
 Write-Host "Остановить:  .\scripts\dev-down.ps1" -ForegroundColor DarkGray
-Wri
+Write-Host ""

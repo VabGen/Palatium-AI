@@ -1343,10 +1343,13 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 (AV / инъекции), `rejected` (политика / парсинг), `expired`, `indexed`.
 
 **Способность, а не разрешение (055).** Intake-политика проверяет не только
-закрытый реестр, но и то, что для MIME реально подключён парсер. Картинки
-(`image/jpeg`, `image/png`, `image/webp`) не имеют текстового слоя. При
-`ATTACHMENTS_IMAGE_OCR_BACKEND=disabled` (или `auto`/`tesseract` без установленных
-extras и без Vision-модели) они **отвергаются на `init`**
+закрытый реестр, но и то, что для MIME реально подключён парсер. PDF / DOCX /
+XLSX / PPTX / HTML требуют optional-extra `attachments` (`pypdf`, `python-docx`,
+…). Host-путь: `uv sync --frozen --extra attachments` (`scripts/dev-up.ps1`
+ставит его сам). Без extra `init` отвечает `mime_not_allowed` даже для типов из
+реестра. Картинки (`image/jpeg`, `image/png`, `image/webp`) не имеют текстового
+слоя. При `ATTACHMENTS_IMAGE_OCR_BACKEND=disabled` (или `auto`/`tesseract` без
+установленных extras и без Vision-модели) они тоже **отвергаются на `init`**
 (`reason="mime_not_allowed"`). Default `auto`: Tesseract (если есть) → при сбое /
 низком качестве — Vision encoder (`ATTACHMENTS_IMAGE_OCR_MODEL`).
 

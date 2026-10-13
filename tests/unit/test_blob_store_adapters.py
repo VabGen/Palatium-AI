@@ -92,7 +92,7 @@ def test_minio_missing_package_raises_actionable_error() -> None:
     """The optional extra must fail with a provisioning hint, not an ImportError."""
     if _minio_installed():
         pytest.skip("minio installed — the missing-package path is not reachable")
-    with pytest.raises(RuntimeError, match="uv sync --frozen --extra attachments"):
+    with pytest.raises(RuntimeError, match="uv sync --frozen"):
         MinIOAdapter(
             endpoint="localhost:9000",
             access_key="k",
@@ -105,7 +105,7 @@ def test_minio_missing_package_raises_actionable_error() -> None:
 async def test_minio_dispatches_blocking_sdk_calls_to_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression for 050: a blocking SDK call on the event loop stalls the graph."""
     if not _minio_installed():
-        pytest.skip("minio not installed — install with `uv sync --frozen --extra attachments`")
+        pytest.skip("minio not installed — install with `uv sync --frozen`")
 
     import minio
 
@@ -263,7 +263,7 @@ def test_resolve_public_endpoint_rejects_malformed_values(value: str) -> None:
 async def test_minio_presigns_against_the_public_endpoint() -> None:
     """Regression: the browser must receive the public host, not the in-cluster one."""
     if not _minio_installed():
-        pytest.skip("minio not installed — install with `uv sync --frozen --extra attachments`")
+        pytest.skip("minio not installed — install with `uv sync --frozen`")
 
     adapter = MinIOAdapter(
         endpoint="minio:9000",
@@ -288,7 +288,7 @@ async def test_minio_presigns_against_the_public_endpoint() -> None:
 async def test_minio_presign_falls_back_to_the_connection_endpoint() -> None:
     """Unset means 'one address for both', so the existing single-host setups keep working."""
     if not _minio_installed():
-        pytest.skip("minio not installed — install with `uv sync --frozen --extra attachments`")
+        pytest.skip("minio not installed — install with `uv sync --frozen`")
 
     adapter = MinIOAdapter(
         endpoint="127.0.0.1:9000",
@@ -307,7 +307,7 @@ async def test_minio_presign_falls_back_to_the_connection_endpoint() -> None:
 async def test_minio_public_endpoint_scheme_decides_tls_for_the_browser() -> None:
     """An https public endpoint must yield an https URL even when the cluster link is plain."""
     if not _minio_installed():
-        pytest.skip("minio not installed — install with `uv sync --frozen --extra attachments`")
+        pytest.skip("minio not installed — install with `uv sync --frozen`")
 
     adapter = MinIOAdapter(
         endpoint="minio:9000",
@@ -335,7 +335,7 @@ class _FakeS3Error(Exception):
 def _fake_minio_client_raising_on_make_bucket(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
     """Install a client that always reports "no bucket", then fails the create."""
     if not _minio_installed():
-        pytest.skip("minio not installed — install with `uv sync --frozen --extra attachments`")
+        pytest.skip("minio not installed — install with `uv sync --frozen`")
 
     import minio
 

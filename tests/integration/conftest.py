@@ -42,5 +42,5 @@ def requires_neo4j(neo4j_credentials: tuple[str, str, str] | None) -> tuple[str,
     try:
         import neo4j  # noqa: F401
     except ImportError:
-        pytest.skip("neo4j driver not installed — poetry install --with graph")
+        pytest.skip("neo4j driver not installed — uv sync --frozen")
     return neo4j_credentials

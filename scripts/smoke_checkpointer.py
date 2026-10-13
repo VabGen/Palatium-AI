@@ -14,6 +14,7 @@ from palatium_ai.application.orchestration.run_config import build_graph_run_con
 from palatium_ai.core.config import get_settings
 from palatium_ai.infrastructure.memory.checkpointer import (
     create_checkpointer,
+    create_psycopg_event_loop,
     ensure_psycopg_compatible_loop,
 )
 
@@ -60,9 +61,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    ensure_psycopg_compatible_loop()
     try:
-        asyncio.run(main())
+        asyncio.run(main(), loop_factory=create_psycopg_event_loop)
     except Exception as exc:
         print(f"smoke_failed: {exc}", file=sys.stderr)
         raise

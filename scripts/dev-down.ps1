@@ -64,18 +64,7 @@ $DevPorts = @(
     @{ Name = "mcp-edms";              Port = 8080 }
 )
 
-function Get-PortListener {
-    param([Parameter(Mandatory = $true)][int]$Port)
-    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if (-not $conn) { return $null }
-    return [pscustomobject]@{ pid = [int]$conn.OwningProcess; port = $Port }
-}
-
-function Test-PortListening {
-    param([Parameter(Mandatory = $true)][int]$Port)
-    return [bool](Get-PortListener -Port $Port)
-}
+# Get-PortListener / Test-PortListening — scripts/lib/dev-common.ps1 (dot-sourced above).
 
 function Get-ChildProcessIds {
     param([Parameter(Mandatory = $true)][int]$ProcessId)

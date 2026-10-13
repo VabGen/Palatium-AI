@@ -14,6 +14,45 @@
 #: port belongs to somebody else.
 $OurLaunchMarkers = @("palatium_ai.main", "mcp_servers.")
 
+function Get-PortListener {
+    <#
+      PID listening on $Port, or $null.
+
+      Do NOT use Get-NetTCPConnection here: on Windows hosts with a large TCP table
+      (proxy fan-out, many TIME_WAIT/ESTABLISHED) it can block for minutes and freeze
+      scripts/dev-up.ps1 mid-wait. netstat -ano is O(rows) and returns promptly.
+    #>
+    param([Parameter(Mandatory = $true)][int]$Port)
+    $pattern = "^\s*TCP\s+\S+:$Port\s+\S+\s+LISTENING\s+(\d+)\s*$"
+    foreach ($line in (& netstat.exe -ano -p tcp 2>$null)) {
+        if ($line -match $pattern) {
+            return [pscustomobject]@{ pid = [int]$Matches[1]; port = $Port }
+        }
+    }
+    return $null
+}
+
+function Test-PortListening {
+    param([Parameter(Mandatory = $true)][int]$Port)
+    # Connect probe — avoids enumerating the TCP table (see Get-PortListener).
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        try {
+            $iar = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+            $ok = $iar.AsyncWaitHandle.WaitOne(200, $false)
+            if (-not $ok) { return $false }
+            $client.EndConnect($iar)
+            return $true
+        }
+        finally {
+            $client.Close()
+        }
+    }
+    catch {
+        return $false
+    }
+}
+
 function Get-ProcessTable {
     # One WMI snapshot keyed by pid. The ownership walk needs ancestors, and querying
     # WMI per hop would race the very process tree it is inspecting.

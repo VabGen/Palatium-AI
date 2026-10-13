@@ -33,6 +33,10 @@ dependencies = [
     "langgraph (>=1.2.10,<2.0.0)",
     "langgraph-checkpoint-postgres (>=2.0.0,<4.0.0)",
     "litellm (>=1.97.0,<2.0.0)",
+    # Default host backends: ATTACHMENTS_BLOB_BACKEND=minio, GRAPH_QUERY_BACKEND=neo4j.
+    # Core so plain `uv sync --frozen` boots without --extra (050).
+    "minio (>=7.2.0,<8.0.0)",
+    "neo4j (>=5.28.0,<6.0.0)",
     "openai (>=2.20.0,<3.0.0)",
     "opentelemetry-api (>=1.29.0,<2.0.0)",
     "opentelemetry-exporter-otlp-proto-http (>=1.29.0,<2.0.0)",
@@ -56,12 +60,11 @@ license-files = ["LICENSE"]
 [project.optional-dependencies]
 mysql = ["mysqlclient (>=2.2.0,<3.0.0)"]
 pgsql = ["psycopg2 (>=2.9,<3.0)"]
-graph = ["neo4j (>=5.28.0,<6.0.0)"]
 graphiti = ["graphiti-core (>=0.11.0,<1.0.0)"]
+# Parsing/OCR for attachments (minio is a core dep — blob backend).
 attachments = [
     "argon2-cffi (>=25.1.0,<26.0.0)",
     "lxml (>=6.1.3,<7.0.0)",
-    "minio (>=7.2.0,<8.0.0)",
     "pillow (>=11.0.0,<12.0.0)",
     "pycryptodome (>=3.23.0,<4.0.0)",
     "pymupdf (>=1.24.0,<2.0.0)",
@@ -275,8 +278,7 @@ exclude_lines = [
 # === Установка Python - uv python install 3.14 --default                                                      ~~ ===
 # === Создать виртуальное окружение с Python 3.14 - uv venv --python 3.14                                      ~~ ===
 # === Синхронизация окружения (установит основные и dev-зависимости) - uv sync                                 ~~ ===
-# === Если нужны опциональные зависимости (например, для работы с вложениями) - uv sync --extra attachments    ~~ ===
-# === Установка всех зависимостей  - uv sync --all-extras --all-groups || uv sync --group type-check           ~~ ===
+# === Parsing/OCR for attachments (minio is core) - uv sync --extra attachments / uv sync --frozen --extra     ~~ ===
 # === Обновит uv.lock до последних совместимых версий - uv lock --upgrade || uv lock --upgrade-package httpx   ~~ ===
 # === Сборка пакета: Создаст source и wheel дистрибутивы в папке dist/. - uv build                             ~~ ===
 # === Очистка кеша - uv cache clean                                                                            ~~ ===

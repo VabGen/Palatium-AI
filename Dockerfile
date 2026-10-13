@@ -106,9 +106,8 @@ COPY src ./src
 COPY alembic.ini ./
 COPY alembic ./alembic
 
-# Lean image = no default (dev) groups. Attachments need the optional `attachments`
-# extra (minio / pypdf / python-docx). Without it ATTACHMENTS_BLOB_BACKEND=minio
-# fails closed on boot (see docs/runbook.md §16.2).
+# Lean image = no default (dev) groups. `minio` / `neo4j` are core deps.
+# Optional `attachments` extra = parsing/OCR (pypdf / python-docx / …).
 #
 # The import assertions below are not decoration. A failed root install used to be
 # swallowed by a trailing `|| true` — the image built while shipping a venv without
