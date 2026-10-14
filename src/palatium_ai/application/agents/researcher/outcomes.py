@@ -32,3 +32,18 @@ def failure_output(
         output=output,
         error_message=error,
     )
+
+
+def soft_empty_output(task_id: UUID, *, error: str) -> AgentOutput:
+    """Empty MCP hits — soft partial, not a hard worker failure (no synthesis)."""
+    return AgentOutput(
+        task_id=task_id,
+        status="partial",
+        confidence=0.0,
+        output=ResearcherOutput(
+            summary=FAILURE_PLACEHOLDER_SUMMARY,
+            confidence=0.0,
+            sources_used=(),
+        ),
+        error_message=error,
+    )

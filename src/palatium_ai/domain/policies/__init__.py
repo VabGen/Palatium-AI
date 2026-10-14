@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from .memory_recall import MemoryRecallDecision, MemoryRecallPolicy
     from .parallel_workers import ParallelWorkerPolicy, ParallelWorkersDecision
     from .promotion import PromotionPolicy
+    from .researcher_tier import ResearcherTierDecision, ResearcherTierPolicy
     from .response_cache import ResponseCacheKeyParts, ResponseCacheKeyPolicy
     from .retention import RetentionDecision, RetentionPolicy, RetentionWindows
     from .retrieval import LAST_RESORT_PLATFORM_TOOLS, RetrievalBindingDecision, RetrievalPolicy
@@ -98,6 +99,8 @@ __all__ = [
     "ParallelWorkersDecision",
     "PromotionPolicy",
     "ReplyLocalePolicy",
+    "ResearcherTierDecision",
+    "ResearcherTierPolicy",
     "ResponseCacheKeyParts",
     "ResponseCacheKeyPolicy",
     "RetentionDecision",
@@ -145,6 +148,8 @@ _LAZY: dict[str, tuple[str, str]] = {
     "ParallelWorkersDecision": (".parallel_workers", "ParallelWorkersDecision"),
     "PromotionPolicy": (".promotion", "PromotionPolicy"),
     "ReplyLocalePolicy": (".locale", "ReplyLocalePolicy"),
+    "ResearcherTierDecision": (".researcher_tier", "ResearcherTierDecision"),
+    "ResearcherTierPolicy": (".researcher_tier", "ResearcherTierPolicy"),
     "ResponseCacheKeyParts": (".response_cache", "ResponseCacheKeyParts"),
     "ResponseCacheKeyPolicy": (".response_cache", "ResponseCacheKeyPolicy"),
     "RetentionDecision": (".retention", "RetentionDecision"),

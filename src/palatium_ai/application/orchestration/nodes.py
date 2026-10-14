@@ -145,6 +145,9 @@ async def continuation_node(
         )
         memory_hints = recall.hint_texts if recall is not None else ()
         budget = state.get("prompt_budget") or MemoryPromptBudget()
+        intent_caps = (
+            tuple(raw_intent.candidate_capabilities) if raw_intent is not None else ()
+        )
         task_input = ContextualizerInput(
             task_id=selectors.require_task_id(state),
             user_text=selectors.resolved_user_text(state),
@@ -153,6 +156,7 @@ async def continuation_node(
             prompt_budget=budget,
             task_kind=intent_task_kind,
             requires_mcp=intent_requires_mcp,
+            candidate_capabilities=intent_caps,
         )
         agent_input = contextualizer_to_agent_input(
             task_input,
@@ -765,11 +769,11 @@ def route_after_critic(state: AgentGraphState) -> Literal["quality_revision", "f
 
 
 def _terminal_mcp_worker_failure(state: AgentGraphState) -> bool:
-    """True when Researcher already failed closed on empty/error MCP — no revise."""
+    """True when Researcher already closed on empty/error MCP — no revise."""
     from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, MCP_TOOL_ERROR
 
     execution = state.get("execution")
-    if execution is None or execution.status != "failure":
+    if execution is None or execution.status == "success":
         return False
     reason = execution.error
     return isinstance(reason, str) and reason in {MCP_EMPTY_RESULT, MCP_TOOL_ERROR}

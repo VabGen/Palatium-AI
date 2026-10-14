@@ -26,6 +26,8 @@ from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.policies.types import (
     CONTENT_GENERATION_CAPABILITY,
     DOCUMENT_GENERATION_CAPABILITY,
+    SUBSTANTIVE_USER_PAYLOAD_CHARS,
+    VERBATIM_EXTRACTION_CAPABILITY,
 )
 
 
@@ -182,19 +184,34 @@ def resolve_style_hint(task_input: FormatterInput) -> FormatterStyleHint:
     if (task_input.revision_feedback or "").strip():
         return "revise_keep_structure"
     caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
+    # Extract / full-text asks: worker body is the deliverable — do not brand-restructure.
+    if VERBATIM_EXTRACTION_CAPABILITY in caps:
+        return "plain_text"
     if DOCUMENT_GENERATION_CAPABILITY in caps:
         return "document_generation"
     if CONTENT_GENERATION_CAPABILITY in caps:
         return "content_generation"
-    if source and plain_paragraph_count(source) == 1:
+    if _preserve_worker_shape(source):
         return "plain_text"
     return "brand_sections_icons"
+
+
+def _preserve_worker_shape(source: str) -> bool:
+    """True when the worker body already has a shape Formatter must not brand-restructure."""
+    if not source:
+        return False
+    para_count = plain_paragraph_count(source)
+    if para_count == 1:
+        return True
+    # Long multi-paragraph or already-structured deliverable: keep shape, skip icon sections.
+    return len(source) >= SUBSTANTIVE_USER_PAYLOAD_CHARS and (
+        para_count is None or para_count >= 2
+    )
 
 
 def _needs_social_synthesis(*, task_kind: str, source: str) -> bool:
     """Live social has no worker draft — Formatter must compose the reply, not echo."""
     return task_kind == "social_conversation" and not source.strip()
-
 
 def _formatter_dialog_block(
     window: DialogTurnWindow | None,

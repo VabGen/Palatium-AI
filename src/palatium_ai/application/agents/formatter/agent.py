@@ -81,7 +81,11 @@ class FormatterAgent(BaseAgent):
             ChatMessage(role="system", content=FORMATTER_SYSTEM_PROMPT),
             ChatMessage(role="user", content=user_message),
         ]
-        max_tokens = formatter_max_tokens(user_message)
+        style_hint = user_payload.get("style_hint")
+        max_tokens = formatter_max_tokens(
+            user_message,
+            style_hint=str(style_hint) if isinstance(style_hint, str) else None,
+        )
 
         try:
             document = await generate_document(

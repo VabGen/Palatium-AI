@@ -113,7 +113,7 @@ def test_route_after_critic_skips_revision_on_mcp_empty() -> None:
     execution = ResearcherTaskResult(
         task_id="t1",
         agent_role="researcher",
-        status="failure",
+        status="partial",
         confidence=0.0,
         requires_review=False,
         error=MCP_EMPTY_RESULT,

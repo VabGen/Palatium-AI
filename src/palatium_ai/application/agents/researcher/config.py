@@ -2,11 +2,19 @@
 
 """Researcher AgentConfig (030)."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from palatium_ai.domain.agents.agent_config import AgentConfig
+from palatium_ai.domain.policies.researcher_tier import ResearcherTierPolicy
 from palatium_ai.domain.policies.types import (
     CONTENT_GENERATION_CAPABILITY,
     DOCUMENT_GENERATION_CAPABILITY,
 )
+
+if TYPE_CHECKING:
+    from palatium_ai.domain.policies.types import ExecutionStrategy
 
 # >5 tools: Researcher is the sole MCP worker for EDMS + platform retrieval
 # (knowledge/memory/graph/web/skills). Supervisor never gets execution tools (030).
@@ -45,3 +53,15 @@ def researcher_completion_budget(candidate_capabilities: tuple[str, ...] | list[
     if caps & _GENERATION_CAPS:
         return RESEARCHER_GENERATION_MAX_TOKENS
     return RESEARCHER_DEFAULT_MAX_TOKENS
+
+
+def researcher_llm_config(
+    config: AgentConfig,
+    *,
+    strategy: ExecutionStrategy | str | None,
+) -> AgentConfig:
+    """Copy of agent config with tier from ResearcherTierPolicy."""
+    decision = ResearcherTierPolicy.decide(strategy=strategy)
+    if decision.model_tier == config.model_tier:
+        return config
+    return config.model_copy(update={"model_tier": decision.model_tier})

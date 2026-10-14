@@ -42,8 +42,9 @@ def test_formatter_renders_mcp_empty_from_execution_error() -> None:
         "execution": ResearcherTaskResult(
             task_id="t1",
             agent_role="researcher",
-            status="failure",
+            status="partial",
             confidence=0.0,
+            requires_review=False,
             output=None,
             error=MCP_EMPTY_RESULT,
         ),

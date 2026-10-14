@@ -32,6 +32,7 @@ class ContextualizerInput(BaseModel):
     prompt_budget: MemoryPromptBudget = Field(default_factory=MemoryPromptBudget)
     task_kind: TaskKind | None = None
     requires_mcp: bool = False
+    candidate_capabilities: tuple[str, ...] = ()
 
 
 class ContextualizerOutput(BaseModel):

@@ -81,7 +81,8 @@ Examples (input → output axes; reasoning omitted):
 - {"text":"tell me a joke","has_prior_dialog":false} → knowledge_request, requires_mcp=false,
   underspecification_kind="none", candidate_capabilities=["compose"]
 - {"text":"расскажи анекдот на тему","has_prior_dialog":true} → knowledge_request,
-  underspecification_kind="none", candidate_capabilities=["compose"] (topic comes from dialog)
+  underspecification_kind="none", candidate_capabilities=["compose"]
+  (Researcher reads dialog for topic; Contextualizer skips LLM on compose)
 - {"text":"напиши ответ на обращение","has_prior_dialog":true} → knowledge_request,
   underspecification_kind="none", candidate_capabilities=["draft"]
 - {"text":"дай текст / OCR / дословно","has_prior_dialog":false} → knowledge_request,

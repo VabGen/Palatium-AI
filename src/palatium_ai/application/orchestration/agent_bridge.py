@@ -110,6 +110,10 @@ def contextualizer_to_agent_input(
             "prompt_budget_json": task_input.prompt_budget.model_dump_json(),
             "task_kind": task_kind,
             "requires_mcp": "true" if task_input.requires_mcp else "false",
+            "candidate_capabilities_json": json.dumps(
+                list(task_input.candidate_capabilities),
+                ensure_ascii=False,
+            ),
             "_thread_id": thread_id,
         },
     )
@@ -425,12 +429,26 @@ def researcher_output_to_task_result(
 ) -> ResearcherTaskResult:
     """Map harness AgentOutput back to graph ResearcherTaskResult."""
     from palatium_ai.application.agents.researcher.parsing import FAILURE_PLACEHOLDER_SUMMARY
+    from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT
 
     parsed: ResearcherOutput | None = None
     if isinstance(agent_output.output, ResearcherOutput) and (
-        agent_output.status != "failure" or agent_output.output.summary != FAILURE_PLACEHOLDER_SUMMARY
+        agent_output.output.summary != FAILURE_PLACEHOLDER_SUMMARY
     ):
         parsed = agent_output.output
+
+    # Empty MCP hits are expected soft-partial — Formatter shows "nothing found", no HITL.
+    if agent_output.error_message == MCP_EMPTY_RESULT:
+        status = agent_output.status if agent_output.status in {"partial", "failure"} else "partial"
+        return ResearcherTaskResult(
+            task_id=task_id,
+            agent_role=agent_role,
+            status=status,
+            confidence=agent_output.confidence,
+            requires_review=False,
+            output=None,
+            error=MCP_EMPTY_RESULT,
+        )
 
     if agent_output.status == "failure":
         requires_review = agent_output.error_message != "MCP tool call denied by human approval"

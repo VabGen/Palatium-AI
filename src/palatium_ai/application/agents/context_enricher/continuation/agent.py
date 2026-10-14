@@ -81,6 +81,7 @@ class ContextualizerAgent(BaseAgent):
             "prompt_budget_json",
             "task_kind",
             "requires_mcp",
+            "candidate_capabilities_json",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -95,6 +96,12 @@ class ContextualizerAgent(BaseAgent):
         task_kind_raw = input.context.get("task_kind") or ""
         task_kind: TaskKind | None = task_kind_raw or None  # type: ignore[assignment]  # context собран из Literal-реестра (017)
         requires_mcp = input.context.get("requires_mcp", "false").lower() == "true"
+        caps_raw = (input.context.get("candidate_capabilities_json") or "").strip()
+        candidate_capabilities: tuple[str, ...] = ()
+        if caps_raw:
+            loaded = json.loads(caps_raw)
+            if isinstance(loaded, list):
+                candidate_capabilities = tuple(str(item) for item in loaded)
 
         # Typed HITL choice resume: never ask LLM — envelope kind=clarify means slot filled.
         hitl_resume = ChoiceResumePolicy.try_parse_graph_user_text(input.instruction)
@@ -106,6 +113,7 @@ class ContextualizerAgent(BaseAgent):
             has_assistant_prior=has_assistant_prior,
             task_kind=task_kind,
             requires_mcp=requires_mcp,
+            candidate_capabilities=candidate_capabilities,
         )
         if not gate.invoke_llm:
             output = ContextualizerOutput(

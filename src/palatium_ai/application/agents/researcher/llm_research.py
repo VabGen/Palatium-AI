@@ -9,7 +9,10 @@ import json
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from palatium_ai.application.agents.researcher.config import researcher_completion_budget
+from palatium_ai.application.agents.researcher.config import (
+    researcher_completion_budget,
+    researcher_llm_config,
+)
 from palatium_ai.application.agents.researcher.outcomes import failure_output
 from palatium_ai.application.agents.researcher.parsing import parse_researcher_output
 from palatium_ai.application.agents.researcher.prompts import RESEARCHER_SYSTEM_PROMPT
@@ -75,9 +78,13 @@ async def run_llm_research(
         ),
     ]
 
+    llm_config = researcher_llm_config(
+        config,
+        strategy=task_input.context_packet.execution_plan.strategy,
+    )
     try:
         completion = await harness.call_llm(
-            config,
+            llm_config,
             messages,
             response_format="json_object",
             max_tokens=researcher_completion_budget(task_input.context_packet.candidate_capabilities),
