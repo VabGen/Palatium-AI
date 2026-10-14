@@ -11,11 +11,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .types import (
+    GROUNDING_DEFAULT,
     LOW_RISK_ROUTE_STRATEGIES,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     AgentRole,
     ContinuationKind,
     ExecutionStrategy,
+    GroundingMode,
     ModelTier,
     RouteStrategy,
     TaskKind,
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
         FormatterPassthroughSignals,
     )
     from .formatter_memory_merge import FormatterMemoryMergeDecision, FormatterMemoryMergePolicy
+    from .grounding import GroundingEmptyDecision, GroundingPolicy
     from .hop_budget import HopBudgetDecision, HopBudgetPolicy
     from .locale import ReplyLocalePolicy
     from .memory_namespace import MemoryNamespaceBinding, MemoryNamespacePolicy
@@ -65,6 +68,7 @@ __all__ = [
     "CLARIFY_MIN_CONFIDENCE",
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
     "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS",
+    "GROUNDING_DEFAULT",
     "LAST_RESORT_PLATFORM_TOOLS",
     "LOW_RISK_ROUTE_STRATEGIES",
     "SUBSTANTIVE_USER_PAYLOAD_CHARS",
@@ -88,6 +92,9 @@ __all__ = [
     "FormatterMemoryMergeDecision",
     "FormatterMemoryMergePolicy",
     "FormatterPassthroughSignals",
+    "GroundingEmptyDecision",
+    "GroundingMode",
+    "GroundingPolicy",
     "HopBudgetDecision",
     "HopBudgetPolicy",
     "MemoryNamespaceBinding",
@@ -138,6 +145,8 @@ _LAZY: dict[str, tuple[str, str]] = {
     "FormatterPassthroughSignals": (".formatter_fast_path", "FormatterPassthroughSignals"),
     "FormatterMemoryMergeDecision": (".formatter_memory_merge", "FormatterMemoryMergeDecision"),
     "FormatterMemoryMergePolicy": (".formatter_memory_merge", "FormatterMemoryMergePolicy"),
+    "GroundingEmptyDecision": (".grounding", "GroundingEmptyDecision"),
+    "GroundingPolicy": (".grounding", "GroundingPolicy"),
     "HopBudgetDecision": (".hop_budget", "HopBudgetDecision"),
     "HopBudgetPolicy": (".hop_budget", "HopBudgetPolicy"),
     "MemoryNamespaceBinding": (".memory_namespace", "MemoryNamespaceBinding"),

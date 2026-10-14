@@ -4,7 +4,13 @@
 
 from pydantic import BaseModel, Field
 
-from palatium_ai.domain.policies.types import ContinuationKind, TaskKind, UnderspecificationKind
+from palatium_ai.domain.policies.types import (
+    GROUNDING_DEFAULT,
+    ContinuationKind,
+    GroundingMode,
+    TaskKind,
+    UnderspecificationKind,
+)
 
 from .contracts import TaskResult
 
@@ -51,6 +57,18 @@ class IntentClassifierOutput(BaseModel):
         ),
     )
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
+    grounding: GroundingMode = Field(
+        default=GROUNDING_DEFAULT,
+        description=(
+            "Need for external retrieval: required (cannot answer without user data), "
+            "optional (try retrieve then degrade), none (reason without tools)."
+        ),
+    )
+    grounding_reason: str = Field(
+        default="",
+        max_length=500,
+        description="Brief rationale for grounding mode (not user-facing).",
+    )
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str = Field(min_length=1)
 

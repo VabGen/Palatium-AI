@@ -64,7 +64,7 @@ from palatium_ai.domain.mcp.platform_schemas import (
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContextualizerInput
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
-from palatium_ai.domain.policies.types import ExecutionStrategy
+from palatium_ai.domain.policies.types import ExecutionStrategy, GroundingMode
 
 
 def _find_project_root(start: Path) -> Path:
@@ -151,6 +151,12 @@ def _dialog_from_input(raw_input: dict[str, Any], *, thread_id: str) -> DialogTu
 
 def _packet_from_raw(raw: dict[str, Any], task_id: str) -> ContextPacket:
     strategy = str(raw.get("selected_strategy", "reason_only"))
+    grounding_raw = raw.get("grounding", "optional")
+    grounding = (
+        grounding_raw
+        if isinstance(grounding_raw, str) and grounding_raw in {"required", "optional", "none"}
+        else "optional"
+    )
     return ContextPacket(
         task_id=task_id,
         user_text=str(raw.get("user_text", "eval")),
@@ -159,6 +165,8 @@ def _packet_from_raw(raw: dict[str, Any], task_id: str) -> ContextPacket:
         route_plan=str(raw.get("route_plan", "cassette eval")),
         requires_mcp=bool(raw.get("requires_mcp", False)),
         candidate_capabilities=tuple(raw.get("candidate_capabilities", ())),
+        grounding=cast("GroundingMode", grounding),
+        grounding_reason=str(raw.get("grounding_reason", "")),
         execution_plan=ToolExecutionPlan(
             strategy=cast("ExecutionStrategy", strategy),
             requires_tool_call=bool(raw.get("requires_tool_call", False)),

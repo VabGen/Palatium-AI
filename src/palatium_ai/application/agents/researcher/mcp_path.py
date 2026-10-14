@@ -423,6 +423,16 @@ async def synthesize_mcp_output(
         logger.exception("researcher MCP synthesis failed", task_id=str(task_uuid))
         agent_metrics.record_error(deps.agent_role, "llm_stage_failure")
         return failure_output(task_uuid, summary=None, error="LLM stage failed in researcher agent")
+    sources = output.sources_used or (source,)
+    output = ResearcherOutput(
+        summary=output.summary,
+        confidence=output.confidence,
+        sources_used=sources,
+        grounding_satisfied=True,
+        grounding_degraded=False,
+        cannot_answer_without_source=False,
+    )
+    agent_metrics.record_grounding_satisfied()
     status: Literal["success", "failure", "partial"] = (
         "partial" if output.confidence < deps.config.confidence_threshold else "success"
     )
@@ -458,7 +468,13 @@ def _verbatim_mcp_output(
     if len(body) > SUMMARY_MAX_CHARS:
         body = body[:SUMMARY_MAX_CHARS].rstrip() + "…"
     confidence = score_mcp_tool_confidence(is_error=False, summary_chars=len(body))
-    output = ResearcherOutput(summary=body, confidence=confidence, sources_used=(source,))
+    output = ResearcherOutput(
+        summary=body,
+        confidence=confidence,
+        sources_used=(source,),
+        grounding_satisfied=True,
+    )
+    agent_metrics.record_grounding_satisfied()
     status: Literal["success", "failure", "partial"] = "partial" if confidence < confidence_threshold else "success"
     return AgentOutput(
         task_id=task_uuid,

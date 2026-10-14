@@ -62,8 +62,10 @@ from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
 from palatium_ai.domain.policies.clarification import CLARIFY_MIN_CONFIDENCE, ClarificationGatePolicy
 from palatium_ai.domain.policies.types import (
+    GROUNDING_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     ContinuationKind,
+    GroundingMode,
     TaskKind,
     UnderspecificationKind,
 )
@@ -93,6 +95,8 @@ class EffectiveRoutingIntent(BaseModel):
     requires_user_choice: bool = False
     underspecification_kind: UnderspecificationKind = "none"
     candidate_capabilities: tuple[str, ...] = ()
+    grounding: GroundingMode = GROUNDING_DEFAULT
+    grounding_reason: str = Field(default="", max_length=500)
     continuation_kind: ContinuationKind = "new_topic"
     prior_context: str | None = Field(default=None, max_length=_PRIOR_CAP)
     # Intent may set requires_review due to history-blind clarify — suppress for follow-ups.
@@ -365,6 +369,8 @@ class ContinuityPolicy:
         trust_prior_for_workers: bool,
         reasoning: str,
         confidence: float,
+        grounding: GroundingMode = GROUNDING_DEFAULT,
+        grounding_reason: str = "",
         clarify_underspec_default: bool = False,
     ) -> EffectiveRoutingIntent:
         """Apply UserChoiceIntentPolicy (sole choice-axis owner) then build routing intent."""
@@ -382,6 +388,8 @@ class ContinuityPolicy:
                     requires_user_choice=requires_user_choice,
                     underspecification_kind=underspec,
                     candidate_capabilities=caps,
+                    grounding=grounding,
+                    grounding_reason=(grounding_reason or "")[:500],
                     confidence=max(0.0, min(1.0, confidence)),
                     reasoning=(reasoning or "continuity")[:2000],
                 )
@@ -395,6 +403,8 @@ class ContinuityPolicy:
             requires_user_choice=normalized.requires_user_choice,
             underspecification_kind=normalized.underspecification_kind,
             candidate_capabilities=normalized.candidate_capabilities,
+            grounding=normalized.grounding,
+            grounding_reason=normalized.grounding_reason,
             continuation_kind=continuation_kind,
             prior_context=cls._clip_prior(prior_context),
             suppress_intent_hitl=suppress,
@@ -472,6 +482,8 @@ class ContinuityPolicy:
                 trust_prior_for_workers=False,
                 reasoning=f"continuity=clarify; {snap.intent_reasoning}",
                 confidence=snap.ctx_confidence,
+                grounding=snap.grounding,
+                grounding_reason=snap.grounding_reason,
                 clarify_underspec_default=True,
             )
 
@@ -486,6 +498,8 @@ class ContinuityPolicy:
             trust_prior_for_workers=False,
             reasoning=f"continuity={snap.kind}; trust intent: {snap.intent_reasoning}",
             confidence=snap.confidence,
+            grounding=snap.grounding,
+            grounding_reason=snap.grounding_reason,
         )
 
     @classmethod
@@ -588,6 +602,8 @@ class ContinuityPolicy:
                 trust_prior_for_workers=True,
                 reasoning=f"continuity=format; prior={source}; intent was {snap.raw_task}",
                 confidence=snap.confidence,
+                grounding=snap.grounding,
+                grounding_reason=snap.grounding_reason,
             )
         user_prior = cls.prior_user_content(dialog)
         if user_prior is None:
@@ -603,6 +619,8 @@ class ContinuityPolicy:
             trust_prior_for_workers=True,
             reasoning=f"continuity=format; prior=user_payload; intent was {snap.raw_task}",
             confidence=snap.confidence,
+            grounding=snap.grounding,
+            grounding_reason=snap.grounding_reason,
         )
 
     @classmethod
@@ -644,6 +662,8 @@ class ContinuityPolicy:
             trust_prior_for_workers=True,
             reasoning=f"{reasoning}; prior={source}",
             confidence=snap.confidence,
+            grounding=snap.grounding,
+            grounding_reason=snap.grounding_reason,
         )
 
 
@@ -658,6 +678,8 @@ class _ResolveSnapshot:
     requires_user_choice: bool
     underspec: UnderspecificationKind
     caps: tuple[str, ...]
+    grounding: GroundingMode
+    grounding_reason: str
     intent_reasoning: str
     confidence: float
     choice_slot_filled: bool
@@ -678,6 +700,8 @@ class _ResolveSnapshot:
             requires_user_choice=bool(raw_intent.requires_user_choice) if raw_intent is not None else False,
             underspec=raw_intent.underspecification_kind if raw_intent is not None else "none",
             caps=raw_intent.candidate_capabilities if raw_intent is not None else (),
+            grounding=raw_intent.grounding if raw_intent is not None else GROUNDING_DEFAULT,
+            grounding_reason=raw_intent.grounding_reason if raw_intent is not None else "",
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,

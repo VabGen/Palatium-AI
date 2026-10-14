@@ -12,7 +12,9 @@ deploy/observability/
 ├── alertmanager/alertmanager.yml
 ├── grafana/
 │   ├── provisioning/                # datasources + dashboard provider
-│   └── dashboards/palatium-overview.json
+│   └── dashboards/
+│       ├── palatium-overview.json
+│       └── palatium-adaptive-grounding.json
 ├── loki/loki-config.yml
 └── promtail/promtail-config.yml
 ```
@@ -35,7 +37,7 @@ docker compose --env-file env/.env \
 |---|---|---|
 | Prometheus | http://localhost:9090 | targets: `/targets`, rules: `/rules` |
 | Alertmanager | http://localhost:9093 | default receiver is a no-op — see below |
-| Grafana | http://localhost:3000 | dashboard *Palatium AI — Overview* |
+| Grafana | http://localhost:3000 | *Overview* + *Adaptive Grounding* |
 | Loki | http://localhost:3100 | query via Grafana Explore |
 
 Everything binds to `127.0.0.1` only (020: nothing exposed on the perimeter).
@@ -99,6 +101,33 @@ Alertmanager's `null` type. Uncomment a real receiver in `alertmanager.yml`
    the Docker root differs, adjust the bind mount in the overlay.
 
 ## Troubleshooting
+
+### `mkdirat etc/prometheus/prometheus.yml: file exists` / Loki `is a directory`
+
+Compose resolves bind paths from the **repo root** (first `-f`), not from
+`deploy/observability/`. Old overlay paths like `./prometheus/prometheus.yml`
+created empty host *directories* at the repo root; Docker then failed to mount
+them over config *files* in the image.
+
+1. Stop obs containers and remove the accidental dirs (not under `deploy/`):
+
+```powershell
+docker compose --env-file env/.env `
+  -f docker-compose.yml `
+  -f deploy/observability/compose.observability.yml `
+  stop prometheus alertmanager grafana loki promtail
+docker compose --env-file env/.env `
+  -f docker-compose.yml `
+  -f deploy/observability/compose.observability.yml `
+  rm -f prometheus alertmanager grafana loki promtail
+
+Remove-Item -Recurse -Force prometheus, alertmanager, grafana, loki, promtail -ErrorAction SilentlyContinue
+```
+
+2. Confirm configs are real files: `deploy/observability/prometheus/prometheus.yml`
+   (and peers) — Mode should be **file**, not directory.
+
+3. Bring the overlay back up (paths are already fixed to `./deploy/observability/...`).
 
 ### PalatiumApiDown
 

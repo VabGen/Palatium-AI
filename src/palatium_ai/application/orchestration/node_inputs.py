@@ -46,6 +46,8 @@ def build_context_weaver_input(
         route_plan=snapshot.route_plan,
         requires_mcp=snapshot.requires_mcp,
         candidate_capabilities=snapshot.candidate_capabilities,
+        grounding=selectors.resolved_grounding(state),
+        grounding_reason=selectors.resolved_grounding_reason(state),
         has_attachment_context=bool((state.get("untrusted_context") or "").strip()),
         has_trusted_prior=bool(routing is not None and routing.trust_prior_for_workers),
     )
@@ -134,6 +136,18 @@ def build_formatter_input(
     critic_result = state.get("critic")
     critic_requires_review = critic_result.requires_review if critic_result is not None else False
     intent_review = snapshot.classification.requires_review and not selectors.suppress_intent_hitl(state)
+    worker_summary = snapshot.worker_summary
+    execution = state.get("execution")
+    if (
+        execution is not None
+        and getattr(execution, "grounding_degraded", False)
+        and worker_summary
+        and not getattr(execution, "cannot_answer_without_source", False)
+    ):
+        # Provenance: answer was not backed by retrieval hits.
+        disclaimer = "Ответ без подтверждения во внешних источниках.\n\n"
+        if not worker_summary.startswith(disclaimer.strip()):
+            worker_summary = disclaimer + worker_summary
 
     return FormatterInput(
         task_id=snapshot.task_id,
@@ -142,7 +156,7 @@ def build_formatter_input(
             fallback_strategy="clarify" if snapshot.route == "clarification" else "format_only",
             fallback_rationale="Fallback packet synthesized by graph before formatter execution.",
         ),
-        worker_summary=snapshot.worker_summary,
+        worker_summary=worker_summary,
         critic_summary=snapshot.critic_summary,
         requires_review=intent_review or critic_requires_review,
         requires_user_choice=selectors.requires_user_choice(state),

@@ -28,6 +28,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      - name: Lint observability
+        run: uv run python scripts/lint_observability.py
+
       # ruff + mypy --strict + tests/ suite (live/slow excluded: 075/080) + coverage gates + SLA/evals.
       # Slow load tests live in perf-nightly.yml; `make perf` runs the same selection locally.
       # Coverage numbers surface in the job summary even when the gate is not pinned.

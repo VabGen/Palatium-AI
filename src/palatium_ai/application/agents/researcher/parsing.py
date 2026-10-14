@@ -71,7 +71,7 @@ def parse_researcher_output(raw_content: str) -> ResearcherOutput:
 
     try:
         confidence = float(payload.get("confidence", 0.0))
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         confidence = 0.0
     if confidence != confidence or confidence in (float("inf"), float("-inf")):
         confidence = 0.0

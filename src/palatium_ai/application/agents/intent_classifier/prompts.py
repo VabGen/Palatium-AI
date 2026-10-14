@@ -76,26 +76,45 @@ Also decide:
   requires_user_choice is true; do not invent "search" without a tool ask.
 - confidence: how sure you are of task_kind. Below 0.7 a clarification_needed label is
   treated as a guess and the platform answers on the default path instead.
+- grounding (need for external data — orthogonal to task_kind):
+  • "required" — cannot answer without the user's concrete data (their file, ticket,
+    transaction, personal record). Example: "what is in my uploaded file X".
+  • "optional" — retrieval may help, but general knowledge / the ask text itself
+    is enough to answer. Examples: compare cloud vs boxed software; analyze a
+    hypothetical sales drop the user just described; approaches to a topic.
+  • "none" — retrieval not useful: jokes, translation, math, pure generation,
+    social. Prefer "compose"/"draft" capabilities with none when applicable.
+  When unsure between required and optional → optional. Between optional and none
+  → optional. Default when uncertain: optional. Judge meaning, not keywords.
 
 Examples (input → output axes; reasoning omitted):
 - {"text":"tell me a joke","has_prior_dialog":false} → knowledge_request, requires_mcp=false,
-  underspecification_kind="none", candidate_capabilities=["compose"]
+  underspecification_kind="none", candidate_capabilities=["compose"], grounding="none"
 - {"text":"расскажи анекдот на тему","has_prior_dialog":true} → knowledge_request,
-  underspecification_kind="none", candidate_capabilities=["compose"]
+  underspecification_kind="none", candidate_capabilities=["compose"], grounding="none"
   (Researcher reads dialog for topic; Contextualizer skips LLM on compose)
 - {"text":"напиши ответ на обращение","has_prior_dialog":true} → knowledge_request,
-  underspecification_kind="none", candidate_capabilities=["draft"]
+  underspecification_kind="none", candidate_capabilities=["draft"], grounding="optional"
 - {"text":"дай текст / OCR / дословно","has_prior_dialog":false} → knowledge_request,
   requires_mcp=false, underspecification_kind="none",
-  candidate_capabilities=["verbatim_extraction"]
+  candidate_capabilities=["verbatim_extraction"], grounding="required"
 - {"text":"что было в предыдущем документе?","has_prior_dialog":true} → knowledge_request,
-  underspecification_kind="none", candidate_capabilities=["retrieve","summarize"]
+  underspecification_kind="none", candidate_capabilities=["retrieve","summarize"],
+  grounding="optional"
+- {"text":"сравни облако и коробочное ПО; проанализируй падение продаж на 15%",
+  "has_prior_dialog":false} → knowledge_request, requires_mcp=false,
+  underspecification_kind="none", grounding="optional", grounding_reason="general analysis"
+- {"text":"что в моём загруженном файле?","has_prior_dialog":false} → knowledge_request,
+  underspecification_kind="none", grounding="required",
+  grounding_reason="needs user file contents"
 - {"text":"предложи несколько тем на выбор","has_prior_dialog":false} → clarification_needed,
   requires_user_choice=true, underspecification_kind="discrete_choice",
-  candidate_capabilities=["user_choice"]
-- {"text":"thanks!","has_prior_dialog":true} → social_conversation, requires_mcp=false
+  candidate_capabilities=["user_choice"], grounding="none"
+- {"text":"thanks!","has_prior_dialog":true} → social_conversation, requires_mcp=false,
+  grounding="none"
 
 Respond ONLY with valid JSON:
 {"task_kind":"<kind>","requires_mcp":false,"requires_user_choice":false,
 "underspecification_kind":"none","candidate_capabilities":["..."],
+"grounding":"optional","grounding_reason":"<brief>",
 "confidence":0.0,"reasoning":"<brief explanation>"}"""

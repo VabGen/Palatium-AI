@@ -7,6 +7,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
+from palatium_ai.domain.policies.types import GROUNDING_DEFAULT, GroundingMode
 
 from .intent import TaskKind
 from .supervisor import WorkerRoute
@@ -29,6 +30,8 @@ class ContextPacket(BaseModel):
     route_plan: str = Field(min_length=1)
     requires_mcp: bool
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
+    grounding: GroundingMode = Field(default=GROUNDING_DEFAULT)
+    grounding_reason: str = Field(default="", max_length=500)
     execution_plan: ToolExecutionPlan
     context_summary: str = Field(min_length=1)
     #: Attachment text for this turn, already wrapped in the untrusted fence by

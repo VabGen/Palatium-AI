@@ -7,6 +7,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
+from palatium_ai.core.logging.context import user_id_var
+from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.workflow_policy import WorkflowExecutionPolicy
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
@@ -85,6 +87,15 @@ class ExecutionPlanner:
         if task_input.has_trusted_prior:
             return _prior_grounded_plan(
                 "Parallel research half: Continuity trusts dialog prior; answer without search_knowledge."
+            )
+        if is_adaptive_grounding_enabled(user_id_var.get()) and task_input.grounding == "none":
+            return ToolExecutionPlan(
+                strategy="reason_only",
+                requires_tool_call=False,
+                rationale=(
+                    f"Parallel research half: adaptive grounding=none "
+                    f"(executable_kind={executable_kind})."
+                ),
             )
         return _search_knowledge_plan(
             f"Parallel research half: retrieve via platform.search_knowledge then reason (executable_kind={executable_kind})."
@@ -210,10 +221,19 @@ def _knowledge_or_tool_plan(
             requires_tool_call=False,
             rationale="Content generation ask; compose from dialog/memory context without search_knowledge.",
         )
+    if is_adaptive_grounding_enabled(user_id_var.get()) and task_input.grounding == "none":
+        return ToolExecutionPlan(
+            strategy="reason_only",
+            requires_tool_call=False,
+            rationale=(
+                f"Adaptive grounding=none; reason without search_knowledge "
+                f"(executable_kind={executable_kind})."
+            ),
+        )
     return _search_knowledge_plan(
         "Knowledge path without domain MCP binding: retrieve via "
         "platform.search_knowledge then reason "
-        f"(executable_kind={executable_kind})."
+        f"(executable_kind={executable_kind}; grounding={task_input.grounding})."
     )
 
 

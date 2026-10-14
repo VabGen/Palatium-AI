@@ -206,6 +206,24 @@ def resolved_candidate_capabilities(state: AgentGraphState) -> tuple[str, ...]:
     return ensure_routing_intent(state).candidate_capabilities
 
 
+def resolved_grounding(state: AgentGraphState):
+    """Grounding mode from Continuity (default optional)."""
+    from palatium_ai.domain.policies.types import GROUNDING_DEFAULT
+
+    routing = routing_intent(state)
+    if routing is None:
+        return GROUNDING_DEFAULT
+    return routing.grounding
+
+
+def resolved_grounding_reason(state: AgentGraphState) -> str:
+    """Grounding rationale from Continuity."""
+    routing = routing_intent(state)
+    if routing is None:
+        return ""
+    return routing.grounding_reason or ""
+
+
 def resolved_reasoning(state: AgentGraphState) -> str:
     """Reasoning: ContinuityPolicy, иначе raw Intent."""
     intent = routing_intent(state)

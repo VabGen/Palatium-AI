@@ -9,6 +9,8 @@ from typing import cast
 from palatium_ai.domain.agents.intent import IntentClassifierOutput, TaskKind, UnderspecificationKind
 from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.llm.json_codec import loads_llm_json
+from palatium_ai.domain.policies.grounding import GroundingPolicy
+from palatium_ai.domain.policies.types import GroundingMode
 
 _VALID_TASK_KINDS: frozenset[str] = frozenset(
     {
@@ -39,6 +41,8 @@ def parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
     capabilities: tuple[str, ...] = (
         tuple(str(item) for item in raw_capabilities if str(item)) if isinstance(raw_capabilities, list) else ()
     )
+    grounding = _coerce_grounding(payload.get("grounding"), task_kind=task_kind, capabilities=capabilities)
+    grounding_reason = str(payload.get("grounding_reason") or payload.get("reason") or "")[:500]
 
     return UserChoiceIntentPolicy.normalize(
         IntentClassifierOutput(
@@ -47,6 +51,8 @@ def parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
             requires_user_choice=_coerce_bool_flag(payload.get("requires_user_choice")),
             underspecification_kind=_coerce_underspecification_kind(payload),
             candidate_capabilities=capabilities,
+            grounding=grounding,
+            grounding_reason=grounding_reason,
             confidence=float(payload.get("confidence", 0.0)),
             reasoning=str(payload.get("reasoning", "No reasoning provided")),
         ),
@@ -73,3 +79,21 @@ def _coerce_task_kind(value: object) -> TaskKind:
     if isinstance(value, str) and value.strip() in _VALID_TASK_KINDS:
         return cast("TaskKind", value.strip())
     return "knowledge_request"
+
+
+def _coerce_grounding(
+    value: object,
+    *,
+    task_kind: TaskKind,
+    capabilities: tuple[str, ...],
+) -> GroundingMode:
+    """Invalid/missing → optional. Soft defaults for social/compose when omitted."""
+    mode = GroundingPolicy.coerce_mode(value)
+    if isinstance(value, str) and value.strip() in {"required", "optional", "none"}:
+        return mode
+    if task_kind == "social_conversation":
+        return "none"
+    caps = {c.strip().lower() for c in capabilities if c.strip()}
+    if "compose" in caps:
+        return "none"
+    return mode

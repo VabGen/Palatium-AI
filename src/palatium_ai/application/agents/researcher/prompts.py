@@ -71,3 +71,14 @@ Return ONLY valid JSON:
   "sources_used": ["llm_internal_reasoning"]
 }
 """
+
+# Appended when Adaptive Grounding degrades empty retrieval to parametric LLM.
+RESEARCHER_UNGROUNDED_SYSTEM_NOTE = """
+---
+CONTEXT:
+External sources returned no usable information for this ask.
+Answer using your general knowledge.
+If the ask truly requires the user's private data (file, ticket, account) that you do not have,
+say so clearly and state what is missing — do not invent those facts.
+---
+"""

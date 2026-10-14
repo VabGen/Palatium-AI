@@ -15,13 +15,16 @@ from palatium_ai.application.agents.researcher.config import (
 )
 from palatium_ai.application.agents.researcher.outcomes import failure_output
 from palatium_ai.application.agents.researcher.parsing import parse_researcher_output
-from palatium_ai.application.agents.researcher.prompts import RESEARCHER_SYSTEM_PROMPT
+from palatium_ai.application.agents.researcher.prompts import (
+    RESEARCHER_SYSTEM_PROMPT,
+    RESEARCHER_UNGROUNDED_SYSTEM_NOTE,
+)
 from palatium_ai.application.agents.skill_hydrate import hydrate_skill_references
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentOutput
-from palatium_ai.domain.agents.researcher import ResearcherInput
+from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutput
 from palatium_ai.domain.llm.models import ChatMessage
 
 if TYPE_CHECKING:
@@ -45,6 +48,7 @@ async def run_llm_research(
     skill_catalog: str,
     task_id: UUID,
     agent_role: str,
+    grounding_degraded: bool = False,
 ) -> AgentOutput:
     skill_references = await hydrate_skill_references(
         catalog_text=skill_catalog,
@@ -54,8 +58,11 @@ async def run_llm_research(
         context=context,
         repository=mcp_tool_call_repository,
     )
+    system = RESEARCHER_SYSTEM_PROMPT
+    if grounding_degraded:
+        system = f"{RESEARCHER_SYSTEM_PROMPT}\n{RESEARCHER_UNGROUNDED_SYSTEM_NOTE}"
     messages = [
-        ChatMessage(role="system", content=RESEARCHER_SYSTEM_PROMPT),
+        ChatMessage(role="system", content=system),
         ChatMessage(
             role="user",
             content=json.dumps(
@@ -64,6 +71,7 @@ async def run_llm_research(
                     "task_kind": task_input.context_packet.task_kind,
                     "requires_mcp": task_input.context_packet.requires_mcp,
                     "candidate_capabilities": task_input.context_packet.candidate_capabilities,
+                    "grounding": task_input.context_packet.grounding,
                     "route_plan": task_input.context_packet.route_plan,
                     "context_summary": task_input.context_packet.context_summary,
                     "attachment_context": task_input.context_packet.untrusted_context,
@@ -72,6 +80,7 @@ async def run_llm_research(
                     "memory_hints": list(task_input.memory_hints[:4]),
                     "skill_catalog": skill_catalog,
                     "skill_references": skill_references,
+                    "retrieval_empty": grounding_degraded,
                 },
                 ensure_ascii=False,
             ),
@@ -97,6 +106,19 @@ async def run_llm_research(
             task_id,
             summary=None,
             error="LLM stage failed in researcher agent",
+        )
+
+    if grounding_degraded:
+        output = ResearcherOutput(
+            summary=output.summary,
+            confidence=output.confidence,
+            sources_used=output.sources_used or ("llm_ungrounded",),
+            grounding_satisfied=False,
+            grounding_degraded=True,
+            cannot_answer_without_source=False,
+        )
+        agent_metrics.record_grounding_degraded(
+            str(task_input.context_packet.grounding or "optional"),
         )
 
     requires_review = output.confidence < config.confidence_threshold
