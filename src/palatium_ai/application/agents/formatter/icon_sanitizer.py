@@ -2,8 +2,9 @@
 
 """Map / strip emoji in Formatter streams; keep <icon name="…"/> for the parser.
 
-SSE preview must never show emoji or icon tokens. The parse buffer keeps mapped
-``<icon name="…"/>`` tokens and drops unmapped pictographs.
+SSE preview keeps mapped ``<icon name="…"/>`` tokens so the FE can render
+``TokenIcon`` during stream (Path C). Unmapped pictographs are dropped.
+Incomplete trailing ``<icon…`` fragments are held across chunks.
 
 LLM slips (``x=`` instead of ``name=``) are normalized to ``name=`` with a warning.
 """
@@ -56,7 +57,10 @@ _EMOJI_RE = re.compile(
     "[\U0001f300-\U0001faff\U00002700-\U000027bf\U00002600-\U000026ff\U0000fe0f\U0000200d]+",
     flags=re.UNICODE,
 )
-_MAX_TAIL = 4
+# Incomplete ``<icon …`` may be up to ~len('<icon name="settings"/>') chars.
+_MAX_EMOJI_TAIL = 4
+_MAX_ICON_TAIL = 48
+_ICON_OPEN = "<icon"
 
 
 def normalize_icon_markup(text: str) -> str:
@@ -81,8 +85,8 @@ def split_stream_chunk(chunk: str, tail: str) -> tuple[str, str, str]:
 
     Returns ``(preview_text, buffer_text, new_tail)``:
     - buffer: mapped emoji → ``<icon name="…"/>``; unmapped emoji removed
-    - preview: emoji and ``<icon/>`` tokens removed
-    - tail: incomplete trailing sequence (≤4 chars) held for the next chunk
+    - preview: emoji removed; complete ``<icon/>`` tokens kept for FE TokenIcon
+    - tail: incomplete trailing emoji or ``<icon…`` held for the next chunk
     """
     combined = f"{tail}{chunk}"
     if not combined:
@@ -93,7 +97,8 @@ def split_stream_chunk(chunk: str, tail: str) -> tuple[str, str, str]:
         return "", "", new_tail
 
     buffer_text = _emoji_to_icon_tokens(body)
-    preview_text = strip_icon_tokens(buffer_text)
+    # Preview keeps icon tokens (FE → TokenIcon); only unmapped emoji already gone.
+    preview_text = buffer_text
     return preview_text, buffer_text, new_tail
 
 
@@ -102,11 +107,11 @@ def flush_stream_tail(tail: str) -> tuple[str, str]:
     if not tail:
         return "", ""
     buffer_text = _emoji_to_icon_tokens(tail)
-    return strip_icon_tokens(buffer_text), buffer_text
+    return buffer_text, buffer_text
 
 
 def strip_icon_tokens(text: str) -> str:
-    """Remove ``<icon name|x="…"/>`` tokens (preview / defense-in-depth)."""
+    """Remove ``<icon name|x="…"/>`` tokens (parser / defense-in-depth)."""
     return _ICON_TOKEN_RE.sub("", text)
 
 
@@ -144,12 +149,40 @@ def _emoji_to_icon_tokens(text: str) -> str:
 
 
 def _split_incomplete_tail(text: str) -> tuple[str, str]:
-    """Hold a short trailing emoji/VS/ZWJ run so multi-codepoint glyphs are not split."""
-    if len(text) <= _MAX_TAIL and _EMOJI_RE.fullmatch(text):
+    """Hold trailing incomplete emoji or ``<icon…`` so tokens are not split across chunks."""
+    icon_tail = _incomplete_icon_tail(text)
+    if icon_tail is not None:
+        cut = len(text) - len(icon_tail)
+        return text[:cut], icon_tail
+
+    if len(text) <= _MAX_EMOJI_TAIL and _EMOJI_RE.fullmatch(text):
         return "", text
-    n = min(_MAX_TAIL, len(text))
+    n = min(_MAX_EMOJI_TAIL, len(text))
     for k in range(n, 0, -1):
         suffix = text[-k:]
         if _EMOJI_RE.fullmatch(suffix) or suffix.endswith(("\ufe0f", "\u200d")):
             return text[:-k], suffix
     return text, ""
+
+
+def _incomplete_icon_tail(text: str) -> str | None:
+    """Return a trailing incomplete ``<icon…`` fragment, or None if complete / absent."""
+    lower = text.lower()
+    # Hold a bare prefix of ``<icon`` (e.g. ``<ic``) at end of chunk.
+    for n in range(1, len(_ICON_OPEN)):
+        if lower.endswith(_ICON_OPEN[:n]):
+            return text[-n:]
+
+    idx = lower.rfind(_ICON_OPEN)
+    if idx < 0:
+        return None
+    fragment = text[idx:]
+    if len(fragment) > _MAX_ICON_TAIL:
+        return None
+    # Complete self-closing tag already finished — do not hold.
+    if _ICON_TOKEN_RE.search(fragment):
+        return None
+    # Closed with ``>`` but not ``/>`` — malformed; do not carry forever.
+    if re.search(r"(?<!/)>", fragment):
+        return None
+    return fragment

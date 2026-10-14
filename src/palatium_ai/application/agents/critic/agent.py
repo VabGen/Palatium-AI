@@ -30,6 +30,7 @@ from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.models import ChatMessage
 from palatium_ai.domain.policies import CriticPolicy
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
+from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -85,6 +86,7 @@ class CriticAgent(BaseAgent):
                     output=output,
                 )
 
+        caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
         gate = CriticPolicy.decide(
             selected_strategy=task_input.selected_strategy,
             task_kind=task_input.context_packet.task_kind,
@@ -97,6 +99,7 @@ class CriticAgent(BaseAgent):
             user_input_chars=task_input.user_input_chars,
             worker_confidence=task_input.worker_confidence,
             has_attachment_context=bool((task_input.context_packet.untrusted_context or "").strip()),
+            verbatim_requested=VERBATIM_EXTRACTION_CAPABILITY in caps,
         )
         if not gate.invoke_llm:
             agent_metrics.record_node_execution(self._config.role, f"passthrough:{gate.reason}")

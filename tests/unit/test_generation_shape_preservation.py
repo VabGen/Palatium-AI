@@ -173,3 +173,73 @@ def test_fast_path_never_passes_through_failed_worker_placeholder() -> None:
         worker_confidence=0.0,
     )
     assert result is None
+
+
+_LONG_ARTICLE = (
+    "Цена на иван-чай улетает в небо, почему он так востребован. " * 25
+    + "\n\n"
+    + "В последнее время цена на популярный травяной напиток резко подорожала. " * 20
+)
+
+
+def test_style_hint_verbatim_extraction_is_plain_text() -> None:
+    assert (
+        resolve_style_hint(_formatter_input(worker=_LONG_ARTICLE, caps=("verbatim_extraction",)))
+        == "plain_text"
+    )
+
+
+def test_verbatim_passthrough_ignores_length_structure_locale() -> None:
+    assert len(_LONG_ARTICLE) > FORMATTER_PASSTHROUGH_MAX_CHARS
+    decision = FormatterFastPathPolicy.decide(
+        source_content=_LONG_ARTICLE,
+        passthrough=_signals(
+            source_chars=len(_LONG_ARTICLE),
+            source_is_plain_prose=False,
+            locale_matches=False,
+            verbatim_requested=True,
+        ),
+        passthrough_max_chars=FORMATTER_PASSTHROUGH_MAX_CHARS,
+    )
+    assert decision.skip_llm is True
+    assert decision.reason == "passthrough_verbatim"
+
+
+def test_long_plain_without_verbatim_still_exceeds_passthrough() -> None:
+    decision = FormatterFastPathPolicy.decide(
+        source_content=_LONG_ARTICLE,
+        passthrough=_signals(source_chars=len(_LONG_ARTICLE), verbatim_requested=False),
+        passthrough_max_chars=FORMATTER_PASSTHROUGH_MAX_CHARS,
+    )
+    assert decision.skip_llm is False
+    assert decision.reason == "source_exceeds_passthrough"
+
+
+def test_verbatim_still_blocked_by_requires_review() -> None:
+    decision = FormatterFastPathPolicy.decide(
+        source_content=_LONG_ARTICLE,
+        passthrough=_signals(
+            source_chars=len(_LONG_ARTICLE),
+            verbatim_requested=True,
+            requires_review=True,
+        ),
+        passthrough_max_chars=FORMATTER_PASSTHROUGH_MAX_CHARS,
+    )
+    assert decision.skip_llm is False
+    assert decision.reason == "requires_review"
+
+
+def test_fast_path_verbatim_long_body_unchanged() -> None:
+    result = try_formatter_fast_path(
+        task_input=_formatter_input(worker=_LONG_ARTICLE, caps=("verbatim_extraction",)),
+        task_kind="knowledge_request",
+        selected_strategy="retrieve_then_reason",
+        worker_confidence=0.9,
+    )
+    assert result is not None
+    assert result.output is not None
+    # Document join may normalize paragraph separators; meaning must stay intact.
+    got = " ".join(result.output.plain_text().split())
+    expected = " ".join(_LONG_ARTICLE.split())
+    assert got == expected
+    assert "иван-чай" in got

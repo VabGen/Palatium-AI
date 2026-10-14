@@ -1,4 +1,4 @@
-"""Icon sanitizer: emoji → tokens in buffer; preview stripped; tail carry."""
+"""Icon sanitizer: emoji → tokens; preview keeps icons; incomplete tag carry."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from palatium_ai.application.agents.formatter.icon_sanitizer import (
 )
 
 
-def test_mapped_emoji_becomes_icon_token_in_buffer() -> None:
+def test_mapped_emoji_becomes_icon_token_in_buffer_and_preview() -> None:
     preview, buffered, tail = split_stream_chunk("Hello 📄 world", "")
     assert tail == ""
     assert '<icon name="document"/>' in buffered
     assert "📄" not in buffered
     assert "📄" not in preview
-    assert "<icon" not in preview
+    assert '<icon name="document"/>' in preview
     assert "Hello" in preview
     assert "world" in preview
 
@@ -32,10 +32,10 @@ def test_unmapped_emoji_stripped_from_both() -> None:
     assert "now" in preview
 
 
-def test_preview_strips_existing_icon_tokens() -> None:
+def test_preview_keeps_existing_icon_tokens() -> None:
     preview, buffered, _ = split_stream_chunk('<icon name="warning"/> Alert', "")
     assert buffered.startswith('<icon name="warning"/>')
-    assert "<icon" not in preview
+    assert '<icon name="warning"/>' in preview
     assert "Alert" in preview
 
 
@@ -49,15 +49,39 @@ def test_surrogate_pair_held_across_chunks() -> None:
     preview, buffered, tail2 = split_stream_chunk(emoji[1:] + " ok", tail)
     assert tail2 == ""
     assert '<icon name="warning"/>' in buffered
+    assert '<icon name="warning"/>' in preview
     assert "ok" in preview
     assert "⚠" not in preview
     assert "⚠️" not in buffered
 
 
+def test_incomplete_icon_tag_held_across_chunks() -> None:
+    _p0, b0, tail = split_stream_chunk('<icon name="doc', "")
+    assert b0 == ""
+    assert tail.startswith("<icon")
+    preview, buffered, tail2 = split_stream_chunk('ument"/> Report', tail)
+    assert tail2 == ""
+    assert '<icon name="document"/>' in buffered
+    assert '<icon name="document"/>' in preview
+    assert "Report" in preview
+    assert 'name="document"/>' not in preview.replace('<icon name="document"/>', "")
+
+
+def test_incomplete_icon_prefix_held() -> None:
+    preview1, _b1, tail = split_stream_chunk("Hello <ic", "")
+    assert tail == "<ic"
+    assert "Hello" in preview1
+    preview2, buffered, tail2 = split_stream_chunk('on name="check"/> done', tail)
+    assert tail2 == ""
+    assert '<icon name="check"/>' in buffered
+    assert '<icon name="check"/>' in preview2
+    assert "done" in preview2
+
+
 def test_flush_stream_tail_maps_emoji() -> None:
     preview, buffered = flush_stream_tail("📋")
     assert '<icon name="document"/>' in buffered
-    assert preview == ""
+    assert '<icon name="document"/>' in preview
     assert strip_icon_tokens(buffered) == ""
 
 
@@ -85,5 +109,5 @@ def test_normalize_icon_markup_rewrites_x_attr() -> None:
 def test_split_stream_accepts_x_attr_in_buffer() -> None:
     preview, buffered, _ = split_stream_chunk('<icon x="document"/> Report', "")
     assert '<icon name="document"/>' in buffered
-    assert "<icon" not in preview
+    assert '<icon name="document"/>' in preview
     assert "Report" in preview

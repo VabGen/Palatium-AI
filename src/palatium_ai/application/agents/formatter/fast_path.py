@@ -26,7 +26,11 @@ from palatium_ai.domain.policies.formatter_fast_path import (
     FormatterPassthroughSignals,
 )
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
-from palatium_ai.domain.policies.types import ExecutionStrategy, TaskKind
+from palatium_ai.domain.policies.types import (
+    VERBATIM_EXTRACTION_CAPABILITY,
+    ExecutionStrategy,
+    TaskKind,
+)
 
 logger = get_logger(__name__)
 
@@ -98,6 +102,7 @@ def _passthrough_signals(
     worker_confidence: float | None,
 ) -> FormatterPassthroughSignals:
     cleaned = mechanical_cleanup(source).strip()
+    caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
     return FormatterPassthroughSignals(
         source_chars=len(cleaned),
         worker_confident=worker_confidence is not None and worker_confidence >= MIN_PIPELINE_CONFIDENCE,
@@ -109,4 +114,5 @@ def _passthrough_signals(
         revision_requested=bool((task_input.revision_feedback or "").strip()),
         restructure_requested=task_kind == "response_formatting",
         underspecification_kind=task_input.underspecification_kind,
+        verbatim_requested=VERBATIM_EXTRACTION_CAPABILITY in caps,
     )

@@ -100,3 +100,34 @@ def test_mid_text_icon_stripped_not_left_as_raw() -> None:
     assert paragraph.icon is None
     assert "<icon" not in paragraph.text
     assert "mark" in paragraph.text
+
+
+def test_orphan_icon_paragraph_merges_into_following_heading() -> None:
+    md = '<icon name="check"/>\n\n## Requirements\n\nBody.\n'
+    doc = markdown_to_content_document(md, _task())
+    heading = next(b for b in doc.blocks if isinstance(b, HeadingBlock))
+    assert heading.icon == "check"
+    assert "Requirements" in heading.text
+    orphans = [
+        b
+        for b in doc.blocks
+        if isinstance(b, ParagraphBlock) and b.icon is not None and not b.text.strip()
+    ]
+    assert orphans == []
+
+
+def test_adjacent_ordered_lists_merge_for_continuous_numbering() -> None:
+    from palatium_ai.application.agents.formatter.markdown_parser import _normalize_blocks
+    from palatium_ai.domain.content.content_document import ListItem
+
+    blocks = (
+        ListBlock(type="list", style="ordered", items=(ListItem(text="First step"),)),
+        ListBlock(type="list", style="ordered", items=(ListItem(text="Second step"),)),
+        ParagraphBlock(type="paragraph", text="After lists."),
+    )
+    out = _normalize_blocks(blocks)
+    ordered = [b for b in out if isinstance(b, ListBlock) and b.style == "ordered"]
+    assert len(ordered) == 1
+    assert len(ordered[0].items) == 2
+    assert ordered[0].items[0].text == "First step"
+    assert ordered[0].items[1].text == "Second step"

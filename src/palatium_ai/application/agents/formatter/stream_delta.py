@@ -20,8 +20,8 @@ from palatium_ai.core.observability.metrics import agent_metrics
 class FormatterMarkdownEmitter:
     """Emit Hybrid stream chunks; ``replace`` only on the first chunk after a worker draft.
 
-    SSE carries sanitised preview text (no emoji / no ``<icon/>``). The parse buffer
-    keeps ``<icon name="…"/>`` tokens for ``markdown_to_content_document``.
+    SSE preview keeps ``<icon name="…"/>`` (FE renders TokenIcon) and drops emoji.
+    The parse buffer keeps the same mapped tokens for ``markdown_to_content_document``.
     """
 
     bridge: TurnSseBridge
@@ -45,8 +45,7 @@ class FormatterMarkdownEmitter:
             self.buffer += buffered
         if not preview and not buffered:
             return
-        # Dual-emit only when there is user-visible preview; empty preview after
-        # icon-only mapping still advances buffer without flashing tokens.
+        # Dual-emit when preview or buffer advanced (icon-only chunks still paint).
         if preview:
             self._emit_preview(preview)
 

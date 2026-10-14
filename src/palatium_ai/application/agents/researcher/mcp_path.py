@@ -35,6 +35,7 @@ from palatium_ai.application.tools.mcp import (
     call_mcp_tool,
 )
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentOutput
@@ -54,6 +55,7 @@ from palatium_ai.domain.mcp.tool_policy import (
     resolve_platform_pin,
 )
 from palatium_ai.domain.memory.tool_output import strip_untrusted_tool_output
+from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.retrieval import RetrievalPolicy
 from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
@@ -85,6 +87,30 @@ def _require_researcher_input(task_input: object) -> ResearcherInput:
         msg = f"expected ResearcherInput, got {type(task_input).__name__}"
         raise TypeError(msg)
     return task_input
+
+
+def _hop_blocks_last_resort(tool_name: str, *, agent_role: str) -> bool:
+    """True when hop budget forbids binding a last-resort retrieval tool."""
+    if not RetrievalPolicy.is_last_resort_tool(tool_name):
+        return False
+    hop = get_hop_collector()
+    if hop is None:
+        return False
+    decision = HopBudgetPolicy.should_skip_last_resort_retrieval(
+        hop_total_ms=hop.total_ms(),
+        budget_ms=hop.budget_ms,
+    )
+    if not decision.degrade:
+        return False
+    agent_metrics.record_node_execution(agent_role, f"hop_budget_skip_{tool_name}")
+    logger.info(
+        "researcher.hop_budget_skip_last_resort",
+        tool_name=tool_name,
+        reason=decision.reason,
+        hop_total_ms=hop.total_ms(),
+        hop_budget_ms=hop.budget_ms,
+    )
+    return True
 
 
 async def execute_mcp_capability(
@@ -147,6 +173,8 @@ async def resolve_mcp_tool_binding(
         )
         if not gate.allowed:
             return None
+        if _hop_blocks_last_resort(execution_plan.tool_name, agent_role=deps.agent_role):
+            return None
         return execution_plan.server_name, execution_plan.tool_name
 
     try:
@@ -161,6 +189,8 @@ async def resolve_mcp_tool_binding(
         return None
 
     if binding is None:
+        return None
+    if _hop_blocks_last_resort(binding.tool_name, agent_role=deps.agent_role):
         return None
     return binding.server_name, binding.tool_name
 

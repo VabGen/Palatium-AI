@@ -38,6 +38,33 @@ set -euo pipefail
 readonly CLAMD_TCP_PORT="${CLAMD_TCP_PORT:-3310}"
 readonly POLL_INTERVAL_SECONDS="${CLAMD_WATCHDOG_INTERVAL_SECONDS:-10}"
 
+# Rate-limit freshclam against database.clamav.net. Official CDN returns 403 when
+# an IP checks too often (compose recreate / multi-instance). Volume
+# `palatium_clamav_db` already keeps signatures across restarts; Checks=2/day is
+# enough for a single private stack. Do not replace the whole conf file — the
+# image owns the rest of freshclam.conf and drifts with the digest pin.
+apply_freshclam_rate_limits() {
+    local conf="/etc/clamav/freshclam.conf"
+    [ -f "${conf}" ] || return 0
+    [ -w "${conf}" ] || {
+        echo "clamd-watchdog: ${conf} not writable; skipping freshclam rate-limit patch" >&2
+        return 0
+    }
+    # Idempotent: strip prior palatium block, then append.
+    if grep -q '^# palatium-ai freshclam rate-limit' "${conf}"; then
+        sed -i '/^# palatium-ai freshclam rate-limit/,/^# palatium-ai end freshclam rate-limit/d' "${conf}"
+    fi
+    {
+        echo "# palatium-ai freshclam rate-limit (CDN 403 mitigation)"
+        echo "Checks 2"
+        echo "ConnectTimeout 30"
+        echo "ReceiveTimeout 60"
+        echo "# palatium-ai end freshclam rate-limit"
+    } >> "${conf}"
+}
+
+apply_freshclam_rate_limits
+
 # PID 1's child (/init, and after its `exec`, `tail`) is alive and not a zombie.
 # A zombie still satisfies `kill -0`, so the state letter from /proc/<pid>/stat is
 # what tells us the child is really gone; `read` is a bash builtin, so this stays

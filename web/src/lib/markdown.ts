@@ -7,6 +7,9 @@ import type { IconToken } from '../types/contentDocument';
 /** Matches `<icon name="…"/>` and legacy LLM slip `<icon x="…"/>`. */
 export const ICON_TOKEN = /<icon\s+(?:name|x)="([a-z_]+)"\s*\/>/gi;
 
+/** Broken stream remnant when `<icon ` was lost mid-chunk. */
+const ICON_ATTR_REMNANT = /(?:^|\s)(?:name|x)="([a-z_]+)"\s*\/>/gi;
+
 const HITL_TAG = /<\/?hitl-(?:action|choice)\b[^>]*\/?>/gi;
 
 /**
@@ -122,14 +125,27 @@ export function iconTokensToMarkdownImages(markdown: string): string {
   });
 }
 
+/** Rewrite leaked `name="document"/>` fragments into icon image tokens when possible. */
+export function repairIconAttrRemnants(markdown: string): string {
+  return markdown.replace(ICON_ATTR_REMNANT, (_match, name: string) => {
+    const raw = name.trim().toLowerCase() || 'unknown';
+    const token = coerceIconToken(raw) ?? raw;
+    return ` ![icon](${ICON_MD_SCHEME}${token})`;
+  });
+}
+
 /**
  * Preview sanitize: strip HITL + emoji, keep icons as markdown images, close dangling.
  * Does **not** strip icon tokens — preview renders them via TokenIcon.
+ * Full ``<icon/>`` tokens are rewritten first; only then attribute remnants.
  */
 export function sanitizeStreamMarkdown(markdown: string): string {
+  const cleaned = markdown
+    .replace(HITL_TAG, '')
+    .replace(EMOJI_RUN, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   return closeDanglingMarkdown(
-    iconTokensToMarkdownImages(
-      markdown.replace(HITL_TAG, '').replace(EMOJI_RUN, '').replace(/\n{3,}/g, '\n\n').trim()
-    )
+    repairIconAttrRemnants(iconTokensToMarkdownImages(cleaned))
   );
 }

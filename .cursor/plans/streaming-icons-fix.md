@@ -87,6 +87,14 @@ test(web): streaming stability + icon normalization
 - [x] Тесты unit (web+py) зелёные; ruff/eslint на затронутых файлах чистые
   (полный mypy / e2e playwright — прогон на CI / локально по желанию)
 
+## Follow-up (2026-10-13) — закрыто в `fix_chat_readability`
+
+Ранее DoD «иконки в preview» был выполнен только на FE; BE всё ещё strip'ал
+`<icon/>` из SSE. Дополнительно: dual-emit `replace` обнулял `textAccumulated`,
+неполный `<icon` утекал как `name="…"/>`, orphan-иконки и `1 1 1 1`.
+Исправления — план `.cursor/plans/fix_chat_readability_*.plan.md` (не
+переписывать историю выше).
+
 ## Запрещено
 
 - Путь A (`:icon[]`) / путь B (rehype)

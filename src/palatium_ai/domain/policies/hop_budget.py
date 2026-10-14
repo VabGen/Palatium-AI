@@ -24,6 +24,10 @@ _STRATEGY_BUDGET_SCALE: dict[str, float] = {
     "ack_only": 0.4,
 }
 
+# Critic LLM is optional quality work. When workers already burned most of the
+# turn budget, skip Critic early so Formatter (never gated) keeps headroom.
+_CRITIC_SOFT_DEGRADE_RATIO = 0.7
+
 
 class HopBudgetDecision(BaseModel):
     """Outcome of HopBudgetPolicy for one gate."""
@@ -52,8 +56,14 @@ class HopBudgetPolicy:
         hop_total_ms: int,
         budget_ms: int,
     ) -> HopBudgetDecision:
-        """Skip Critic LLM when the turn is already over budget."""
-        return cls._exceeded(hop_total_ms=hop_total_ms, budget_ms=budget_ms)
+        """Skip Critic LLM when over budget or soft headroom for Formatter is gone."""
+        hard = cls._exceeded(hop_total_ms=hop_total_ms, budget_ms=budget_ms)
+        if hard.degrade or hard.reason == "budget_disabled":
+            return hard
+        soft_limit = int(budget_ms * _CRITIC_SOFT_DEGRADE_RATIO)
+        if hop_total_ms > soft_limit:
+            return HopBudgetDecision(degrade=True, reason="hop_budget_protect_formatter")
+        return hard
 
     @classmethod
     def should_skip_formatter_repairs(
@@ -63,6 +73,16 @@ class HopBudgetPolicy:
         budget_ms: int,
     ) -> HopBudgetDecision:
         """Skip Formatter schema/locale repair LLM loops when over budget."""
+        return cls._exceeded(hop_total_ms=hop_total_ms, budget_ms=budget_ms)
+
+    @classmethod
+    def should_skip_last_resort_retrieval(
+        cls,
+        *,
+        hop_total_ms: int,
+        budget_ms: int,
+    ) -> HopBudgetDecision:
+        """Skip ``web_fallback`` when the turn is already over budget (070 last-resort)."""
         return cls._exceeded(hop_total_ms=hop_total_ms, budget_ms=budget_ms)
 
     @staticmethod

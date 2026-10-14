@@ -16,9 +16,27 @@ def test_exceeded_skips_critic() -> None:
     assert decision.reason == "hop_budget_exceeded"
 
 
+def test_critic_soft_degrade_protects_formatter_headroom() -> None:
+    """At 70% of budget, Critic yields remaining time to Formatter."""
+    decision = HopBudgetPolicy.should_skip_critic_llm(hop_total_ms=11_000, budget_ms=15_000)
+    assert decision.degrade is True
+    assert decision.reason == "hop_budget_protect_formatter"
+    still_ok = HopBudgetPolicy.should_skip_critic_llm(hop_total_ms=10_000, budget_ms=15_000)
+    assert still_ok.degrade is False
+
+
 def test_exceeded_skips_formatter_repairs() -> None:
     decision = HopBudgetPolicy.should_skip_formatter_repairs(hop_total_ms=20_000, budget_ms=15_000)
     assert decision.degrade is True
+
+
+def test_exceeded_skips_last_resort_retrieval() -> None:
+    decision = HopBudgetPolicy.should_skip_last_resort_retrieval(
+        hop_total_ms=16_000,
+        budget_ms=15_000,
+    )
+    assert decision.degrade is True
+    assert decision.reason == "hop_budget_exceeded"
 
 
 def test_disabled_budget() -> None:

@@ -136,6 +136,9 @@ def test_watchdog_supervises_init_without_policing_cold_start() -> None:
     # A cold container spends minutes in freshclam before clamd exists; failing then
     # would turn a slow first start into a restart loop.
     assert "clamd_seen" in text, "the wrapper must only react once clamd has answered at least once"
+    # CDN 403 mitigation: rate-limit Checks without forking the whole image conf.
+    assert "apply_freshclam_rate_limits" in text
+    assert "Checks 2" in text
 
 
 def test_compose_runs_the_watchdog_as_clamav_entrypoint() -> None:

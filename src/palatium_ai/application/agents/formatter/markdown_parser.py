@@ -101,7 +101,7 @@ def markdown_to_content_document(markdown: str, task_input: FormatterInput) -> C
         return json_doc.model_copy(
             update={
                 "title": _clean_text_field(json_doc.title),
-                "blocks": _apply_icons_and_strip_emoji(json_doc.blocks),
+                "blocks": _normalize_blocks(_apply_icons_and_strip_emoji(json_doc.blocks)),
             }
         )
 
@@ -111,7 +111,7 @@ def markdown_to_content_document(markdown: str, task_input: FormatterInput) -> C
     if not blocks:
         blocks = (ParagraphBlock(type="paragraph", text=cleaned or " "),)
     title = _clean_text_field(title) if title else None
-    blocks = _apply_icons_and_strip_emoji(blocks)
+    blocks = _normalize_blocks(_apply_icons_and_strip_emoji(blocks))
 
     locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
     source_refs = _source_refs_from_cites(cite_nums, task_input)
@@ -297,6 +297,74 @@ def _consume_callout(
 
 def _apply_icons_and_strip_emoji(blocks: tuple[ContentBlock, ...]) -> tuple[ContentBlock, ...]:
     return tuple(_enrich_block(block) for block in blocks)
+
+
+def _normalize_blocks(blocks: tuple[ContentBlock, ...]) -> tuple[ContentBlock, ...]:
+    """Merge orphan icon-only blocks into the next block; join adjacent ordered lists."""
+    if not blocks:
+        return blocks
+    merged_icons = _merge_orphan_icons(blocks)
+    return _merge_adjacent_ordered_lists(merged_icons)
+
+
+def _is_icon_only_block(block: ContentBlock) -> bool:
+    match block:
+        case ParagraphBlock(icon=icon, text=text) | HeadingBlock(icon=icon, text=text):
+            return icon is not None and not text.strip()
+        case _:
+            return False
+
+
+def _attach_icon(block: ContentBlock, icon: IconToken) -> ContentBlock:
+    match block:
+        case HeadingBlock() | ParagraphBlock() | CalloutBlock():
+            if block.icon is not None:
+                return block
+            return block.model_copy(update={"icon": icon})
+        case ListBlock() if block.items:
+            first = block.items[0]
+            if first.icon is not None:
+                return block
+            items = (first.model_copy(update={"icon": icon}), *block.items[1:])
+            return block.model_copy(update={"items": items})
+        case _:
+            return block
+
+
+def _merge_orphan_icons(blocks: tuple[ContentBlock, ...]) -> tuple[ContentBlock, ...]:
+    out: list[ContentBlock] = []
+    i = 0
+    while i < len(blocks):
+        block = blocks[i]
+        if _is_icon_only_block(block) and i + 1 < len(blocks):
+            icon = getattr(block, "icon", None)
+            nxt = blocks[i + 1]
+            if icon is not None and not _is_icon_only_block(nxt):
+                out.append(_attach_icon(nxt, icon))
+                i += 2
+                continue
+        out.append(block)
+        i += 1
+    return tuple(out) or blocks
+
+
+def _merge_adjacent_ordered_lists(blocks: tuple[ContentBlock, ...]) -> tuple[ContentBlock, ...]:
+    if not blocks:
+        return blocks
+    out: list[ContentBlock] = []
+    for block in blocks:
+        if (
+            isinstance(block, ListBlock)
+            and block.style == "ordered"
+            and out
+            and isinstance(out[-1], ListBlock)
+            and out[-1].style == "ordered"
+        ):
+            prev = out[-1]
+            out[-1] = prev.model_copy(update={"items": prev.items + block.items})
+            continue
+        out.append(block)
+    return tuple(out)
 
 
 def _enrich_block(block: ContentBlock) -> ContentBlock:

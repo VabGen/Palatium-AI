@@ -6,11 +6,16 @@ Big Tech presentation layer (Anthropic / Copilot / ADK): the user-visible
 document is the product surface — soft latency degrade must not flatten it, and
 hop budget never drives ``skip_llm``.
 
-The one sanctioned skip is *passthrough*: a short, already-plain answer whose
-deterministic emit is paragraphs only. There is nothing to compile — an LLM pass
-could only add structure the content does not have (a one-line joke turned into an
-icon list). The gate is on the worker answer's shape, never on the user's wording
-or length (055).
+Sanctioned skips:
+- *passthrough*: a short, already-plain answer whose deterministic emit is
+  paragraphs only. There is nothing to compile — an LLM pass could only add
+  structure the content does not have (a one-line joke turned into an icon list).
+- *verbatim*: Intent tagged ``verbatim_extraction`` — the worker body *is* the
+  deliverable (file extract). Length / structure / locale must not force an LLM
+  rewrite that replaces the already-streamed text.
+
+The gate is on capabilities and worker answer shape, never on the user's wording
+(055).
 """
 
 from __future__ import annotations
@@ -41,10 +46,12 @@ class FormatterPassthroughSignals(BaseModel):
     revision_requested: bool = False
     restructure_requested: bool = False
     underspecification_kind: str = "none"
+    # Intent tagged extract/full-text — show worker body as-is (ignore length/structure).
+    verbatim_requested: bool = False
 
 
 class FormatterFastPathPolicy:
-    """Pure domain policy: Formatter LLM unless a short plain answer can pass through."""
+    """Pure domain policy: Formatter LLM unless a short plain or verbatim answer can pass through."""
 
     @classmethod
     def decide(
@@ -68,7 +75,12 @@ class FormatterFastPathPolicy:
             max_chars=passthrough_max_chars,
         )
         if blocker is None:
-            return FormatterFastPathDecision(skip_llm=True, reason="passthrough_plain_prose")
+            reason = (
+                "passthrough_verbatim"
+                if passthrough is not None and passthrough.verbatim_requested
+                else "passthrough_plain_prose"
+            )
+            return FormatterFastPathDecision(skip_llm=True, reason=reason)
         return FormatterFastPathDecision(skip_llm=False, reason=blocker)
 
     @staticmethod
@@ -80,14 +92,22 @@ class FormatterFastPathPolicy:
     ) -> str | None:
         if passthrough is None or max_chars <= 0 or not source_content.strip():
             return "presentation_requires_formatter_llm"
-        checks = (
-            (not passthrough.worker_confident, "worker_not_confident"),
-            (passthrough.source_chars > max_chars, "source_exceeds_passthrough"),
-            (not passthrough.source_is_plain_prose, "source_has_structure"),
-            (not passthrough.locale_matches, "locale_mismatch"),
+        if not passthrough.worker_confident:
+            return "worker_not_confident"
+        hard_stops = (
             (passthrough.requires_review, "requires_review"),
             (passthrough.revision_requested, "revision_requested"),
             (passthrough.restructure_requested, "restructure_requested"),
             (passthrough.underspecification_kind != "none", "underspecified"),
         )
-        return next((reason for failed, reason in checks if failed), None)
+        hard = next((reason for failed, reason in hard_stops if failed), None)
+        if hard is not None:
+            return hard
+        if passthrough.verbatim_requested:
+            return None
+        soft_stops = (
+            (passthrough.source_chars > max_chars, "source_exceeds_passthrough"),
+            (not passthrough.source_is_plain_prose, "source_has_structure"),
+            (not passthrough.locale_matches, "locale_mismatch"),
+        )
+        return next((reason for failed, reason in soft_stops if failed), None)

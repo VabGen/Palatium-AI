@@ -41,17 +41,19 @@
 # silently change the running stack. To bump one: change both the tag and the digest.
 #
 # Health:
-#   API         http://localhost:8000/health
-#   LiteLLM     http://localhost:4000/health/liveliness
-#   LiteLLM UI  http://localhost:4000/ui
-#   Neo4j       http://localhost:7474
-#   Langfuse    http://localhost:3000        (--profile observability)
-#   Silo console http://localhost:9001       (--profile attachments-s3)
-#   MCP EDMS    http://localhost:8080/docs
+#   API           http://localhost:8000/health
+#   LiteLLM       http://localhost:4000/health/liveliness
+#   LiteLLM UI    http://localhost:4000/ui
+#   Neo4j         http://localhost:7474
+#   Langfuse      http://localhost:3000       (--profile observability)
+#   Silo console  http://localhost:9001       (--profile attachments-s3)
+#   MCP EDMS      http://localhost:8080/docs
 #   MCP Analytics http://localhost:8081/docs
 #
 # After changing a model mapping:
 #   docker compose --env-file env/.env up -d --force-recreate litellm
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# docker compose --env-file env/.env --profile docker-mcp --profile docker-api --profile attachments --profile attachments-s3 -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.attachments-av.yml -f docker-compose.attachments-s3.yml up -d --build
 # =============================================================================
 
 name: palatium-ai
@@ -184,6 +186,14 @@ services:
       # container past the budget while buying nothing under a few hundred MB of store.
       NEO4J_server_memory_pagecache_size: 512m
       NEO4J_PLUGINS: '["apoc"]'
+      # Neo4j ≥2026.03 warns when X-Forward headers are accepted from any source.
+      # Local compose publishes HTTP only on loopback and has no reverse proxy in
+      # front of Neo4j — disable processing. Staging/prod behind Traefik/nginx:
+      # set NEO4J_X_FORWARD_ENABLED=true and pin allow_proxies/hosts
+      # (see env/.env.staging.example).
+      NEO4J_server_http_x__forward_enabled: ${NEO4J_X_FORWARD_ENABLED:-false}
+      NEO4J_server_http_x__forward_allow__proxies: ${NEO4J_X_FORWARD_ALLOW_PROXIES:-}
+      NEO4J_server_http_x__forward_allow__hosts: ${NEO4J_X_FORWARD_ALLOW_HOSTS:-}
     ports:
       # Loopback only: the API and the gateway reach Neo4j over the compose network by
       # service name, so publishing to every interface would only widen the perimeter
@@ -207,7 +217,7 @@ services:
       retries: 12
       start_period: 45s
 
-    # ============================================================
+  # ============================================================
   # LiteLLM Gateway — маршрутизатор tier-* → реальные провайдеры
   # ============================================================
   litellm:

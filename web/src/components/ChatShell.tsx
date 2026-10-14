@@ -686,9 +686,12 @@ export function ChatShell() {
         { ...result, hitl_cards: hydratedCards },
         assistantId
       );
+      // Document first, then drop preview in the same turn so UI never flashes empty.
       setMessages(prev =>
         prev.map(msg => (msg.id === assistantId && msg.role === 'assistant' ? assistant : msg))
       );
+      clearStreamPreview();
+      streamingAssistantIdRef.current = null;
       // Industry chat pattern (ChatGPT/Claude/Gemini): composer is staging only.
       // After a successful send the file lives on the user message; ready chips
       // leave the composer. Failed chips stay so the user can see why / retry.
@@ -697,6 +700,7 @@ export function ChatShell() {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         setMessages(prev => prev.filter(msg => msg.id !== assistantId));
+        clearStreamPreview();
         return;
       }
       // Сообщение уже humanized в `errorDetail` (см. client.ts).
@@ -717,13 +721,13 @@ export function ChatShell() {
             : msg
         )
       );
+      clearStreamPreview();
       // Keep ready chips on failure so the user can retry without re-upload.
     } finally {
       if (streamAbortRef.current === abort) {
         streamAbortRef.current = null;
       }
       streamingAssistantIdRef.current = null;
-      clearStreamPreview();
       setBusy(false);
     }
   }
@@ -791,6 +795,8 @@ export function ChatShell() {
         setMessages(prev =>
           prev.map(msg => (msg.id === messageId && msg.role === 'assistant' ? assistant : msg))
         );
+        clearStreamPreview();
+        streamingAssistantIdRef.current = null;
         requestAnimationFrame(() => clearStreamBubbleHeight());
         toast.success(t('toast.regenerated'));
       } catch (err) {
@@ -802,6 +808,7 @@ export function ChatShell() {
                 : msg
             )
           );
+          clearStreamPreview();
           return;
         }
         setMessages(prev =>
@@ -815,13 +822,13 @@ export function ChatShell() {
               : msg
           )
         );
+        clearStreamPreview();
         toast.error(t('toast.regenerateFailed'));
       } finally {
         if (streamAbortRef.current === abort) {
           streamAbortRef.current = null;
         }
         streamingAssistantIdRef.current = null;
-        clearStreamPreview();
         setBusy(false);
       }
     },

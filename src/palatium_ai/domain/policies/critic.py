@@ -56,8 +56,23 @@ class CriticPolicy:
         user_input_chars: int = 0,
         worker_confidence: float | None = None,
         has_attachment_context: bool = False,
+        verbatim_requested: bool = False,
     ) -> CriticGateDecision:
         """Return whether Critic must call an LLM (fail-closed on risk signals)."""
+        # Untrusted evidence always fails closed — even for extract asks.
+        if contains_untrusted_tool_output(worker_summary):
+            return _invoke("untrusted_tool_evidence")
+
+        # Verbatim extract: worker body *is* the answer. Do not invent incompleteness
+        # / quality HITL that would also block Formatter passthrough (055).
+        if cls._verbatim_passthrough(
+            verbatim_requested=verbatim_requested,
+            worker_summary=worker_summary,
+            worker_confidence=worker_confidence,
+            confidence_threshold=confidence_threshold,
+        ):
+            return _passthrough("verbatim_extraction_passthrough")
+
         hard = cls._hard_risk_gate(
             requires_mcp=requires_mcp,
             requires_tool_call=requires_tool_call,
@@ -92,6 +107,21 @@ class CriticPolicy:
         return _invoke("default_quality_gate")
 
     @staticmethod
+    def _verbatim_passthrough(
+        *,
+        verbatim_requested: bool,
+        worker_summary: str | None,
+        worker_confidence: float | None,
+        confidence_threshold: float,
+    ) -> bool:
+        return (
+            verbatim_requested
+            and bool((worker_summary or "").strip())
+            and worker_confidence is not None
+            and worker_confidence >= confidence_threshold
+        )
+
+    @staticmethod
     def _hard_risk_gate(
         *,
         requires_mcp: bool,
@@ -99,10 +129,9 @@ class CriticPolicy:
         worker_summary: str | None,
         has_attachment_context: bool,
     ) -> CriticGateDecision | None:
+        _ = worker_summary  # scanned earlier in decide()
         if requires_tool_call or requires_mcp:
             return _invoke("side_effect_risk")
-        if contains_untrusted_tool_output(worker_summary):
-            return _invoke("untrusted_tool_evidence")
         # Fenced upload: judge must verify grounding (no prior-file echo).
         if has_attachment_context:
             return _invoke("attachment_grounding_gate")

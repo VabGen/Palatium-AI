@@ -52,6 +52,7 @@ class CriticGrader:
             user_input_chars=int(raw_input.get("user_input_chars", 0)),
             worker_confidence=(float(raw_input["worker_confidence"]) if raw_input.get("worker_confidence") is not None else None),
             has_attachment_context=bool(raw_input.get("has_attachment_context", False)),
+            verbatim_requested=bool(raw_input.get("verbatim_requested", False)),
         )
         policy_output = {
             "invoke_llm": decision.invoke_llm,

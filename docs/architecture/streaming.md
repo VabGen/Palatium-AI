@@ -1,6 +1,6 @@
 # SSE streaming
 
-Актуально на 2026-10-11. Транспорт — `StreamingResponse` в
+Актуально на 2026-10-13. Транспорт — `StreamingResponse` в
 `presentation/api/routers/intents.py`, не `sse-starlette`. Кадр:
 
 ```text
@@ -20,7 +20,7 @@ data: {json.dumps(payload)}
 |---|---|---|---|
 | `hop` | `IntentGraphRunner` | `{node, task_id, thread_id}` | `onHop` (имя события зафиксировано) |
 | `answer_delta` | workers / fast-path / dual от Formatter | `{delta, replace?}` | fallback preview; TTFT metric |
-| `text_delta` | `FormatterMarkdownEmitter` | `{content}` | **primary** stream preview (GFM) |
+| `text_delta` | `FormatterMarkdownEmitter` | `{content}` | **primary** stream preview (GFM; keeps `<icon name="…"/>` for FE `TokenIcon`, no emoji) |
 | `result` | `IntentService.process_stream` | `{task_id, thread_id, result: FormatterTaskResult}` | финальный `ContentDocument` |
 | `done` | роутер `intents.py` | `{}` | не используется |
 | `error` | `process_stream` или роутер | `{message, …}` либо `{detail, status_code}` | исключение на клиенте |
@@ -35,8 +35,10 @@ Deprecated: `formatter_delta` (debug JSON tokens) — больше не эмит
 1. `hop` — узел графа отдал update.
 2. `answer_delta` — готовая prose работника (и позже замена черновика с `replace`).
    Первый user-visible чанк пишет `palatium_sse_ttft_seconds`.
-3. `text_delta` — токены GFM от Formatter. На первом чанке после worker draft —
-   dual `answer_delta` с `replace: true` **один раз**; далее dual без `replace`.
+3. `text_delta` — токены GFM от Formatter (включая `<icon name="…"/>`; незакрытый
+   хвост тега держится между чанками). На первом чанке после worker draft —
+   dual `answer_delta` с `replace: true` **один раз**; клиент не сбрасывает
+   `textAccumulated`, если `text_delta` уже шёл. Далее dual без `replace`.
 4. `result` — `FormatterTaskResult`; `ContentDocument` собран
    `markdown_to_content_document` из финального markdown (JSON ContentDocument —
    fallback совместимости).
@@ -48,10 +50,13 @@ XML-теги `<hitl-action>` / `<hitl-choice>` в стриме — не инте
 
 ## Fast path
 
-`FormatterFastPathPolicy` пропускает LLM только для prose без структуры
+`FormatterFastPathPolicy` пропускает LLM для prose без структуры
 (`plain_paragraph_count` не `None`) и не длиннее `FORMATTER_PASSTHROUGH_MAX_CHARS`,
 плюс уверенный worker, совпадение локали и отсутствие review / revision / restructure / choice.
 Заголовки, списки и fenced-блоки остаются на LLM независимо от длины.
+Исключение: capability `verbatim_extraction` — passthrough без лимита 600 и без
+требования «plain prose» (тело worker = ответ; LLM не переписывает уже
+показанный SSE draft).
 
 ## Новым агентам
 

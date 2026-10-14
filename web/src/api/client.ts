@@ -488,8 +488,12 @@ export async function processIntentStream(
     if (eventName === 'answer_delta' && typeof payload.delta === 'string') {
       if (payload.replace === true) {
         answerAccumulated = '';
-        // Dual-emit replace also resets markdown preview accumulator.
-        textAccumulated = '';
+        // Worker→formatter replace for answer-only preview. Dual-emit after
+        // text_delta must NOT wipe the markdown accumulator (emitter sends
+        // text_delta then answer_delta+replace on the first Formatter chunk).
+        if (!hasTextDelta) {
+          textAccumulated = '';
+        }
       }
       answerAccumulated += payload.delta;
       handlers.onAnswerDelta?.(payload.delta, answerAccumulated);

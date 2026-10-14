@@ -26,6 +26,7 @@ from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.policies.types import (
     CONTENT_GENERATION_CAPABILITY,
     DOCUMENT_GENERATION_CAPABILITY,
+    VERBATIM_EXTRACTION_CAPABILITY,
 )
 
 
@@ -182,6 +183,9 @@ def resolve_style_hint(task_input: FormatterInput) -> FormatterStyleHint:
     if (task_input.revision_feedback or "").strip():
         return "revise_keep_structure"
     caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
+    # Extract / full-text asks: worker body is the deliverable — do not brand-restructure.
+    if VERBATIM_EXTRACTION_CAPABILITY in caps:
+        return "plain_text"
     if DOCUMENT_GENERATION_CAPABILITY in caps:
         return "document_generation"
     if CONTENT_GENERATION_CAPABILITY in caps:

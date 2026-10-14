@@ -691,6 +691,98 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api up 
 Режим определяется переменной `ENVIRONMENT` (`development` | `staging` | `production`);
 `development` — единственный, где `memory` + `disabled` разрешены.
 
+### 3.17a. `column "ocr_applied" … does not exist`
+
+**Симптом:** API/pipeline падает на чтении/записи `palatium_ai.attachments` с
+`UndefinedColumn` / `column "ocr_applied" of relation "attachments" does not exist`.
+
+**Причина:** код уже на ревизии `h8c9d0e1f2a3` (nullable `ocr_applied` /
+`extract_status` / `extracted_chars`), а БД — нет. Это **не** отсутствие миграции
+в репо и не повод для Expand–Contract dual-write: колонки additive/nullable.
+
+**Фикс:**
+
+```powershell
+uv run alembic upgrade head
+# или из контейнера:
+docker compose --env-file env/.env exec api alembic upgrade head
+```
+
+Проверка:
+
+```powershell
+docker compose --env-file env/.env exec -T postgres `
+  psql -U postgres -d postgres -c "SELECT version_num FROM palatium_ai.alembic_version;"
+# → h8c9d0e1f2a3
+```
+
+Таблица версий живёт в схеме **`palatium_ai`**, не в `public`: запрос
+`SELECT … FROM alembic_version` без схемы даёт ложный `relation does not exist`.
+`\d palatium_ai.attachments` должен показать `ocr_applied` / `extract_status` /
+`extracted_chars`. `RUN_MIGRATIONS=1` обязан смотреть в тот же Postgres DSN, что API.
+
+### 3.17b. `hop_budget_exceeded` / turn ~20–30 s
+
+**Симптом:** в логе `agent.turn.hops` с `hop_budget_exceeded=True`,
+`hop_slowest_node` = `formatter` или `researcher`, бюджет `TURN_HOP_BUDGET_MS`
+(default 15000).
+
+**Это soft SLO**, не hard-fail: Critic LLM и Formatter repair уже soft-degrade
+при нехватке бюджета; Formatter presentation LLM **намеренно не** гейтится
+(бренд UI). Основная длительность — latency корпоративного LLM + MCP.
+
+**Что делать:** смотреть `hop_ms` по узлам; не поднимать `max_wal_size` и не
+менять транспорт на «WebSocket Responses» ради этого. Опции: быстрее tier для
+Formatter, меньше repair, `web_fallback` только при пустом local (и skip при
+уже превышенном бюджете). Поднять `TURN_HOP_BUDGET_MS` — только если осознанно
+сдвигаете алерт `PalatiumTurnHopBudgetExceeded`, не «ускорение».
+
+### 3.17c. ClamAV `freshclam` → HTTP 403 / 429 от CDN
+
+**Симптом:** `403`/`429`, cool-down до timestamp в `/var/log/clamav/freshclam.log`,
+локальный `daily-NNNNN` отстаёт от CDN (например 28130 vs 28152), при этом
+`clamd` SelfCheck OK на **старых** базах.
+
+**Причина:** rate-limit CDN. Volume `palatium_clamav_db` уже сохраняет CVD;
+watchdog ставит `Checks 2` + таймауты. Пока cool-down активен, обновлений не будет.
+
+**Фикс (dev):** дождаться конца cool-down → `docker compose … restart clamav`
+(не `down -v`). Приватное зеркало (`cvdupdate`) — только если бан устойчив после
+cool-down и AV обязателен в prod. Сканы на устаревших базах работают, но детект
+свежих сигнатур слабее.
+
+### 3.17d. `embeddings.schema.provider_unmatched` (knowledge @1536)
+
+**Симптом:** `Vector path disabled` для `schema=knowledge`, `expected_dim=1536`,
+при этом memory биндится (`qwen` @4096).
+
+**Причина:** `EMBEDDING_DEFAULT_PROVIDER=qwen` (4096) и пустой
+`KNOWLEDGE_EMBEDDING_PROVIDER` / нет провайдера с dim=1536 и API key.
+Corporate embedding gateway — native 4096 без MRL; обрезать до 1536 на клиенте
+запрещено (060).
+
+**Фикс:** задать провайдер @1536 с ключом, например:
+
+```env
+KNOWLEDGE_EMBEDDING_PROVIDER="openai"
+OPENAI_EMBEDDING_API_KEY="…"
+OPENAI_EMBEDDING_MODEL="text-embedding-3-small"
+OPENAI_EMBEDDING_DIMENSION=1536
+OPENAI_EMBEDDING_BASE_URL="https://api.openai.com/v1"
+```
+
+Не ставьте `OPENAI_EMBEDDING_MODEL=generative-model` — это chat, не embedding.
+Без 1536-эндпоинта knowledge остаётся на FTS-only (осознанный degrade, не баг
+рантайма).
+
+### 3.17e. MinIO: `taking drive /data offline` / `all drives are offline`
+
+**Симптом:** кратковременно `unable to write+read`, затем `bringing drive /data online`.
+
+**Причина:** I/O hiccup тома Docker (часто Desktop/WSL), не обязательно мёртвый диск.
+Проверка: `docker compose exec minio df -h /data` — место и mount; повторы → SMART
+хоста / место на Docker disk image / права volume.
+
 ### 3.18. MinIO / ClamAV недоступны из API
 
 **MinIO.** Endpoint проверяется **на старте** (`ensure_bucket()`): неверный адрес/креды →

@@ -330,6 +330,16 @@ textarea {
   display: inline-block;
   vertical-align: -0.2em;
   margin-right: 0.3em;
+  flex-shrink: 0;
+}
+
+/* Keep leading stream icons on the same line as heading / paragraph text. */
+.msg.pending .stream-preview--md > p,
+.msg.pending .stream-md-h {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.25em 0.35em;
 }
 
 .msg.pending .stream-md-h {
@@ -337,6 +347,7 @@ textarea {
   font-size: 1.05em;
   font-weight: 650;
   line-height: 1.3;
+  align-items: center;
 }
 
 .msg.pending .stream-md-list {
@@ -922,6 +933,8 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* One counter for the whole answer so split ordered lists do not all show "1." */
+  counter-reset: item;
 }
 
 .block-heading {
@@ -967,9 +980,6 @@ textarea {
   gap: 8px;
   align-items: flex-start;
   line-height: 1.45;
-}
-.block-list.style-ordered {
-  counter-reset: item;
 }
 .block-list.style-ordered li {
   counter-increment: item;

@@ -8,6 +8,11 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/LITELLM_DB_URL
+  # Clients hit LiteLLM on loopback / compose DNS (no ingress). Empty list enables
+  # per-source login throttling without trusting X-Forwarded-For from the world.
+  # Behind Traefik/nginx: replace with the proxy CIDR(s), e.g. ["10.0.0.0/8"].
+  trusted_proxy_ranges: []
+  user_api_key_cache_ttl: 300
 
 model_list:
   # ============================================================
@@ -85,10 +90,15 @@ router_settings:
 litellm_settings:
   drop_params: true
   cache: true
+  # Share virtual-key auth lookups across workers via the same Redis as response cache.
+  enable_redis_auth_cache: true
   cache_params:
     type: redis
     host: redis
     port: 6379
+    # When REDIS_PASSWORD is set in env/.env, add:
+    #   password: os.environ/REDIS_PASSWORD
+    # Empty password + AUTH breaks Valkey with requirepass disabled.
     similarity_threshold: 0.95
     ttl: 3600
   # P0.3: app marks leading system messages with Anthropic-style
