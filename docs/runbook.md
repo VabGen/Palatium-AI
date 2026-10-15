@@ -691,6 +691,28 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api up 
 Режим определяется переменной `ENVIRONMENT` (`development` | `staging` | `production`);
 `development` — единственный, где `memory` + `disabled` разрешены.
 
+### 3.17f. `api` не стартует: `RuntimeError: HITL escalation requires at least one OOB channel …`
+
+Это **не баг**, а fail-closed guard (020/040): эскалация, осевшая только в логе и
+audit, никого не пейджит, поэтому в `staging`/`production` нужен хотя бы один канал,
+выходящий за пределы процесса. В `development` требование не действует.
+
+| Канал | Что задать (целиком) |
+|---|---|
+| webhook | `HITL_NOTIFY_WEBHOOK_URL` (http/https) |
+| email | `HITL_NOTIFY_EMAIL_TO` + `HITL_NOTIFY_SMTP_HOST` + `HITL_NOTIFY_EMAIL_FROM` |
+| slack | `HITL_NOTIFY_SLACK_BOT_TOKEN` + `HITL_NOTIFY_SLACK_CHANNEL` |
+
+Что увидел composition root:
+
+```powershell
+docker compose --env-file env/.env --profile docker-mcp --profile docker-api logs api --tail 200 |
+    Select-String "hitl.escalation.channels|HITL notifier channels"
+```
+
+`hitl.escalation.channels` перечисляет принятые каналы (`webhook,email,slack`);
+`LoggingHitlNotifier` в этот список не входит — он baseline-канал, а не OOB.
+
 ### 3.17a. `column "ocr_applied" … does not exist`
 
 **Симптом:** API/pipeline падает на чтении/записи `palatium_ai.attachments` с

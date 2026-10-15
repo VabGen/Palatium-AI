@@ -27,9 +27,10 @@
 | `TURN_COST_BUDGET_USD` / `DAILY_COST_BUDGET_USD` | >0 hard caps |
 | Redis | обязателен для HITL / kill-switch / budget (multi-worker); in-memory запрещён |
 | `MANAGER_ROLES` | очередь `GET /api/hitl/queue/escalated` + OOB notify roles |
-| `HITL_NOTIFY_WEBHOOK_URL` | опциональный HTTPS webhook на escalate (Slack/Teams/…); иначе только audit/log |
-| `HITL_NOTIFY_EMAIL_*` / SMTP | опциональный email канал escalate |
-| `HITL_NOTIFY_SLACK_*` | опциональный Slack `chat.postMessage` |
+| `HITL_NOTIFY_WEBHOOK_URL` | HTTPS webhook на escalate (Slack/Teams/…) |
+| `HITL_NOTIFY_EMAIL_*` / SMTP | email канал escalate (`EMAIL_TO` + `SMTP_HOST` + `EMAIL_FROM`) |
+| `HITL_NOTIFY_SLACK_*` | Slack `chat.postMessage` (`BOT_TOKEN` + `CHANNEL`) |
+| OOB-канал escalate | **≥1 из webhook/email/slack обязателен** (hard fail без него); иначе эскалация не пейджит человека |
 | `HITL_STEP_UP_METHOD` | staging/prod: `idp_acr` или `webauthn` (**не** `hmac_stub`) |
 | `HITL_STEP_UP_AUTHORIZE_URL` | опциональный шаблон IdP start URL (placeholders `{card_id}`…) |
 | `HITL_STEP_UP_REQUIRED` | override; пусто → enforce только staging/production |

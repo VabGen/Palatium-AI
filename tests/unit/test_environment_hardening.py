@@ -21,6 +21,7 @@ def _settings(
     jwt_algorithm: str = "RS256",
     cors_origin_list: tuple[str, ...] = ("https://app.palatium.example",),
     hitl_signing_secret: object | None = None,
+    notify_channels: tuple[str, ...] = ("webhook",),
 ) -> SimpleNamespace:
     llm = SimpleNamespace(
         default_provider=default_provider,
@@ -42,6 +43,7 @@ def _settings(
             jwt_algorithm=jwt_algorithm,
             cors_origin_list=cors_origin_list,
             hitl_signing_secret=hitl_signing_secret,
+            hitl_notify_external_channels=notify_channels,
         ),
         observability=SimpleNamespace(
             turn_cost_budget_usd=turn_budget,
@@ -95,3 +97,18 @@ def test_hardening_accepts_asymmetric_jwt_and_public_cors() -> None:
     _assert_environment_hardening(
         _settings(jwt_algorithm="ES256", cors_origin_list=("https://app.palatium.example",), hitl_signing_secret=long_secret)
     )
+
+
+def test_hardening_requires_oob_hitl_notify_channel() -> None:
+    """An escalation that only reaches the process log never pages a human (020)."""
+    with pytest.raises(RuntimeError, match="HITL_NOTIFY"):
+        _assert_environment_hardening(_settings(notify_channels=()))
+
+
+@pytest.mark.parametrize("channel", ("webhook", "email", "slack"))
+def test_hardening_accepts_any_single_oob_notify_channel(channel: str) -> None:
+    _assert_environment_hardening(_settings(notify_channels=(channel,)))
+
+
+def test_dev_is_not_required_to_configure_notify_channel() -> None:
+    _assert_environment_hardening(_settings(environment="development", notify_channels=()))

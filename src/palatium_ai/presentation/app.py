@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import SecretStr
 
 from palatium_ai.application.bootstrap import shutdown, startup
 from palatium_ai.core.config import get_settings
@@ -82,14 +83,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Middleware order: last added runs first on the request path.
     application.add_middleware(
-        RateLimitMiddleware,
+        RateLimitMiddleware,  # type: ignore[arg-type]
         limit=resolved_settings.security.api_rate_limit,
         window_seconds=resolved_settings.security.api_rate_limit_window_seconds,
         path_prefixes=resolved_settings.security.rate_limit_path_prefixes,
     )
     metrics_public = resolved_settings.security.metrics_public if resolved_settings.app.environment == "development" else False
     application.add_middleware(
-        AuthMiddleware,
+        AuthMiddleware,  # type: ignore[arg-type]
         security=resolved_settings.security,
         token_service=token_service,
         metrics_public=metrics_public,
@@ -98,7 +99,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if not cors_origins:
         raise RuntimeError("CORS_ORIGINS must list at least one origin (wildcards are forbidden)")
     application.add_middleware(
-        CORSMiddleware,
+        CORSMiddleware,  # type: ignore[arg-type]
         allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
@@ -273,23 +274,15 @@ def _assert_environment_hardening(settings: Settings) -> None:
     """Fail closed on staging/production Zero Trust / SLA knobs."""
     if settings.app.environment not in {"staging", "production"}:
         return
+    _assert_identity_hardening(settings)
+    _assert_budget_and_fallback_hardening(settings)
+    _assert_hitl_hardening(settings)
+
+
+def _assert_identity_hardening(settings: Settings) -> None:
+    """Auth, token signing and origin allow-list (020)."""
     if not settings.security.auth_enabled:
         raise RuntimeError("AUTH_ENABLED must be true when ENVIRONMENT is staging or production")
-    if settings.observability.turn_cost_budget_usd <= 0:
-        raise RuntimeError("TURN_COST_BUDGET_USD must be > 0 when ENVIRONMENT is staging or production")
-    if settings.observability.daily_cost_budget_usd <= 0:
-        raise RuntimeError("DAILY_COST_BUDGET_USD must be > 0 when ENVIRONMENT is staging or production")
-    chain = settings.llm.build_provider_chain(settings.llm.default_provider)
-    if len(chain) < 2:
-        raise RuntimeError(
-            "LLM_FALLBACK_PROVIDERS must yield ≥1 distinct fallback "
-            "(provider chain length ≥2) when ENVIRONMENT is staging or production"
-        )
-    step_up_method = getattr(settings.security, "hitl_step_up_method", "hmac_stub")
-    if step_up_method == "hmac_stub":
-        raise RuntimeError(
-            "HITL_STEP_UP_METHOD=hmac_stub is forbidden when ENVIRONMENT is staging or production (use idp_acr or webauthn)"
-        )
     # 020 / 055: symmetric JWT in a hardened environment is a shared-secret footgun — require
     # asymmetric signing/verification (JWKS). Default HS256 must not silently reach production.
     algorithm = str(settings.security.jwt_algorithm).strip().upper()
@@ -301,13 +294,53 @@ def _assert_environment_hardening(settings: Settings) -> None:
         raise RuntimeError(
             f"CORS_ORIGINS must not include loopback origins {loopback!r} when ENVIRONMENT is staging or production"
         )
+
+
+def _assert_budget_and_fallback_hardening(settings: Settings) -> None:
+    """Spend caps and a second provider — a provider outage must not be a full stop (020)."""
+    if settings.observability.turn_cost_budget_usd <= 0:
+        raise RuntimeError("TURN_COST_BUDGET_USD must be > 0 when ENVIRONMENT is staging or production")
+    if settings.observability.daily_cost_budget_usd <= 0:
+        raise RuntimeError("DAILY_COST_BUDGET_USD must be > 0 when ENVIRONMENT is staging or production")
+    chain = settings.llm.build_provider_chain(settings.llm.default_provider)
+    if len(chain) < 2:
+        raise RuntimeError(
+            "LLM_FALLBACK_PROVIDERS must yield ≥1 distinct fallback "
+            "(provider chain length ≥2) when ENVIRONMENT is staging or production"
+        )
+
+
+def _assert_hitl_hardening(settings: Settings) -> None:
+    """Step-up ceremony, action-token key and an escalation channel that reaches a human."""
+    step_up_method = getattr(settings.security, "hitl_step_up_method", "hmac_stub")
+    if step_up_method == "hmac_stub":
+        raise RuntimeError(
+            "HITL_STEP_UP_METHOD=hmac_stub is forbidden when ENVIRONMENT is staging or production "
+            "(use idp_acr or webauthn)"
+        )
     # 020: HITL action tokens are HMAC even with asymmetric JWT — require a non-trivial key.
     hitl_secret = getattr(settings.security, "hitl_signing_secret", None)
-    if hitl_secret is not None and 0 < len(hitl_secret.get_secret_value().strip()) < 32:
-        raise RuntimeError("HITL_SIGNING_SECRET must be at least 32 characters when ENVIRONMENT is staging or production")
+    if hitl_secret is not None:
+        secret_str = cast(SecretStr, hitl_secret)
+        if 0 < len(secret_str.get_secret_value().strip()) < 32:
+            raise RuntimeError(
+                "HITL_SIGNING_SECRET must be at least 32 characters when ENVIRONMENT is staging or production"
+            )
+    # 020/040: an escalation whose only sink is the in-process log never reaches a human —
+    # the card would escalate "successfully" into a log line with nobody paged. Require at
+    # least one channel that actually leaves the process.
+    notify_channels = settings.security.hitl_notify_external_channels
+    if not notify_channels:
+        raise RuntimeError(
+            "HITL escalation requires at least one OOB channel when ENVIRONMENT is staging or production: "
+            "HITL_NOTIFY_WEBHOOK_URL, or HITL_NOTIFY_EMAIL_TO + HITL_NOTIFY_SMTP_HOST + HITL_NOTIFY_EMAIL_FROM, "
+            "or HITL_NOTIFY_SLACK_BOT_TOKEN + HITL_NOTIFY_SLACK_CHANNEL"
+        )
+    logger.info("hitl.escalation.channels", channels=",".join(notify_channels))
 
 
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104 — CORS origin allowlist, not a bind address
+_LOOPBACK_HOSTS = frozenset(
+    {"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104 — CORS origin allowlist, not a bind address
 
 
 def _is_loopback_origin(origin: str) -> bool:

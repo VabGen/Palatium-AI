@@ -34,8 +34,15 @@ regexes = [
 # Path allowlist. Every entry is a place where a "secret-looking" literal is
 # structurally guaranteed to be a placeholder, never a credential.
 paths = [
-  # Env templates ship documented placeholders ("", "CHANGE_ME"). Real env files
-  # are gitignored (.gitignore: env/.env*) and must never appear in history.
+  # Env templates ship documented placeholders ("", "CHANGE_ME").
+  #
+  # ВНИМАНИЕ (2026-10-15): комментарий здесь раньше утверждал «Real env files are
+  # gitignored (.gitignore: env/.env*) and must never appear in history». Это неверно —
+  # четыре рабочих профиля (env/.env, .env.dev, .env.staging, .env.prod) ТРЕКАЮТСЯ вместе
+  # с живыми значениями (осознанное исключение, см. .gitignore и docs/secrets.md §1).
+  # Поэтому allowlist ниже намеренно покрывает ТОЛЬКО `*.example`: расширять его на
+  # профили нельзя — это было бы allowlist'ом реальных креденшелов, что запрещено
+  # правилом в шапке файла. Закрывать надо не сканер, а исключение (ротация + rm --cached).
   '''env/\.env\..*\.example$''',
   # Test fixtures use obviously-fake literals (e.g. "tok", "unit-test-...-key").
   # Rule: a REAL credential must never be written into a test — if one ever is,

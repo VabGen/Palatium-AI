@@ -18,9 +18,14 @@ poetry.toml
 venv/
 .venv/
 
-# Secrets — never commit real env files (templates *.example stay tracked)
-# These were commented out, which silently un-ignored live credential files and let
-# env/.env (OLLAMA_API_KEY, PALATIUM_GATEWAY_KEY) reach the git history. Keep enabled.
+# ANTI-PATTERN: секреты в git — сознательное исключение, подтверждено пользователем 2026-10-15
+# env/.env, .env.dev, .env.staging, .env.prod трекаются вместе с живыми значениями
+# (OLLAMA_API_KEY, LITELLM_MASTER_KEY, CLICKHOUSE_PASSWORD, GRAFANA_ADMIN_PASSWORD, …).
+# Нарушает 020 (секреты — только env/secret store) и 025 (секрет в артефакте репозитория).
+# Паттерны НИЖЕ намеренно закомментированы — это выбор, а не забытая правка; предыдущая
+# редакция комментария утверждала обратное («Keep enabled») и вводила в заблуждение.
+# Выход из исключения: `git rm --cached` четырёх профилей → ротация утёкших значений →
+# чистка истории → Vault для staging/prod (docs/secrets.md §4) → раскомментировать паттерны.
 #env/.env
 #env/.env.dev
 #env/.env.staging
@@ -35,6 +40,9 @@ venv/
 # un-ignored, and a plain `git add .` would stage live credentials. Root-level patterns
 # instead of editing the vendored .gitignore (017: exclude the path in our config, do not
 # edit someone else's file). `*.example` templates stay tracked.
+# Эти паттерны оставлены закомментированными вместе с решением выше, хотя сами по себе ему
+# не противоречат: включение — отдельное решение (в `.gitignore` гейт `check_todos.py`
+# не смотрит, поэтому долг записан прозой, а не маркером).
 #**/.env
 #**/.env.local
 #**/.env.*.local

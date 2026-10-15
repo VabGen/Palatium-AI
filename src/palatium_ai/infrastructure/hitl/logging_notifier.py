@@ -1,6 +1,6 @@
 # src/palatium_ai/infrastructure/hitl/logging_notifier.py
 
-"""Stub OOB notifier: structlog + audit event (no email/Slack yet)."""
+"""Baseline HITL escalation sink: structlog + hash-chained audit event."""
 
 from __future__ import annotations
 
@@ -14,10 +14,16 @@ logger = get_logger(__name__)
 
 
 class LoggingHitlNotifier:
-    """Records escalation for ops pipelines until a real channel adapter exists."""
+    """Always-on baseline channel: logs the notice and appends the audit event.
+
+    It is not an OOB channel — the notice never leaves the process, which is why the
+    audit metadata keeps ``channel="logging_stub"`` (020/040: an escalation that was
+    paged is distinguishable from one that only landed in the log). Real channels
+    (webhook / email / Slack) are composed alongside it by ``build_hitl_service``.
+    """
 
     async def notify_escalation(self, notice: HitlEscalationNotice) -> None:
-        """Log and audit an escalation notice (stub channel)."""
+        """Log and audit an escalation notice (baseline channel)."""
         logger.warning(
             "hitl.escalation.notify",
             card_id=notice.card_id,

@@ -446,7 +446,9 @@ npm run build
     `scripts/smoke_hitl_write_step_up.py`.
 - Просрочка с `risk_score > 0.5` → **escalate** (manager queue + OOB notify:
   logging + optional webhook / SMTP email / Slack bot) + audit
-  `hitl_escalation_notified`; иначе `auto_rejected`.
+  `hitl_escalation_notified`; иначе `auto_rejected`. В **staging/production**
+  обязателен хотя бы один внешний канал (webhook / email / Slack) — иначе старт
+  падает: escalation, осевшая только в логе, не пейджит человека (020).
 - Manager: `GET /api/hitl/queue/escalated` (tenant `org_id`), `POST .../manager-resolve`.
 
 Write MCP (EDMS stub): `archive_document` — platform-pinned `write` → HITL interrupt

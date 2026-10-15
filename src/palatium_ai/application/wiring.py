@@ -154,15 +154,16 @@ def build_hitl_service(
 
     channels: list[HitlNotifierPort] = [LoggingHitlNotifier()]
     webhook = (notify_webhook_url or "").strip()
-    if security is not None and security.hitl_notify_webhook_url is not None:
-        webhook = str(security.hitl_notify_webhook_url)
+    if security is not None:
+        # Channel selection lives in SecurityConfig so the staging/production hardening
+        # gate counts exactly the channels built here (no second condition to drift).
+        webhook = security.hitl_notify_webhook_target or webhook
         notify_webhook_timeout_seconds = security.hitl_notify_webhook_timeout_seconds
     if webhook:
         channels.append(WebhookHitlNotifier(webhook, timeout_seconds=notify_webhook_timeout_seconds))
 
     if security is not None:
-        recipients = security.hitl_notify_email_recipients
-        if recipients and security.hitl_notify_smtp_host.strip() and security.hitl_notify_email_from.strip():
+        if security.hitl_notify_email_enabled:
             password = (
                 security.hitl_notify_smtp_password.get_secret_value() if security.hitl_notify_smtp_password is not None else None
             )
@@ -171,19 +172,15 @@ def build_hitl_service(
                     host=security.hitl_notify_smtp_host,
                     port=security.hitl_notify_smtp_port,
                     mail_from=security.hitl_notify_email_from,
-                    mail_to=recipients,
+                    mail_to=security.hitl_notify_email_recipients,
                     username=security.hitl_notify_smtp_username or None,
                     password=password,
                     use_tls=security.hitl_notify_smtp_use_tls,
                 )
             )
-        slack_token = (
-            security.hitl_notify_slack_bot_token.get_secret_value().strip()
-            if security.hitl_notify_slack_bot_token is not None
-            else ""
-        )
-        slack_channel = security.hitl_notify_slack_channel.strip()
-        if slack_token and slack_channel:
+        slack_target = security.hitl_notify_slack_target
+        if slack_target is not None:
+            slack_token, slack_channel = slack_target
             channels.append(
                 SlackHitlNotifier(
                     bot_token=slack_token,

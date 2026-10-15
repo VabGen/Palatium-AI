@@ -238,6 +238,48 @@ class SecurityConfig(BaseConfig):
         """Parsed HITL_NOTIFY_EMAIL_TO list."""
         return tuple(part.strip() for part in self.hitl_notify_email_to.split(",") if part.strip())
 
+    @property
+    def hitl_notify_email_enabled(self) -> bool:
+        """True when the email channel can deliver: host, sender and recipients all set."""
+        return (
+            bool(self.hitl_notify_email_recipients)
+            and bool(self.hitl_notify_smtp_host.strip())
+            and bool(self.hitl_notify_email_from.strip())
+        )
+
+    @property
+    def hitl_notify_webhook_target(self) -> str | None:
+        """Webhook URL when configured (empty string is normalized to None by validation)."""
+        return str(self.hitl_notify_webhook_url) if self.hitl_notify_webhook_url is not None else None
+
+    @property
+    def hitl_notify_slack_target(self) -> tuple[str, str] | None:
+        """``(bot_token, channel)`` when both are set; a half-configured pair is no channel."""
+        token = (
+            self.hitl_notify_slack_bot_token.get_secret_value().strip() if self.hitl_notify_slack_bot_token is not None else ""
+        )
+        channel = self.hitl_notify_slack_channel.strip()
+        if not token or not channel:
+            return None
+        return token, channel
+
+    @property
+    def hitl_notify_external_channels(self) -> tuple[str, ...]:
+        """Escalation channels that leave the process (020) — logging is not one of them.
+
+        Single source for both the wiring (which adapters to compose) and the
+        staging/production hardening gate: an escalation whose only sink is the
+        in-process log never reaches a human, so that deployment must fail closed.
+        """
+        channels: list[str] = []
+        if self.hitl_notify_webhook_target is not None:
+            channels.append("webhook")
+        if self.hitl_notify_email_enabled:
+            channels.append("email")
+        if self.hitl_notify_slack_target is not None:
+            channels.append("slack")
+        return tuple(channels)
+
     def effective_hitl_step_up_required(self, environment: str) -> bool:
         """Whether high-risk MCP approve requires step-up for this deployment."""
         if self.hitl_step_up_required is not None:
