@@ -30,6 +30,17 @@ def test_skip_capability_discovery_with_prior() -> None:
     assert decision.invoke_llm is False
 
 
+def test_skip_compose_knowledge_with_prior() -> None:
+    decision = ContextualizerPolicy.decide(
+        has_assistant_prior=True,
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=("compose",),
+    )
+    assert decision.invoke_llm is False
+    assert decision.reason == "self_contained:compose"
+
+
 def test_invoke_for_knowledge_with_prior() -> None:
     decision = ContextualizerPolicy.decide(
         has_assistant_prior=True,

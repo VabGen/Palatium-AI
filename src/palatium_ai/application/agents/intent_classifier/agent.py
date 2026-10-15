@@ -107,6 +107,8 @@ def _empty_intent_output() -> IntentClassifierOutput:
         requires_user_choice=False,
         underspecification_kind="none",
         candidate_capabilities=(),
+        grounding="optional",
+        grounding_reason="",
         confidence=0.0,
         reasoning="failure",
     )

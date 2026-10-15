@@ -56,6 +56,13 @@ repos:
         pass_filenames: false
         files: ^src/palatium_ai/.*\.py$
 
+      - id: lint-observability
+        name: lint observability (no raw query in logs/metrics/OTel)
+        entry: python scripts/lint_observability.py
+        language: system
+        pass_filenames: false
+        files: ^src/palatium_ai/.*\.py$
+
       - id: mypy-strict
         name: mypy --strict (src/palatium_ai)
         entry: mypy --strict src/palatium_ai

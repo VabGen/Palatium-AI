@@ -1,0 +1,1141 @@
+{
+  "uid": "palatium-adaptive-grounding",
+  "title": "Palatium AI \u2014 Adaptive Grounding",
+  "description": "Pre-flip / staging A/B panels grouped by question. Thresholds from docs/grounding-mvp-deferrals.md. Label mode= not grounding=. Provisioned from git; UI edits disabled.",
+  "tags": [
+    "palatium",
+    "grounding",
+    "adaptive"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "1. Rollout health",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "1.1 Rollout decision split",
+      "description": "At PCT=10 expect ~10%/90%. enabled=true=0 with PCT>0 \u2192 flag not on pods.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum by (enabled) (rate(palatium_grounding_rollout_total[5m]))",
+          "legendFormat": "{{enabled}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "1.2 Flag OFF ratio",
+      "description": "Red near 1 at PCT=100 means config not propagated or shadow unexpectedly active.",
+      "gridPos": {
+        "h": 7,
+        "w": 5,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_flag_off_total[5m])) / clamp_min(sum(rate(palatium_grounding_rollout_total[5m])), 1e-9)",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "1.3 Enabled series by job (pod proxy)",
+      "description": "Without scrape version label, job/instance rate of enabled=true shows who serves ON traffic.",
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 13,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum by (job) (rate(palatium_grounding_rollout_total{enabled=\"true\"}[5m]))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "1.4 enabled_but_zero_rollout (logs)",
+      "description": "Alert if >0 after intentional PCT>0 flip.",
+      "gridPos": {
+        "h": 7,
+        "w": 5,
+        "x": 19,
+        "y": 1
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "palatium-loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "palatium-loki"
+          },
+          "expr": "count_over_time({app=\"palatium-ai\"} |= \"enabled_but_zero_rollout\" [5m])",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "id": 200,
+      "type": "row",
+      "title": "2. Mode distribution",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "2.1 Grounding mode over time",
+      "description": "Expect optional~40-60%, required~20-30%, none~20-30%. required>40% \u2192 clarification hot path.",
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum by (mode) (rate(palatium_grounding_mode_total[5m]))",
+          "legendFormat": "{{mode}}"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "2.2 default_used (deferred)",
+      "description": "Placeholder until palatium_grounding_default_used_total exists. Future gate >0.05.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "vector(0)",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "id": 300,
+      "type": "row",
+      "title": "3. Quality (prod gates)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 31,
+      "type": "stat",
+      "title": "3.1 Degraded ratio within optional",
+      "description": "PROD GATE. Red >0.7 for 30m \u2192 pause rollout, fill corpus. Label is mode= (not grounding=).",
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_degraded_total{mode=\"optional\"}[30m])) / clamp_min(sum(rate(palatium_grounding_degraded_total{mode=\"optional\"}[30m])) + sum(rate(palatium_grounding_satisfied_total{mode=\"optional\"}[30m])), 1e-9)",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "3.1b Degraded ratio (timeseries)",
+      "description": "",
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 6,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_degraded_total{mode=\"optional\"}[30m])) / clamp_min(sum(rate(palatium_grounding_degraded_total{mode=\"optional\"}[30m])) + sum(rate(palatium_grounding_satisfied_total{mode=\"optional\"}[30m])), 1e-9)",
+          "legendFormat": "degraded_ratio"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "3.2 Satisfied / Degraded / Required-empty",
+      "description": "Shape: satisfied should rise as PCT rises if corpus is alive.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_satisfied_total[5m]))",
+          "legendFormat": "satisfied"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_degraded_total[5m]))",
+          "legendFormat": "degraded"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_required_empty_total[5m]))",
+          "legendFormat": "required_empty"
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "stat",
+      "title": "3.3 Required-empty / required",
+      "description": "PROD GATE. Pause if >0.30 \u2014 clarification template under review.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.2
+              },
+              {
+                "color": "red",
+                "value": 0.3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_required_empty_total[5m])) / clamp_min(sum(rate(palatium_grounding_mode_total{mode=\"required\"}[5m])), 1e-9)",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "type": "table",
+      "title": "3.4 Clarification top-10 by query_hash",
+      "description": "If top-10 \u224880% of clarifications \u2192 narrow query class; tune classifier not template.",
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 8,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "topk(10, sum by (query_hash, len_bucket) (rate(palatium_grounding_clarification_total[1h])))",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 400,
+      "type": "row",
+      "title": "4. Latency",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "4.1 Grounding latency p50/p95/p99 by mode",
+      "description": "Empty-path latency is mostly degraded=true (clarify + LLM reason).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le, mode) (rate(palatium_grounding_latency_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{mode}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(palatium_grounding_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{mode}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, mode) (rate(palatium_grounding_latency_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{mode}}"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "4.2 p95 empty-path / grounded (proxy)",
+      "description": "PROD GATE #1 proxy: empty-path (degraded=true) vs grounded (degraded=false). Sparse until satisfied path observes latency. Pause if >2. Corrected vs inverted draft (LLM reason in numerator).",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1.5
+              },
+              {
+                "color": "red",
+                "value": 2.0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(palatium_grounding_latency_seconds_bucket{degraded=\"true\"}[15m]))) / clamp_min(histogram_quantile(0.95, sum by (le) (rate(palatium_grounding_latency_seconds_bucket{degraded=\"false\"}[15m]))), 0.001)",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "type": "timeseries",
+      "title": "4.3 Latency histogram rate by le",
+      "description": "If mass sits in +Inf, custom buckets are wrong range.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum by (le) (rate(palatium_grounding_latency_seconds_bucket[5m]))",
+          "legendFormat": "le={{le}}"
+        }
+      ]
+    },
+    {
+      "id": 500,
+      "type": "row",
+      "title": "5. Risk \u2014 hallucination",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "5.1 Judge runs vs hallucination",
+      "description": "At sample=1%: judge_runs \u2248 1% of degraded. judge_runs=0 \u2192 task not running.",
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 0,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_judge_runs_total[1h]))",
+          "legendFormat": "judge_runs"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_hallucination_total[1h]))",
+          "legendFormat": "hallucination"
+        }
+      ]
+    },
+    {
+      "id": 52,
+      "type": "stat",
+      "title": "5.2 Hallucination rate",
+      "description": "PROD GATE #3. >0.05 \u2192 rollback. Noisy on 5m; use 1h+.",
+      "gridPos": {
+        "h": 7,
+        "w": 7,
+        "x": 10,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.03
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_hallucination_total[1h])) / clamp_min(sum(rate(palatium_grounding_judge_runs_total[1h])), 1e-9)",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "type": "stat",
+      "title": "5.3 Judge failures",
+      "description": "Non-zero \u2192 LLM-judge failing; quality metric unreliable.",
+      "gridPos": {
+        "h": 7,
+        "w": 7,
+        "x": 17,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.0001
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_judge_failed_total[5m]))",
+          "legendFormat": "value"
+        }
+      ]
+    },
+    {
+      "id": 600,
+      "type": "row",
+      "title": "6. Baseline compare (A/B)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 61,
+      "type": "timeseries",
+      "title": "6.1 Stub/empty proxy: OFF vs ON cohort",
+      "description": "Primary project metric proxy. Expect ON line to improve as corpus fills; OFF cohort stays sticky via hash.",
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 0,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_flag_off_total[30m])) / clamp_min(sum(rate(palatium_grounding_rollout_total{enabled=\"false\"}[30m])), 1e-9)",
+          "legendFormat": "OFF stub_proxy"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(rate(palatium_grounding_degraded_total[30m])) / clamp_min(sum(rate(palatium_grounding_rollout_total{enabled=\"true\"}[30m])), 1e-9)",
+          "legendFormat": "ON degraded_proxy"
+        }
+      ]
+    },
+    {
+      "id": 62,
+      "type": "timeseries",
+      "title": "6.2 Turn count per cohort (24h)",
+      "description": "Validity: ON cohort <200 \u2192 % metrics noisy, baseline not valid.",
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(increase(palatium_grounding_rollout_total{enabled=\"true\"}[24h]))",
+          "legendFormat": "ON"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum(increase(palatium_grounding_rollout_total{enabled=\"false\"}[24h]))",
+          "legendFormat": "OFF"
+        }
+      ]
+    },
+    {
+      "id": 70,
+      "type": "timeseries",
+      "title": "6.3 Transform kind distribution (24h)",
+      "description": "Transformation axis from ContinuityPolicy. expand/shorten/rewrite must route to reasoning (reason_only), never Formatter passthrough.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum by (kind) (increase(palatium_transform_total[24h]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    }
+  ]
+}

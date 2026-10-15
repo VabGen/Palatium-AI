@@ -110,6 +110,10 @@ def contextualizer_to_agent_input(
             "prompt_budget_json": task_input.prompt_budget.model_dump_json(),
             "task_kind": task_kind,
             "requires_mcp": "true" if task_input.requires_mcp else "false",
+            "candidate_capabilities_json": json.dumps(
+                list(task_input.candidate_capabilities),
+                ensure_ascii=False,
+            ),
             "_thread_id": thread_id,
         },
     )
@@ -347,6 +351,8 @@ def context_weaver_to_agent_input(
             "route_plan": task_input.route_plan,
             "requires_mcp": "true" if task_input.requires_mcp else "false",
             "candidate_capabilities_json": json.dumps(list(task_input.candidate_capabilities), ensure_ascii=False),
+            "grounding": task_input.grounding,
+            "grounding_reason": task_input.grounding_reason or "",
             "has_attachment_context": "true" if task_input.has_attachment_context else "false",
             "has_trusted_prior": "true" if task_input.has_trusted_prior else "false",
             "_task_id": task_input.task_id,
@@ -425,12 +431,47 @@ def researcher_output_to_task_result(
 ) -> ResearcherTaskResult:
     """Map harness AgentOutput back to graph ResearcherTaskResult."""
     from palatium_ai.application.agents.researcher.parsing import FAILURE_PLACEHOLDER_SUMMARY
+    from palatium_ai.domain.agents.researcher import GROUNDING_REQUIRED_EMPTY, MCP_EMPTY_RESULT
 
     parsed: ResearcherOutput | None = None
-    if isinstance(agent_output.output, ResearcherOutput) and (
-        agent_output.status != "failure" or agent_output.output.summary != FAILURE_PLACEHOLDER_SUMMARY
-    ):
+    if isinstance(agent_output.output, ResearcherOutput) and (agent_output.output.summary != FAILURE_PLACEHOLDER_SUMMARY):
         parsed = agent_output.output
+
+    grounding_satisfied = bool(parsed.grounding_satisfied) if parsed is not None else False
+    grounding_degraded = bool(parsed.grounding_degraded) if parsed is not None else False
+    cannot_answer = bool(parsed.cannot_answer_without_source) if parsed is not None else False
+
+    # Adaptive grounding: required retrieval empty → clarification (not nothing-found stub).
+    if agent_output.error_message == GROUNDING_REQUIRED_EMPTY:
+        return ResearcherTaskResult(
+            task_id=task_id,
+            agent_role=agent_role,
+            status="partial",
+            confidence=agent_output.confidence,
+            requires_review=False,
+            output=parsed,
+            error=GROUNDING_REQUIRED_EMPTY,
+            grounding_satisfied=False,
+            grounding_degraded=True,
+            cannot_answer_without_source=True,
+        )
+
+    # Empty MCP hits are expected soft-partial — Formatter shows "nothing found", no HITL
+    # (only when Adaptive Grounding is off / stub path).
+    if agent_output.error_message == MCP_EMPTY_RESULT:
+        status = agent_output.status if agent_output.status in {"partial", "failure"} else "partial"
+        return ResearcherTaskResult(
+            task_id=task_id,
+            agent_role=agent_role,
+            status=status,
+            confidence=agent_output.confidence,
+            requires_review=False,
+            output=None,
+            error=MCP_EMPTY_RESULT,
+            grounding_satisfied=False,
+            grounding_degraded=True,
+            cannot_answer_without_source=False,
+        )
 
     if agent_output.status == "failure":
         requires_review = agent_output.error_message != "MCP tool call denied by human approval"
@@ -445,6 +486,12 @@ def researcher_output_to_task_result(
         )
 
     requires_review = agent_output.status == "partial"
+    if parsed is not None and parsed.sources_used and not grounding_degraded:
+        grounding_satisfied = True
+        if not parsed.grounding_satisfied:
+            from palatium_ai.core.observability.metrics import agent_metrics
+
+            agent_metrics.record_grounding_satisfied()
     return ResearcherTaskResult(
         task_id=task_id,
         agent_role=agent_role,
@@ -453,6 +500,9 @@ def researcher_output_to_task_result(
         requires_review=requires_review,
         output=parsed,
         error=agent_output.error_message,
+        grounding_satisfied=grounding_satisfied,
+        grounding_degraded=grounding_degraded,
+        cannot_answer_without_source=cannot_answer,
     )
 
 
@@ -575,7 +625,19 @@ def merge_parallel_worker_results(
     research: ResearcherTaskResult,
     analyst: ResearcherTaskResult,
 ) -> ResearcherTaskResult:
-    """Merge Researcher∥Analyst outcomes into one execution slot for Critic/Formatter."""
+    """Merge Researcher∥Analyst outcomes into one execution slot for Critic/Formatter.
+
+    Grounding flags are OR-merged (any cannot_answer / degraded wins). Dropping them
+    would silently disable Adaptive Grounding on the parallel path.
+
+    Merge policy: **strict** (any degraded wins). Correct for complementary tools
+    (multi-source grounding: if the user asked to compare X and Y and Y is missing,
+    the honest outcome is degraded — half the ask has no ground). Tools are treated
+    as complements, not alternatives. There is no ``tool_relation`` signal in state
+    today; if alternative tools are added later («find *anything* about X»), introduce
+    explicit ``tool_relation ∈ {complementary, alternative}`` in the execution plan
+    and switch merge accordingly — do **not** silently flip to any-satisfied-wins.
+    """
     research_summary = research.output.summary if research.output is not None else (research.error or "research empty")
     analyst_summary = analyst.output.summary if analyst.output is not None else (analyst.error or "analyst empty")
     sources: list[str] = []
@@ -593,6 +655,11 @@ def merge_parallel_worker_results(
         status = "success"
     confidence = min(research.confidence, analyst.confidence)
     errors: list[str] = [e for e in (research.error, analyst.error) if isinstance(e, str) and e]
+    cannot_answer = research.cannot_answer_without_source or analyst.cannot_answer_without_source
+    grounding_degraded = research.grounding_degraded or analyst.grounding_degraded or cannot_answer
+    grounding_satisfied = (
+        (research.grounding_satisfied or analyst.grounding_satisfied) and not grounding_degraded and not cannot_answer
+    )
     return ResearcherTaskResult(
         task_id=research.task_id,
         agent_role="parallel_workers",
@@ -603,8 +670,14 @@ def merge_parallel_worker_results(
             summary=f"[research]\n{research_summary}\n\n[analysis]\n{analyst_summary}",
             confidence=confidence,
             sources_used=tuple(dict.fromkeys(sources)),
+            grounding_satisfied=grounding_satisfied,
+            grounding_degraded=grounding_degraded,
+            cannot_answer_without_source=cannot_answer,
         ),
         error="; ".join(errors) if errors else None,
+        grounding_satisfied=grounding_satisfied,
+        grounding_degraded=grounding_degraded,
+        cannot_answer_without_source=cannot_answer,
     )
 
 

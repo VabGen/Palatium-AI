@@ -30,7 +30,10 @@ just because an optional parameter (topic, tone, length, style) is unstated.
 
 Continuity hints (from Contextualizer) describe dependence on prior dialog — they do NOT
 force a task_kind. Classify from the rewritten text:
-- continuation_kind=format + has_prior_dialog → lean response_formatting
+- continuation_kind=format + has_prior_dialog → set transformation (below). Only lean
+  response_formatting when transformation is restructure (layout/sections/table/list).
+  For expand / shorten / rewrite → knowledge_request (content change over prior), NOT
+  response_formatting — Formatter would only restyle without changing substance.
 - continuation_kind=answer + has_prior_dialog → do NOT emit clarification_needed only because
   facts seem missing from the text (prior dialog may hold them). Still classify the ask:
   research/explain/meta-dialog questions → knowledge_request; greetings/thanks only →
@@ -76,25 +79,66 @@ Also decide:
   requires_user_choice is true; do not invent "search" without a tool ask.
 - confidence: how sure you are of task_kind. Below 0.7 a clarification_needed label is
   treated as a guess and the platform answers on the default path instead.
+- grounding (need for external data — orthogonal to task_kind):
+  • "required" — cannot answer without the user's concrete data (their file, ticket,
+    transaction, personal record). Example: "what is in my uploaded file X".
+  • "optional" — retrieval may help, but general knowledge / the ask text itself
+    is enough to answer. Examples: compare cloud vs boxed software; analyze a
+    hypothetical sales drop the user just described; approaches to a topic.
+  • "none" — retrieval not useful: jokes, translation, math, pure generation,
+    social. Prefer "compose"/"draft" capabilities with none when applicable.
+  When unsure between required and optional → optional. Between optional and none
+  → optional. Default when uncertain: optional. Judge meaning, not keywords.
+- transformation (how to transform prior — orthogonal to task_kind / grounding):
+  • "none" — not a prior-transform ask (default).
+  • "restructure" — same substance, new layout (table, sections, bullets, icons).
+  • "expand" — fuller / more detailed / развёрнутый ответ on the same prior content.
+  • "shorten" — compress prior; keep key facts.
+  • "rewrite" — rephrase prior with different wording; same meaning, not layout-only.
+  When continuation_kind is not format (and the ask does not transform prior) → "none".
+  When unsure between restructure and expand → expand (content change is safer UX).
 
 Examples (input → output axes; reasoning omitted):
 - {"text":"tell me a joke","has_prior_dialog":false} → knowledge_request, requires_mcp=false,
-  underspecification_kind="none", candidate_capabilities=["compose"]
+  underspecification_kind="none", candidate_capabilities=["compose"], grounding="none"
 - {"text":"расскажи анекдот на тему","has_prior_dialog":true} → knowledge_request,
-  underspecification_kind="none", candidate_capabilities=["compose"] (topic comes from dialog)
+  underspecification_kind="none", candidate_capabilities=["compose"], grounding="none"
+  (Researcher reads dialog for topic; Contextualizer skips LLM on compose)
 - {"text":"напиши ответ на обращение","has_prior_dialog":true} → knowledge_request,
-  underspecification_kind="none", candidate_capabilities=["draft"]
+  underspecification_kind="none", candidate_capabilities=["draft"], grounding="optional"
 - {"text":"дай текст / OCR / дословно","has_prior_dialog":false} → knowledge_request,
   requires_mcp=false, underspecification_kind="none",
-  candidate_capabilities=["verbatim_extraction"]
+  candidate_capabilities=["verbatim_extraction"], grounding="required"
 - {"text":"что было в предыдущем документе?","has_prior_dialog":true} → knowledge_request,
-  underspecification_kind="none", candidate_capabilities=["retrieve","summarize"]
+  underspecification_kind="none", candidate_capabilities=["retrieve","summarize"],
+  grounding="optional"
+- {"text":"сравни облако и коробочное ПО; проанализируй падение продаж на 15%",
+  "has_prior_dialog":false} → knowledge_request, requires_mcp=false,
+  underspecification_kind="none", grounding="optional", grounding_reason="general analysis"
+- {"text":"что в моём загруженном файле?","has_prior_dialog":false} → knowledge_request,
+  underspecification_kind="none", grounding="required",
+  grounding_reason="needs user file contents"
 - {"text":"предложи несколько тем на выбор","has_prior_dialog":false} → clarification_needed,
   requires_user_choice=true, underspecification_kind="discrete_choice",
-  candidate_capabilities=["user_choice"]
-- {"text":"thanks!","has_prior_dialog":true} → social_conversation, requires_mcp=false
+  candidate_capabilities=["user_choice"], grounding="none"
+- {"text":"thanks!","has_prior_dialog":true} → social_conversation, requires_mcp=false,
+  grounding="none", transformation="none"
+- {"text":"представь таблицей / сделай разделы","has_prior_dialog":true,
+  "continuation_kind":"format"} → response_formatting, requires_mcp=false,
+  candidate_capabilities=["format"], grounding="none", transformation="restructure"
+- {"text":"разверни / подробнее / полный развёрнутый ответ","has_prior_dialog":true,
+  "continuation_kind":"format"} → knowledge_request, requires_mcp=false,
+  candidate_capabilities=["expand"], grounding="none", transformation="expand"
+- {"text":"короче / сократи","has_prior_dialog":true, "continuation_kind":"format"} →
+  knowledge_request, requires_mcp=false, candidate_capabilities=["shorten"],
+  grounding="none", transformation="shorten"
+- {"text":"перепиши другими словами","has_prior_dialog":true, "continuation_kind":"format"} →
+  knowledge_request, requires_mcp=false, candidate_capabilities=["rewrite"],
+  grounding="none", transformation="rewrite"
 
 Respond ONLY with valid JSON:
 {"task_kind":"<kind>","requires_mcp":false,"requires_user_choice":false,
 "underspecification_kind":"none","candidate_capabilities":["..."],
+"grounding":"optional","grounding_reason":"<brief>",
+"transformation":"none",
 "confidence":0.0,"reasoning":"<brief explanation>"}"""

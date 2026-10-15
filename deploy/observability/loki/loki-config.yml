@@ -11,6 +11,15 @@ server:
 
 common:
   path_prefix: /loki
+  # Single ingester with an in-memory ring. At boot the rate store polls the ring
+  # before this process has registered itself, so exactly one
+  # `ratestore.go ... "error getting ingester clients" err="empty ring"` line is
+  # logged per start — and a `DeadlineExceeded` against an ingester address when a
+  # stale entry is still being resolved. Both are benign and are NOT a symptom of a
+  # broken ring: readiness flips to `ready`, `/ring` shows the ingester ACTIVE, and
+  # a push followed by `query_range` returns the line (verified on the pinned 3.3.2).
+  # Do not "fix" this by pinning `common.instance_addr` — that only swaps the
+  # advertised address (container IP → loopback) and does not remove the log line.
   storage:
     filesystem:
       chunks_directory: /loki/chunks

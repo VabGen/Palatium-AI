@@ -37,7 +37,9 @@ FORMATTER_PASSTHROUGH_MAX_CHARS = 600
 
 # ContentDocument JSON needs headroom; live truncations at 512 broke UI.
 FORMATTER_MAX_COMPLETION_TOKENS = 4_096
-FORMATTER_MIN_COMPLETION_TOKENS = 2_048
+FORMATTER_MIN_COMPLETION_TOKENS = 1_024
+# Brand/restructure styles: tighter completion so hop budget is not burned on icon sections.
+FORMATTER_BRAND_MAX_COMPLETION_TOKENS = 1_536
 
 # Soft composition bias for the model (prompt playbook) — closed set (010/055).
 # plain_text / content_generation / document_generation preserve the source's own

@@ -1,6 +1,13 @@
 # Observability overlay (P1-7). Opt-in — merged on top of the main stack:
 #
-#   docker compose -f docker-compose.yml -f deploy/observability/compose.observability.yml up -d
+#   docker compose --env-file env/.env \
+#     -f docker-compose.yml \
+#     -f deploy/observability/compose.observability.yml up -d
+#
+# Bind paths are relative to the *project directory* (repo root = first `-f`
+# file), not this overlay's folder. Wrong `./prometheus/...` creates empty
+# host *directories* named like config files → mkdirat "file exists" / Loki
+# "is a directory". Always run from repo root with paths under deploy/observability/.
 #
 # Everything binds to 127.0.0.1 only (020: no perimeter exposure).
 # Two environments, one config:
@@ -8,7 +15,7 @@
 #   * staging/prod — app.py forces metrics_public=false, so /metrics needs a valid
 #     JWT. Put one in PROMETHEUS_METRICS_TOKEN (env/.env is gitignored).
 #
-# Images are pinned to tags that are guaranteed to exist; pin digests in production
+# Images are pinned to tags that are known to exist; pin digests in production
 # and let Dependabot (`docker` ecosystem) bump them.
 
 services:
@@ -23,8 +30,8 @@ services:
     ports:
       - "127.0.0.1:${PROMETHEUS_PUBLISH_PORT:-9090}:9090"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - ./deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/observability/prometheus/alerts:/etc/prometheus/alerts:ro
       - palatium_prometheus:/prometheus
     configs:
       # Bearer for GET /metrics. Ignored while /metrics is public (development);
@@ -52,7 +59,7 @@ services:
     ports:
       - "127.0.0.1:${ALERTMANAGER_PUBLISH_PORT:-9093}:9093"
     volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - palatium_alertmanager:/alertmanager
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/ready"]
@@ -72,12 +79,41 @@ services:
       # Dashboards/datasources are provisioned from files, not clicked in the UI.
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/palatium-overview.json
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+      # The corporate network answers grafana.com with HTTP 451, so every outbound
+      # catalog/update/telemetry call is switched off. Left on, each boot tries to
+      # install or refresh the image's preinstalled plugins and logs a 451 per
+      # attempt ("Failed to install plugin grafana-lokiexplore-app", "Error
+      # downloading plugin manifest keys", "Update check failed").
+      #
+      # `public_key_retrieval_disabled` is the setting that actually stops the
+      # outbound call: `check_for_plugin_updates` is scoped to update *checks* only
+      # and does not cover the dynamic signature-key downloader, so the periodic
+      # `plugin.signature.key_retriever ... 451` line survives without it. It is the
+      # documented switch for air-gapped / egress-restricted installs; verification
+      # then falls back to the key bundled in the image.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED: "true"
     ports:
       - "127.0.0.1:${GRAFANA_PUBLISH_PORT:-3000}:3000"
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - palatium_grafana:/var/lib/grafana
+    # Grafana opens every subdirectory of the provisioning path at boot and logs
+    # "Failed to read plugin/alerting provisioning files ... no such file or
+    # directory" for the ones that are absent. There is nothing to put in either:
+    # the dashboards use core panels only, and alerting rules live in
+    # deploy/observability/prometheus/alerts/ and route through Alertmanager.
+    # An empty tmpfs creates the two directories without shipping a placeholder
+    # *file* — a `.gitkeep` would be picked up by the reader instead and logged as
+    # "file has invalid suffix '.gitkeep' (.yaml,.yml,.json accepted), skipping".
+    tmpfs:
+      - /etc/grafana/provisioning/plugins
+      - /etc/grafana/provisioning/alerting
     depends_on:
       prometheus:
         condition: service_healthy
@@ -95,7 +131,7 @@ services:
     ports:
       - "127.0.0.1:${LOKI_PUBLISH_PORT:-3100}:3100"
     volumes:
-      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - ./deploy/observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - palatium_loki:/loki
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
@@ -111,7 +147,7 @@ services:
     volumes:
       # Container stdout/stderr == structlog JSON (040 correlation by trace_id).
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./deploy/observability/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
       - palatium_promtail:/positions
     depends_on:
       loki:

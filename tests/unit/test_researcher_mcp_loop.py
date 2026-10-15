@@ -110,7 +110,7 @@ async def test_mcp_success_second_llm_call_hides_envelope() -> None:
 async def test_mcp_empty_skips_synthesis() -> None:
     output, llm = await _run(json.dumps({"hit_count": 0, "hits": []}))
 
-    assert output.status == "failure"
+    assert output.status == "partial"
     assert output.error_message == MCP_EMPTY_RESULT
     assert len(llm.calls) == 1
 

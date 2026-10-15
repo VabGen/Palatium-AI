@@ -8,7 +8,9 @@ ContinuityPolicy — единственный слой, который види�
 1. Прикрепить prior_context к worker'ам (trust_prior_for_workers).
 2. Подавить ложный HITL Intent на follow-up (suppress_intent_hitl).
 3. Применить *операцию* continuity, которую Intent не может увидеть без истории:
-   - format + prior → response_formatting
+   - format + prior + transformation∈{none,restructure} → response_formatting
+   - format + prior + transformation∈{expand,shorten,rewrite} → knowledge_request
+     with trust_prior (content change — not Formatter layout template)
      (кроме false format: Intent clarify-slot open_text/discrete_choice/choice
      или social_conversation — demote, без sticky rehydrate)
    - answer + refers_to_prior + clarification_needed → knowledge_request
@@ -61,10 +63,15 @@ from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
 from palatium_ai.domain.policies.clarification import CLARIFY_MIN_CONFIDENCE, ClarificationGatePolicy
+from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import (
+    GROUNDING_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
+    TRANSFORMATION_DEFAULT,
     ContinuationKind,
+    GroundingMode,
     TaskKind,
+    TransformationKind,
     UnderspecificationKind,
 )
 
@@ -93,6 +100,9 @@ class EffectiveRoutingIntent(BaseModel):
     requires_user_choice: bool = False
     underspecification_kind: UnderspecificationKind = "none"
     candidate_capabilities: tuple[str, ...] = ()
+    grounding: GroundingMode = GROUNDING_DEFAULT
+    grounding_reason: str = Field(default="", max_length=500)
+    transformation: TransformationKind = TRANSFORMATION_DEFAULT
     continuation_kind: ContinuationKind = "new_topic"
     prior_context: str | None = Field(default=None, max_length=_PRIOR_CAP)
     # Intent may set requires_review due to history-blind clarify — suppress for follow-ups.
@@ -290,11 +300,7 @@ class ContinuityPolicy:
         if raw in rw and len(rw) - len(raw) < _REWRITE_ENRICHMENT_MIN_CHARS:
             return False
         raw_tokens = set(raw.split())
-        novel = [
-            token
-            for token in rw.split()
-            if token not in raw_tokens and len(token) >= _REWRITE_NOVEL_TOKEN_MIN_CHARS
-        ]
+        novel = [token for token in rw.split() if token not in raw_tokens and len(token) >= _REWRITE_NOVEL_TOKEN_MIN_CHARS]
         if not novel:
             return False
         prior_n = " ".join(prior.lower().split())
@@ -365,13 +371,14 @@ class ContinuityPolicy:
         trust_prior_for_workers: bool,
         reasoning: str,
         confidence: float,
+        grounding: GroundingMode = GROUNDING_DEFAULT,
+        grounding_reason: str = "",
+        transformation: TransformationKind = TRANSFORMATION_DEFAULT,
         clarify_underspec_default: bool = False,
     ) -> EffectiveRoutingIntent:
         """Apply UserChoiceIntentPolicy (sole choice-axis owner) then build routing intent."""
         if clarify_underspec_default and underspec == "none":
-            clarified: UnderspecificationKind = (
-                "discrete_choice" if requires_user_choice else "open_text"
-            )
+            clarified: UnderspecificationKind = "discrete_choice" if requires_user_choice else "open_text"
             underspec = clarified
 
         normalized = ClarificationGatePolicy.apply(
@@ -382,6 +389,9 @@ class ContinuityPolicy:
                     requires_user_choice=requires_user_choice,
                     underspecification_kind=underspec,
                     candidate_capabilities=caps,
+                    grounding=grounding,
+                    grounding_reason=(grounding_reason or "")[:500],
+                    transformation=TransformPolicy.coerce(transformation),
                     confidence=max(0.0, min(1.0, confidence)),
                     reasoning=(reasoning or "continuity")[:2000],
                 )
@@ -395,6 +405,9 @@ class ContinuityPolicy:
             requires_user_choice=normalized.requires_user_choice,
             underspecification_kind=normalized.underspecification_kind,
             candidate_capabilities=normalized.candidate_capabilities,
+            grounding=normalized.grounding,
+            grounding_reason=normalized.grounding_reason,
+            transformation=normalized.transformation,
             continuation_kind=continuation_kind,
             prior_context=cls._clip_prior(prior_context),
             suppress_intent_hitl=suppress,
@@ -472,6 +485,9 @@ class ContinuityPolicy:
                 trust_prior_for_workers=False,
                 reasoning=f"continuity=clarify; {snap.intent_reasoning}",
                 confidence=snap.ctx_confidence,
+                grounding=snap.grounding,
+                grounding_reason=snap.grounding_reason,
+                transformation=snap.transformation,
                 clarify_underspec_default=True,
             )
 
@@ -486,6 +502,9 @@ class ContinuityPolicy:
             trust_prior_for_workers=False,
             reasoning=f"continuity={snap.kind}; trust intent: {snap.intent_reasoning}",
             confidence=snap.confidence,
+            grounding=snap.grounding,
+            grounding_reason=snap.grounding_reason,
+            transformation=snap.transformation,
         )
 
     @classmethod
@@ -569,6 +588,16 @@ class ContinuityPolicy:
     ) -> EffectiveRoutingIntent | None:
         if snap.kind != "format":
             return None
+        route = TransformPolicy.decide_format_route(transformation=snap.transformation)
+        if route.format_only:
+            task_kind: TaskKind = "response_formatting"
+            caps = TransformPolicy.merge_capability(("format",), snap.transformation)
+            route_label = "response_formatting"
+        else:
+            # expand/shorten/rewrite: content change over prior — Researcher reason_only.
+            task_kind = "knowledge_request"
+            caps = TransformPolicy.merge_capability(snap.caps, snap.transformation)
+            route_label = f"knowledge_request({route.reason})"
         if assistant_prior is not None:
             prior = cls.resolve_worker_prior(
                 assistant_prior=assistant_prior,
@@ -578,31 +607,37 @@ class ContinuityPolicy:
             )
             source = cls._prior_source_label(prior=prior, assistant_prior=assistant_prior)
             return cls._finalize(
-                task_kind="response_formatting",
+                task_kind=task_kind,
                 requires_mcp=False,
                 requires_user_choice=snap.requires_user_choice,
                 underspec=snap.underspec,
-                caps=("format",),
+                caps=caps,
                 continuation_kind=snap.kind,
                 prior_context=prior,
                 trust_prior_for_workers=True,
-                reasoning=f"continuity=format; prior={source}; intent was {snap.raw_task}",
+                reasoning=(f"continuity=format→{route_label}; prior={source}; intent was {snap.raw_task}"),
                 confidence=snap.confidence,
+                grounding=snap.grounding,
+                grounding_reason=snap.grounding_reason,
+                transformation=snap.transformation,
             )
         user_prior = cls.prior_user_content(dialog)
         if user_prior is None:
             return None
         return cls._finalize(
-            task_kind="response_formatting",
+            task_kind=task_kind,
             requires_mcp=False,
             requires_user_choice=snap.requires_user_choice,
             underspec=snap.underspec,
-            caps=("format",),
+            caps=caps,
             continuation_kind=snap.kind,
             prior_context=user_prior,
             trust_prior_for_workers=True,
-            reasoning=f"continuity=format; prior=user_payload; intent was {snap.raw_task}",
+            reasoning=(f"continuity=format→{route_label}; prior=user_payload; intent was {snap.raw_task}"),
             confidence=snap.confidence,
+            grounding=snap.grounding,
+            grounding_reason=snap.grounding_reason,
+            transformation=snap.transformation,
         )
 
     @classmethod
@@ -644,6 +679,9 @@ class ContinuityPolicy:
             trust_prior_for_workers=True,
             reasoning=f"{reasoning}; prior={source}",
             confidence=snap.confidence,
+            grounding=snap.grounding,
+            grounding_reason=snap.grounding_reason,
+            transformation=snap.transformation,
         )
 
 
@@ -658,6 +696,9 @@ class _ResolveSnapshot:
     requires_user_choice: bool
     underspec: UnderspecificationKind
     caps: tuple[str, ...]
+    grounding: GroundingMode
+    grounding_reason: str
+    transformation: TransformationKind
     intent_reasoning: str
     confidence: float
     choice_slot_filled: bool
@@ -678,6 +719,11 @@ class _ResolveSnapshot:
             requires_user_choice=bool(raw_intent.requires_user_choice) if raw_intent is not None else False,
             underspec=raw_intent.underspecification_kind if raw_intent is not None else "none",
             caps=raw_intent.candidate_capabilities if raw_intent is not None else (),
+            grounding=raw_intent.grounding if raw_intent is not None else GROUNDING_DEFAULT,
+            grounding_reason=raw_intent.grounding_reason if raw_intent is not None else "",
+            transformation=(
+                TransformPolicy.coerce(raw_intent.transformation) if raw_intent is not None else TRANSFORMATION_DEFAULT
+            ),
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,
@@ -702,9 +748,7 @@ def _map_answer_task(
             reasoning = f"continuity=answer; corrected history-blind clarify → knowledge_request; {snap.intent_reasoning}"
         return "knowledge_request", caps, reasoning
     if recovery_label is not None:
-        reasoning = (
-            f"continuity=answer; {recovery_label}; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
-        )
+        reasoning = f"continuity=answer; {recovery_label}; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
     else:
         reasoning = f"continuity=answer; trust intent task_kind={snap.raw_task}; {snap.intent_reasoning}"
     return snap.raw_task, snap.caps, reasoning

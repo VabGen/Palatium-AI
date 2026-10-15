@@ -521,9 +521,7 @@ def make_supervisor_agent(harness: object | None = None) -> SupervisorAgent:
     return SupervisorAgent(resolved, SUPERVISOR_CONFIG)  # type: ignore[arg-type]
 
 
-def make_critic_agent(
-    llm: FakeLLMPort | SequentialFakeLLMPort, harness: object | None = None
-) -> CriticAgent:
+def make_critic_agent(llm: FakeLLMPort | SequentialFakeLLMPort, harness: object | None = None) -> CriticAgent:
     from palatium_ai.application.agents.critic import CRITIC_CONFIG, CriticAgent
     from palatium_ai.application.agents.harness import Harness
 
@@ -531,9 +529,7 @@ def make_critic_agent(
     return CriticAgent(resolved, CRITIC_CONFIG)  # type: ignore[arg-type]
 
 
-def make_formatter_agent(
-    llm: FakeLLMPort | SequentialFakeLLMPort, harness: object | None = None
-) -> FormatterAgent:
+def make_formatter_agent(llm: FakeLLMPort | SequentialFakeLLMPort, harness: object | None = None) -> FormatterAgent:
     from palatium_ai.application.agents.formatter import FORMATTER_CONFIG, FormatterAgent
     from palatium_ai.application.agents.harness import Harness
 

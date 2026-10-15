@@ -67,3 +67,37 @@ class ObservabilityConfig(BaseConfig):
         validation_alias="RESPONSE_CACHE_TTL_SECONDS",
         description="TTL for L1 response cache entries (0 disables writes).",
     )
+    adaptive_grounding_enabled: bool = Field(
+        default=False,
+        validation_alias="ADAPTIVE_GROUNDING_ENABLED",
+        description=(
+            "Master switch for Adaptive Grounding (two-key with ADAPTIVE_GROUNDING_ROLLOUT_PCT: ON iff enabled and pct>0)."
+        ),
+    )
+    adaptive_grounding_rollout_pct: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        validation_alias="ADAPTIVE_GROUNDING_ROLLOUT_PCT",
+        description=(
+            "Sticky per-user rollout 0..100. PCT=0 with ENABLED=true is the "
+            "rollback path (startup warns: no traffic until PCT>0)."
+        ),
+    )
+    grounding_judge_sample_rate: float = Field(
+        default=0.01,
+        ge=0.0,
+        le=1.0,
+        validation_alias="GROUNDING_JUDGE_SAMPLE_RATE",
+        description="Sample rate for fire-and-forget hallucination judge on degraded turns.",
+    )
+    grounding_judge_model: str = Field(
+        default="tier-small",
+        validation_alias="GROUNDING_JUDGE_MODEL",
+        description="Model tier/alias for grounding hallucination judge.",
+    )
+    otel_capture_raw_query: bool = Field(
+        default=False,
+        validation_alias="OTEL_CAPTURE_RAW_QUERY",
+        description="Dev-only: attach redacted query string to OTel spans. Never on staging/prod.",
+    )

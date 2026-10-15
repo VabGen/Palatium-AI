@@ -24,7 +24,7 @@ import palatium_ai.core.observability.metrics  # noqa: F401
 
 _OBSERVABILITY_DIR = Path(__file__).resolve().parents[2] / "deploy" / "observability"
 _ALERTS_DIR = _OBSERVABILITY_DIR / "prometheus" / "alerts"
-_DASHBOARD = _OBSERVABILITY_DIR / "grafana" / "dashboards" / "palatium-overview.json"
+_DASHBOARDS_DIR = _OBSERVABILITY_DIR / "grafana" / "dashboards"
 _PROMETHEUS_CONFIG = _OBSERVABILITY_DIR / "prometheus" / "prometheus.yml"
 _ALERTMANAGER_CONFIG = _OBSERVABILITY_DIR / "alertmanager" / "alertmanager.yml"
 
@@ -83,14 +83,20 @@ def _iter_rules() -> list[tuple[str, dict[str, Any]]]:
     return rules
 
 
+def _dashboard_files() -> list[Path]:
+    return sorted(_DASHBOARDS_DIR.glob("*.json"))
+
+
 def _dashboard_panel_exprs() -> list[tuple[str, str]]:
-    dashboard = json.loads(_DASHBOARD.read_text(encoding="utf-8"))
     exprs: list[tuple[str, str]] = []
-    for panel in dashboard.get("panels", []):
-        for target in panel.get("targets", []):
-            expr = target.get("expr")
-            if isinstance(expr, str):
-                exprs.append((panel.get("title", "<untitled>"), expr))
+    for path in _dashboard_files():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for panel in dashboard.get("panels", []):
+            for target in panel.get("targets", []):
+                expr = target.get("expr")
+                if isinstance(expr, str):
+                    title = f"{path.name}:{panel.get('title', '<untitled>')}"
+                    exprs.append((title, expr))
     return exprs
 
 
@@ -112,6 +118,14 @@ def test_every_promql_app_metric_exists_in_registry() -> None:
             f"{source}: {name}" for name in _app_metrics_in(str(rule.get("expr", ""))) if not _is_registered(name, registered)
         )
     assert not missing, "alert rules reference unknown app metrics:\n" + "\n".join(missing)
+
+
+def test_dashboard_json_files_exist() -> None:
+    files = _dashboard_files()
+    assert files, f"no Grafana dashboards in {_DASHBOARDS_DIR}"
+    names = {p.name for p in files}
+    assert "palatium-overview.json" in names
+    assert "palatium-adaptive-grounding.json" in names
 
 
 def test_dashboard_panels_reference_known_app_metrics() -> None:

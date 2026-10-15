@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
+from palatium_ai.domain.policies.grounding import GroundingPolicy
 
 
 def decode_context_weaver_input(input_context: dict[str, str], *, instruction: str) -> ContextWeaverInput:
@@ -20,6 +21,8 @@ def decode_context_weaver_input(input_context: dict[str, str], *, instruction: s
         route_plan=input_context["route_plan"],
         requires_mcp=input_context.get("requires_mcp", "false").lower() == "true",
         candidate_capabilities=capabilities,
+        grounding=GroundingPolicy.coerce_mode(input_context.get("grounding")),
+        grounding_reason=(input_context.get("grounding_reason") or "")[:500],
         has_attachment_context=input_context.get("has_attachment_context", "false").lower() == "true",
         has_trusted_prior=input_context.get("has_trusted_prior", "false").lower() == "true",
     )

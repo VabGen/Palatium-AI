@@ -186,6 +186,11 @@ def resolved_task_kind(state: AgentGraphState) -> TaskKind:
     return ensure_routing_intent(state).task_kind
 
 
+def resolved_transformation(state: AgentGraphState) -> str:
+    """Transformation axis from ContinuityPolicy (none/restructure/expand/shorten/rewrite)."""
+    return str(ensure_routing_intent(state).transformation)
+
+
 def resolved_requires_mcp(state: AgentGraphState) -> bool:
     """MCP flag из ContinuityPolicy."""
     return ensure_routing_intent(state).requires_mcp
@@ -204,6 +209,24 @@ def underspecification_kind(state: AgentGraphState) -> str:
 def resolved_candidate_capabilities(state: AgentGraphState) -> tuple[str, ...]:
     """Capabilities из ContinuityPolicy."""
     return ensure_routing_intent(state).candidate_capabilities
+
+
+def resolved_grounding(state: AgentGraphState):
+    """Grounding mode from Continuity (default optional)."""
+    from palatium_ai.domain.policies.types import GROUNDING_DEFAULT
+
+    routing = routing_intent(state)
+    if routing is None:
+        return GROUNDING_DEFAULT
+    return routing.grounding
+
+
+def resolved_grounding_reason(state: AgentGraphState) -> str:
+    """Grounding rationale from Continuity."""
+    routing = routing_intent(state)
+    if routing is None:
+        return ""
+    return routing.grounding_reason or ""
 
 
 def resolved_reasoning(state: AgentGraphState) -> str:

@@ -25,6 +25,11 @@ Deliverable completeness (candidate_capabilities):
   reply, creative text, etc.). Do NOT replace it with a meta-description of what you
   would write ("here is a draft…", "текст составлен…", "preserving requisites…").
   An optional one-line framing may follow the body, never substitute for it.
+- "expand": prior_context is the base. summary MUST substantially elaborate it
+  (more detail, explanation, examples). Do NOT return the prior text unchanged or
+  only re-sectioned / branded with icons — that is a failed expand.
+- "shorten": compress prior_context; keep key facts, drop filler. Do not invent new claims.
+- "rewrite": rephrase prior_context with different wording; same meaning. Not layout-only.
 - Extract / full-text asks ("дай текст", "extract the text", "полный текст", "verbatim",
   "OCR text", "what's written in the file") WHEN attachment_context is non-empty:
   summary MUST be the VERBATIM fence body (OCR/extracted text), not a paraphrase,
@@ -70,4 +75,15 @@ Return ONLY valid JSON:
   "confidence": <0.0-1.0>,
   "sources_used": ["llm_internal_reasoning"]
 }
+"""
+
+# Appended when Adaptive Grounding degrades empty retrieval to parametric LLM.
+RESEARCHER_UNGROUNDED_SYSTEM_NOTE = """
+---
+CONTEXT:
+External sources returned no usable information for this ask.
+Answer using your general knowledge.
+If the ask truly requires the user's private data (file, ticket, account) that you do not have,
+say so clearly and state what is missing — do not invent those facts.
+---
 """

@@ -11,14 +11,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .types import (
+    GROUNDING_DEFAULT,
     LOW_RISK_ROUTE_STRATEGIES,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
+    TRANSFORMATION_DEFAULT,
     AgentRole,
     ContinuationKind,
     ExecutionStrategy,
+    GroundingMode,
     ModelTier,
     RouteStrategy,
     TaskKind,
+    TransformationKind,
     UnderspecificationKind,
     UntrustedContentAction,
 )
@@ -41,16 +45,19 @@ if TYPE_CHECKING:
         FormatterPassthroughSignals,
     )
     from .formatter_memory_merge import FormatterMemoryMergeDecision, FormatterMemoryMergePolicy
+    from .grounding import GroundingEmptyDecision, GroundingPolicy
     from .hop_budget import HopBudgetDecision, HopBudgetPolicy
     from .locale import ReplyLocalePolicy
     from .memory_namespace import MemoryNamespaceBinding, MemoryNamespacePolicy
     from .memory_recall import MemoryRecallDecision, MemoryRecallPolicy
     from .parallel_workers import ParallelWorkerPolicy, ParallelWorkersDecision
     from .promotion import PromotionPolicy
+    from .researcher_tier import ResearcherTierDecision, ResearcherTierPolicy
     from .response_cache import ResponseCacheKeyParts, ResponseCacheKeyPolicy
     from .retention import RetentionDecision, RetentionPolicy, RetentionWindows
     from .retrieval import LAST_RESORT_PLATFORM_TOOLS, RetrievalBindingDecision, RetrievalPolicy
     from .scratchpad import SessionScratchpadPolicy
+    from .transform import TransformPolicy, TransformRouteDecision
     from .untrusted_content import (
         DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
         FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
@@ -64,9 +71,11 @@ __all__ = [
     "CLARIFY_MIN_CONFIDENCE",
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
     "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS",
+    "GROUNDING_DEFAULT",
     "LAST_RESORT_PLATFORM_TOOLS",
     "LOW_RISK_ROUTE_STRATEGIES",
     "SUBSTANTIVE_USER_PAYLOAD_CHARS",
+    "TRANSFORMATION_DEFAULT",
     "AckReplyPolicy",
     "AgentRole",
     "AttachmentRehydrateDecision",
@@ -87,6 +96,9 @@ __all__ = [
     "FormatterMemoryMergeDecision",
     "FormatterMemoryMergePolicy",
     "FormatterPassthroughSignals",
+    "GroundingEmptyDecision",
+    "GroundingMode",
+    "GroundingPolicy",
     "HopBudgetDecision",
     "HopBudgetPolicy",
     "MemoryNamespaceBinding",
@@ -98,6 +110,8 @@ __all__ = [
     "ParallelWorkersDecision",
     "PromotionPolicy",
     "ReplyLocalePolicy",
+    "ResearcherTierDecision",
+    "ResearcherTierPolicy",
     "ResponseCacheKeyParts",
     "ResponseCacheKeyPolicy",
     "RetentionDecision",
@@ -108,6 +122,9 @@ __all__ = [
     "RouteStrategy",
     "SessionScratchpadPolicy",
     "TaskKind",
+    "TransformPolicy",
+    "TransformRouteDecision",
+    "TransformationKind",
     "UnderspecificationKind",
     "UntrustedContentAction",
     "UntrustedContentPolicy",
@@ -135,8 +152,12 @@ _LAZY: dict[str, tuple[str, str]] = {
     "FormatterPassthroughSignals": (".formatter_fast_path", "FormatterPassthroughSignals"),
     "FormatterMemoryMergeDecision": (".formatter_memory_merge", "FormatterMemoryMergeDecision"),
     "FormatterMemoryMergePolicy": (".formatter_memory_merge", "FormatterMemoryMergePolicy"),
+    "GroundingEmptyDecision": (".grounding", "GroundingEmptyDecision"),
+    "GroundingPolicy": (".grounding", "GroundingPolicy"),
     "HopBudgetDecision": (".hop_budget", "HopBudgetDecision"),
     "HopBudgetPolicy": (".hop_budget", "HopBudgetPolicy"),
+    "TransformPolicy": (".transform", "TransformPolicy"),
+    "TransformRouteDecision": (".transform", "TransformRouteDecision"),
     "MemoryNamespaceBinding": (".memory_namespace", "MemoryNamespaceBinding"),
     "MemoryNamespacePolicy": (".memory_namespace", "MemoryNamespacePolicy"),
     "MemoryRecallDecision": (".memory_recall", "MemoryRecallDecision"),
@@ -145,6 +166,8 @@ _LAZY: dict[str, tuple[str, str]] = {
     "ParallelWorkersDecision": (".parallel_workers", "ParallelWorkersDecision"),
     "PromotionPolicy": (".promotion", "PromotionPolicy"),
     "ReplyLocalePolicy": (".locale", "ReplyLocalePolicy"),
+    "ResearcherTierDecision": (".researcher_tier", "ResearcherTierDecision"),
+    "ResearcherTierPolicy": (".researcher_tier", "ResearcherTierPolicy"),
     "ResponseCacheKeyParts": (".response_cache", "ResponseCacheKeyParts"),
     "ResponseCacheKeyPolicy": (".response_cache", "ResponseCacheKeyPolicy"),
     "RetentionDecision": (".retention", "RetentionDecision"),

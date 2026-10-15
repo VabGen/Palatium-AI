@@ -92,6 +92,31 @@ services:
     # in a quiet dev stack. 256m covers the planner's segment target with room to spare
     # and is accounted for inside this container's mem_limit, not extra VM budget.
     shm_size: 256m
+    # Checkpoint tuning. The observed `checkpoint complete` lines spent 20-46 s in
+    # `write=` while flushing only 200-460 buffers, so the wall clock is the host's
+    # fsync latency (Docker Desktop's virtualised volume), not the volume of data.
+    # With the 5-minute default interval a tiny WAL triggers a checkpoint anyway and
+    # each one stalls the disk for tens of seconds. Fewer, longer, spread-out
+    # checkpoints remove the periodic stalls; durability is untouched —
+    # synchronous_commit and full_page_writes keep their defaults (020).
+    command:
+      - postgres
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - min_wal_size=512MB
+      - -c
+      - wal_compression=on
+      # 25% of this container's mem_limit; the previous 128 MiB default left the
+      # buffer cache smaller than effective_cache_size claimed.
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
@@ -248,6 +273,13 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_DB_URL: ${LITELLM_DB_URL}
       LITELLM_LOG: ${LITELLM_LOG:-INFO}
+      # Coordination Redis (auth/usage caches, budget-job locks). Pinned as a literal
+      # for the same reason as `api` above: env/.env is authored for the Poetry host
+      # profile and says `REDIS_HOST=localhost`, which inside this container is the
+      # gateway itself — LiteLLM would build its Redis client against `localhost:6379`
+      # and every cache call would fail. In-network the service name is the only route.
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
 
       # =====================================================================
       # TIER MAPPING — вот здесь задаётся какой провайдер обслуживает tier.

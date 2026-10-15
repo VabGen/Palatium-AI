@@ -99,6 +99,13 @@ def test_style_hint_preserves_generated_shape(caps: tuple[str, ...], worker: str
     assert resolve_style_hint(_formatter_input(worker=worker, caps=caps)) == expected
 
 
+def test_style_hint_long_structured_stays_plain() -> None:
+    """Long legal/file answers must not burn hop budget on brand icon sections."""
+    long_body = "Раздел А.\n\n" + ("Проверка соответствия статье закона. " * 20)
+    assert len(long_body) >= 400
+    assert resolve_style_hint(_formatter_input(worker=long_body, caps=())) == "plain_text"
+
+
 def test_explicit_user_decisions_outrank_generation_hint() -> None:
     choice = _formatter_input(worker=_JOKE, caps=("compose",), requires_user_choice=True)
     reformat = _formatter_input(worker=_JOKE, caps=("compose",), task_kind="response_formatting")

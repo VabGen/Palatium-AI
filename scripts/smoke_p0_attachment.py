@@ -45,7 +45,13 @@ def main() -> int:
         "--tb=line",
     ]
     print("C.2 smoke:", " ".join(cmd), flush=True)
-    proc = subprocess.run(cmd, cwd=_ROOT, capture_output=True, text=True, check=False)
+    proc = subprocess.run(  # noqa: S603 - literal argv list, no shell, no untrusted input
+        cmd,
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = (
         f"C.2 smoke_p0_attachment — {stamp}\n"

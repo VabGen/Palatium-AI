@@ -44,6 +44,16 @@ UnderspecificationKind = Literal[
 
 ContinuationKind = Literal["format", "answer", "new_topic", "clarify"]
 
+# How a format-continuation transforms prior (orthogonal to continuation_kind).
+# restructure → Formatter format_only; expand/shorten/rewrite → Researcher reason_only.
+TransformationKind = Literal["none", "restructure", "expand", "shorten", "rewrite"]
+TRANSFORMATION_DEFAULT: TransformationKind = "none"
+
+# Need for external retrieval (orthogonal to task_kind). Intent classifies;
+# ExecutionPlanner maps to retrieve_then_reason vs reason_only (Adaptive RAG).
+GroundingMode = Literal["required", "optional", "none"]
+GROUNDING_DEFAULT: GroundingMode = "optional"
+
 # Structural length floor: user turn long enough to be a document/payload vs
 # phatic ping. Shared by Continuity + Critic (055 — one constant, not copies).
 SUBSTANTIVE_USER_PAYLOAD_CHARS = 400
@@ -88,15 +98,19 @@ UntrustedContentAction = Literal["allow", "mask", "quarantine", "reject"]
 __all__ = [
     "CONTENT_GENERATION_CAPABILITY",
     "DOCUMENT_GENERATION_CAPABILITY",
+    "GROUNDING_DEFAULT",
     "LOW_RISK_ROUTE_STRATEGIES",
     "SUBSTANTIVE_USER_PAYLOAD_CHARS",
+    "TRANSFORMATION_DEFAULT",
     "VERBATIM_EXTRACTION_CAPABILITY",
     "AgentRole",
     "ContinuationKind",
     "ExecutionStrategy",
+    "GroundingMode",
     "ModelTier",
     "RouteStrategy",
     "TaskKind",
+    "TransformationKind",
     "UnderspecificationKind",
     "UntrustedContentAction",
 ]

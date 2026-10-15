@@ -18,8 +18,26 @@ if TYPE_CHECKING:
 
 def setup_observability(settings: Settings) -> None:
     """Bootstrap OTel (primary) + LangSmith env (secondary, 040)."""
+    import structlog
+
+    from palatium_ai.core.observability.adaptive_grounding import (
+        warn_if_enabled_but_zero_rollout,
+    )
+
     setup_otel_tracing(settings.observability, service_name=settings.app.name)
     apply_langsmith_env(settings.observability)
+    warn_if_enabled_but_zero_rollout(settings)
+    if settings.observability.otel_capture_raw_query:
+        env = (settings.app.environment or "").strip().lower()
+        log = structlog.get_logger(__name__)
+        if env not in {"development", "dev", "local", "test"}:
+            log.warning(
+                "otel.capture_raw_query.misconfigured",
+                environment=settings.app.environment,
+                message="OTEL_CAPTURE_RAW_QUERY must stay false outside development",
+            )
+        else:
+            log.warning("otel.capture_raw_query.enabled", environment=settings.app.environment)
 
 
 __all__ = [

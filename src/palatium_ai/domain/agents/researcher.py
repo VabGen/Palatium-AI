@@ -16,6 +16,8 @@ RESEARCHER_TOOL_ARGS_INVALID = "researcher_tool_args_invalid"
 # Machine codes. Formatter maps them; they are not user-facing prose.
 MCP_EMPTY_RESULT = "mcp_empty_result"
 MCP_TOOL_ERROR = "mcp_tool_error"
+# Adaptive grounding: required retrieval returned empty — ask user for source.
+GROUNDING_REQUIRED_EMPTY = "grounding_required_empty"
 
 
 class ResearcherInput(BaseModel):
@@ -40,9 +42,15 @@ class ResearcherOutput(BaseModel):
     summary: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
     sources_used: tuple[str, ...] = Field(default_factory=tuple)
+    grounding_satisfied: bool = False
+    grounding_degraded: bool = False
+    cannot_answer_without_source: bool = False
 
 
 class ResearcherTaskResult(TaskResult):
     """TaskResult с типизированным output для Researcher."""
 
     output: ResearcherOutput | None = None
+    grounding_satisfied: bool = False
+    grounding_degraded: bool = False
+    cannot_answer_without_source: bool = False

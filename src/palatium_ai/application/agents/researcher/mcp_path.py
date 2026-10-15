@@ -12,8 +12,12 @@ from uuid import UUID
 
 from langgraph.types import interrupt
 
-from palatium_ai.application.agents.researcher.config import SUMMARY_MAX_CHARS, researcher_completion_budget
-from palatium_ai.application.agents.researcher.outcomes import failure_output
+from palatium_ai.application.agents.researcher.config import (
+    SUMMARY_MAX_CHARS,
+    researcher_completion_budget,
+    researcher_llm_config,
+)
+from palatium_ai.application.agents.researcher.outcomes import failure_output, soft_empty_output
 from palatium_ai.application.agents.researcher.parsing import (
     approval_granted,
     mcp_joined_text,
@@ -391,7 +395,12 @@ async def mcp_outcome_to_output(
     if outcome.is_error:
         return failure_output(task_uuid, summary=None, error=MCP_TOOL_ERROR)
     if mcp_payload_is_empty(raw):
-        return failure_output(task_uuid, summary=None, error=MCP_EMPTY_RESULT)
+        logger.warning(
+            "researcher.mcp_empty_result",
+            tool=f"{server_name}.{tool_name}",
+            task_id=str(task_uuid),
+        )
+        return soft_empty_output(task_uuid, error=MCP_EMPTY_RESULT)
     source = f"mcp:{server_name}.{tool_name}"
     if _verbatim_requested(task_input):
         return _verbatim_mcp_output(
@@ -428,9 +437,13 @@ async def synthesize_mcp_output(
         server_name=server_name,
         tool_name=tool_name,
     )
+    llm_config = researcher_llm_config(
+        deps.config,
+        strategy=task_input.context_packet.execution_plan.strategy,
+    )
     try:
         completion = await deps.harness.call_llm(
-            deps.config,
+            llm_config,
             _synthesis_messages(task_input, tool_result=fenced, source=source),
             response_format="json_object",
             max_tokens=researcher_completion_budget(task_input.context_packet.candidate_capabilities),
@@ -440,6 +453,16 @@ async def synthesize_mcp_output(
         logger.exception("researcher MCP synthesis failed", task_id=str(task_uuid))
         agent_metrics.record_error(deps.agent_role, "llm_stage_failure")
         return failure_output(task_uuid, summary=None, error="LLM stage failed in researcher agent")
+    sources = output.sources_used or (source,)
+    output = ResearcherOutput(
+        summary=output.summary,
+        confidence=output.confidence,
+        sources_used=sources,
+        grounding_satisfied=True,
+        grounding_degraded=False,
+        cannot_answer_without_source=False,
+    )
+    agent_metrics.record_grounding_satisfied()
     status: Literal["success", "failure", "partial"] = (
         "partial" if output.confidence < deps.config.confidence_threshold else "success"
     )
@@ -466,11 +489,22 @@ def _verbatim_mcp_output(
     """Keep the tool body. The envelope stays out of the user-visible summary."""
     body = strip_untrusted_tool_output(raw).strip()
     if not body:
-        return failure_output(task_uuid, summary=None, error=MCP_EMPTY_RESULT)
+        logger.warning(
+            "researcher.mcp_empty_result",
+            tool=source,
+            task_id=str(task_uuid),
+        )
+        return soft_empty_output(task_uuid, error=MCP_EMPTY_RESULT)
     if len(body) > SUMMARY_MAX_CHARS:
         body = body[:SUMMARY_MAX_CHARS].rstrip() + "…"
     confidence = score_mcp_tool_confidence(is_error=False, summary_chars=len(body))
-    output = ResearcherOutput(summary=body, confidence=confidence, sources_used=(source,))
+    output = ResearcherOutput(
+        summary=body,
+        confidence=confidence,
+        sources_used=(source,),
+        grounding_satisfied=True,
+    )
+    agent_metrics.record_grounding_satisfied()
     status: Literal["success", "failure", "partial"] = "partial" if confidence < confidence_threshold else "success"
     return AgentOutput(
         task_id=task_uuid,

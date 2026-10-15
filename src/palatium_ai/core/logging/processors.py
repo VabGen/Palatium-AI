@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 
     from structlog.types import EventDict
 
+from palatium_ai.core.observability.redaction import redact
+
 from .context import session_id_var, trace_id_var, turn_id_var, user_id_var
 
 
@@ -36,3 +38,12 @@ def add_timestamp(logger: logging.Logger, method_name: str, event_dict: EventDic
     """Add ISO timestamp."""
     event_dict["timestamp"] = datetime.now(UTC).isoformat()
     return event_dict
+
+
+def redact_observability_strings(
+    _logger: logging.Logger,
+    _method_name: str,
+    event_dict: EventDict,
+) -> EventDict:
+    """PII/token redact on every string value after enrichment, before renderer."""
+    return {k: redact(v) if isinstance(v, str) else v for k, v in event_dict.items()}

@@ -37,10 +37,7 @@ class Neo4jDriverTransport:
         try:
             from neo4j import AsyncGraphDatabase
         except ImportError as exc:
-            raise ImportError(
-                "GRAPH_QUERY_BACKEND=neo4j requires the neo4j driver "
-                "(uv sync --frozen — core dependency)"
-            ) from exc
+            raise ImportError("GRAPH_QUERY_BACKEND=neo4j requires the neo4j driver (uv sync --frozen — core dependency)") from exc
         if not uri.strip() or not password:
             msg = "GRAPHITI_NEO4J_URI and GRAPHITI_NEO4J_PASSWORD are required for neo4j graph port"
             raise ValueError(msg)

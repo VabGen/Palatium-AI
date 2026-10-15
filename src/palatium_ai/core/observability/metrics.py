@@ -7,6 +7,21 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 from threading import Lock
+from typing import Final
+
+# Adaptive Grounding latency histogram — custom buckets (pre-flip hardening).
+GROUNDING_LATENCY_BUCKETS: Final[tuple[float, ...]] = (
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    40.0,
+    60.0,
+)
 
 
 class _NoopMetric:
@@ -178,6 +193,62 @@ try:  # pragma: no cover - optional dependency
         "Application cache misses by layer.",
         ["cache_layer"],
     )
+    _palatium_grounding_mode_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_mode_total",
+        "Turns classified by Adaptive Grounding mode.",
+        ["mode"],
+    )
+    _palatium_grounding_degraded_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_degraded_total",
+        "Empty retrieval degraded to parametric LLM (optional grounding).",
+        ["mode"],
+    )
+    _palatium_grounding_required_empty_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_required_empty_total",
+        "Required grounding with empty retrieval (clarification path).",
+    )
+    _palatium_grounding_satisfied_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_satisfied_total",
+        "Retrieval satisfied Adaptive Grounding (sources present).",
+        ["mode"],
+    )
+    _palatium_grounding_flag_off_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_flag_off_total",
+        "Empty retrieval took Adaptive Grounding OFF stub path.",
+    )
+    _palatium_grounding_latency_seconds: _PromHistogram | _NoopMetric = _PromHistogram(
+        "palatium_grounding_latency_seconds",
+        "Adaptive Grounding empty-path handling latency (degrade or clarify).",
+        ["mode", "degraded"],
+        buckets=GROUNDING_LATENCY_BUCKETS,
+    )
+    _palatium_grounding_rollout_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_rollout_total",
+        "Hits per Adaptive Grounding sticky-rollout decision.",
+        ["enabled"],
+    )
+    _palatium_grounding_hallucination_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_hallucination_total",
+        "Sampled hallucination detections on degraded responses.",
+    )
+    _palatium_grounding_judge_runs_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_judge_runs_total",
+        "LLM-judge invocations for grounding (sampled).",
+    )
+    _palatium_grounding_judge_failed_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_judge_failed_total",
+        "Grounding LLM-judge failures (fire-and-forget; quality signal unreliable).",
+    )
+    _palatium_grounding_clarification_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_grounding_clarification_total",
+        "Clarification responses emitted (hash8 + length bucket; never raw query).",
+        ["query_hash", "len_bucket"],
+    )
+    _palatium_transform_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_transform_total",
+        "Requested prior-content transformation kind (closed label set).",
+        ["kind"],
+    )
 except ImportError:  # pragma: no cover - fallback
     _palatium_agent_request_duration_seconds = _NoopMetric()
     _palatium_agent_errors_total = _NoopMetric()
@@ -210,6 +281,18 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_sse_ttft_seconds = _NoopMetric()
     _palatium_cache_hit_total = _NoopMetric()
     _palatium_cache_miss_total = _NoopMetric()
+    _palatium_grounding_mode_total = _NoopMetric()
+    _palatium_grounding_degraded_total = _NoopMetric()
+    _palatium_grounding_required_empty_total = _NoopMetric()
+    _palatium_grounding_satisfied_total = _NoopMetric()
+    _palatium_grounding_flag_off_total = _NoopMetric()
+    _palatium_grounding_latency_seconds = _NoopMetric()
+    _palatium_grounding_rollout_total = _NoopMetric()
+    _palatium_grounding_hallucination_total = _NoopMetric()
+    _palatium_grounding_judge_runs_total = _NoopMetric()
+    _palatium_grounding_judge_failed_total = _NoopMetric()
+    _palatium_grounding_clarification_total = _NoopMetric()
+    _palatium_transform_total = _NoopMetric()
 
 
 @dataclass
@@ -278,6 +361,66 @@ class AgentMetrics:
 
     def record_turn_hop_budget_exceeded(self) -> None:
         _palatium_turn_hop_budget_exceeded_total.inc()
+
+    def record_grounding_mode(self, mode: str) -> None:
+        safe = (mode or "optional").strip()[:32] or "optional"
+        _palatium_grounding_mode_total.labels(mode=safe).inc()
+
+    def record_grounding_degraded(self, mode: str = "optional") -> None:
+        safe = (mode or "optional").strip()[:32] or "optional"
+        _palatium_grounding_degraded_total.labels(mode=safe).inc()
+
+    def record_grounding_required_empty(self) -> None:
+        _palatium_grounding_required_empty_total.inc()
+
+    def record_grounding_satisfied(self, mode: str = "optional") -> None:
+        safe = (mode or "optional").strip()[:32] or "optional"
+        _palatium_grounding_satisfied_total.labels(mode=safe).inc()
+
+    def record_grounding_flag_off(self) -> None:
+        _palatium_grounding_flag_off_total.inc()
+
+    def record_grounding_rollout(self, *, enabled: bool) -> None:
+        _palatium_grounding_rollout_total.labels(enabled="true" if enabled else "false").inc()
+
+    def record_grounding_hallucination(self) -> None:
+        _palatium_grounding_hallucination_total.inc()
+
+    def record_grounding_judge_run(self) -> None:
+        _palatium_grounding_judge_runs_total.inc()
+
+    def record_grounding_judge_failed(self) -> None:
+        _palatium_grounding_judge_failed_total.inc()
+
+    def record_grounding_clarification(self, *, query_hash: str, len_bucket: str) -> None:
+        safe_hash = (query_hash or "empty").strip()[:16] or "empty"
+        safe_bucket = (len_bucket or "empty").strip()[:16] or "empty"
+        _palatium_grounding_clarification_total.labels(
+            query_hash=safe_hash,
+            len_bucket=safe_bucket,
+        ).inc()
+
+    def record_transform(self, *, kind: str) -> None:
+        """Count requested prior-content transformation kind (none/restructure/…)."""
+        safe = (kind or "none").strip()[:32] or "none"
+        _palatium_transform_total.labels(kind=safe).inc()
+
+    def record_grounding_latency(
+        self,
+        *,
+        mode: str,
+        degraded: bool,
+        duration_seconds: float,
+    ) -> None:
+        safe_mode = (mode or "optional").strip()[:32] or "optional"
+        _palatium_grounding_latency_seconds.labels(
+            mode=safe_mode,
+            degraded="true" if degraded else "false",
+        ).observe(max(0.0, float(duration_seconds)))
+
+    @staticmethod
+    def grounding_latency_buckets() -> tuple[float, ...]:
+        return GROUNDING_LATENCY_BUCKETS
 
     def record_token_usage(
         self,

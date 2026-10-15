@@ -17,6 +17,7 @@
 | **[../.cursor/plans/memory-max-pro.md](../.cursor/plans/memory-max-pro.md)** | План Memory MAX PRO: hybrid cortex, LOCKED решения, волны M0–M8 (актуально на 2026-10-06) |
 | **[adr/0003-postgres-checkpointer-session-ttl.md](adr/0003-postgres-checkpointer-session-ttl.md)** | ADR: short-term = Postgres checkpointer + retention TTL |
 | **[adr/0004-hybrid-memory-not-neo4j-only.md](adr/0004-hybrid-memory-not-neo4j-only.md)** | ADR: Postgres medium + bi-temporal Neo4j; reject Neo4j-only Cortex |
+| **[grounding-mvp-deferrals.md](grounding-mvp-deferrals.md)** | Adaptive Grounding MVP: осознанные deferrals + критерий возврата + staging A/B gate (2026-10-14) |
 | **[audit/latency-audit.md](audit/latency-audit.md)** | Аудит скорости ответа: карта `/intents/process`, узкие места, план P0–P2 (актуально на 2026-10-01) |
 | **[architecture/streaming.md](architecture/streaming.md)** | SSE-контракт `/intents/process/stream`: события, TTFT, fast path (актуально на 2026-10-09) |
 | **[embedded-assistant.md](embedded-assistant.md)** | Embeddable-виджет `<palatium-assistant>`: контракт событий, темизация, доставка, §9 — интеграционный пакет и чек-лист приёмки для команды СЭД |

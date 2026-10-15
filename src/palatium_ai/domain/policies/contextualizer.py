@@ -4,8 +4,9 @@
 
 Primary graph order (P0.1 latency): Intent → Contextualizer. Intent classifies the
 raw turn first; Contextualizer receives ``task_kind`` and only rewrites when the
-kind is prior-dependent (knowledge / tool / format / clarify). Social and capability
-asks skip the LLM even with assistant prior — they are self-contained; Continuity
+kind is prior-dependent (knowledge / tool / format / clarify). Social, capability,
+and compose (content generation) asks skip the LLM even with assistant prior —
+they are self-contained; Researcher still sees dialog for topic fill. Continuity
 still sees dialog.
 
 When ``task_kind`` is missing (tests / incomplete state), fail closed: invoke LLM
@@ -16,9 +17,11 @@ Does not inspect user phrasing.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pydantic import BaseModel, Field
 
-from palatium_ai.domain.policies.types import TaskKind
+from palatium_ai.domain.policies.types import CONTENT_GENERATION_CAPABILITY, TaskKind
 
 
 class ContextualizerGateDecision(BaseModel):
@@ -50,6 +53,7 @@ class ContextualizerPolicy:
         has_assistant_prior: bool,
         task_kind: TaskKind | None,
         requires_mcp: bool,
+        candidate_capabilities: Sequence[str] = (),
     ) -> ContextualizerGateDecision:
         """Return whether Contextualizer must call an LLM."""
         if not has_assistant_prior:
@@ -60,6 +64,10 @@ class ContextualizerPolicy:
 
         if task_kind is None:
             return ContextualizerGateDecision(invoke_llm=True, reason="unknown_task_kind")
+
+        caps = {str(c).strip().lower() for c in candidate_capabilities if str(c).strip()}
+        if CONTENT_GENERATION_CAPABILITY in caps:
+            return ContextualizerGateDecision(invoke_llm=False, reason="self_contained:compose")
 
         if task_kind in cls._PRIOR_DEPENDENT_KINDS:
             return ContextualizerGateDecision(invoke_llm=True, reason=f"prior_dependent:{task_kind}")

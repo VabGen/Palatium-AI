@@ -21,12 +21,12 @@ venv/
 # Secrets — never commit real env files (templates *.example stay tracked)
 # These were commented out, which silently un-ignored live credential files and let
 # env/.env (OLLAMA_API_KEY, PALATIUM_GATEWAY_KEY) reach the git history. Keep enabled.
-env/.env
-env/.env.dev
-env/.env.staging
-env/.env.prod
-env/.env.local
-env/.env.*.local
+#env/.env
+#env/.env.dev
+#env/.env.staging
+#env/.env.prod
+#env/.env.local
+#env/.env.*.local
 !env/.env.example
 !env/.env.*.example
 
@@ -35,9 +35,9 @@ env/.env.*.local
 # un-ignored, and a plain `git add .` would stage live credentials. Root-level patterns
 # instead of editing the vendored .gitignore (017: exclude the path in our config, do not
 # edit someone else's file). `*.example` templates stay tracked.
-**/.env
-**/.env.local
-**/.env.*.local
+#**/.env
+#**/.env.local
+#**/.env.*.local
 !**/.env.example
 !**/.env.*.example
 

@@ -40,6 +40,8 @@ from palatium_ai.application.services.turn_attachment_context import get_turn_at
 from palatium_ai.application.services.turn_recall_context import get_turn_recall_context
 from palatium_ai.core.exceptions import ClarifyError
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.logging.context import user_id_var
+from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
 from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.span_names import (
@@ -145,6 +147,7 @@ async def continuation_node(
         )
         memory_hints = recall.hint_texts if recall is not None else ()
         budget = state.get("prompt_budget") or MemoryPromptBudget()
+        intent_caps = tuple(raw_intent.candidate_capabilities) if raw_intent is not None else ()
         task_input = ContextualizerInput(
             task_id=selectors.require_task_id(state),
             user_text=selectors.resolved_user_text(state),
@@ -153,6 +156,7 @@ async def continuation_node(
             prompt_budget=budget,
             task_kind=intent_task_kind,
             requires_mcp=intent_requires_mcp,
+            candidate_capabilities=intent_caps,
         )
         agent_input = contextualizer_to_agent_input(
             task_input,
@@ -192,8 +196,16 @@ async def continuation_node(
             dialog=window,
             prior_context=routing_intent.prior_context,
             trust_prior_for_workers=routing_intent.trust_prior_for_workers,
+            grounding=routing_intent.grounding,
+            adaptive_grounding_enabled=is_adaptive_grounding_enabled(user_id_var.get()),
         )
         agent_metrics.record_attachment_sticky(action=rehydrate.reason)
+        logger.info(
+            "attachment.build_turn_context",
+            rehydrate_source=rehydrate.rehydrate_source,
+            rehydrate_reason=rehydrate.reason,
+            attachment_count=len(rehydrate.attachment_ids),
+        )
         attach_ctx = get_turn_attachment_context()
         if rehydrate.clear_pending and attach_ctx is not None and attach_ctx.clear_pending is not None:
             await attach_ctx.clear_pending()
@@ -360,6 +372,21 @@ async def weaving_node(
             strategy = None
             if result.output is not None:
                 strategy = str(result.output.execution_bundle.selected_strategy)
+            from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
+
+            # Sticky rollout decision recorded once per turn (not per planner/researcher check).
+            is_adaptive_grounding_enabled(
+                (state.get("user_id") or "").strip() or None,
+                record=True,
+            )
+            agent_metrics.record_grounding_mode(str(task_input.grounding))
+            agent_metrics.record_transform(kind=selectors.resolved_transformation(state))
+            logger.info(
+                "agent.turn.grounding",
+                grounding=task_input.grounding,
+                grounding_reason=task_input.grounding_reason or "",
+                strategy=strategy,
+            )
             hop = get_hop_collector()
             if hop is not None:
                 hop.apply_strategy_budget(strategy)
@@ -441,7 +468,16 @@ async def researcher_node(
             agent_role=agent.config.role,
         )
         _emit_worker_answer_deltas(result)
-        return cast("AgentGraphState", {"execution": result}), result
+        update: dict[str, object] = {"execution": result}
+        if result.cannot_answer_without_source:
+            question = (
+                result.output.summary
+                if result.output is not None and result.output.summary.strip()
+                else "Уточните источник данных или приложите файл."
+            )
+            update["requires_clarification"] = True
+            update["clarification_question"] = question
+        return cast("AgentGraphState", update), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_RESEARCHER, state=state, run=run)
 
@@ -656,18 +692,35 @@ async def formatter_node(
 def _mcp_failure_formatter_result(
     state: AgentGraphState,
 ) -> tuple[AgentGraphState, FormatterTaskResult] | None:
-    """Presentation for MCP empty/error. The graph still reaches Formatter."""
+    """Presentation for MCP empty/error. The graph still reaches Formatter.
+
+    Adaptive Grounding ON: ``mcp_empty_result`` is not stubbed here (optional→LLM
+    already answered; required→clarification). Tool errors still use localized copy.
+    """
     from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
     from palatium_ai.application.agents.formatter.deterministic import aligned_document_from_source
     from palatium_ai.application.agents.formatter.messages import localized_message
+    from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
     from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, MCP_TOOL_ERROR
 
     execution = state.get("execution")
     reason = execution.error if execution is not None else None
     if not isinstance(reason, str):
         return None
+    adaptive = is_adaptive_grounding_enabled((state.get("user_id") or "").strip() or None)
+    if reason == MCP_EMPTY_RESULT and adaptive:
+        return None
     if reason not in {MCP_EMPTY_RESULT, MCP_TOOL_ERROR}:
         return None
+    if reason == MCP_EMPTY_RESULT and not adaptive:
+        from palatium_ai.core.logging import get_logger
+
+        get_logger(__name__).warning(
+            "formatter.mcp_empty_stub",
+            fallback_disabled=True,
+            adaptive_grounding_enabled=False,
+            reason=reason,
+        )
     snapshot = OrchestrationSnapshot.from_state(state)
     task_input = node_inputs.build_formatter_input(snapshot, state)
     text = localized_message(
@@ -749,7 +802,9 @@ def route_after_context(
 
 def route_after_critic(state: AgentGraphState) -> Literal["quality_revision", "formatter"]:
     """Critic → worker revision loop (bounded) or Formatter (HITL/finalize)."""
-    # Terminal MCP empty/error cannot improve by re-calling the same tool (RC-4).
+    # Required-empty clarification and terminal MCP empty/error cannot improve via revision.
+    if state.get("requires_clarification"):
+        return GRAPH_NODE_FORMATTER
     if _terminal_mcp_worker_failure(state):
         return GRAPH_NODE_FORMATTER
     critic = state.get("critic")
@@ -765,14 +820,24 @@ def route_after_critic(state: AgentGraphState) -> Literal["quality_revision", "f
 
 
 def _terminal_mcp_worker_failure(state: AgentGraphState) -> bool:
-    """True when Researcher already failed closed on empty/error MCP — no revise."""
-    from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, MCP_TOOL_ERROR
+    """True when Researcher already closed on empty/error MCP — no revise."""
+    from palatium_ai.domain.agents.researcher import (
+        GROUNDING_REQUIRED_EMPTY,
+        MCP_EMPTY_RESULT,
+        MCP_TOOL_ERROR,
+    )
 
     execution = state.get("execution")
-    if execution is None or execution.status != "failure":
+    if execution is None or execution.status == "success":
         return False
+    if getattr(execution, "cannot_answer_without_source", False):
+        return True
     reason = execution.error
-    return isinstance(reason, str) and reason in {MCP_EMPTY_RESULT, MCP_TOOL_ERROR}
+    return isinstance(reason, str) and reason in {
+        MCP_EMPTY_RESULT,
+        MCP_TOOL_ERROR,
+        GROUNDING_REQUIRED_EMPTY,
+    }
 
 
 def route_after_quality_revision(

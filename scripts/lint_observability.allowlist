@@ -1,0 +1,4 @@
+# Paths (substring match against repo-relative path) exempt from observability lint.
+# Keep empty unless a false positive is unavoidable and reviewed.
+scripts/lint_observability.py
+src/palatium_ai/core/observability/redaction.py

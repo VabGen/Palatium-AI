@@ -115,3 +115,125 @@ groups:
         annotations:
           summary: "Memory promote batch errors"
           description: "medium→graph promote is failing (060/M7). Check Neo4j GraphWritePort and jobs.memory_promote."
+
+  - name: palatium-adaptive-grounding
+    interval: 30s
+    rules:
+      # Near-full ON cohort still taking Adaptive-OFF stub → mixed pod config / stale env.
+      - alert: PalatiumGroundingFlagNotPropagated
+        expr: |
+          (
+            sum(rate(palatium_grounding_rollout_total{enabled="true"}[15m]))
+            /
+            clamp_min(sum(rate(palatium_grounding_rollout_total[15m])), 1e-9)
+          ) > 0.9
+          and
+          sum(rate(palatium_grounding_flag_off_total[15m])) > 0.01
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Adaptive Grounding ON cohort still hits flag_off stub"
+          description: >-
+            >90% sticky-enabled decisions but flag_off still increments — some pods
+            likely still on Adaptive OFF. Check panel 1.1/1.2 and pod env. PCT=0
+            zero-traffic case is Loki canary enabled_but_zero_rollout, not this alert.
+
+      - alert: PalatiumGroundingDegradedRatioHigh
+        expr: |
+          (
+            sum(rate(palatium_grounding_degraded_total{mode="optional"}[30m]))
+            /
+            clamp_min(
+              sum(rate(palatium_grounding_degraded_total{mode="optional"}[30m]))
+              + sum(rate(palatium_grounding_satisfied_total{mode="optional"}[30m])),
+              1e-9
+            )
+          ) > 0.7
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Optional grounding degraded ratio >70%"
+          description: "Most optional retrievals degrade to parametric LLM — corpus empty. Pause PCT rollout."
+
+      - alert: PalatiumGroundingRequiredEmptyHigh
+        expr: |
+          (
+            sum(rate(palatium_grounding_required_empty_total[30m]))
+            /
+            clamp_min(sum(rate(palatium_grounding_mode_total{mode="required"}[30m])), 1e-9)
+          ) > 0.30
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Required-empty ratio >30%"
+          description: "Clarification template is a hot path. Pause and review classifier/template."
+
+      - alert: PalatiumGroundingHallucinationDetected
+        expr: increase(palatium_grounding_hallucination_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Grounding hallucination sample detected"
+          description: "Sampled judge marked a degraded answer as hallucinated. Rollback PCT; review ungrounded answers."
+
+      - alert: PalatiumGroundingHallucinationRate
+        expr: |
+          (
+            sum(rate(palatium_grounding_hallucination_total[1h]))
+            /
+            clamp_min(sum(rate(palatium_grounding_judge_runs_total[1h])), 1e-9)
+          ) > 0.05
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Grounding hallucination sample rate >5%"
+          description: "Sustained judge-positive rate above rollback trigger. Prefer 1h window (sample=1% is sparse)."
+
+      - alert: PalatiumGroundingJudgeSilent
+        expr: |
+          sum(increase(palatium_grounding_judge_runs_total[1h])) == 0
+          and
+          sum(increase(palatium_grounding_degraded_total[1h])) > 100
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Grounding LLM-judge is silent under load"
+          description: ">100 degraded turns in 1h but zero judge runs — sample task not firing or stuck."
+
+      - alert: PalatiumGroundingJudgeFailures
+        expr: sum(rate(palatium_grounding_judge_failed_total[15m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Grounding LLM-judge failing"
+          description: "Quality metric unreliable while judge errors. Check grounding.judge_failed logs."
+
+      - alert: PalatiumGroundingLatencyRegression
+        expr: |
+          (
+            histogram_quantile(0.95, sum by (le) (
+              rate(palatium_grounding_latency_seconds_bucket{degraded="true"}[15m])
+            ))
+            /
+            clamp_min(
+              histogram_quantile(0.95, sum by (le) (
+                rate(palatium_grounding_latency_seconds_bucket{degraded="false"}[15m])
+              )),
+              0.001
+            )
+          ) > 2.0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Grounding empty-path p95 >2× grounded"
+          description: >-
+            Proxy for ON/OFF latency gate. Sparse until satisfied path records
+            degraded=false latency — treat NaN as no data, not green.

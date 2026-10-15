@@ -58,6 +58,8 @@ class ContextWeaverAgent(BaseAgent):
             "route_plan",
             "requires_mcp",
             "candidate_capabilities_json",
+            "grounding",
+            "grounding_reason",
             "has_attachment_context",
             "has_trusted_prior",
         ]
@@ -104,6 +106,8 @@ class ContextWeaverAgent(BaseAgent):
             route_plan=task_input.route_plan,
             requires_mcp=task_input.requires_mcp,
             candidate_capabilities=task_input.candidate_capabilities,
+            grounding=task_input.grounding,
+            grounding_reason=task_input.grounding_reason,
             execution_plan=execution_plan,
             context_summary=context_summary,
         )
