@@ -68,6 +68,57 @@ async def test_grounding_required_retrieves_when_enabled(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio()
+async def test_grounding_required_overrides_trusted_prior(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Log bug: required + trusted prior → reason_only skipped MCP and echoed wrong OCR."""
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ENABLED", "true")
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ROLLOUT_PCT", "100")
+    from palatium_ai.core.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        bundle = await ExecutionPlanner(capability_index=None).build(
+            _input(
+                user_text="дай полный текст из файла",
+                grounding="required",
+                grounding_reason="needs user file contents",
+                requires_mcp=False,
+                has_trusted_prior=True,
+                has_attachment_context=False,
+            ),
+        )
+        assert bundle.selected_strategy == "retrieve_then_reason"
+        assert bundle.requires_tool_call is True
+        assert bundle.steps[0].tool_name == "search_knowledge"
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio()
+async def test_grounding_required_keeps_explicit_attachment_fence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """This-turn upload fence still grounds without search (explicit OCR is the source)."""
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ENABLED", "true")
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ROLLOUT_PCT", "100")
+    from palatium_ai.core.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        bundle = await ExecutionPlanner(capability_index=None).build(
+            _input(
+                user_text="дай полный текст из файла",
+                grounding="required",
+                has_attachment_context=True,
+                has_trusted_prior=True,
+            ),
+        )
+        assert bundle.selected_strategy == "reason_only"
+        assert bundle.requires_tool_call is False
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio()
 async def test_compose_still_reason_only_with_adaptive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ADAPTIVE_GROUNDING_ENABLED", "true")
     monkeypatch.setenv("ADAPTIVE_GROUNDING_ROLLOUT_PCT", "100")

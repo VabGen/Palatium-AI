@@ -10,7 +10,8 @@ from palatium_ai.domain.agents.intent import IntentClassifierOutput, TaskKind, U
 from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.llm.json_codec import loads_llm_json
 from palatium_ai.domain.policies.grounding import GroundingPolicy
-from palatium_ai.domain.policies.types import GroundingMode
+from palatium_ai.domain.policies.transform import TransformPolicy
+from palatium_ai.domain.policies.types import GroundingMode, TransformationKind
 
 _VALID_TASK_KINDS: frozenset[str] = frozenset(
     {
@@ -43,6 +44,7 @@ def parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
     )
     grounding = _coerce_grounding(payload.get("grounding"), task_kind=task_kind, capabilities=capabilities)
     grounding_reason = str(payload.get("grounding_reason") or payload.get("reason") or "")[:500]
+    transformation = _coerce_transformation(payload.get("transformation"))
 
     return UserChoiceIntentPolicy.normalize(
         IntentClassifierOutput(
@@ -53,6 +55,7 @@ def parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
             candidate_capabilities=capabilities,
             grounding=grounding,
             grounding_reason=grounding_reason,
+            transformation=transformation,
             confidence=float(payload.get("confidence", 0.0)),
             reasoning=str(payload.get("reasoning", "No reasoning provided")),
         ),
@@ -97,3 +100,7 @@ def _coerce_grounding(
     if "compose" in caps:
         return "none"
     return mode
+
+
+def _coerce_transformation(value: object) -> TransformationKind:
+    return TransformPolicy.coerce(value)

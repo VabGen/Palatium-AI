@@ -153,9 +153,7 @@ def _packet_from_raw(raw: dict[str, Any], task_id: str) -> ContextPacket:
     strategy = str(raw.get("selected_strategy", "reason_only"))
     grounding_raw = raw.get("grounding", "optional")
     grounding = (
-        grounding_raw
-        if isinstance(grounding_raw, str) and grounding_raw in {"required", "optional", "none"}
-        else "optional"
+        grounding_raw if isinstance(grounding_raw, str) and grounding_raw in {"required", "optional", "none"} else "optional"
     )
     return ContextPacket(
         task_id=task_id,
@@ -308,6 +306,8 @@ async def run_intent_classifier_cassette(task: dict[str, Any]) -> dict[str, Any]
     return {
         "task_kind": result.output.task_kind,
         "requires_mcp": result.output.requires_mcp,
+        "grounding": result.output.grounding,
+        "transformation": result.output.transformation,
         "status": result.status,
         "confidence": result.confidence,
     }

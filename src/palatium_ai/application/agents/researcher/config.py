@@ -44,11 +44,17 @@ SUMMARY_MAX_CHARS = 8_000
 RESEARCHER_DEFAULT_MAX_TOKENS = 2_048
 RESEARCHER_GENERATION_MAX_TOKENS = 4_096
 
-_GENERATION_CAPS: frozenset[str] = frozenset({CONTENT_GENERATION_CAPABILITY, DOCUMENT_GENERATION_CAPABILITY})
+_GENERATION_CAPS: frozenset[str] = frozenset(
+    {
+        CONTENT_GENERATION_CAPABILITY,
+        DOCUMENT_GENERATION_CAPABILITY,
+        "expand",  # prior elaboration needs headroom beyond default
+    },
+)
 
 
 def researcher_completion_budget(candidate_capabilities: tuple[str, ...] | list[str]) -> int:
-    """Higher completion ceiling for draft/compose so letters are not gateway-truncated."""
+    """Higher completion ceiling for draft/compose/expand so bodies are not gateway-truncated."""
     caps = {str(c).strip().lower() for c in candidate_capabilities if str(c).strip()}
     if caps & _GENERATION_CAPS:
         return RESEARCHER_GENERATION_MAX_TOKENS

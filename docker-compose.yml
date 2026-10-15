@@ -90,6 +90,31 @@ services:
     # in a quiet dev stack. 256m covers the planner's segment target with room to spare
     # and is accounted for inside this container's mem_limit, not extra VM budget.
     shm_size: 256m
+    # Checkpoint tuning. The observed `checkpoint complete` lines spent 20-46 s in
+    # `write=` while flushing only 200-460 buffers, so the wall clock is the host's
+    # fsync latency (Docker Desktop's virtualised volume), not the volume of data.
+    # With the 5-minute default interval a tiny WAL triggers a checkpoint anyway and
+    # each one stalls the disk for tens of seconds. Fewer, longer, spread-out
+    # checkpoints remove the periodic stalls; durability is untouched —
+    # synchronous_commit and full_page_writes keep their defaults (020).
+    command:
+      - postgres
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - min_wal_size=512MB
+      - -c
+      - wal_compression=on
+      # 25% of this container's mem_limit; the previous 128 MiB default left the
+      # buffer cache smaller than effective_cache_size claimed.
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/.env}
@@ -184,6 +209,18 @@ services:
       # container past the budget while buying nothing under a few hundred MB of store.
       NEO4J_server_memory_pagecache_size: 512m
       NEO4J_PLUGINS: '["apoc"]'
+      # X-Forward processing is ON by default (`server.http.x_forward.enabled`);
+      # with `allow_proxies`/`allow_hosts` unset it trusts the headers from *any*
+      # source and *any* hostname, which is what the two startup SECURITY WARNINGs
+      # report. Nothing fronts Neo4j in this stack — both published ports are
+      # loopback-only and in-network callers dial `bolt://neo4j:7687` directly, and
+      # X-Forward headers are an HTTP concern, not a Bolt one — so the fail-closed
+      # answer is to stop processing them at all rather than to enumerate trusted
+      # proxies that do not exist (020). If a reverse proxy is ever put in front,
+      # set enabled back to true and list *its* address range in
+      # `server.http.x_forward.allow_proxies` plus the hostnames in `allow_hosts`
+      # (both introduced in Neo4j 2026.03, and this image is 2026.07.1).
+      NEO4J_server_http_x__forward_enabled: "false"
     ports:
       # Loopback only: the API and the gateway reach Neo4j over the compose network by
       # service name, so publishing to every interface would only widen the perimeter
@@ -238,6 +275,13 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       LITELLM_DB_URL: ${LITELLM_DB_URL}
       LITELLM_LOG: ${LITELLM_LOG:-INFO}
+      # Coordination Redis (auth/usage caches, budget-job locks). Pinned as a literal
+      # for the same reason as `api` above: env/.env is authored for the Poetry host
+      # profile and says `REDIS_HOST=localhost`, which inside this container is the
+      # gateway itself — LiteLLM would build its Redis client against `localhost:6379`
+      # and every cache call would fail. In-network the service name is the only route.
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
 
       # =====================================================================
       # TIER MAPPING — вот здесь задаётся какой провайдер обслуживает tier.

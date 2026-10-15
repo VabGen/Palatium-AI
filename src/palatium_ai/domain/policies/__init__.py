@@ -14,6 +14,7 @@ from .types import (
     GROUNDING_DEFAULT,
     LOW_RISK_ROUTE_STRATEGIES,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
+    TRANSFORMATION_DEFAULT,
     AgentRole,
     ContinuationKind,
     ExecutionStrategy,
@@ -21,6 +22,7 @@ from .types import (
     ModelTier,
     RouteStrategy,
     TaskKind,
+    TransformationKind,
     UnderspecificationKind,
     UntrustedContentAction,
 )
@@ -55,6 +57,7 @@ if TYPE_CHECKING:
     from .retention import RetentionDecision, RetentionPolicy, RetentionWindows
     from .retrieval import LAST_RESORT_PLATFORM_TOOLS, RetrievalBindingDecision, RetrievalPolicy
     from .scratchpad import SessionScratchpadPolicy
+    from .transform import TransformPolicy, TransformRouteDecision
     from .untrusted_content import (
         DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
         FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
@@ -72,6 +75,7 @@ __all__ = [
     "LAST_RESORT_PLATFORM_TOOLS",
     "LOW_RISK_ROUTE_STRATEGIES",
     "SUBSTANTIVE_USER_PAYLOAD_CHARS",
+    "TRANSFORMATION_DEFAULT",
     "AckReplyPolicy",
     "AgentRole",
     "AttachmentRehydrateDecision",
@@ -118,6 +122,9 @@ __all__ = [
     "RouteStrategy",
     "SessionScratchpadPolicy",
     "TaskKind",
+    "TransformPolicy",
+    "TransformRouteDecision",
+    "TransformationKind",
     "UnderspecificationKind",
     "UntrustedContentAction",
     "UntrustedContentPolicy",
@@ -149,6 +156,8 @@ _LAZY: dict[str, tuple[str, str]] = {
     "GroundingPolicy": (".grounding", "GroundingPolicy"),
     "HopBudgetDecision": (".hop_budget", "HopBudgetDecision"),
     "HopBudgetPolicy": (".hop_budget", "HopBudgetPolicy"),
+    "TransformPolicy": (".transform", "TransformPolicy"),
+    "TransformRouteDecision": (".transform", "TransformRouteDecision"),
     "MemoryNamespaceBinding": (".memory_namespace", "MemoryNamespaceBinding"),
     "MemoryNamespacePolicy": (".memory_namespace", "MemoryNamespacePolicy"),
     "MemoryRecallDecision": (".memory_recall", "MemoryRecallDecision"),

@@ -244,8 +244,12 @@ try:  # pragma: no cover - optional dependency
         "Clarification responses emitted (hash8 + length bucket; never raw query).",
         ["query_hash", "len_bucket"],
     )
+    _palatium_transform_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_transform_total",
+        "Requested prior-content transformation kind (closed label set).",
+        ["kind"],
+    )
 except ImportError:  # pragma: no cover - fallback
-
     _palatium_agent_request_duration_seconds = _NoopMetric()
     _palatium_agent_errors_total = _NoopMetric()
     _palatium_agent_human_escalation_total = _NoopMetric()
@@ -288,6 +292,7 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_grounding_judge_runs_total = _NoopMetric()
     _palatium_grounding_judge_failed_total = _NoopMetric()
     _palatium_grounding_clarification_total = _NoopMetric()
+    _palatium_transform_total = _NoopMetric()
 
 
 @dataclass
@@ -394,6 +399,11 @@ class AgentMetrics:
             query_hash=safe_hash,
             len_bucket=safe_bucket,
         ).inc()
+
+    def record_transform(self, *, kind: str) -> None:
+        """Count requested prior-content transformation kind (none/restructure/…)."""
+        safe = (kind or "none").strip()[:32] or "none"
+        _palatium_transform_total.labels(kind=safe).inc()
 
     def record_grounding_latency(
         self,

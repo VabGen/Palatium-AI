@@ -13,6 +13,7 @@ from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.workflow_policy import WorkflowExecutionPolicy
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
 from palatium_ai.domain.mcp.models import ExecutionPlanBundle, ToolExecutionPlan
+from palatium_ai.domain.policies.grounding import GroundingPolicy
 from palatium_ai.domain.policies.parallel_workers import ParallelWorkerPolicy
 from palatium_ai.domain.policies.types import CONTENT_GENERATION_CAPABILITY, TaskKind
 
@@ -80,25 +81,27 @@ class ExecutionPlanner:
         )
         if task_input.requires_mcp:
             return _mcp_unresolved_plan()
+        adaptive_on = is_adaptive_grounding_enabled(user_id_var.get())
         if task_input.has_attachment_context:
             return _attachment_grounded_plan(
                 "Parallel research half: fenced attachment text already present; ground without search_knowledge."
             )
-        if task_input.has_trusted_prior:
+        if task_input.has_trusted_prior and GroundingPolicy.allows_prior_grounded_skip(
+            enabled=adaptive_on,
+            grounding=task_input.grounding,
+        ):
             return _prior_grounded_plan(
                 "Parallel research half: Continuity trusts dialog prior; answer without search_knowledge."
             )
-        if is_adaptive_grounding_enabled(user_id_var.get()) and task_input.grounding == "none":
+        if adaptive_on and task_input.grounding == "none":
             return ToolExecutionPlan(
                 strategy="reason_only",
                 requires_tool_call=False,
-                rationale=(
-                    f"Parallel research half: adaptive grounding=none "
-                    f"(executable_kind={executable_kind})."
-                ),
+                rationale=(f"Parallel research half: adaptive grounding=none (executable_kind={executable_kind})."),
             )
         return _search_knowledge_plan(
-            f"Parallel research half: retrieve via platform.search_knowledge then reason (executable_kind={executable_kind})."
+            f"Parallel research half: retrieve via platform.search_knowledge then reason "
+            f"(executable_kind={executable_kind}; grounding={task_input.grounding})."
         )
 
     async def _build_primary_step(self, task_input: ContextWeaverInput) -> ToolExecutionPlan:
@@ -202,14 +205,16 @@ def _knowledge_or_tool_plan(
     task_input: ContextWeaverInput,
     executable_kind: TaskKind,
 ) -> ToolExecutionPlan:
+    adaptive_on = is_adaptive_grounding_enabled(user_id_var.get())
     if task_input.has_attachment_context:
         return _attachment_grounded_plan(
             "Turn already carries fenced attachment text; ground the answer on upload OCR without search_knowledge."
         )
-    if task_input.has_trusted_prior:
-        return _prior_grounded_plan(
-            "Continuity trusts dialog prior; answer from prior_context without search_knowledge."
-        )
+    if task_input.has_trusted_prior and GroundingPolicy.allows_prior_grounded_skip(
+        enabled=adaptive_on,
+        grounding=task_input.grounding,
+    ):
+        return _prior_grounded_plan("Continuity trusts dialog prior; answer from prior_context without search_knowledge.")
     if task_input.requires_mcp:
         return _mcp_unresolved_plan()
     caps = {c.strip().lower() for c in task_input.candidate_capabilities}
@@ -221,14 +226,11 @@ def _knowledge_or_tool_plan(
             requires_tool_call=False,
             rationale="Content generation ask; compose from dialog/memory context without search_knowledge.",
         )
-    if is_adaptive_grounding_enabled(user_id_var.get()) and task_input.grounding == "none":
+    if adaptive_on and task_input.grounding == "none":
         return ToolExecutionPlan(
             strategy="reason_only",
             requires_tool_call=False,
-            rationale=(
-                f"Adaptive grounding=none; reason without search_knowledge "
-                f"(executable_kind={executable_kind})."
-            ),
+            rationale=(f"Adaptive grounding=none; reason without search_knowledge (executable_kind={executable_kind})."),
         )
     return _search_knowledge_plan(
         "Knowledge path without domain MCP binding: retrieve via "

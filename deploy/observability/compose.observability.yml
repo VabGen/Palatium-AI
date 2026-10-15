@@ -79,6 +79,16 @@ services:
       # Dashboards/datasources are provisioned from files, not clicked in the UI.
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/palatium-overview.json
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+      # The corporate network answers grafana.com with HTTP 451, so every outbound
+      # catalog/update/telemetry call is switched off. Left on, each boot tries to
+      # install or refresh the image's preinstalled plugins and logs a 451 per
+      # attempt ("Failed to install plugin grafana-lokiexplore-app", "Error
+      # downloading plugin manifest keys", "Update check failed").
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
     ports:
       - "127.0.0.1:${GRAFANA_PUBLISH_PORT:-3000}:3000"
     volumes:

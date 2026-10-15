@@ -152,6 +152,79 @@ def test_format_forces_response_formatting() -> None:
     assert effective.trust_prior_for_workers is True
 
 
+def test_format_expand_routes_to_knowledge_not_formatting() -> None:
+    """UX bug: «разверни» must not stay on Formatter format_only (same text twice)."""
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="Разверни предыдущий ответ подробнее",
+        continuation_kind="format",
+        confidence=0.95,
+        refers_to_prior=True,
+        prior_assistant_excerpt="План...",
+        reasoning="expand prior",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="response_formatting",
+        requires_mcp=False,
+        candidate_capabilities=("format",),
+        transformation="expand",
+        confidence=0.9,
+        reasoning="user asked to expand",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.task_kind == "knowledge_request"
+    assert effective.transformation == "expand"
+    assert "expand" in effective.candidate_capabilities
+    assert effective.trust_prior_for_workers is True
+    assert effective.continuation_kind == "format"
+
+
+def test_format_restructure_stays_response_formatting() -> None:
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="Представь план таблицей",
+        continuation_kind="format",
+        confidence=0.95,
+        refers_to_prior=True,
+        prior_assistant_excerpt="План...",
+        reasoning="restructure",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=("format",),
+        transformation="restructure",
+        confidence=0.9,
+        reasoning="table layout",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.task_kind == "response_formatting"
+    assert effective.transformation == "restructure"
+
+
+def test_format_shorten_routes_to_knowledge() -> None:
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="Сократи предыдущий ответ",
+        continuation_kind="format",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="План...",
+        reasoning="shorten",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="response_formatting",
+        requires_mcp=False,
+        transformation="shorten",
+        confidence=0.9,
+        reasoning="shorten ask",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert effective.task_kind == "knowledge_request"
+    assert effective.transformation == "shorten"
+    assert "shorten" in effective.candidate_capabilities
+
+
 def test_false_format_with_open_text_slot_stays_clarify() -> None:
     """Intent clarify-slot + false Contextualizer format must not sticky-bind PDF prior."""
     dialog = _dialog_with_prior()
@@ -791,9 +864,7 @@ def test_true_clarify_without_history_still_clarifies() -> None:
 
 def test_false_new_topic_recovers_when_rewrite_injects_prior() -> None:
     """Meta/anaphora mislabeled as new_topic: rewrite adds prior tokens → answer."""
-    prior = (
-        "Тезисный анализ обращения МБОО «Доброе дело»: 1) предмет 2) сроки 3) стороны."
-    )
+    prior = "Тезисный анализ обращения МБОО «Доброе дело»: 1) предмет 2) сроки 3) стороны."
     dialog = DialogTurnWindow(
         thread_id="t1",
         turns=(

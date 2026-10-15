@@ -27,3 +27,20 @@ def test_parse_explicit_required() -> None:
     out = parse_classifier_output(raw)
     assert out.grounding == "required"
     assert "file" in out.grounding_reason
+
+
+def test_parse_transformation_expand() -> None:
+    raw = """{"task_kind":"knowledge_request","requires_mcp":false,
+    "underspecification_kind":"none","candidate_capabilities":["expand"],
+    "grounding":"none","transformation":"expand",
+    "confidence":0.9,"reasoning":"expand prior"}"""
+    out = parse_classifier_output(raw)
+    assert out.transformation == "expand"
+
+
+def test_parse_transformation_defaults_none() -> None:
+    raw = """{"task_kind":"knowledge_request","requires_mcp":false,
+    "underspecification_kind":"none","candidate_capabilities":[],
+    "confidence":0.9,"reasoning":"plain ask"}"""
+    out = parse_classifier_output(raw)
+    assert out.transformation == "none"

@@ -140,3 +140,53 @@ async def test_required_empty_clarifies_with_query(monkeypatch: pytest.MonkeyPat
         assert "По запросу" in output.output.summary
     finally:
         get_settings.cache_clear()
+
+
+@pytest.mark.asyncio()
+async def test_flag_off_logs_fallback_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify researcher.grounding_stub emits fallback_disabled when adaptive OFF."""
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ENABLED", "false")
+    from unittest.mock import MagicMock, patch
+
+    from palatium_ai.core.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        task_id = str(uuid4())
+        soft = json.dumps(
+            {
+                "summary": "По запросу ничего не найдено.",
+                "confidence": 0.0,
+                "sources_used": [],
+            },
+            ensure_ascii=False,
+        )
+        llm = SequentialStaticLLMPort(
+            [load_cassette_response("researcher/search_knowledge_args.json"), soft],
+        )
+        harness = Harness(llm=llm)
+        agent = ResearcherAgent(harness, RESEARCHER_CONFIG, llm, mcp_registry=_EmptyRegistry())
+        mock_log = MagicMock()
+        with patch("palatium_ai.application.agents.researcher.agent.logger", mock_log):
+            output = await harness.execute_with_guardrails(
+                agent,
+                researcher_to_agent_input(
+                    ResearcherInput(
+                        task_id=task_id,
+                        context_packet=_packet(
+                            task_id,
+                            grounding="optional",
+                            user_text="сравни облако и коробку",
+                        ),
+                    ),
+                    trace_id="ag-off",
+                    thread_id="ag-off",
+                    user_id="eval-user",
+                ),
+            )
+        warning_calls = [c for c in mock_log.warning.call_args_list if c.args and c.args[0] == "researcher.grounding_stub"]
+        assert warning_calls, "expected researcher.grounding_stub warning when flag OFF"
+        assert warning_calls[0].kwargs.get("fallback_disabled") is True
+        assert output.error_message == MCP_EMPTY_RESULT or (isinstance(output.output, ResearcherOutput) and output.output.summary)
+    finally:
+        get_settings.cache_clear()

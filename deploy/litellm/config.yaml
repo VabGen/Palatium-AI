@@ -8,6 +8,13 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/LITELLM_DB_URL
+  # Nothing fronts this gateway: the API reaches it as `litellm:4000` inside the
+  # compose network and the UI is published on loopback only (020). An *empty* list
+  # is not the same as leaving the key unset — unset leaves the direct peer
+  # untrusted and drops the per-source login throttle
+  # (`login_throttle.warn_source_login_limit_is_off`). Empty = "clients connect
+  # directly", which is exactly this topology.
+  trusted_proxy_ranges: []
 
 model_list:
   # ============================================================
@@ -95,6 +102,14 @@ litellm_settings:
   # ``cache_control: {type: ephemeral}`` (see litellm_adapter._to_litellm_messages).
   # Providers that ignore the field still succeed thanks to drop_params; Qwen/gateway
   # prefix cache activates when the corporate endpoint supports it.
+  #
+  # Virtual-key auth cache in the coordination Redis. Without it each worker keeps
+  # its own in-memory `user_api_key_cache` and re-validates every key against
+  # Postgres on its own (see proxy_server._attach_redis_usage_cache). The Redis it
+  # attaches is the one named by the REDIS_* environment — which is why
+  # docker-compose pins REDIS_HOST=redis for this service: env/.env carries the
+  # host-profile `localhost`, i.e. the gateway container itself.
+  enable_redis_auth_cache: true
 
 
 ## 1. Валидация compose + интерполяции

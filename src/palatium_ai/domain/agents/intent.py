@@ -6,9 +6,11 @@ from pydantic import BaseModel, Field
 
 from palatium_ai.domain.policies.types import (
     GROUNDING_DEFAULT,
+    TRANSFORMATION_DEFAULT,
     ContinuationKind,
     GroundingMode,
     TaskKind,
+    TransformationKind,
     UnderspecificationKind,
 )
 
@@ -68,6 +70,14 @@ class IntentClassifierOutput(BaseModel):
         default="",
         max_length=500,
         description="Brief rationale for grounding mode (not user-facing).",
+    )
+    transformation: TransformationKind = Field(
+        default=TRANSFORMATION_DEFAULT,
+        description=(
+            "How to transform prior content when the ask is a format-continuation: "
+            "restructure (layout/sections) vs expand/shorten/rewrite (content change). "
+            "none when not a prior-transform ask."
+        ),
     )
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str = Field(min_length=1)

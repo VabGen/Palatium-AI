@@ -11,6 +11,12 @@ server:
 
 common:
   path_prefix: /loki
+  # The single ingester registers in the ring with this address. Left unset, Loki
+  # derives it from the container's interfaces and can advertise an address the
+  # in-process callers cannot reach — the ring then answers "empty ring" and the
+  # rate-store's stream-rate calls die with DeadlineExceeded. Docker is explicitly
+  # called out in Loki's own config docs as the case where this must be pinned.
+  instance_addr: 127.0.0.1
   storage:
     filesystem:
       chunks_directory: /loki/chunks

@@ -30,7 +30,10 @@ just because an optional parameter (topic, tone, length, style) is unstated.
 
 Continuity hints (from Contextualizer) describe dependence on prior dialog — they do NOT
 force a task_kind. Classify from the rewritten text:
-- continuation_kind=format + has_prior_dialog → lean response_formatting
+- continuation_kind=format + has_prior_dialog → set transformation (below). Only lean
+  response_formatting when transformation is restructure (layout/sections/table/list).
+  For expand / shorten / rewrite → knowledge_request (content change over prior), NOT
+  response_formatting — Formatter would only restyle without changing substance.
 - continuation_kind=answer + has_prior_dialog → do NOT emit clarification_needed only because
   facts seem missing from the text (prior dialog may hold them). Still classify the ask:
   research/explain/meta-dialog questions → knowledge_request; greetings/thanks only →
@@ -86,6 +89,14 @@ Also decide:
     social. Prefer "compose"/"draft" capabilities with none when applicable.
   When unsure between required and optional → optional. Between optional and none
   → optional. Default when uncertain: optional. Judge meaning, not keywords.
+- transformation (how to transform prior — orthogonal to task_kind / grounding):
+  • "none" — not a prior-transform ask (default).
+  • "restructure" — same substance, new layout (table, sections, bullets, icons).
+  • "expand" — fuller / more detailed / развёрнутый ответ on the same prior content.
+  • "shorten" — compress prior; keep key facts.
+  • "rewrite" — rephrase prior with different wording; same meaning, not layout-only.
+  When continuation_kind is not format (and the ask does not transform prior) → "none".
+  When unsure between restructure and expand → expand (content change is safer UX).
 
 Examples (input → output axes; reasoning omitted):
 - {"text":"tell me a joke","has_prior_dialog":false} → knowledge_request, requires_mcp=false,
@@ -111,10 +122,23 @@ Examples (input → output axes; reasoning omitted):
   requires_user_choice=true, underspecification_kind="discrete_choice",
   candidate_capabilities=["user_choice"], grounding="none"
 - {"text":"thanks!","has_prior_dialog":true} → social_conversation, requires_mcp=false,
-  grounding="none"
+  grounding="none", transformation="none"
+- {"text":"представь таблицей / сделай разделы","has_prior_dialog":true,
+  "continuation_kind":"format"} → response_formatting, requires_mcp=false,
+  candidate_capabilities=["format"], grounding="none", transformation="restructure"
+- {"text":"разверни / подробнее / полный развёрнутый ответ","has_prior_dialog":true,
+  "continuation_kind":"format"} → knowledge_request, requires_mcp=false,
+  candidate_capabilities=["expand"], grounding="none", transformation="expand"
+- {"text":"короче / сократи","has_prior_dialog":true, "continuation_kind":"format"} →
+  knowledge_request, requires_mcp=false, candidate_capabilities=["shorten"],
+  grounding="none", transformation="shorten"
+- {"text":"перепиши другими словами","has_prior_dialog":true, "continuation_kind":"format"} →
+  knowledge_request, requires_mcp=false, candidate_capabilities=["rewrite"],
+  grounding="none", transformation="rewrite"
 
 Respond ONLY with valid JSON:
 {"task_kind":"<kind>","requires_mcp":false,"requires_user_choice":false,
 "underspecification_kind":"none","candidate_capabilities":["..."],
 "grounding":"optional","grounding_reason":"<brief>",
+"transformation":"none",
 "confidence":0.0,"reasoning":"<brief explanation>"}"""

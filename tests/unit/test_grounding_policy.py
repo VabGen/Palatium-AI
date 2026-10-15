@@ -24,6 +24,18 @@ def test_empty_required_clarifies() -> None:
     assert d.action == "clarify"
 
 
+def test_required_blocks_prior_skip_when_adaptive_on() -> None:
+    assert GroundingPolicy.allows_prior_grounded_skip(enabled=True, grounding="required") is False
+    assert GroundingPolicy.allows_prior_grounded_skip(enabled=True, grounding="optional") is True
+    assert GroundingPolicy.allows_prior_grounded_skip(enabled=False, grounding="required") is True
+
+
+def test_required_blocks_sticky_rehydrate_when_adaptive_on() -> None:
+    assert GroundingPolicy.allows_sticky_attachment_rehydrate(enabled=True, grounding="required") is False
+    assert GroundingPolicy.allows_sticky_attachment_rehydrate(enabled=True, grounding="optional") is True
+    assert GroundingPolicy.allows_sticky_attachment_rehydrate(enabled=False, grounding="required") is True
+
+
 def test_clarification_embeds_file_query() -> None:
     text = GroundingPolicy.required_empty_clarification("что в моём загруженном файле отчёт.docx?")
     assert "отчёт.docx" in text or "файле" in text

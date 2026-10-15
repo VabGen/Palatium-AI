@@ -1,23 +1,28 @@
 ---
-description: Branching SoT — feature branches from/to dev; master is release-only
+description: Branching SoT + Cursor — never commit, never create branches; work only on the open branch
 alwaysApply: true
 ---
 
 # Branching policy
 
-## SoT
+## SoT (человек / процесс)
 
 - `dev` — интеграционная ветка (все PR идут сюда)
 - `master` — релизная ветка (только promotion из `dev`)
 - `feature/*`, `fix/*`, `chore/*`, `test/*`, `diagnostics/*` — короткоживущие, всегда от `dev`
-
-## Cursor / agent
-
-- Никогда не создавать ветку от `master`
-- Перед `git checkout -b`: `git checkout dev && git pull`
 - Target PR: `base=dev`, не `master` (без явного разрешения владельца)
-- Не плодить ветки под каждый диагностический шаг — одна `diagnostics/<topic>`
 - Удалять ветку после merge в `dev`
+
+## Cursor / agent — жёсткий запрет
+
+- **Никогда не создавать ветки** (`git checkout -b`, `git switch -c`, `gh pr create` с новой веткой и т.п.)
+- **Никогда не делать коммиты** (`git commit`, `git commit --amend`) — даже по просьбе «закоммить»
+- **Никогда не переключать ветку** (`git checkout`, `git switch`) без явного запроса пользователя
+- Работать **только в уже открытой** ветке репозитория (та, что сейчас `HEAD`)
+- Ветку и коммиты создаёт **только человек**; агент пишет/правит файлы в текущем checkout
+- Push / force-push / merge — только по явному запросу пользователя; ветку агент не заводит
+
+Если для задачи нужна новая ветка — сказать пользователю и ждать, пока он её откроет. Не обходить запрет «для удобства».
 
 ## Tooling (текущее состояние `dev`)
 

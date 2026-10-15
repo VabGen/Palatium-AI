@@ -40,6 +40,8 @@ from palatium_ai.application.services.turn_attachment_context import get_turn_at
 from palatium_ai.application.services.turn_recall_context import get_turn_recall_context
 from palatium_ai.core.exceptions import ClarifyError
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.logging.context import user_id_var
+from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
 from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.span_names import (
@@ -145,9 +147,7 @@ async def continuation_node(
         )
         memory_hints = recall.hint_texts if recall is not None else ()
         budget = state.get("prompt_budget") or MemoryPromptBudget()
-        intent_caps = (
-            tuple(raw_intent.candidate_capabilities) if raw_intent is not None else ()
-        )
+        intent_caps = tuple(raw_intent.candidate_capabilities) if raw_intent is not None else ()
         task_input = ContextualizerInput(
             task_id=selectors.require_task_id(state),
             user_text=selectors.resolved_user_text(state),
@@ -196,8 +196,16 @@ async def continuation_node(
             dialog=window,
             prior_context=routing_intent.prior_context,
             trust_prior_for_workers=routing_intent.trust_prior_for_workers,
+            grounding=routing_intent.grounding,
+            adaptive_grounding_enabled=is_adaptive_grounding_enabled(user_id_var.get()),
         )
         agent_metrics.record_attachment_sticky(action=rehydrate.reason)
+        logger.info(
+            "attachment.build_turn_context",
+            rehydrate_source=rehydrate.rehydrate_source,
+            rehydrate_reason=rehydrate.reason,
+            attachment_count=len(rehydrate.attachment_ids),
+        )
         attach_ctx = get_turn_attachment_context()
         if rehydrate.clear_pending and attach_ctx is not None and attach_ctx.clear_pending is not None:
             await attach_ctx.clear_pending()
@@ -372,6 +380,7 @@ async def weaving_node(
                 record=True,
             )
             agent_metrics.record_grounding_mode(str(task_input.grounding))
+            agent_metrics.record_transform(kind=selectors.resolved_transformation(state))
             logger.info(
                 "agent.turn.grounding",
                 grounding=task_input.grounding,

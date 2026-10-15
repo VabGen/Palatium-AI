@@ -1094,6 +1094,48 @@
           "legendFormat": "OFF"
         }
       ]
+    },
+    {
+      "id": 70,
+      "type": "timeseries",
+      "title": "6.3 Transform kind distribution (24h)",
+      "description": "Transformation axis from ContinuityPolicy. expand/shorten/rewrite must route to reasoning (reason_only), never Formatter passthrough.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "palatium-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "palatium-prometheus"
+          },
+          "expr": "sum by (kind) (increase(palatium_transform_total[24h]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
     }
   ]
 }

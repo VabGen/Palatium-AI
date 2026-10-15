@@ -186,6 +186,11 @@ def resolved_task_kind(state: AgentGraphState) -> TaskKind:
     return ensure_routing_intent(state).task_kind
 
 
+def resolved_transformation(state: AgentGraphState) -> str:
+    """Transformation axis from ContinuityPolicy (none/restructure/expand/shorten/rewrite)."""
+    return str(ensure_routing_intent(state).transformation)
+
+
 def resolved_requires_mcp(state: AgentGraphState) -> bool:
     """MCP flag из ContinuityPolicy."""
     return ensure_routing_intent(state).requires_mcp

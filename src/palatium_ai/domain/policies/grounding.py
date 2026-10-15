@@ -39,6 +39,41 @@ class GroundingPolicy:
         return GROUNDING_DEFAULT
 
     @classmethod
+    def allows_prior_grounded_skip(
+        cls,
+        *,
+        enabled: bool,
+        grounding: GroundingMode | str | None,
+    ) -> bool:
+        """Whether ExecutionPlanner may answer from trusted dialog prior without retrieval.
+
+        ``grounding=required`` means this turn needs source evidence. Dialog prior
+        (or sticky OCR from an earlier upload) must not short-circuit into
+        ``reason_only`` — that path skipped MCP and echoed the wrong file (055).
+        Explicit turn fences still use ``has_attachment_context`` separately.
+        """
+        if not enabled:
+            return True
+        return cls.coerce_mode(grounding) != "required"
+
+    @classmethod
+    def allows_sticky_attachment_rehydrate(
+        cls,
+        *,
+        enabled: bool,
+        grounding: GroundingMode | str | None,
+    ) -> bool:
+        """Sticky session attachments must not fence a ``required`` turn.
+
+        Rehydrating the last upload into ``untrusted_context`` makes the planner
+        treat stale OCR as evidence and skip retrieval. Explicit uploads at entry
+        still fence normally (``decide_entry``).
+        """
+        if not enabled:
+            return True
+        return cls.coerce_mode(grounding) != "required"
+
+    @classmethod
     def decide_empty_retrieval(
         cls,
         *,
@@ -69,6 +104,5 @@ class GroundingPolicy:
                 "(файл, документ, период) или приложите файл."
             )
         return (
-            "Для ответа нужны ваши данные (файл, документ или запись), которых сейчас нет. "
-            "Уточните источник или приложите файл."
+            "Для ответа нужны ваши данные (файл, документ или запись), которых сейчас нет. Уточните источник или приложите файл."
         )
