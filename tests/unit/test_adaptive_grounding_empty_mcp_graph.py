@@ -101,10 +101,7 @@ async def test_graph_empty_mcp_optional_degrades_not_stub(monkeypatch: pytest.Mo
             },
             ensure_ascii=False,
         )
-        critic_json = (
-            '{"accuracy_score": 8, "safety_score": 9, '
-            '"requires_review": false, "summary": "ok"}'
-        )
+        critic_json = '{"accuracy_score": 8, "safety_score": 9, "requires_review": false, "summary": "ok"}'
         mcp = _EmptySearchRegistry()
         # Shared sequence: Intent → tool-args → degrade LLM → Critic → Formatter.
         # Args builder uses researcher._llm; degrade uses harness.call_llm — same port.
@@ -142,10 +139,7 @@ async def test_graph_empty_mcp_optional_degrades_not_stub(monkeypatch: pytest.Mo
             session_service=_FakeSessionService(),  # type: ignore[arg-type]
             hitl_service=HitlService(InMemoryHitlCardStore(), signing_secret=_HITL_HMAC),
         )
-        ask = (
-            "Сравни подписку на облачный сервис и покупку коробочного ПО. "
-            "Проанализируй ситуацию: продажи упали на 15%."
-        )
+        ask = "Сравни подписку на облачный сервис и покупку коробочного ПО. Проанализируй ситуацию: продажи упали на 15%."
         result = await service.process(
             text=ask,
             thread_id="adaptive-empty-1",

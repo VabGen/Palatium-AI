@@ -71,8 +71,7 @@ class ObservabilityConfig(BaseConfig):
         default=False,
         validation_alias="ADAPTIVE_GROUNDING_ENABLED",
         description=(
-            "Master switch for Adaptive Grounding (two-key with "
-            "ADAPTIVE_GROUNDING_ROLLOUT_PCT: ON iff enabled and pct>0)."
+            "Master switch for Adaptive Grounding (two-key with ADAPTIVE_GROUNDING_ROLLOUT_PCT: ON iff enabled and pct>0)."
         ),
     )
     adaptive_grounding_rollout_pct: int = Field(

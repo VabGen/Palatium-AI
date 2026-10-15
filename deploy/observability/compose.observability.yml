@@ -84,17 +84,36 @@ services:
       # install or refresh the image's preinstalled plugins and logs a 451 per
       # attempt ("Failed to install plugin grafana-lokiexplore-app", "Error
       # downloading plugin manifest keys", "Update check failed").
+      #
+      # `public_key_retrieval_disabled` is the setting that actually stops the
+      # outbound call: `check_for_plugin_updates` is scoped to update *checks* only
+      # and does not cover the dynamic signature-key downloader, so the periodic
+      # `plugin.signature.key_retriever ... 451` line survives without it. It is the
+      # documented switch for air-gapped / egress-restricted installs; verification
+      # then falls back to the key bundled in the image.
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
       GF_NEWS_NEWS_FEED_ENABLED: "false"
       GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED: "true"
     ports:
       - "127.0.0.1:${GRAFANA_PUBLISH_PORT:-3000}:3000"
     volumes:
       - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - palatium_grafana:/var/lib/grafana
+    # Grafana opens every subdirectory of the provisioning path at boot and logs
+    # "Failed to read plugin/alerting provisioning files ... no such file or
+    # directory" for the ones that are absent. There is nothing to put in either:
+    # the dashboards use core panels only, and alerting rules live in
+    # deploy/observability/prometheus/alerts/ and route through Alertmanager.
+    # An empty tmpfs creates the two directories without shipping a placeholder
+    # *file* — a `.gitkeep` would be picked up by the reader instead and logged as
+    # "file has invalid suffix '.gitkeep' (.yaml,.yml,.json accepted), skipping".
+    tmpfs:
+      - /etc/grafana/provisioning/plugins
+      - /etc/grafana/provisioning/alerting
     depends_on:
       prometheus:
         condition: service_healthy

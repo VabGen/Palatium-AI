@@ -35,9 +35,9 @@ venv/
 # un-ignored, and a plain `git add .` would stage live credentials. Root-level patterns
 # instead of editing the vendored .gitignore (017: exclude the path in our config, do not
 # edit someone else's file). `*.example` templates stay tracked.
-**/.env
-**/.env.local
-**/.env.*.local
+#**/.env
+#**/.env.local
+#**/.env.*.local
 !**/.env.example
 !**/.env.*.example
 

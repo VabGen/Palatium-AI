@@ -24,10 +24,7 @@ from palatium_ai.domain.policies.grounding import GroundingPolicy
 if TYPE_CHECKING:
     import pytest
 
-SCREENSHOT_ASK = (
-    "Сравни подписку на облачный сервис и покупку коробочного ПО. "
-    "Проанализируй ситуацию: продажи упали на 15%."
-)
+SCREENSHOT_ASK = "Сравни подписку на облачный сервис и покупку коробочного ПО. Проанализируй ситуацию: продажи упали на 15%."
 
 
 def test_screenshot_ask_is_optional_empty_degrade() -> None:

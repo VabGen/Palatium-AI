@@ -46,7 +46,4 @@ def redact_observability_strings(
     event_dict: EventDict,
 ) -> EventDict:
     """PII/token redact on every string value after enrichment, before renderer."""
-    return {
-        k: redact(v) if isinstance(v, str) else v
-        for k, v in event_dict.items()
-    }
+    return {k: redact(v) if isinstance(v, str) else v for k, v in event_dict.items()}

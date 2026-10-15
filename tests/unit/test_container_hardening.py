@@ -29,6 +29,8 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
+OBSERVABILITY_COMPOSE = REPO_ROOT / "deploy" / "observability" / "compose.observability.yml"
+LITELLM_CONFIG = REPO_ROOT / "deploy" / "litellm" / "config.yaml"
 WATCHDOG_SCRIPT = REPO_ROOT / "deploy" / "clamav" / "clamd-watchdog.sh"
 
 # Path *inside* the container; the compose entrypoint and the volume target must
@@ -91,6 +93,30 @@ def _service(name: str) -> dict[str, Any]:
     service = services[name]
     assert isinstance(service, dict), f"service {name!r} must be a mapping"
     return service
+
+
+def _observability_service(name: str) -> dict[str, Any]:
+    """A service from the opt-in overlay, which is a separate compose file.
+
+    Its wiring is invisible to ``_service()``, so the Grafana provisioning contract
+    below is asserted against this file rather than folded into the base compose.
+    """
+    loaded = yaml.safe_load(OBSERVABILITY_COMPOSE.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict), "compose.observability.yml must parse to a mapping"
+    services: dict[str, Any] = loaded.get("services", {})
+    assert name in services, f"service {name!r} missing from compose.observability.yml"
+    service = services[name]
+    assert isinstance(service, dict), f"service {name!r} must be a mapping"
+    return service
+
+
+def _postgres_setting(key: str) -> str:
+    """Value of a ``-c key=value`` flag in the postgres command."""
+    command = [str(part) for part in _service("postgres").get("command", [])]
+    prefix = f"{key}="
+    found = [part for part in command if part.startswith(prefix)]
+    assert found, f"the postgres command does not set {key}; the image default applies"
+    return found[0].removeprefix(prefix)
 
 
 def _memory_bytes(value: object) -> int:
@@ -298,4 +324,132 @@ def test_postgres_image_pin_and_volume_target_agree_on_the_major() -> None:
     assert target == expected, (
         f"image {tag} keeps PGDATA under {expected}, but the volume is mounted at {target}: "
         "the cluster would land in an anonymous volume and the named one would stay empty"
+    )
+
+
+def test_postgres_checkpoints_are_tuned_for_slow_host_fsync() -> None:
+    """Stock checkpoint settings turn every five minutes into a 20-46 s stall on this host.
+
+    The staging logs showed ``checkpoint complete`` spending 20-46 s in ``write=`` while
+    flushing only 200-460 buffers, so the wall clock is Docker Desktop's virtualised-volume
+    fsync latency, not the volume of data written. With the default 5-minute interval and a
+    1 GB ``max_wal_size``, even a nearly empty WAL still triggers a checkpoint, and each one
+    parks the disk for tens of seconds. Fewer, longer, spread-out checkpoints remove the
+    periodic stalls. ``synchronous_commit`` and ``full_page_writes`` are deliberately left
+    at their defaults, so nothing here trades durability for latency (020).
+    """
+    timeout = _postgres_setting("checkpoint_timeout")
+    assert timeout.endswith("min"), f"checkpoint_timeout must be explicit, got {timeout!r}"
+    assert int(timeout.removesuffix("min")) > 5, (
+        f"checkpoint_timeout {timeout} is still the stock 5-minute interval — the exact stall this tuning removes"
+    )
+
+    completion = float(_postgres_setting("checkpoint_completion_target"))
+    assert completion >= 0.9, f"completion target {completion} does not spread the flush across the whole interval"
+
+    max_wal = _memory_bytes(_postgres_setting("max_wal_size"))
+    assert max_wal >= 1024 * _MIB, (
+        f"max_wal_size {_postgres_setting('max_wal_size')} still forces checkpoints on a nearly empty WAL"
+    )
+
+    assert _memory_bytes(_postgres_setting("shared_buffers")) >= 256 * _MIB, (
+        "shared_buffers must be sized against this container's mem_limit, not left at the 128 MiB default"
+    )
+
+
+def test_neo4j_does_not_trust_x_forward_headers() -> None:
+    """Neo4j processes ``X-Forwarded-*`` by default, and with no trusted proxies configured
+    it trusts them from *any* source and *any* hostname — the two ``SECURITY WARNING`` lines
+    it prints at startup. Nothing fronts Neo4j in this stack (both published ports are
+    loopback-only, in-network callers dial ``bolt://neo4j:7687``, and X-Forward headers are an
+    HTTP concern rather than a Bolt one), so the fail-closed move is to stop processing them
+    instead of enumerating proxies that do not exist (020). Note the key's ``x__forward``: the
+    image encodes a literal underscore as ``__`` (cf. ``...heap_initial__size`` →
+    ``server.memory.heap.initial_size``), and the setting name really is ``server.http.x_forward``.
+    """
+    environment = _service("neo4j")["environment"]
+
+    assert environment.get("NEO4J_server_http_x__forward_enabled") == "false", (
+        "X-Forward processing must be off while no reverse proxy fronts Neo4j — otherwise the "
+        "startup SECURITY WARNINGs stay, and removing this one line silently brings them back"
+    )
+
+
+def test_litellm_reaches_the_coordination_redis_by_service_name() -> None:
+    """``env_file: env/.env`` carries ``REDIS_HOST=localhost`` — the Poetry host profile.
+
+    Interpolating it into this container points LiteLLM's coordination Redis (virtual-key
+    auth cache, spend cache, budget-job locks) at *itself*, so every cache call fails. Inside
+    the compose network only the service name resolves, and ``litellm_settings.cache_params``
+    already says ``host: redis`` — the two must not disagree (020).
+    """
+    environment = _service("litellm")["environment"]
+
+    assert str(environment["REDIS_HOST"]) == "redis", f"LiteLLM must reach Redis as 'redis', got {environment['REDIS_HOST']!r}"
+    assert int(environment["REDIS_PORT"]) == 6379
+
+
+def test_litellm_declares_auth_cache_and_proxy_topology() -> None:
+    """Two runtime warnings that are pure configuration and invisible until the gateway boots.
+
+    Without ``enable_redis_auth_cache`` each worker keeps its own in-memory
+    ``user_api_key_cache`` and re-validates every virtual key against Postgres on its own.
+    Leaving ``trusted_proxy_ranges`` unset is *not* the same as setting it empty: unset keeps
+    the direct peer untrusted and drops the per-source Admin UI login throttle, while an empty
+    list declares "clients connect directly" — which is this topology (nothing fronts the
+    gateway; the UI is published on loopback only).
+    """
+    loaded = yaml.safe_load(LITELLM_CONFIG.read_text(encoding="utf-8"))
+
+    assert loaded["litellm_settings"].get("enable_redis_auth_cache") is True, (
+        "without enable_redis_auth_cache the virtual-key cache stays per-worker and re-reads keys from Postgres"
+    )
+    assert loaded["general_settings"].get("trusted_proxy_ranges") == [], (
+        "declaring an empty trusted_proxy_ranges (rather than leaving it unset) is what keeps the "
+        "per-source login throttle armed while no proxy fronts the gateway"
+    )
+
+
+def test_grafana_provisioning_dirs_exist_without_placeholder_files() -> None:
+    """Grafana opens *every* subdirectory of its provisioning path and logs an error per missing one.
+
+    ``/etc/grafana/provisioning/{plugins,alerting}`` have nothing to declare here: the shipped
+    dashboards use core panels only, and alerting rules live in ``prometheus/alerts/`` and route
+    through Alertmanager. A ``.gitkeep`` is not a workaround — the provisioning reader globs the
+    directory and logs "file has invalid suffix '.gitkeep' (.yaml,.yml,.json accepted), skipping".
+    An empty tmpfs creates the directory with no file to trip over.
+    """
+    grafana = _observability_service("grafana")
+    tmpfs = [str(entry) for entry in grafana.get("tmpfs", [])]
+
+    for directory in ("/etc/grafana/provisioning/plugins", "/etc/grafana/provisioning/alerting"):
+        assert directory in tmpfs, f"{directory} must exist in the container, or Grafana logs 'no such file or directory'"
+
+    provisioning = REPO_ROOT / "deploy" / "observability" / "grafana" / "provisioning"
+    placeholders = sorted(path.name for path in provisioning.rglob("*") if path.is_file() and not path.suffix)
+    assert not placeholders, (
+        f"extensionless placeholder files {placeholders} under provisioning/ are read by Grafana and logged as "
+        "'file has invalid suffix ... skipping' — create the directory with a tmpfs mount instead"
+    )
+
+
+def test_grafana_makes_no_outbound_grafana_com_calls() -> None:
+    """This network answers grafana.com with HTTP 451, so every outbound call must be off.
+
+    Left on, each boot installs/refreshes the image's preinstalled plugins and logs a 451 per
+    attempt. ``check_for_plugin_updates`` is scoped to update *checks* and does not cover the
+    dynamic signature-key downloader, so ``public_key_retrieval_disabled`` is the setting that
+    actually silences the periodic ``plugin.signature.key_retriever`` error; verification then
+    falls back to the key bundled in the image.
+    """
+    environment = _observability_service("grafana")["environment"]
+
+    assert environment["GF_ANALYTICS_REPORTING_ENABLED"] == "false"
+    assert environment["GF_ANALYTICS_CHECK_FOR_UPDATES"] == "false"
+    assert environment["GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES"] == "false"
+    assert environment["GF_PLUGINS_PREINSTALL_DISABLED"] == "true", (
+        "without it the background installer still tries lokiexplore/pyroscope against grafana.com and logs error=451"
+    )
+    assert environment["GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED"] == "true", (
+        "check_for_plugin_updates does not stop the signature key downloader; this setting does"
     )

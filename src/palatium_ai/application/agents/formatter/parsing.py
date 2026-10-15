@@ -204,14 +204,13 @@ def _preserve_worker_shape(source: str) -> bool:
     if para_count == 1:
         return True
     # Long multi-paragraph or already-structured deliverable: keep shape, skip icon sections.
-    return len(source) >= SUBSTANTIVE_USER_PAYLOAD_CHARS and (
-        para_count is None or para_count >= 2
-    )
+    return len(source) >= SUBSTANTIVE_USER_PAYLOAD_CHARS and (para_count is None or para_count >= 2)
 
 
 def _needs_social_synthesis(*, task_kind: str, source: str) -> bool:
     """Live social has no worker draft — Formatter must compose the reply, not echo."""
     return task_kind == "social_conversation" and not source.strip()
+
 
 def _formatter_dialog_block(
     window: DialogTurnWindow | None,

@@ -28,10 +28,7 @@ def test_formatter_max_tokens_floor_and_cap() -> None:
     assert formatter_max_tokens("hi") == FORMATTER_MIN_COMPLETION_TOKENS
     assert FORMATTER_MIN_COMPLETION_TOKENS == 1_024
     assert formatter_max_tokens("x" * 40_000) == FORMATTER_MAX_COMPLETION_TOKENS
-    assert (
-        formatter_max_tokens("x" * 40_000, style_hint="brand_sections_icons")
-        == FORMATTER_BRAND_MAX_COMPLETION_TOKENS
-    )
+    assert formatter_max_tokens("x" * 40_000, style_hint="brand_sections_icons") == FORMATTER_BRAND_MAX_COMPLETION_TOKENS
 
 
 def test_formatter_max_tokens_scales_with_payload_not_short_ask() -> None:

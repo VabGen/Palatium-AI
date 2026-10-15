@@ -53,8 +53,7 @@ def _assert_pyjwt_not_shadowed() -> None:
     names = {dist.metadata["Name"].lower() for dist in metadata.distributions()}
     if "jwt" in names and "pyjwt" in names:
         raise SystemExit(
-            "Conflicting package 'jwt' is installed alongside PyJWT. "
-            "Remove it (`uv remove jwt` then `uv sync`). Use PyJWT only."
+            "Conflicting package 'jwt' is installed alongside PyJWT. Remove it (`uv remove jwt` then `uv sync`). Use PyJWT only."
         )
     from jwt import PyJWKClient  # noqa: F401
 

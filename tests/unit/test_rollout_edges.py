@@ -71,9 +71,7 @@ def test_warning_on_enabled_true_pct_zero(monkeypatch: pytest.MonkeyPatch) -> No
     ):
         warn_if_enabled_but_zero_rollout(get_settings())
     mock_log.warning.assert_called_once()
-    assert mock_log.warning.call_args.args[0] == (
-        "adaptive_grounding.enabled_but_zero_rollout"
-    )
+    assert mock_log.warning.call_args.args[0] == ("adaptive_grounding.enabled_but_zero_rollout")
 
 
 def test_no_warning_when_pct_positive(monkeypatch: pytest.MonkeyPatch) -> None:

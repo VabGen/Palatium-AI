@@ -219,10 +219,7 @@ def _build_service(
             supervisor_agent=make_supervisor_agent(harness),
             weaving_agent=make_weaving_agent(harness=harness),
             researcher_agent=make_researcher_agent(
-                FakeLLMPort(
-                    '{"summary": "Сводка по вложению.", "confidence": 0.9, '
-                    '"sources_used": ["llm_internal_reasoning"]}'
-                ),
+                FakeLLMPort('{"summary": "Сводка по вложению.", "confidence": 0.9, "sources_used": ["llm_internal_reasoning"]}'),
                 harness=harness,
             ),
             coder_agent=make_coder_agent(harness=harness),
@@ -308,9 +305,7 @@ async def test_p0_polluted_scratchpad_does_not_retarget_t1_fence_to_a2() -> None
         namespace=user_namespace(_USER),
         key="foreign-file",
         value={
-            "text": (
-                f"{_USER_NS_MARKER} past session asked '{_FOLLOW_UP}' about {_A2_NAME} id={a2_id}"
-            ),
+            "text": (f"{_USER_NS_MARKER} past session asked '{_FOLLOW_UP}' about {_A2_NAME} id={a2_id}"),
             "kind": "fact",
             "confidence": 0.95,
         },
@@ -369,10 +364,6 @@ async def test_p0_polluted_scratchpad_does_not_retarget_t1_fence_to_a2() -> None
     assert str(a2_id) not in ctx, f"H4 attachment path: A2 uuid LEAKED; untrusted_context={ctx!r}"
     assert refs == (_A1_NAME,), f"attachment_refs={refs!r}"
 
-    assert _T2_SCRATCH_MARKER not in hints, (
-        f"H4 scratchpad cross-thread: T2 pad loaded on T1; memory_hits={hints!r}"
-    )
-    assert _USER_NS_MARKER not in hints, (
-        f"H4 user-ns bleed into T1 memory_hits; memory_hits={hints!r}"
-    )
+    assert _T2_SCRATCH_MARKER not in hints, f"H4 scratchpad cross-thread: T2 pad loaded on T1; memory_hits={hints!r}"
+    assert _USER_NS_MARKER not in hints, f"H4 user-ns bleed into T1 memory_hits; memory_hits={hints!r}"
     assert _A2_NAME not in hints, f"H4 A2 filename in T1 memory_hits; memory_hits={hints!r}"

@@ -144,9 +144,7 @@ def test_no_bare_trailing_or_true_can_hide_a_failed_install() -> None:
             # A grouped `{ ... || true; }` segment ends with `; }` and is safe.
             if not segment.rstrip().endswith("; }")
         ]
-        assert len(ungrouped) <= 1, (
-            f"a `|| true` is still chained onto the install RUN and can swallow a failed `uv sync`: {run}"
-        )
+        assert len(ungrouped) <= 1, f"a `|| true` is still chained onto the install RUN and can swallow a failed `uv sync`: {run}"
 
 
 @pytest.mark.parametrize("stage", ("builder", "runtime"))

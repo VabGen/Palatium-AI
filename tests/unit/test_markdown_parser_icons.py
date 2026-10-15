@@ -94,7 +94,7 @@ def test_x_attr_normalized_on_heading() -> None:
 
 
 def test_mid_text_icon_stripped_not_left_as_raw() -> None:
-    md = "See the <icon name=\"check\"/> mark.\n"
+    md = 'See the <icon name="check"/> mark.\n'
     doc = markdown_to_content_document(md, _task())
     paragraph = next(b for b in doc.blocks if isinstance(b, ParagraphBlock))
     assert paragraph.icon is None

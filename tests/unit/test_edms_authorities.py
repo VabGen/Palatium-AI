@@ -70,8 +70,7 @@ def test_artifact_is_hand_edit_proof() -> None:
     """Сгенерированный файл обязан совпадать с рендером из своего же содержимого."""
     mod = _load_generator()
     assert _ARTIFACT_PATH.read_text(encoding="utf-8") == mod.render(EDMS_AUTHORITIES), (
-        "edms_authorities.py отредактирован вручную или устарел — "
-        "перегенерируй: uv run python scripts/gen_edms_authorities.py"
+        "edms_authorities.py отредактирован вручную или устарел — перегенерируй: uv run python scripts/gen_edms_authorities.py"
     )
 
 

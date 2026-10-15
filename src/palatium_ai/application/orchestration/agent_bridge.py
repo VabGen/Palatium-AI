@@ -434,9 +434,7 @@ def researcher_output_to_task_result(
     from palatium_ai.domain.agents.researcher import GROUNDING_REQUIRED_EMPTY, MCP_EMPTY_RESULT
 
     parsed: ResearcherOutput | None = None
-    if isinstance(agent_output.output, ResearcherOutput) and (
-        agent_output.output.summary != FAILURE_PLACEHOLDER_SUMMARY
-    ):
+    if isinstance(agent_output.output, ResearcherOutput) and (agent_output.output.summary != FAILURE_PLACEHOLDER_SUMMARY):
         parsed = agent_output.output
 
     grounding_satisfied = bool(parsed.grounding_satisfied) if parsed is not None else False
@@ -658,13 +656,9 @@ def merge_parallel_worker_results(
     confidence = min(research.confidence, analyst.confidence)
     errors: list[str] = [e for e in (research.error, analyst.error) if isinstance(e, str) and e]
     cannot_answer = research.cannot_answer_without_source or analyst.cannot_answer_without_source
-    grounding_degraded = (
-        research.grounding_degraded or analyst.grounding_degraded or cannot_answer
-    )
+    grounding_degraded = research.grounding_degraded or analyst.grounding_degraded or cannot_answer
     grounding_satisfied = (
-        (research.grounding_satisfied or analyst.grounding_satisfied)
-        and not grounding_degraded
-        and not cannot_answer
+        (research.grounding_satisfied or analyst.grounding_satisfied) and not grounding_degraded and not cannot_answer
     )
     return ResearcherTaskResult(
         task_id=research.task_id,
