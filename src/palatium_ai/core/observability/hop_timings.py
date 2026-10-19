@@ -11,6 +11,17 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from typing import Protocol
+
+
+class BudgetScaler(Protocol):
+    """Port for scaling the turn hop budget; implemented by ``HopBudgetPolicy`` (domain).
+
+    ``core`` must not import ``domain`` (rule 000), so the scaling policy is injected by
+    the caller (``application/orchestration``) instead of being imported here.
+    """
+
+    def __call__(self, *, base_ms: int, strategy: str | None) -> int: ...
 
 
 @dataclass(slots=True)
@@ -31,12 +42,10 @@ class HopTimingCollector:
     budget_ms: int = 0
     base_budget_ms: int = 0
 
-    def apply_strategy_budget(self, strategy: str | None) -> None:
-        """Recompute ``budget_ms`` from base × strategy scale (HopBudgetPolicy)."""
-        from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
-
+    def apply_strategy_budget(self, strategy: str | None, *, scaler: BudgetScaler) -> None:
+        """Recompute ``budget_ms`` as base × strategy scale, using the injected policy."""
         base = self.base_budget_ms if self.base_budget_ms > 0 else self.budget_ms
-        self.budget_ms = HopBudgetPolicy.effective_budget_ms(base_ms=base, strategy=strategy)
+        self.budget_ms = scaler(base_ms=base, strategy=strategy)
 
     def record(
         self,

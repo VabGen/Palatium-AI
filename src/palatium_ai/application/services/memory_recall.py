@@ -229,7 +229,7 @@ async def _select_graph_hits(
             as_of=as_of,
             thread_id=thread_id,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # graph select failure degrades to medium-only recall (060)
         logger.warning("memory_recall.graph_select_failed", error=str(exc))
         return []
     seen = {h.text.strip().lower() for h in pinned + durable if h.text.strip()}
@@ -346,7 +346,7 @@ async def _maybe_bump_access(
         return
     try:
         await bump(namespace=namespace, key=entry_key)  # type: ignore[misc]  # bump — inspect-вызов, точный тип недоступен (017)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # bump_access is telemetry; recall itself must succeed (060)
         logger.warning(
             "memory_recall.bump_access_failed",
             entry_key=entry_key,

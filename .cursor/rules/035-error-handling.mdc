@@ -53,11 +53,13 @@ Zero Trust / RBAC / secret scanner — **020**. Resilience (retry/circuit breake
 
 ## Гейты
 
-- ruff `BLE` (blind except) — включён. `domain/`, `core/`, `presentation/` проверяются
-  уже сейчас; `application/` и `infrastructure/` пока закрыты `per-file-ignores`
-  (42 граничных `except Exception`) с явным TODO-долгом на сужение по сайтам
-  (`pyproject.toml`, backlog §5 плана `cursor-rules-hardening`) — исключение без TODO
-  запрещено (015, 017).
+- ruff `BLE` (blind except) — включён **на всём репозитории** без `per-file-ignores`:
+  `domain/`, `core/`, `presentation/`, `application/`, `infrastructure/`, `scripts/`,
+  `.cursor/hooks/`. Сужение выполнено 2026-10-16: 44 граничных `except Exception`
+  помечены по сайтам `# noqa: BLE001  # boundary catch: <почему>` (015, 017), снятый
+  blanket-ignore из `pyproject.toml` не возвращается — новый site идёт только с
+  причиной на строке.
+- Каждый такой catch — с логированием/метрикой; «проглотить молча» запрещено.
 - Тест RBAC-отказа: Harness возвращает структурированный отказ, `PermissionError`
   наружу не пробрасывается (075, 070.3).
 - `datetime`-ошибки в TTL/retention — `DTZ` + запрет naive datetime (015, 050).

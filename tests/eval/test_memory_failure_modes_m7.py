@@ -17,7 +17,7 @@ from palatium_ai.domain.memory.eval_metrics import (
     mean_recall_at_k,
     recall_at_k,
 )
-from palatium_ai.domain.memory.namespaces import thread_namespace, user_namespace
+from palatium_ai.domain.memory.namespaces import thread_namespace
 from palatium_ai.infrastructure.graph.in_memory_graph_write_port import InMemoryGraphWritePort
 from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
 from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
@@ -127,8 +127,14 @@ async def test_g1_storage_exhaustion_queue_cap() -> None:
 
 @pytest.mark.asyncio()
 async def test_m7_recall_at_k_above_slo() -> None:
-    """Offline Recall@4 on a fixed fixture must stay ≥ 0.85 (SLO §15 / M7)."""
+    """Offline Recall@4 on a fixed fixture must stay ≥ 0.85 (SLO §15 / M7).
+
+    Fixture facts live in the thread namespace: hot-path Select admits only
+    ``preference`` from ``user_namespace`` (060 / P0-B), so a fact-scoped eval over
+    user-level entries would measure the kind gate, not ranking.
+    """
     port = InMemoryMemoryPort()
+    namespace = thread_namespace("eval-rk")
     # (query_token, entry_key, text) — unique tokens so noise cannot dominate ranking.
     cases: list[tuple[str, str, str]] = [
         ("duckdbnx", "duck-dinner", "User prefers duckdbnx for dinner"),
@@ -142,7 +148,7 @@ async def test_m7_recall_at_k_above_slo() -> None:
     ]
     for idx in range(12):
         await port.put(
-            namespace=user_namespace("eval-rk"),
+            namespace=namespace,
             key=f"noise-{idx}",
             value={
                 "text": f"Unrelated filler note number {idx} about weather",
@@ -153,7 +159,7 @@ async def test_m7_recall_at_k_above_slo() -> None:
         )
     for _token, key, text in cases:
         await port.put(
-            namespace=user_namespace("eval-rk"),
+            namespace=namespace,
             key=key,
             value={"text": text, "kind": "fact", "confidence": 0.95, "importance": 0.95},
         )
@@ -163,8 +169,7 @@ async def test_m7_recall_at_k_above_slo() -> None:
     for token, gold_key, gold_text in cases:
         bundle = await recall_for_thread(
             port,
-            thread_id=f"rk-{gold_key}",
-            user_id="eval-rk",
+            thread_id="eval-rk",
             query=token,
             limit=k,
             min_confidence=0.7,
@@ -212,14 +217,13 @@ async def test_g7_recall_hints_are_faithful_to_corpus() -> None:
     }
     for key, text in corpus.items():
         await port.put(
-            namespace=user_namespace("g7-faith"),
+            namespace=thread_namespace("g7-faith-t"),
             key=key,
             value={"text": text, "kind": "fact", "confidence": 0.95, "importance": 0.9},
         )
     bundle = await recall_for_thread(
         port,
         thread_id="g7-faith-t",
-        user_id="g7-faith",
         query="tables timezone",
         limit=4,
         min_confidence=0.7,

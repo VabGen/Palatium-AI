@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from palatium_ai.application.services.attachment_reference_resolver import AttachmentReferenceResolver
 from palatium_ai.application.services.attachment_service import AttachmentService
 from palatium_ai.application.services.document_export_service import DocumentExportService
 from palatium_ai.application.services.feedback_service import FeedbackService
@@ -376,6 +377,7 @@ async def startup(settings: Settings) -> AppResources:
     attachment_ports = await build_attachment_ports(settings, session_factory)
     attachment_service: AttachmentService | None = None
     attachment_read_service = None
+    file_reference_resolver: AttachmentReferenceResolver | None = None
     if attachment_ports is not None:
         attachment_service = build_attachment_service(
             settings,
@@ -386,6 +388,9 @@ async def startup(settings: Settings) -> AppResources:
             mcp_tool_call_repository=mcp_tool_call_repository,
         )
         attachment_read_service = build_attachment_read_service(settings, attachment_ports)
+        # Same repository the read path uses: the registry of what this thread holds
+        # is single-sourced, not a second store (050).
+        file_reference_resolver = AttachmentReferenceResolver(repository=attachment_ports.repository)
     intent_service, memory_extract, capability_index, document_ingest_service = build_intent_service(
         settings,
         mcp_registry,
@@ -400,6 +405,7 @@ async def startup(settings: Settings) -> AppResources:
         checkpointer=checkpointer_handle.saver,
         graph_write=graph_ports.write,
         attachment_service=attachment_service,
+        file_reference_resolver=file_reference_resolver,
     )
     if attachment_service is not None and document_ingest_service is not None:
         attachment_service.bind_document_ingest(document_ingest_service)
@@ -526,7 +532,7 @@ async def _ensure_neo4j_memory_schema(graph_ports: GraphPorts) -> None:
         from palatium_ai.infrastructure.memory.neo4j_schema import ensure_memory_schema
 
         await ensure_memory_schema(driver)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # schema bootstrap is best-effort: API boots without indexes (082)
         # App stays up; queries work without indexes, just slower (Phase 4 DoD).
         logger.exception("neo4j.schema_bootstrap_failed", error=str(exc))
 
@@ -546,7 +552,7 @@ async def _hitl_sweep_loop(hitl_service: HitlService) -> None:
                 )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # sweep loop must survive a failed cycle (060)
             logger.error("HITL sweep failed", error=str(exc))
 
 

@@ -619,7 +619,7 @@ class AttachmentService:
                 continue
             try:
                 await self._purge(attachment, user_id=user_id)
-            except Exception:
+            except Exception:  # noqa: BLE001  # one failed purge is counted, the sweep continues (020)
                 failed += 1
                 agent_metrics.record_error("attachments", "retention_sweep_failed")
                 logger.warning("attachment retention purge failed", attachment_id=str(attachment.id))
@@ -663,7 +663,7 @@ class AttachmentService:
         """
         try:
             await self.sweep_expired(user_id=user_id)
-        except Exception:
+        except Exception:  # noqa: BLE001  # degraded store must not break the read path (020)
             agent_metrics.record_error("attachments", "retention_sweep_read_path_failed")
             logger.warning("attachment retention sweep failed on the read path")
 
@@ -1175,7 +1175,7 @@ class AttachmentService:
         """Best-effort state transition; the write already happened, so log on drift."""
         try:
             attachment = await self._repository.get(payload.attachment_id, user_id=payload.user_id)
-        except Exception:
+        except Exception:  # noqa: BLE001  # state read is best-effort; the write already happened
             logger.warning("attachment index state read failed", attachment_id=str(payload.attachment_id))
             return
         if attachment is None:

@@ -36,12 +36,12 @@ ARG WITH_ATTACHMENTS=0
 # ---------------------------------------------------------------------------
 # Pinned by digest, not by the mutable `3.14-slim` tag (025): the tag is a moving target,
 # so the code we build on could change without a pull request in this repo. The digest
-# below is the multi-arch index of `python:3.14-slim` = 3.14.7-slim-trixie (2026-09-19);
+# below is the multi-arch index of `python:3.14-slim` = 3.14.8-slim-trixie (2026-10-06);
 # the tag stays on the line as the human-readable hint. Bumping PYTHON_VERSION without
 # refreshing the digest fails the build on purpose (`manifest unknown`) — a silent
 # base-image swap is the outcome this pin exists to prevent. Drift is gated by
 # `scripts/ci_security.py` (base image pin check).
-FROM python:${PYTHON_VERSION}-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS base
+FROM python:${PYTHON_VERSION}-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS base
 
 ARG PYTHON_VERSION
 ENV PYTHONDONTWRITEBYTECODE=1 \

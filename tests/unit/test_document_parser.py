@@ -96,6 +96,38 @@ async def test_plain_text_parser_never_raises_on_undecodable_bytes() -> None:
     assert parsed.page_count == 1
 
 
+async def test_plain_text_parser_flags_lossy_decode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Silent ``errors="replace"`` must be visible: a fallback prints U+FFFD in the answer."""
+    from palatium_ai.infrastructure.parsing import document_parser
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        document_parser.agent_metrics,
+        "record_utf8_decode_failure",
+        lambda *, kind: calls.append(kind),
+    )
+    parser = PlainTextParser(media_types=("text/plain",), max_chars=1000)
+    # 0x98 is undefined in cp1251 and an invalid UTF-8 start byte, so every
+    # encoding in the chain fails and the lossy fallback runs.
+    parsed = await parser.parse(b"\x98\x98test", mime_type="text/plain", filename="a.txt")
+    assert "\ufffd" in parsed.pages[0].text
+    assert calls == ["text"]
+
+
+async def test_plain_text_parser_does_not_flag_a_clean_decode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from palatium_ai.infrastructure.parsing import document_parser
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        document_parser.agent_metrics,
+        "record_utf8_decode_failure",
+        lambda *, kind: calls.append(kind),
+    )
+    parser = PlainTextParser(media_types=("text/plain",), max_chars=1000)
+    await parser.parse("отчёт".encode("cp1251"), mime_type="text/plain", filename="a.txt")
+    assert calls == []
+
+
 async def test_plain_text_parser_records_truncation_instead_of_dropping_silently() -> None:
     parser = PlainTextParser(media_types=("text/plain",), max_chars=10)
     parsed = await parser.parse(b"x" * 50, mime_type="text/plain", filename="a.txt")

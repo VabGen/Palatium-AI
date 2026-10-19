@@ -12,7 +12,7 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FORMATTER_OUTPUT_INVALID, FormatterInput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.content import ContentDocument
-from palatium_ai.domain.content.content_document import DocumentMeta, ParagraphBlock
+from palatium_ai.domain.content.content_document import DocumentMeta
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 logger = get_logger(__name__)
@@ -54,13 +54,8 @@ def failure_or_fallback(
             output=fallback,
             error_message=None,
         )
-    return AgentOutput(
-        task_id=input.task_id,
-        status="failure",
-        confidence=0.0,
-        output=empty_document(task_input.response_locale),
-        error_message=FORMATTER_OUTPUT_INVALID,
-    )
+    # No deterministic source to render: this stays an honest hard failure.
+    return invalid_output(input=input, task_input=task_input, agent_role=agent_role)
 
 
 def fallback_document(
@@ -81,7 +76,7 @@ def empty_document(response_locale: str) -> ContentDocument:
         schema_version=1,
         locale=locale,
         title=None,
-        blocks=(ParagraphBlock(type="paragraph", text=" "),),
+        blocks=(),
         actions=(),
         meta=DocumentMeta(
             confidence=0.0,

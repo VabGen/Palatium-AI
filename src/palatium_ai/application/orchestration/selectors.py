@@ -14,7 +14,12 @@ from palatium_ai.domain.mcp.models import ToolExecutionPlan
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
 from palatium_ai.domain.memory.tool_output import compress_worker_context
-from palatium_ai.domain.policies import ContinuityPolicy, EffectiveRoutingIntent, budget_untrusted_text
+from palatium_ai.domain.policies import (
+    ContinuityPolicy,
+    EffectiveRoutingIntent,
+    GroundingMode,
+    budget_untrusted_text,
+)
 
 _CONTEXT_PACKET_FACTORY = ContextPacketFactory()
 
@@ -211,7 +216,12 @@ def resolved_candidate_capabilities(state: AgentGraphState) -> tuple[str, ...]:
     return ensure_routing_intent(state).candidate_capabilities
 
 
-def resolved_grounding(state: AgentGraphState):
+def resolved_file_reference(state: AgentGraphState) -> str:
+    """File-reference axis from Continuity (none/thread_file, 055)."""
+    return str(ensure_routing_intent(state).file_reference)
+
+
+def resolved_grounding(state: AgentGraphState) -> GroundingMode:
     """Grounding mode from Continuity (default optional)."""
     from palatium_ai.domain.policies.types import GROUNDING_DEFAULT
 

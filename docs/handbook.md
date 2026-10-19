@@ -164,16 +164,40 @@ uv run alembic upgrade head
 ### 5.2. Старт API
 
 ```bash
-# вариант A
-uv run python -m palatium_ai.main
-
-# вариант B
-uv run uvicorn palatium_ai.main:app --reload --host 127.0.0.1 --port 8000
+uv run python -m palatium_ai        # короткая форма
+uv run python -m palatium_ai.main   # то же самое, явный модуль
 ```
+
+`palatium_ai/main.py:main()` — единственная точка входа, которая настраивает event loop и
+reload-политику; `palatium_ai/__main__.py` — тонкий алиас на неё (своего `uvicorn.run` не
+заводит). Прямой `uvicorn palatium_ai.main:app` эти настройки пропускает: так
+стартует только контейнер на Linux, где asyncio и так даёт `SelectorEventLoop` (§5.2.1).
 
 API: http://127.0.0.1:8000  
 Swagger: http://127.0.0.1:8000/docs  
 Health: http://127.0.0.1:8000/health
+
+### 5.2.1. Event loop и hot-reload
+
+- psycopg async (LangGraph Postgres checkpointer) требует `add_reader` → на Windows нужен
+  `SelectorEventLoop`, а не дефолтный `ProactorEventLoop`. Поэтому `main()` передаёт
+  uvicorn `loop="palatium_ai.infrastructure.memory.checkpointer:create_psycopg_event_loop"`,
+  а bootstrap после старта проверяет фактический loop (`ensure_psycopg_compatible_loop`) и
+  пишет warning, если он несовместим.
+- Строка здесь — контракт uvicorn: `loop` типизирован как `LoopFactoryType | str` и
+  резолвится через `import_from_string`, callable не принимается. Значение не пишется
+  руками, а выводится из самой фабрики (`psycopg_loop_factory_spec()`), поэтому
+  переименование/перенос функции не расходится со ссылкой; перед `uvicorn.run`
+  ссылка проверяется (`resolve_loop_factory`) и при поломке процесс падает с её именем,
+  а не с generic `STARTUP_FAILURE`.
+- На POSIX кастомная фабрика не нужна и не передаётся: uvicorn получает штатный
+  `loop="asyncio"` (там selector-loop по умолчанию). Политики event loop
+  (`set_event_loop_policy`) не используются — deprecated в 3.14, удалены в 3.16.
+- `reload_dirs` = `<repo>/src` (только код приложения). Корень репозитория в watch
+  нельзя: `.venv`/`.tox`/`node_modules` заставляют WatchFiles штормить reload и boot
+  не завершается. Правка `docs/`, `web/`, env-файлов reload не вызывает.
+  `PALATIUM_UVICORN_RELOAD=0` выключает перезагрузчик (`scripts/dev-up.ps1` делает это:
+  на Windows reloader-child с редиректом stdio умирает на `WaitNamedPipe`).
 
 ### 5.3. Логи агентов
 

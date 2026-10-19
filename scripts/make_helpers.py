@@ -176,7 +176,7 @@ def _reachable(url: str, timeout: float = 5.0) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
             return 200 <= int(response.status) < 300
-    except Exception:
+    except Exception:  # noqa: BLE001  # a probe reports an unreachable endpoint, it never raises
         return False
 
 

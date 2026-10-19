@@ -302,7 +302,7 @@ async def forget_memory(
                 user_id=user_id.strip(),
                 entry_key=entry_key.strip(),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # graph expiry is best-effort; the medium forget is recorded (060)
             logger.warning(
                 "forget_memory.graph_expire_failed",
                 entry_key=entry_key.strip()[:128],

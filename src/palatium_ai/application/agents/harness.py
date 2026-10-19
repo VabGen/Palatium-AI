@@ -368,7 +368,7 @@ class Harness:
                 # All provider breakers are open: every retry would just re-check the
                 # breaker and sleep, so fail immediately with the platform error type.
                 raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # retry loop captures any provider failure before raising (030)
                 last_error = exc
                 if attempt >= config.max_retries - 1:
                     break

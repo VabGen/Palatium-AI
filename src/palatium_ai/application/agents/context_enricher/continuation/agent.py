@@ -82,6 +82,7 @@ class ContextualizerAgent(BaseAgent):
             "task_kind",
             "requires_mcp",
             "candidate_capabilities_json",
+            "has_attachment_context",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -96,6 +97,9 @@ class ContextualizerAgent(BaseAgent):
         task_kind_raw = input.context.get("task_kind") or ""
         task_kind: TaskKind | None = task_kind_raw or None  # type: ignore[assignment]  # context собран из Literal-реестра (017)
         requires_mcp = input.context.get("requires_mcp", "false").lower() == "true"
+        # Without this flag the model sees an empty dialog and calls a real upload
+        # "missing" (continuation_kind=clarify), which also clears sticky pending (055).
+        has_attachment_context = input.context.get("has_attachment_context", "false").lower() == "true"
         caps_raw = (input.context.get("candidate_capabilities_json") or "").strip()
         candidate_capabilities: tuple[str, ...] = ()
         if caps_raw:
@@ -154,6 +158,7 @@ class ContextualizerAgent(BaseAgent):
             "user_text": input.instruction,
             "dialog_history": dialog_history,
             "memory_hints": list(clipped_hints),
+            "has_attachment_context": has_attachment_context,
         }
         _maybe_log_debug_payload(
             task_id=str(input.task_id),

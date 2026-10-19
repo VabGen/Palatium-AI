@@ -39,13 +39,13 @@ async def ensure_memory_schema(driver: AsyncDriver) -> int:
             backfilled += n
             if n < _BATCH:
                 break
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # backfill is best-effort; index creation still runs (060)
         logger.warning("neo4j.schema_bootstrap.backfill_failed", error=str(e))
 
     for statement in _INDEX_STATEMENTS:
         try:
             await driver.execute_query(statement)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # per-statement index creation is best-effort (060)
             logger.warning(
                 "neo4j.schema_bootstrap.index_failed",
                 statement=statement[:80],

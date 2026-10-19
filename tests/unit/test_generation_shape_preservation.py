@@ -190,10 +190,7 @@ _LONG_ARTICLE = (
 
 
 def test_style_hint_verbatim_extraction_is_plain_text() -> None:
-    assert (
-        resolve_style_hint(_formatter_input(worker=_LONG_ARTICLE, caps=("verbatim_extraction",)))
-        == "plain_text"
-    )
+    assert resolve_style_hint(_formatter_input(worker=_LONG_ARTICLE, caps=("verbatim_extraction",))) == "plain_text"
 
 
 def test_verbatim_passthrough_ignores_length_structure_locale() -> None:

@@ -13,6 +13,9 @@ from .contracts import TaskResult
 
 # Stable failure when planned MCP args cannot be built/validated.
 RESEARCHER_TOOL_ARGS_INVALID = "researcher_tool_args_invalid"
+# Thread file re-read: the reference could not be resolved to exactly one owner file.
+# Retrying cannot change the thread's contents — the graph must not revise on this.
+ATTACHMENT_REFERENCE_UNRESOLVED = "attachment_reference_unresolved"
 # Machine codes. Formatter maps them; they are not user-facing prose.
 MCP_EMPTY_RESULT = "mcp_empty_result"
 MCP_TOOL_ERROR = "mcp_tool_error"

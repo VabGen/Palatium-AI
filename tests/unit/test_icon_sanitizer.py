@@ -111,3 +111,23 @@ def test_split_stream_accepts_x_attr_in_buffer() -> None:
     assert '<icon name="document"/>' in buffered
     assert '<icon name="document"/>' in preview
     assert "Report" in preview
+
+
+def test_hitl_tag_held_across_chunks() -> None:
+    """A ``<hitl-action ... />`` split across chunks must not leak into preview."""
+    tail = ""
+    preview1, buffer1, tail = split_stream_chunk('<hitl-action kind="confirm" label="Send to EDM', tail)
+    assert "<hitl-action" not in preview1
+    assert "EDM" in tail
+
+    _preview2, buffer2, tail = split_stream_chunk('S" />', tail)
+    combined = buffer1 + buffer2
+    assert '<hitl-action kind="confirm" label="Send to EDMS" />' in combined
+    assert tail == ""
+
+
+def test_complete_hitl_tag_not_held() -> None:
+    _preview, buffered, tail = split_stream_chunk('<hitl-choice options=\'["A","B"]\' /> done', "")
+    assert tail == ""
+    assert "<hitl-choice" in buffered
+    assert "done" in buffered

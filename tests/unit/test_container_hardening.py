@@ -372,9 +372,14 @@ def test_neo4j_does_not_trust_x_forward_headers() -> None:
     """
     environment = _service("neo4j")["environment"]
 
-    assert environment.get("NEO4J_server_http_x__forward_enabled") == "false", (
-        "X-Forward processing must be off while no reverse proxy fronts Neo4j — otherwise the "
-        "startup SECURITY WARNINGs stay, and removing this one line silently brings them back"
+    enabled = str(environment.get("NEO4J_server_http_x__forward_enabled", ""))
+    # Local compose stays fail-closed; staging/prod behind a proxy opts in via
+    # NEO4J_X_FORWARD_ENABLED (documented in the compose comment). The default MUST be
+    # off — an empty or unknown value fails rather than silently permissive (020).
+    assert enabled in {"false", "${NEO4J_X_FORWARD_ENABLED:-false}"}, (
+        "X-Forward processing must default to off while no reverse proxy fronts Neo4j — "
+        "otherwise the startup SECURITY WARNINGs stay, and removing this one line silently "
+        "brings them back"
     )
 
 

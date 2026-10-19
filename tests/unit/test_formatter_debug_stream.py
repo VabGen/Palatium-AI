@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from palatium_ai.application.agents.formatter.agent import FormatterAgent
 from palatium_ai.application.agents.formatter.config import FORMATTER_CONFIG
+from palatium_ai.application.agents.formatter.llm_stream import call_formatter_llm
 from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, turn_sse_bridge
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
 
@@ -16,18 +16,23 @@ def _completion(content: str = "Hello") -> LLMCompletion:
     return LLMCompletion(content=content, model="test")
 
 
-def _agent() -> tuple[FormatterAgent, AsyncMock]:
+def _harness() -> AsyncMock:
     harness = AsyncMock()
     harness.call_llm = AsyncMock(return_value=_completion())
     harness.call_llm_stream = AsyncMock(return_value=_completion())
-    return FormatterAgent(harness, FORMATTER_CONFIG), harness
+    return harness
 
 
 @pytest.mark.asyncio()
 async def test_formatter_one_shot_text_without_bridge() -> None:
-    agent, harness = _agent()
+    harness = _harness()
     messages = [ChatMessage(role="user", content="hi")]
-    _completion_out, markdown = await agent._call_formatter_llm(messages, max_tokens=32)
+    _completion_out, markdown = await call_formatter_llm(
+        harness=harness,
+        config=FORMATTER_CONFIG,
+        messages=messages,
+        max_tokens=32,
+    )
     assert markdown == "Hello"
     harness.call_llm.assert_awaited_once()
     kwargs = harness.call_llm.await_args.kwargs
@@ -38,7 +43,7 @@ async def test_formatter_one_shot_text_without_bridge() -> None:
 
 @pytest.mark.asyncio()
 async def test_formatter_streams_text_delta_and_dual_answer_delta() -> None:
-    agent, harness = _agent()
+    harness = _harness()
 
     async def _stream(*_args: object, **kwargs: object) -> LLMCompletion:
         on_delta = kwargs["on_delta"]
@@ -51,7 +56,12 @@ async def test_formatter_streams_text_delta_and_dual_answer_delta() -> None:
     bridge = TurnSseBridge()
     messages = [ChatMessage(role="user", content="hi")]
     with turn_sse_bridge(bridge):
-        completion, markdown = await agent._call_formatter_llm(messages, max_tokens=32)
+        completion, markdown = await call_formatter_llm(
+            harness=harness,
+            config=FORMATTER_CONFIG,
+            messages=messages,
+            max_tokens=32,
+        )
     assert markdown == "Hello world"
     assert completion.content == "Hello world"
     harness.call_llm.assert_not_awaited()
@@ -73,7 +83,7 @@ async def test_formatter_streams_text_delta_and_dual_answer_delta() -> None:
 
 @pytest.mark.asyncio()
 async def test_formatter_replace_once_after_worker_draft() -> None:
-    agent, harness = _agent()
+    harness = _harness()
 
     async def _stream(*_args: object, **kwargs: object) -> LLMCompletion:
         on_delta = kwargs["on_delta"]
@@ -86,7 +96,12 @@ async def test_formatter_replace_once_after_worker_draft() -> None:
     bridge.has_emitted_answer = True
     messages = [ChatMessage(role="user", content="hi")]
     with turn_sse_bridge(bridge):
-        await agent._call_formatter_llm(messages, max_tokens=32)
+        await call_formatter_llm(
+            harness=harness,
+            config=FORMATTER_CONFIG,
+            messages=messages,
+            max_tokens=32,
+        )
 
     events = []
     while not bridge.queue.empty():

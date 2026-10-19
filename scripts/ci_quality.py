@@ -48,9 +48,27 @@ def _run(title: str, argv: list[str]) -> None:
         raise SystemExit(completed.returncode)
 
 
+def _installed_distribution_names() -> set[str]:
+    """Installed distribution names, lower-cased, tolerating metadata without ``Name``.
+
+    ``importlib.metadata`` on 3.14 returns ``None`` for a missing field instead of raising
+    ``KeyError``; an editable/local wheel without ``Name`` used to crash the guard with
+    ``AttributeError`` before it ever looked for the conflict it exists to catch.
+    """
+    names: set[str] = set()
+    for dist in metadata.distributions():
+        # ``.get`` instead of ``["Name"]``: 3.14 deprecates implicit-None ``__getitem__``
+        # and will raise ``KeyError`` for a missing field — the guard must not die on
+        # incomplete metadata either way.
+        name = dist.metadata.get("Name")
+        if name:
+            names.add(name.lower())
+    return names
+
+
 def _assert_pyjwt_not_shadowed() -> None:
     print("== conflict check: jwt vs PyJWT ==")
-    names = {dist.metadata["Name"].lower() for dist in metadata.distributions()}
+    names = _installed_distribution_names()
     if "jwt" in names and "pyjwt" in names:
         raise SystemExit(
             "Conflicting package 'jwt' is installed alongside PyJWT. Remove it (`uv remove jwt` then `uv sync`). Use PyJWT only."

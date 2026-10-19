@@ -17,7 +17,6 @@ from palatium_ai.application.agents.critic.config import (
 from palatium_ai.application.agents.critic.parsing import (
     confidence_from_scores,
     decode_critic_input,
-    parse_critic_output,
 )
 from palatium_ai.application.agents.critic.prompts import CRITIC_SYSTEM_PROMPT
 from palatium_ai.core.logging import get_logger
@@ -129,7 +128,9 @@ class CriticAgent(BaseAgent):
                         "continuation_kind": task_input.continuation_kind,
                         "candidate_capabilities": list(task_input.context_packet.candidate_capabilities),
                         "context_summary": task_input.context_packet.context_summary,
-                        "attachment_context": task_input.context_packet.untrusted_context,
+                        # Neutral LLM-facing name (055): internal field names are
+                        # echoed verbatim by the model into user prose.
+                        "attached_files": task_input.context_packet.untrusted_context,
                         "classification_confidence": task_input.classification_confidence,
                         "classification_reasoning": task_input.classification_reasoning,
                         "route_plan": task_input.context_packet.route_plan,
@@ -141,12 +142,15 @@ class CriticAgent(BaseAgent):
         ]
 
         try:
+            # Provider structured output: the harness builds the json_schema payload
+            # from the model, so the response is guaranteed to match CriticOutput.
             completion = await self._harness.call_llm(
                 self._config,
                 messages,
-                response_format="json_object",
+                response_format="json_schema",
+                response_model=CriticOutput,
             )
-            output = parse_critic_output(completion.content)
+            output = CriticOutput.model_validate_json(completion.content)
         except Exception:
             logger.exception("critic LLM stage failed", task_id=str(input.task_id))
             agent_metrics.record_error(self._config.role, "llm_stage_failure")

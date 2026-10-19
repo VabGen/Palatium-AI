@@ -107,7 +107,7 @@ class MCPCapabilityIndex:
     async def _safe_list_summaries(self, server_name: str) -> list[MCPToolSummary]:
         try:
             return await self._registry.list_tool_summaries(server_name)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # one unreachable MCP server must not fail discovery (070)
             logger.warning(
                 "MCP capability discovery skipped server",
                 server=server_name,

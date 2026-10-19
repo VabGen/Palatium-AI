@@ -127,7 +127,8 @@ def test_widget_build_stays_single_file_with_hashed_name() -> None:
     source = "\n".join(lines.values())
 
     assert "formats: ['iife']" in source
-    assert "inlineDynamicImports: true" in source
+    # Vite 8 / Rolldown: codeSplitting:false replaced the deprecated inlineDynamicImports.
+    assert "codeSplitting: false" in source
     assert "manualChunks" not in source, "chunking is incompatible with the single-file IIFE contract"
     assert re.search(r"v\$\{version\}\.\[hash\]", source), "artifact name must embed semver and content hash"
 

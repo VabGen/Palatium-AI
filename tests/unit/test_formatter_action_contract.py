@@ -26,10 +26,12 @@ def test_formatter_prompt_shrunk_at_least_forty_percent() -> None:
 
 
 def test_formatter_prompt_keeps_behavior_and_drops_format_rules() -> None:
+    # Security fence + the current GFM-era input marker and style hints stay; the legacy
+    # JSON-prompt tokens (closed enums in prose, JSON-only output) must never come back.
     assert "<<<UNTRUSTED_TOOL_OUTPUT>>>" in FORMATTER_SYSTEM_PROMPT
-    assert "<input_contract>" in FORMATTER_SYSTEM_PROMPT
-    assert "status_callout" in FORMATTER_SYSTEM_PROMPT
-    assert "sections_unordered" in FORMATTER_SYSTEM_PROMPT
+    assert "<formatter_input>" in FORMATTER_SYSTEM_PROMPT
+    assert "plain_text" in FORMATTER_SYSTEM_PROMPT
+    assert "document_generation" in FORMATTER_SYSTEM_PROMPT
     assert "metrics_kv" not in FORMATTER_SYSTEM_PROMPT
     assert "choice_hitl" not in FORMATTER_SYSTEM_PROMPT
     assert "OUTPUT: ONLY one JSON" not in FORMATTER_SYSTEM_PROMPT

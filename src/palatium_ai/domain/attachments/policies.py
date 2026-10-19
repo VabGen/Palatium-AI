@@ -42,6 +42,16 @@ _MEDIA_EXTENSIONS: dict[str, frozenset[str]] = {
 
 SUPPORTED_MEDIA_TYPES: frozenset[str] = frozenset(_MEDIA_EXTENSIONS)
 
+
+def supported_document_extensions() -> frozenset[str]:
+    """Lower-case extensions intake accepts, derived from the MIME registry.
+
+    Public so callers that must recognise a document *name* in free text (thread
+    file re-read, 055) read the same closed registry instead of re-declaring it.
+    """
+    return frozenset(extension for extensions in _MEDIA_EXTENSIONS.values() for extension in extensions)
+
+
 # Characters that must never reach a stored filename or a log line.
 _FORBIDDEN_FILENAME_CHARS = frozenset({"\x00", "\r", "\n"})
 

@@ -207,7 +207,7 @@ def main() -> int:
             )
         )
         return 0
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # smoke script reports FAILED and exits 1
         print(f"smoke_memory_hitl FAILED: {exc}", file=sys.stderr)
         return 1
 

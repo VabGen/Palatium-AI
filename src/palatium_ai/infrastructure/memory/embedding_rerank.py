@@ -8,7 +8,10 @@ import math
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.core.logging import get_logger
 from palatium_ai.core.types.coerce import coerce_float
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.ports import MemoryPort
@@ -58,7 +61,9 @@ class EmbeddingRerankMemoryPort:
         texts = [query.strip()] + [str(item.get("text", "")).strip() for item in candidates]
         try:
             vectors = await self._embeddings.embed(texts)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001  # rerank degrades to unranked hits when embed fails
+            # 050/040: a degraded rerank must be observable, not silently swallowed.
+            logger.warning("memory.rerank.embedding_failed", error_type=type(exc).__name__)
             return candidates[:safe_limit]
 
         if len(vectors) != len(texts) or not vectors[0]:

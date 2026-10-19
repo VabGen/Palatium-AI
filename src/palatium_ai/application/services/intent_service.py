@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from palatium_ai.application.orchestration.state import AgentGraphState
+    from palatium_ai.application.services.attachment_reference_resolver import AttachmentReferenceResolver
     from palatium_ai.application.services.attachment_service import AttachmentService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.memory_extract import MemoryExtractService
@@ -106,6 +107,7 @@ class IntentService:
         attachment_service: AttachmentService | None = None,
         response_cache: ResponseCacheService | None = None,
         graph_write: GraphWritePort | None = None,
+        file_reference_resolver: AttachmentReferenceResolver | None = None,
     ) -> None:
         self._session_service = session_service
         self._hitl_service = hitl_service
@@ -146,6 +148,7 @@ class IntentService:
             dialog_turn_store=dialog_turn_store,
             consolidation=consolidation,
             option_synthesizer=option_synthesizer,
+            file_reference_resolver=file_reference_resolver,
         )
         self._graph_runner.bind_attach_hitl_cards(self._hitl_flow.attach_hitl_cards)
 

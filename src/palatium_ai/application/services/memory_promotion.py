@@ -153,5 +153,5 @@ async def _audit_promoted(
                 "access_frequency": str(access_frequency),
             },
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # audit write is best-effort; the promote result is kept (040)
         logger.warning("memory_promotion.audit_failed", error=str(exc))

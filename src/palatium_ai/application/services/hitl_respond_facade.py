@@ -330,7 +330,7 @@ class HitlRespondFacade:
                 reason=f"resume_failed:{type(cause).__name__}",
             )
             agent_metrics.record_hitl_deny("resume_compensated_deny")
-        except Exception:
+        except Exception:  # noqa: BLE001  # best-effort compensation; the deny is recorded anyway (020)
             agent_metrics.record_hitl_deny("resume_compensate_failed")
 
 

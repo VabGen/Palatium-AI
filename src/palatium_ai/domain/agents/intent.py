@@ -5,9 +5,11 @@
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.policies.types import (
+    FILE_REFERENCE_DEFAULT,
     GROUNDING_DEFAULT,
     TRANSFORMATION_DEFAULT,
     ContinuationKind,
+    FileReferenceKind,
     GroundingMode,
     TaskKind,
     TransformationKind,
@@ -34,6 +36,9 @@ class IntentClassifierInput(BaseModel):
     text: str = Field(min_length=1, max_length=32_000)
     continuation_kind: ContinuationKind | None = None
     has_prior_dialog: bool = False
+    #: Dialog already holds uploads (turn payload ids). Structural precondition for
+    #: ``file_reference="thread_file"`` — a re-read can only target an existing file.
+    has_thread_files: bool = False
 
 
 class IntentClassifierOutput(BaseModel):
@@ -77,6 +82,14 @@ class IntentClassifierOutput(BaseModel):
             "How to transform prior content when the ask is a format-continuation: "
             "restructure (layout/sections) vs expand/shorten/rewrite (content change). "
             "none when not a prior-transform ask."
+        ),
+    )
+    file_reference: FileReferenceKind = Field(
+        default=FILE_REFERENCE_DEFAULT,
+        description=(
+            "none | thread_file. 'thread_file' when the ask operates on a file already "
+            "uploaded in this dialog (re-read it from storage) rather than on content "
+            "fenced into the current turn. Identity is resolved in code, not by the model."
         ),
     )
     confidence: float = Field(ge=0.0, le=1.0)

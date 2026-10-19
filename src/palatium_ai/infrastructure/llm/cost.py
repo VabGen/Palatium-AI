@@ -44,7 +44,7 @@ def estimate_completion_cost_usd(
             prompt_tokens=max(0, prompt_tokens),
             completion_tokens=max(0, completion_tokens),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # cost is best-effort; a missing price card never invents a rate (050)
         logger.debug(
             "LLM cost estimate unavailable",
             model=model,

@@ -79,7 +79,7 @@ class TesseractPdfOcrParser:
                 image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
                 try:
                     text = pytesseract.image_to_string(image, lang=self._lang).strip()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001  # one unreadable page must not fail the whole document (035)
                     logger.warning("pdf page OCR failed", page=index + 1, error_type=type(exc).__name__)
                     text = ""
                 budget = self._max_chars - total_chars

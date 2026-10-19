@@ -50,7 +50,7 @@ def _read_stdin_json() -> dict[str, object] | None:
     """Parse hook stdin JSON. Cursor sends one JSON object then closes stdin."""
     try:
         raw = sys.stdin.read()
-    except Exception:
+    except Exception:  # noqa: BLE001  # an unreadable stdin must ask the user, never hard-deny everything
         return None
     if not raw or not raw.strip():
         return None
@@ -93,7 +93,7 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # top-level guard: emit "ask" instead of crashing the IDE hook
         with contextlib.suppress(Exception):
             audit_chain.append_event(
                 "shell_hook_crashed",

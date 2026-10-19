@@ -122,7 +122,7 @@ class LLMClientFactory:
                 continue
             try:
                 adapters.append((provider, self.get_client(provider)))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # an unusable provider is skipped in the fallback chain (020)
                 logger.warning(
                     "llm.fallback.provider_unavailable",
                     provider=provider,
@@ -314,7 +314,7 @@ class _FallbackChainLLMAdapter:
                     response_model=response_model,
                     timeout_seconds=timeout_seconds,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # provider failure moves to the next in the chain (020)
                 self._capture_provider_failure(provider, exc, errors, unsupported)
                 logger.warning(
                     "llm.fallback.try_next",
@@ -368,7 +368,7 @@ class _FallbackChainLLMAdapter:
                 )
                 async for delta in stream:
                     yield delta
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # stream provider failure moves to the next in the chain (020)
                 self._capture_provider_failure(provider, exc, errors, unsupported)
                 logger.warning(
                     "llm.fallback.stream_try_next",

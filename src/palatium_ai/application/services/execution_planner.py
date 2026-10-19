@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.core.logging.context import user_id_var
 from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
+from palatium_ai.core.observability.file_reread_rollout import is_file_reread_enabled
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.workflow_policy import WorkflowExecutionPolicy
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
@@ -110,6 +111,9 @@ class ExecutionPlanner:
             requires_mcp=task_input.requires_mcp,
         )
 
+        if task_input.route == "researcher" and _file_reread_requested(task_input) and is_file_reread_enabled(user_id_var.get()):
+            return _file_reread_plan()
+
         route_plan = _route_local_plan(task_input.route, executable_kind, task_input.requires_mcp)
         if route_plan is not None:
             return route_plan
@@ -152,6 +156,31 @@ class ExecutionPlanner:
             requires_tool_call=True,
             rationale="Matching MCP capability was discovered from registered tool descriptors.",
         )
+
+
+def _file_reread_requested(task_input: ContextWeaverInput) -> bool:
+    """True when the turn re-reads a thread file and owns no fence of its own.
+
+    A fresh upload wins the turn (the fence already carries its text), so the axis
+    alone never re-reads storage next to a new document (055). Coverage is a separate
+    decision — the caller applies the sticky rollout gate before dispatching.
+    """
+    return task_input.file_reference == "thread_file" and not task_input.has_attachment_context
+
+
+def _file_reread_plan() -> ToolExecutionPlan:
+    """Direct owner-scoped storage read; the reference is resolved in the worker path."""
+    return ToolExecutionPlan(
+        strategy="direct_tool_call",
+        capability="attachments",
+        server_name="platform",
+        tool_name="read_attachment",
+        requires_tool_call=True,
+        rationale=(
+            "Thread file re-read: the ask targets a file already uploaded in this dialog; "
+            "read its owner-scoped body from storage instead of claiming it is missing."
+        ),
+    )
 
 
 def _route_local_plan(

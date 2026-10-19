@@ -61,6 +61,35 @@ Git/PR-процесс — `088`. Секреты и RBAC — **020**; верси�
 - Runtime-образ — multi-stage, **non-root** (механика — `082`).
 - Секреты — только через env/volume, никогда в слои образа (020).
 
+## Артефакт релиза: скан, SBOM, подпись
+
+- Образ, который уезжает на стенд, обязан быть просканирован **как артефакт**, а не только
+  как набор зависимостей: уязвимости ОС-слоя не видны ни в `pyproject.toml`, ни в `uv.lock`.
+  Гейт — `scripts/ci_supply_chain.py`, CI-job `supply-chain`.
+- `pip-audit` и Trivy не дублируют друг друга: первый судит набор пакетов проекта по lock,
+  второй — то, что реально лежит в слоях (ОС-пакеты, венв образа).
+- Блокирует **fixable** HIGH/CRITICAL. Решение принимает код (`fixable_findings` в
+  `scripts/ci_supply_chain.py`), а не severity-флаг сканера: у `python:3.14-slim` Debian-находок
+  без исправления больше сорока, и гейт, красный на них, выключают в первую неделю (082).
+  Поэтому отчёт `artifacts/trivy-report.json` остаётся полным — видно ровно то, что гейт
+  сознательно пропускает; «нет исправления» — пробел базового дистрибутива, а не PR-задача.
+- Триаж — `security/trivy-ignore.txt` (`--ignorefile`) с `exp:<YYYY-MM-DD>`: просроченная
+  запись перестаёт действовать сама, поэтому «приняли и забыли» не работает.
+- `pip/_vendor/**` исключён (`--skip-dirs`): Trivy читает `pip/_vendor/vendor.txt` и выдаёт
+  вендоренные копии за установленные дистрибутивы; в образе нет их `dist-info`, `import urllib3`
+  там падает, а приложение стартует из `/app/.venv` по `uv.lock` (этот набор судит `pip-audit`).
+- SBOM — CycloneDX (`artifacts/sbom.cdx.json`; Trivy 0.76 пишет spec 1.7, контракт — 1.6+).
+  SPDX 3.0 не используется: Trivy отдаёт SPDX 2.3, и документ с несуществующей версией
+  выглядел бы валидным артефактом.
+- Подпись — keyless `cosign sign-blob` по SBOM и сразу `cosign verify-blob` против identity
+  **этого** workflow (`--certificate-identity`, issuer `token.actions.githubusercontent.com`).
+  Подпись без верификации в том же прогоне — декорация; verify-шаг и есть гейт.
+- Инструменты пиннуются как всё остальное: Trivy — digest-образ, cosign — SHA-пин
+  `sigstore/cosign-installer`.
+- Подпись **образов** и проверка перед деплоем ждут решения о registry: публикации образов
+  в проекте пока нет (082 — инструмент не добавляется молча). Появится push — `cosign sign`
+  на публикацию и `cosign verify` в деплое, на тех же пинах.
+
 ## GitHub Actions
 
 - Сторонние action — пин по **commit SHA** с комментарием версии:
@@ -78,8 +107,9 @@ Git/PR-процесс — `088`. Секреты и RBAC — **020**; верси�
 
 ## Backlog (осознанно не сделано)
 
-- **SBOM / provenance** (CycloneDX + attestation) — уровень зрелости ниже текущих
-  гейтов; решение 2026-09-30: backlog до релиза, не «тихо забыто».
+- **Image attestations** (`cosign attest`, SLSA provenance) — ждут registry и публикации
+  образов. SBOM и его подпись уже в гейтах (см. «Артефакт релиза»); attestation без
+  push-пайплайна была бы имитацией. Решение 2026-10-16.
 
 Базовый образ `Dockerfile` переведён на digest-пин в W5 плана hardening (2026-09-30):
 `python:${PYTHON_VERSION}-slim@sha256:…` в корневом `Dockerfile` и в
@@ -93,12 +123,16 @@ Git/PR-процесс — `088`. Секреты и RBAC — **020**; верси�
 | Pin-drift Actions | `scripts/ci_security.py` | `uses:` без SHA / без версии |
 | Pin-drift base image | `scripts/ci_security.py` | `FROM` без `@sha256:` (нет пина по digest) |
 | `pip-audit` + триаж | `scripts/ci_security.py`, `security/pip-audit-ignore.txt` | нетриаженная advisory |
+| Trivy image: fixable HIGH/CRITICAL | `scripts/ci_supply_chain.py`, CI-job `supply-chain` | находка с доступным фиксом без триажа |
+| SBOM (CycloneDX) + keyless-подпись и verify | `scripts/ci_supply_chain.py --sign`, CI-job `supply-chain` | нет SBOM или подпись не сходится с identity workflow |
 | gitleaks (история) | CI-job `security`, `.gitleaks.toml` | утёкший секрет в любом коммите |
 | `docker compose config --quiet` | Makefile `validate`, CI-job `compose` (082) | невалидный compose |
 
 ## DoD для изменения supply-chain
 
 - lock обновлён и синхронен; `ci_security.py` локально зелёный;
+- изменение образа или зависимостей — дополнительно `make supply-chain` зелёный: сканер и
+  SBOM проверяют артефакт, а не намерение;
 - новый пин/образ — с причиной (комментарий или строка триажа);
 - политика зафиксирована **в этом файле**, а не только в тексте PR (иначе следующий
   ревьюер её не увидит).

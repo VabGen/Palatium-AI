@@ -571,6 +571,11 @@ class IntentGraphRunner:
             str(getattr(routing_intent, "underspecification_kind", "none") or "none") if routing_intent is not None else "none"
         )
         prior_context = getattr(routing_intent, "prior_context", None) if routing_intent is not None else None
+        resolved_file_reference = (
+            str(getattr(routing_intent, "file_reference", "none") or "none") if routing_intent is not None else "none"
+        )
+        execution = final_state.get("execution")
+        execution_error = execution.error if execution is not None else None
         has_turn_attachments = bool((final_state.get("untrusted_context") or "").strip())
 
         if isinstance(formatted, FormatterTaskResult):
@@ -588,6 +593,8 @@ class IntentGraphRunner:
                 org_id=org_id,
                 has_turn_attachments=has_turn_attachments,
                 dialog=final_state.get("dialog_window"),
+                file_reference=resolved_file_reference,
+                execution_error=execution_error,
             )
             logger.info(
                 "agent.turn.reasoning",

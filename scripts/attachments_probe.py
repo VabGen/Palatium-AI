@@ -230,7 +230,7 @@ def _http_ok(url: str, *, timeout: float = 5.0) -> tuple[bool, str]:
             return 200 <= int(response.status) < 300, f"HTTP {response.status}"
     except urllib.error.HTTPError as exc:
         return False, f"HTTP {exc.code}"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # a probe reports an unreachable endpoint, it never raises
         return False, type(exc).__name__
 
 
@@ -574,8 +574,7 @@ def _image_ocr_lines(env: dict[str, str]) -> list[str]:
     return lines
 
 
-def main() -> int:
-    """Run the requested probes and print a machine-readable report."""
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--env-file", default=_DEFAULT_ENV_FILE, help=f"default: {_DEFAULT_ENV_FILE}")
     parser.add_argument("--preflight-image", action="store_true", help="check the S3 image is pullable")
@@ -597,47 +596,35 @@ def main() -> int:
         help="re-check probes that are not ready yet, for up to SECONDS (0 = a single pass)",
     )
     parser.add_argument("--json", action="store_true", help="also dump the report as JSON")
-    args = parser.parse_args()
+    return parser
 
-    env = _read_env_file(Path(args.env_file))
-    image = resolve_store_image(Path(args.env_file))
+
+def _warn_legacy_image_override(env: dict[str, str]) -> None:
+    """Report an ignored ``ATTACHMENTS_MINIO_IMAGE``; silently dropping it would be worse."""
     if env.get("ATTACHMENTS_MINIO_IMAGE"):
-        # Silently dropping an operator's setting would be worse than the drift it causes.
         print(
             "warn: ATTACHMENTS_MINIO_IMAGE is set but ignored — the store image is pinned "
             "by tag+digest in docker-compose.yml; change it there (050)",
             file=sys.stderr,
         )
 
-    if args.mode:
-        # Purely informational: no network beyond the S3 preflight (only for --full), no
-        # container, non-fatal exit code — it answers "will the API actually use the
-        # containers I just started?".
-        if args.full:
-            plan = full_launch(image)
-            extra = [f"note: S3 profile+overlay skipped — {plan.s3_skip_reason}"] if plan.s3_skip_reason else []
-            lines = mode_report(env, blob=plan.blob_backend, scanner=plan.scanner_backend, extra=extra)
-        else:
-            lines = mode_report(
-                env,
-                blob=env.get("ATTACHMENTS_BLOB_BACKEND") or _SETTINGS_DEFAULT_BLOB_BACKEND,
-                scanner=env.get("ATTACHMENTS_SCANNER_BACKEND") or _SETTINGS_DEFAULT_SCANNER_BACKEND,
-            )
-        for line in lines:
-            print(line)
-        return 0
 
-    if args.compose_args:
-        # stdout is captured by `$(shell ...)` in the Makefile and by the menu, so the
-        # flags stay alone on stdout while the human-readable reason for skipping S3
-        # goes to stderr.
-        plan = full_launch(image)
-        if plan.s3_skip_reason:
-            print(f"S3 profile skipped: {plan.s3_skip_reason}", file=sys.stderr)
-        print(" ".join(plan.compose_args()))
-        return 0
+def _mode_lines(*, full: bool, env: dict[str, str], image: str) -> list[str]:
+    """The backends the API will actually use, for a plain ``up`` or for ``--full``."""
+    if not full:
+        return mode_report(
+            env,
+            blob=env.get("ATTACHMENTS_BLOB_BACKEND") or _SETTINGS_DEFAULT_BLOB_BACKEND,
+            scanner=env.get("ATTACHMENTS_SCANNER_BACKEND") or _SETTINGS_DEFAULT_SCANNER_BACKEND,
+        )
+    plan = full_launch(image)
+    extra = [f"note: S3 profile+overlay skipped — {plan.s3_skip_reason}"] if plan.s3_skip_reason else []
+    return mode_report(env, blob=plan.blob_backend, scanner=plan.scanner_backend, extra=extra)
 
-    report = run_until_ready(
+
+def _run_probes(args: argparse.Namespace, env: dict[str, str], image: str) -> Report:
+    """Run the probes this invocation asks for, honouring ``--wait``."""
+    return run_until_ready(
         _checks(
             env_file=Path(args.env_file),
             image=image,
@@ -655,13 +642,45 @@ def main() -> int:
         announce=lambda message: print(message, file=sys.stderr),
     )
 
-    if args.json:
+
+def _print_report(report: Report, *, as_json: bool) -> None:
+    if as_json:
         print(json.dumps(report.as_dict(), indent=2))
     for probe in report.probes:
         marker = "OK  " if probe.ok else "FAIL"
         print(f"{marker} {probe.name}: {probe.detail}")
         if probe.hint:
             print(f"     hint: {probe.hint}")
+
+
+def main() -> int:
+    """Run the requested probes and print a machine-readable report."""
+    args = _build_parser().parse_args()
+
+    env = _read_env_file(Path(args.env_file))
+    image = resolve_store_image(Path(args.env_file))
+    _warn_legacy_image_override(env)
+
+    if args.mode:
+        # Purely informational: no network beyond the S3 preflight (only for --full), no
+        # container, non-fatal exit code — it answers "will the API actually use the
+        # containers I just started?".
+        for line in _mode_lines(full=args.full, env=env, image=image):
+            print(line)
+        return 0
+
+    if args.compose_args:
+        # stdout is captured by `$(shell ...)` in the Makefile and by the menu, so the
+        # flags stay alone on stdout while the human-readable reason for skipping S3
+        # goes to stderr.
+        plan = full_launch(image)
+        if plan.s3_skip_reason:
+            print(f"S3 profile skipped: {plan.s3_skip_reason}", file=sys.stderr)
+        print(" ".join(plan.compose_args()))
+        return 0
+
+    report = _run_probes(args, env, image)
+    _print_report(report, as_json=args.json)
 
     if report.failed:
         print("attachments_probe: FAILED")

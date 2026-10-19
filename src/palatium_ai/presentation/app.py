@@ -18,7 +18,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import SecretStr
 
 from palatium_ai.application.bootstrap import shutdown, startup
 from palatium_ai.core.config import get_settings
@@ -48,6 +47,8 @@ from palatium_ai.presentation.websockets.session import register_websocket_route
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from pydantic import SecretStr
 
     from palatium_ai.core.config.settings import Settings
 
@@ -83,14 +84,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Middleware order: last added runs first on the request path.
     application.add_middleware(
-        RateLimitMiddleware,  # type: ignore[arg-type]
+        RateLimitMiddleware,
         limit=resolved_settings.security.api_rate_limit,
         window_seconds=resolved_settings.security.api_rate_limit_window_seconds,
         path_prefixes=resolved_settings.security.rate_limit_path_prefixes,
     )
     metrics_public = resolved_settings.security.metrics_public if resolved_settings.app.environment == "development" else False
     application.add_middleware(
-        AuthMiddleware,  # type: ignore[arg-type]
+        AuthMiddleware,
         security=resolved_settings.security,
         token_service=token_service,
         metrics_public=metrics_public,
@@ -99,7 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if not cors_origins:
         raise RuntimeError("CORS_ORIGINS must list at least one origin (wildcards are forbidden)")
     application.add_middleware(
-        CORSMiddleware,  # type: ignore[arg-type]
+        CORSMiddleware,
         allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
@@ -315,17 +316,14 @@ def _assert_hitl_hardening(settings: Settings) -> None:
     step_up_method = getattr(settings.security, "hitl_step_up_method", "hmac_stub")
     if step_up_method == "hmac_stub":
         raise RuntimeError(
-            "HITL_STEP_UP_METHOD=hmac_stub is forbidden when ENVIRONMENT is staging or production "
-            "(use idp_acr or webauthn)"
+            "HITL_STEP_UP_METHOD=hmac_stub is forbidden when ENVIRONMENT is staging or production (use idp_acr or webauthn)"
         )
     # 020: HITL action tokens are HMAC even with asymmetric JWT — require a non-trivial key.
     hitl_secret = getattr(settings.security, "hitl_signing_secret", None)
     if hitl_secret is not None:
-        secret_str = cast(SecretStr, hitl_secret)
+        secret_str = cast("SecretStr", hitl_secret)
         if 0 < len(secret_str.get_secret_value().strip()) < 32:
-            raise RuntimeError(
-                "HITL_SIGNING_SECRET must be at least 32 characters when ENVIRONMENT is staging or production"
-            )
+            raise RuntimeError("HITL_SIGNING_SECRET must be at least 32 characters when ENVIRONMENT is staging or production")
     # 020/040: an escalation whose only sink is the in-process log never reaches a human —
     # the card would escalate "successfully" into a log line with nobody paged. Require at
     # least one channel that actually leaves the process.
@@ -339,8 +337,7 @@ def _assert_hitl_hardening(settings: Settings) -> None:
     logger.info("hitl.escalation.channels", channels=",".join(notify_channels))
 
 
-_LOOPBACK_HOSTS = frozenset(
-    {"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104 — CORS origin allowlist, not a bind address
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104 — CORS origin allowlist, not a bind address
 
 
 def _is_loopback_origin(origin: str) -> bool:

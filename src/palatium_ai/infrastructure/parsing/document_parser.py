@@ -24,6 +24,7 @@ import asyncio
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.ports.document_parser import (
     DocumentParseError,
     DocumentParserPort,
@@ -61,13 +62,21 @@ def _truncate_at_word(text: str, max_chars: int) -> str:
     return piece.rstrip()
 
 
-def _decode_text(data: bytes) -> str:
-    """Decode bytes with the first encoding that succeeds; never raise on bad bytes."""
+def _decode_text(data: bytes, *, kind: str) -> str:
+    """Decode bytes with the first encoding that succeeds; never raise on bad bytes.
+
+    The last-resort ``errors="replace"`` is lossy: U+FFFD replaces bytes the guess
+    could not read, so the text handed to the model may not match the file. It is
+    still better than failing an upload outright, but every fallback is counted —
+    a non-zero ``palatium_utf8_decode_failures_total`` means a real encoding defect
+    (mojibake / broken OCR) that must be visible, not silently swallowed (040).
+    """
     for encoding in _TEXT_ENCODINGS:
         try:
             return data.decode(encoding)
         except UnicodeDecodeError:
             continue
+    agent_metrics.record_utf8_decode_failure(kind=kind)
     return data.decode("utf-8", errors="replace")
 
 
@@ -84,7 +93,7 @@ class PlainTextParser:
 
     async def parse(self, data: bytes, *, mime_type: str, filename: str) -> ParsedDocument:
         """Decode bytes to text; decoding is CPU-only, so it stays on the loop."""
-        text = _decode_text(data)
+        text = _decode_text(data, kind="text")
         truncated = len(text) > self._max_chars
         body = text if not truncated else _truncate_at_word(text, self._max_chars)
         return ParsedDocument(
@@ -464,7 +473,7 @@ class HtmlParser:
             raise DocumentParseError(msg) from exc
 
         try:
-            document = lxml_html.fromstring(_decode_text(data))
+            document = lxml_html.fromstring(_decode_text(data, kind="html"))
         except (TypeError, ValueError, etree.ParserError) as exc:
             raise DocumentParseError("html is corrupt or not parseable") from exc
 

@@ -170,6 +170,13 @@ try:  # pragma: no cover - optional dependency
         "On-demand attachment reads (platform.read_attachment).",
         ["kind", "ocr_applied", "ocr_engine", "ocr_cached"],
     )
+    # Any non-zero rate means bytes were silently replaced with U+FFFD on a decode
+    # fallback; the extracted text may differ from the file. Watch, not a knob (040).
+    _palatium_utf8_decode_failures_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_utf8_decode_failures_total",
+        "Text decodes that fell back to errors=replace (lossy).",
+        ["kind"],
+    )
     _palatium_turn_duration_seconds: _PromHistogram | _NoopMetric = _PromHistogram(
         "palatium_turn_duration_seconds",
         "End-to-end intent process turn duration (seconds).",
@@ -182,6 +189,13 @@ try:  # pragma: no cover - optional dependency
     _palatium_sse_ttft_seconds: _PromHistogram | _NoopMetric = _PromHistogram(
         "palatium_sse_ttft_seconds",
         "Time to first user-visible answer_delta on the SSE turn (seconds).",
+    )
+    # Any non-zero rate is a bug, not a tuning knob: it means a frame we already
+    # painted was overwritten (layout shift). Alert on increase(...) > 0 (040).
+    _palatium_sse_layout_shift_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_sse_layout_shift_total",
+        "SSE replace/replace-pending frames that overwrite already-shown content.",
+        ["contract"],
     )
     _palatium_cache_hit_total: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_cache_hit_total",
@@ -276,9 +290,11 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_secret_redactions_total = _NoopMetric()
     _palatium_attachment_parse_total = _NoopMetric()
     _palatium_attachment_read_total = _NoopMetric()
+    _palatium_utf8_decode_failures_total = _NoopMetric()
     _palatium_turn_duration_seconds = _NoopMetric()
     _palatium_llm_ttft_seconds = _NoopMetric()
     _palatium_sse_ttft_seconds = _NoopMetric()
+    _palatium_sse_layout_shift_total = _NoopMetric()
     _palatium_cache_hit_total = _NoopMetric()
     _palatium_cache_miss_total = _NoopMetric()
     _palatium_grounding_mode_total = _NoopMetric()
@@ -582,6 +598,26 @@ class AgentMetrics:
     def record_sse_ttft(self, duration_seconds: float) -> None:
         """First answer_delta after process_stream bind (user-visible TTFT)."""
         _palatium_sse_ttft_seconds.observe(max(0.0, float(duration_seconds)))
+
+    def record_sse_layout_shift(self, *, contract: str) -> None:
+        """Count a frame that overwrites content already shown to the user.
+
+        A ``replace`` frame is correct only for the deprecated
+        ``legacy_markdown`` migration contract (dual-emit). Under the
+        structured contract this must stay at zero; a non-zero rate is an alert,
+        not a metric to watch (040).
+        """
+        safe = (contract or "unknown").strip()[:32] or "unknown"
+        _palatium_sse_layout_shift_total.labels(contract=safe).inc()
+
+    def record_utf8_decode_failure(self, *, kind: str) -> None:
+        """Bytes were replaced by U+FFFD: extracted text is lossy for this upload.
+
+        Silent ``errors="replace"`` masks a real defect (mojibake, truncated OCR,
+        wrong encoding guess); the counter makes it visible in dashboards (040).
+        """
+        safe = (kind or "unknown").strip()[:32] or "unknown"
+        _palatium_utf8_decode_failures_total.labels(kind=safe).inc()
 
     def record_cache_hit(self, *, cache_layer: str) -> None:
         layer = (cache_layer or "unknown").strip()[:32] or "unknown"

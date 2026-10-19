@@ -222,6 +222,18 @@ class AttachmentConfig(BaseConfig):
         default="tag",
         validation_alias="ATTACHMENTS_PII_POLICY",
     )
+    #: Thread file re-read coverage (055/070): a follow-up turn may re-read a file the
+    #: dialog already holds instead of claiming it is missing. Single-key rollout —
+    #: the feature is binary, so a separate ENABLED key would be redundant config (055).
+    #: ``0`` = off (dark default + one-variable rollback), ``1..99`` = sticky canary,
+    #: ``100`` = every caller. Sticky per user, so a rolling update cannot flip a
+    #: dialog's behaviour mid-conversation (same semantics as FORMATTER_ROLLOUT_PCT).
+    file_reread_pct: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        validation_alias="ATTACHMENTS_FILE_REREAD_PCT",
+    )
 
     @field_validator(
         "minio_public_endpoint",

@@ -29,6 +29,10 @@ from palatium_ai.domain.policies.types import (
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     VERBATIM_EXTRACTION_CAPABILITY,
 )
+from palatium_ai.domain.policies.untrusted_content import (
+    budget_untrusted_text,
+    count_fence_blocks,
+)
 
 
 def parse_formatter_document(raw_content: str) -> ContentDocument:
@@ -53,6 +57,12 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
         citation_refs_from_untrusted_context,
         sanitize_source_refs,
     )
+    from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
+
+    # Last user-facing boundary of every Formatter path (LLM, fast path, deterministic
+    # fallback): internal contract vocabulary the model mirrored from our payload/prompts
+    # must not reach blocks, card labels or the persisted transcript (020, 055).
+    document = InternalVocabularyPolicy.sanitize_document(document)
 
     confidence = clamp_confidence(document.meta.confidence)
     if task_input.requires_review:
@@ -146,13 +156,34 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
             has_attachments=has_attachments,
         )
         if has_attachments:
-            payload["attachment_context"] = _clip(
+            # Budget per fence, never by head+tail on the joined blob: that dropped the
+            # second file's ``source=attachment:<id>:<name>`` header while keeping an
+            # unlabeled text tail, so the model reported "only one document" and asked
+            # the user to re-upload a file that was already there (055, 020, 065).
+            payload["attached_files"] = budget_untrusted_text(
                 task_input.context_packet.untrusted_context or "",
-                FORMATTER_ATTACHMENT_MAX_CHARS,
+                max_chars=FORMATTER_ATTACHMENT_MAX_CHARS,
             )
     if memory_block:
-        payload["memory_hints"] = memory_block
+        payload["user_facts"] = memory_block
     return payload
+
+
+def formatter_attachment_stats(
+    task_input: FormatterInput,
+    user_payload: dict[str, object],
+) -> dict[str, object]:
+    """Fence vs delivered chars — attachment loss must be observable, not silent (040, 065)."""
+    fence = task_input.context_packet.untrusted_context or ""
+    delivered = str(user_payload.get("attached_files") or "")
+    return {
+        "attachment_fences": count_fence_blocks(fence),
+        "attachment_fence_chars": len(fence),
+        "attachment_payload_chars": len(delivered),
+        # Fence present but nothing delivered is a by-design omission (worker draft is SoT);
+        # delivered-but-shorter means the budget dropped text the model cannot recover.
+        "attachment_budget_trimmed": bool(delivered) and len(delivered) < len(fence),
+    }
 
 
 def build_formatter_user_message(payload: dict[str, object]) -> str:

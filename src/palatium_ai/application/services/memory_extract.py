@@ -159,7 +159,7 @@ class MemoryExtractService:
                 try:
                     await self._process_job(job)
                     await self._job_queue.complete(record.id)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001  # failed job is marked failed; the worker keeps draining (M3)
                     logger.error(
                         "memory_extract.failed",
                         thread_id=job.thread_id,
@@ -172,7 +172,7 @@ class MemoryExtractService:
                 await self._record_queue_metrics()
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # worker backoff must classify any error type, not crash (M3)
                 delay = self._backoff_for_worker_error(
                     exc,
                     schema_failures=schema_failures,
@@ -292,7 +292,7 @@ class MemoryExtractService:
     async def _record_queue_metrics(self) -> None:
         try:
             stats = await self._job_queue.stats()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # queue stats are telemetry-only; must not break the worker
             logger.debug("memory_extract.stats_failed", error=str(exc))
             return
         agent_metrics.record_memory_extract_queue(

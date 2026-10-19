@@ -90,7 +90,7 @@ class ResponseCacheService:
             return None
         try:
             result = FormatterTaskResult.model_validate_json(raw)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # a corrupt cache entry is treated as a miss (080)
             logger.warning("response_cache.decode_failed", error=str(exc))
             return None
         logger.info(

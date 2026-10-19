@@ -227,7 +227,8 @@ _PLATFORM_TOOL_DESCRIPTIONS: dict[str, str] = {
     "web_fallback": "External web search fallback after local retrieval empty.",
     "read_attachment": (
         "On-demand read of a user-owned attachment (lazy Tesseract/Vision OCR with "
-        "write-through cache; call when attachment_context says text is missing)."
+        "write-through cache; call when the attached file list is empty but the user "
+        "refers to a document from the dialog)."
     ),
 }
 

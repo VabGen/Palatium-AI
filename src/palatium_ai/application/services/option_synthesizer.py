@@ -17,6 +17,7 @@ from palatium_ai.domain.content import ActionSpec
 from palatium_ai.domain.hitl.option_synthesis import DiscreteChoiceSynthesisPolicy
 from palatium_ai.domain.llm.json_codec import loads_llm_json
 from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 if TYPE_CHECKING:
@@ -33,8 +34,11 @@ Return ONLY JSON:
 Rules:
 - 2 to 12 options; action_id = choice_1 .. choice_N
 - Labels are concrete alternatives for the missing slot (topic/type/format/kind/branch)
-  of user_text. prior_context (may be null) is background only: never offer an option
-  that switches to a different task or repeats an earlier request from it
+  of user_request. previous_answer (may be null) is background only: never offer an
+  option that switches to a different task or repeats an earlier request from it
+- Labels and framing are user-facing: never name input keys or internal fields
+  ("в previous_answer указано…" is forbidden — describe the situation in the user's
+  own terms), never a file id or debug reasoning
 - Write "framing" and EVERY option "label" in response_locale from the user JSON.
   Never answer in English (or any other language) unless response_locale itself is
   that language. Language mirroring is mandatory, not optional.
@@ -76,8 +80,8 @@ class OptionSynthesizer:
         """Return exclusive options + framing; empty actions on failure."""
         locale = ReplyLocalePolicy.normalize(response_locale) or "und"
         payload = {
-            "user_text": user_text[:8000],
-            "prior_context": (prior_context or "")[:4000] or None,
+            "user_request": user_text[:8000],
+            "previous_answer": (prior_context or "")[:4000] or None,
             "response_locale": locale,
         }
         messages = [
@@ -91,7 +95,7 @@ class OptionSynthesizer:
                 temperature=0.0,
                 response_format="json_object",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # failure degrades to empty options; the card stays usable (020)
             logger.warning("option_synthesizer.failed", error=str(exc))
             return OptionSynthesisResult((), None)
         return await self._pin_locale(messages, completion.content, locale)
@@ -122,7 +126,7 @@ class OptionSynthesizer:
                 temperature=0.0,
                 response_format="json_object",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # locale repair is optional; a degraded result is returned
             logger.warning("option_synthesizer.locale_repair_failed", error=str(exc))
             return OptionSynthesisResult((), None)
 
@@ -142,7 +146,7 @@ def _parse_result(raw: str) -> OptionSynthesisResult:
     if not isinstance(data, dict):
         return OptionSynthesisResult((), None)
     framing_raw = data.get("framing")
-    framing = str(framing_raw).strip()[:2000] if framing_raw else None
+    framing = InternalVocabularyPolicy.sanitize_text(str(framing_raw).strip())[:2000] if framing_raw else None
     raw_options = data.get("options")
     if not isinstance(raw_options, list):
         return OptionSynthesisResult((), framing)
@@ -150,7 +154,9 @@ def _parse_result(raw: str) -> OptionSynthesisResult:
     for index, item in enumerate(raw_options, start=1):
         if not isinstance(item, dict):
             continue
-        label = str(item.get("label") or "").strip()
+        # The model mirrors the payload/prompt vocabulary (``prior_context`` …) into
+        # card labels; a card is user-facing, so it goes through the same guard (020).
+        label = InternalVocabularyPolicy.sanitize_text(str(item.get("label") or "").strip())
         if not label:
             continue
         action_id = str(item.get("action_id") or f"choice_{index}").strip() or f"choice_{index}"

@@ -44,6 +44,7 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentOutput
 from palatium_ai.domain.agents.researcher import (
+    ATTACHMENT_REFERENCE_UNRESOLVED,
     MCP_EMPTY_RESULT,
     MCP_TOOL_ERROR,
     RESEARCHER_TOOL_ARGS_INVALID,
@@ -59,17 +60,25 @@ from palatium_ai.domain.mcp.tool_policy import (
     resolve_platform_pin,
 )
 from palatium_ai.domain.memory.tool_output import strip_untrusted_tool_output
+from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.retrieval import RetrievalPolicy
 from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
 if TYPE_CHECKING:
+    from palatium_ai.application.services.attachment_reference_resolver import (
+        AttachmentReferenceResolver,
+    )
     from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.ports.harness import HarnessPort
     from palatium_ai.domain.ports.mcp import MCPRegistryPort, McpToolCallRecorderPort
 
 logger = get_logger(__name__)
+
+#: Host-local tool that materialises a thread file's text (070).
+_READ_ATTACHMENT_TOOL = "read_attachment"
+_PLATFORM_SERVER = "platform"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +93,68 @@ class McpPathDeps:
     argument_builder: ToolArgumentBuilder
     mcp_tool_call_repository: McpToolCallRecorderPort | None
     agent_role: str
+    #: Optional: required only for the thread file re-read path. Without it the
+    #: worker refuses the re-read instead of letting the model invent a file id.
+    file_reference_resolver: AttachmentReferenceResolver | None = None
+
+
+async def _build_file_reread_arguments(
+    deps: McpPathDeps,
+    task_input: ResearcherInput,
+    context: AgentContext,
+    tool_name: str,
+    task_uuid: UUID,
+) -> dict[str, object] | AgentOutput:
+    """Deterministic args for a thread file re-read (070, 020).
+
+    The model never picks the file: ``attachment_id`` comes from the owner-scoped
+    repository through ``AttachmentReferenceResolver``. Any failure here is a typed
+    refusal with a user-facing reason — never a guess, never an invented id.
+    """
+    resolver = deps.file_reference_resolver
+    user_id = (context.user_id or "").strip()
+    if resolver is None or not user_id or not context.thread_id:
+        logger.warning(
+            "researcher.file_reference_unavailable",
+            tool=f"{_PLATFORM_SERVER}.{tool_name}",
+            task_id=task_input.task_id,
+            user_id_bound=bool(user_id),
+            thread_id_bound=bool(context.thread_id),
+        )
+        agent_metrics.record_error(deps.agent_role, "file_reference_unavailable")
+        return failure_output(
+            task_uuid,
+            summary=(
+                "Не удалось получить доступ к файлу из хранилища. Загрузите файл в этот диалог — и я разберу его содержимое."
+            ),
+            error=ATTACHMENT_REFERENCE_UNRESOLVED,
+        )
+
+    resolution = await resolver.resolve(
+        user_id=user_id,
+        thread_id=context.thread_id,
+        hint_text=_file_reference_hint(task_input),
+    )
+    if resolution.attachment_id is None:
+        logger.info(
+            "researcher.file_reference_unresolved",
+            status=resolution.status,
+            reason=resolution.reason,
+            task_id=task_input.task_id,
+        )
+        agent_metrics.record_error(deps.agent_role, f"file_reference_{resolution.status}")
+        return failure_output(
+            task_uuid,
+            summary=FileReferencePolicy.refusal_message(resolution),
+            error=ATTACHMENT_REFERENCE_UNRESOLVED,
+        )
+    return {"attachment_id": str(resolution.attachment_id), "user_id": user_id}
+
+
+def _file_reference_hint(task_input: ResearcherInput) -> str:
+    """Text the resolver may read a file name from: this ask + trusted prior."""
+    parts = [task_input.context_packet.user_text, task_input.prior_context or "", *task_input.memory_hints]
+    return "\n".join(part for part in parts if part.strip())
 
 
 def _require_researcher_input(task_input: object) -> ResearcherInput:
@@ -230,6 +301,8 @@ async def build_mcp_tool_arguments(
     task_uuid: UUID,
 ) -> dict[str, object] | AgentOutput:
     task_input = _require_researcher_input(task_input)
+    if server_name == _PLATFORM_SERVER and tool_name == _READ_ATTACHMENT_TOOL:
+        return await _build_file_reread_arguments(deps, task_input, context, tool_name, task_uuid)
     try:
         return await deps.argument_builder.build_arguments(
             descriptor=descriptor,
@@ -523,10 +596,10 @@ def _synthesis_messages(task_input: ResearcherInput, *, tool_result: str, source
         "candidate_capabilities": list(task_input.context_packet.candidate_capabilities),
         "route_plan": task_input.context_packet.route_plan,
         "context_summary": task_input.context_packet.context_summary,
-        "attachment_context": task_input.context_packet.untrusted_context,
-        "prior_context": task_input.prior_context,
+        "attached_files": task_input.context_packet.untrusted_context,
+        "previous_answer": task_input.prior_context,
         "revision_feedback": task_input.revision_feedback,
-        "memory_hints": list(task_input.memory_hints[:4]),
+        "user_facts": list(task_input.memory_hints[:4]),
         "mcp_tool_result": tool_result,
         "mcp_source": source,
     }

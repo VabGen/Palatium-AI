@@ -84,8 +84,11 @@ dist/
 *.egg-info/
 *.egg
 
+# Node-деревья зависимостей: паттерн без якоря — npm-проект только в `web/`, но
+# случайный `npm install`/`npx` из корня репо не должен попадать в индекс (050, 084).
+node_modules/
+
 # Chat UI (Vite)
-web/node_modules/
 web/dist/
 web/dist-widget/
 

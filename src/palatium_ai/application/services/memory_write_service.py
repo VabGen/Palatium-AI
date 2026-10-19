@@ -126,5 +126,5 @@ async def _audit_write(
                 "contains_pii": "true" if contains_pii else "false",
             },
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # audit write is best-effort; the write result is kept (040)
         logger.warning("memory_write.audit_failed", error=str(exc))

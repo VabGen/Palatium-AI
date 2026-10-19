@@ -43,6 +43,19 @@ ActionStyle = Literal["primary", "secondary", "danger"]
 HeadingLevel = Literal[1, 2, 3]
 # How the document expects human participation (server turns this into HITL cards).
 DocumentInteraction = Literal["none", "choice", "confirm"]
+# Semantic class of the answer (UI skin / analytics hint; core does not branch on it).
+DocumentKind = Literal[
+    "analysis",
+    "recommendation",
+    "response",
+    "letter",
+    "memo",
+    "guide",
+    "report",
+    "faq",
+]
+# Register of the prose — how ceremonial the user-facing text should read.
+FormalityLevel = Literal["casual", "neutral", "formal", "official"]
 # Opaque widget id for UI registry — not a product allow-list.
 _WIDGET_KIND_PATTERN = r"^[a-z][a-z0-9_]{0,62}$"
 
@@ -264,6 +277,9 @@ class DocumentMeta(BaseModel):
     source_refs: tuple[str, ...] = ()
     # none = informational; choice/confirm → server mints clickable HITL cards from actions.
     interaction: DocumentInteraction = "none"
+    # Semantic hints — defaults keep every existing (legacy) document valid (Phase 1).
+    kind: DocumentKind = "analysis"
+    formality: FormalityLevel = "neutral"
 
 
 class ContentDocument(BaseModel):
@@ -274,7 +290,9 @@ class ContentDocument(BaseModel):
     schema_version: Literal[1] = 1
     locale: str = Field(min_length=2, max_length=16, pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
     title: str | None = Field(default=None, max_length=300)
-    blocks: tuple[ContentBlock, ...] = Field(min_length=1)
+    # Empty is a legitimate (honest) state: a failed/empty generation must not be
+    # faked with a whitespace paragraph. Consumers iterate `blocks` (no ^[0] access).
+    blocks: tuple[ContentBlock, ...] = Field(default_factory=tuple)
     actions: tuple[ActionSpec, ...] = ()
     meta: DocumentMeta
 
@@ -291,6 +309,8 @@ class ContentDocument(BaseModel):
                 return block.items[0].text[:limit]
             if isinstance(block, StepsBlock) and block.items:
                 return block.items[0].title[:limit]
+        if not self.blocks:
+            return ""
         return self.blocks[0].type[:limit]
 
     def plain_text(self, limit: int = 4000) -> str:

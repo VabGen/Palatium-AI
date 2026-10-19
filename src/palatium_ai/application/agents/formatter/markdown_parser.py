@@ -33,13 +33,19 @@ from palatium_ai.domain.content.content_document import (
     CalloutTone,
     ContentBlock,
     ContentDocument,
+    DividerBlock,
     DocumentInteraction,
     DocumentMeta,
+    FormulaBlock,
     HeadingBlock,
     IconToken,
+    KeyValueBlock,
+    KeyValueItem,
     ListBlock,
     ListItem,
     ParagraphBlock,
+    StepItem,
+    StepsBlock,
     TableBlock,
 )
 from palatium_ai.domain.content.markdown_blocks import prose_to_blocks
@@ -58,11 +64,20 @@ _CITE = re.compile(r"\[(\d+)\]")
 _CALLOUT_START = re.compile(r"^>\s*\[!(NOTE|WARNING|DANGER|SUCCESS|INFO)\]\s*$", re.IGNORECASE)
 _CALLOUT_BODY = re.compile(r"^>\s?(.*)$")
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+# Split table cells on unescaped pipes only — GFM allows a literal ``\|`` inside a cell.
+_SPLIT_ROW_CELL = re.compile(r"(?<!\\)\|")
 _FENCE = re.compile(r"^\s*```")
 _LEADING_ICON = re.compile(
     r'^\s*<icon\s+(?:name|x)="([a-z_]+)"\s*/>\s*',
     re.IGNORECASE,
 )
+# Rich structured blocks (UI renders these; see rule 055 — no per-phrase hardcode).
+_FORMULA_BLOCK = re.compile(r"^\s*\$\$(.+?)\$\$\s*$")
+_DIVIDER = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+# Label separator may sit inside the bold (`**Label:** value`) or after it (`**Label**: value`).
+_LABEL_SEP_CHARS = ":—–-"
+_KV_LINE = re.compile(r"^\s*[-*]\s+\*\*(?P<label>.+?)\*\*\s*(?P<sep>[:—–-])?\s*(?P<value>.+)$")
+_STEPS_ITEM = re.compile(r"^\s*\d+[.)]\s+\*\*(?P<title>.+?)\*\*\s*(?P<sep>[:—–-])?\s*(?P<body>.+)$")
 
 logger = get_logger(__name__)
 
@@ -93,7 +108,7 @@ def markdown_to_content_document(markdown: str, task_input: FormatterInput) -> C
     """Build a ContentDocument from final Formatter markdown (or legacy JSON)."""
     raw = (markdown or "").strip()
     if not raw:
-        return _empty_paragraph_doc(task_input)
+        return _empty_document(task_input)
 
     json_doc = _try_json_document(raw)
     if json_doc is not None:
@@ -109,7 +124,12 @@ def markdown_to_content_document(markdown: str, task_input: FormatterInput) -> C
     cite_nums = {int(m.group(1)) for m in _CITE.finditer(cleaned)}
     title, blocks = _parse_gfm_blocks(cleaned)
     if not blocks:
-        blocks = (ParagraphBlock(type="paragraph", text=cleaned or " "),)
+        if cleaned:
+            blocks = (ParagraphBlock(type="paragraph", text=cleaned),)
+        elif not actions and interaction == "none":
+            # Nothing to render and nothing to ask → honest empty document; the layer
+            # above turns it into failure_or_fallback. Never fake a whitespace block.
+            return _empty_document(task_input)
     title = _clean_text_field(title) if title else None
     blocks = _normalize_blocks(_apply_icons_and_strip_emoji(blocks))
 
@@ -131,12 +151,19 @@ def markdown_to_content_document(markdown: str, task_input: FormatterInput) -> C
 
 
 def _try_json_document(raw: str) -> ContentDocument | None:
+    """Legacy JSON path — only when the whole response is valid JSON with schema_version=1."""
     stripped = raw.strip()
-    if not (stripped.startswith("{") and '"schema_version"' in stripped):
+    if not stripped.startswith("{"):
+        return None
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         return None
     try:
         return parse_formatter_document(stripped)
-    except (ValueError, TypeError, json.JSONDecodeError, ValidationError):  # fmt: skip
+    except ValueError, TypeError, ValidationError:
         return None
 
 
@@ -246,27 +273,115 @@ def _parse_gfm_blocks(text: str) -> tuple[str | None, tuple[ContentBlock, ...]]:
             i += 1
             continue
 
-        callout = _CALLOUT_START.match(line.strip())
-        if callout:
+        block, consumed = _try_structured_block(lines, i)
+        if consumed:
             flush_buf()
-            block, consumed = _consume_callout(lines, i, callout.group(1))
-            blocks.append(block)
+            if block is not None:
+                blocks.append(block)
             i += consumed
             continue
-
-        if _looks_like_table_header(lines, i):
-            flush_buf()
-            table, consumed = _parse_table(lines, i)
-            if table is not None:
-                blocks.append(table)
-                i += consumed
-                continue
 
         buf.append(line)
         i += 1
 
     flush_buf()
     return title, tuple(blocks)
+
+
+def _try_structured_block(lines: list[str], index: int) -> tuple[ContentBlock | None, int]:
+    """Detect a rich block (callout/divider/formula/kv/steps/table) at ``index``.
+
+    Rich blocks are ordered by specificity, and every check that could also read a
+    prose line is tested here so ``_parse_gfm_blocks`` stays a flat dispatch loop.
+    Returns ``(block, lines_consumed)``; ``consumed == 0`` means "not a rich block".
+    A result may carry ``block is None`` with ``consumed > 0`` only for an empty
+    formula — the line is still swallowed so the literal ``$$ $$`` never leaks into prose.
+    """
+    line = lines[index]
+
+    callout = _CALLOUT_START.match(line.strip())
+    if callout:
+        return _consume_callout(lines, index, callout.group(1))
+
+    # Divider must be checked before a table separator: a lone `---` is a divider.
+    if _DIVIDER.match(line):
+        return DividerBlock(type="divider"), 1
+
+    # Formula block: `$$E = mc^2$$` on its own line (LaTeX, not a code fence).
+    formula_match = _FORMULA_BLOCK.match(line)
+    if formula_match:
+        latex = formula_match.group(1).strip()[:4000]
+        return (FormulaBlock(type="formula", latex=latex) if latex else None), 1
+
+    # Key-value panel: 2+ consecutive `- **Label:** value` bullets.
+    kv_block, kv_consumed = _try_parse_kv_panel(lines, index)
+    if kv_block is not None:
+        return kv_block, kv_consumed
+
+    # Steps / timeline: 2+ consecutive `N. **Title:** body` items.
+    steps_block, steps_consumed = _try_parse_steps(lines, index)
+    if steps_block is not None:
+        return steps_block, steps_consumed
+
+    # GFM pipe table — checked last so a divider line is never read as a separator.
+    if _looks_like_table_header(lines, index):
+        table, table_consumed = _parse_table(lines, index)
+        if table is not None:
+            return table, table_consumed
+
+    return None, 0
+
+
+def _split_label_separator(text: str) -> tuple[str, bool]:
+    """Return ``(label, had_separator)`` — the separator may be inside the bold or after it."""
+    stripped = text.strip()
+    if stripped and stripped[-1] in _LABEL_SEP_CHARS:
+        return stripped.rstrip(_LABEL_SEP_CHARS).strip(), True
+    return stripped, False
+
+
+def _try_parse_kv_panel(lines: list[str], index: int) -> tuple[KeyValueBlock | None, int]:
+    """Detect 2+ consecutive ``- **Label:** value`` bullets as one definition panel.
+
+    A single match stays a normal bullet list — the panel needs two pairs to signal
+    "these are parallel parameters, not prose" (055).
+    """
+    items: list[KeyValueItem] = []
+    i = index
+    while i < len(lines):
+        match = _KV_LINE.match(lines[i])
+        if match is None:
+            break
+        label, had_inline_sep = _split_label_separator(match.group("label"))
+        if not had_inline_sep and match.group("sep") is None:
+            break
+        value = match.group("value").strip()
+        if label and value:
+            items.append(KeyValueItem(label=label[:200], value=value[:2000]))
+        i += 1
+    if len(items) >= 2:
+        return KeyValueBlock(type="kv", items=tuple(items)), i - index
+    return None, 0
+
+
+def _try_parse_steps(lines: list[str], index: int) -> tuple[StepsBlock | None, int]:
+    """Detect 2+ consecutive ``N. **Title:** body`` items as one process timeline."""
+    items: list[StepItem] = []
+    i = index
+    while i < len(lines):
+        match = _STEPS_ITEM.match(lines[i])
+        if match is None:
+            break
+        title, had_inline_sep = _split_label_separator(match.group("title"))
+        if not had_inline_sep and match.group("sep") is None:
+            break
+        body = match.group("body").strip()
+        if title and body:
+            items.append(StepItem(title=title[:200], body=body[:2000], status="pending"))
+        i += 1
+    if len(items) >= 2:
+        return StepsBlock(type="steps", items=tuple(items)), i - index
+    return None, 0
 
 
 def _consume_callout(
@@ -386,12 +501,34 @@ def _enrich_block(block: ContentBlock) -> ContentBlock:
                 }
             )
         case ListBlock():
-            items = tuple(_enrich_list_item(item) for item in block.items)
-            return block.model_copy(update={"items": items})
+            list_items = tuple(_enrich_list_item(item) for item in block.items)
+            return block.model_copy(update={"items": list_items})
         case TableBlock():
             columns = tuple(_clean_text_field(c) or " " for c in block.columns)
             rows = tuple(tuple(_clean_text_field(cell) or " " for cell in row) for row in block.rows)
             return block.model_copy(update={"columns": columns, "rows": rows})
+        case KeyValueBlock():
+            kv_items = tuple(
+                item.model_copy(
+                    update={
+                        "label": _clean_text_field(item.label) or item.label,
+                        "value": _clean_text_field(item.value) or item.value,
+                    }
+                )
+                for item in block.items
+            )
+            return block.model_copy(update={"items": kv_items})
+        case StepsBlock():
+            step_items = tuple(
+                item.model_copy(
+                    update={
+                        "title": _clean_text_field(item.title) or item.title,
+                        "body": _clean_text_field(item.body) or item.body,
+                    }
+                )
+                for item in block.items
+            )
+            return block.model_copy(update={"items": step_items})
         case _:
             return block
 
@@ -464,17 +601,19 @@ def _parse_table(lines: list[str], index: int) -> tuple[TableBlock | None, int]:
 
 
 def _split_row(line: str) -> list[str]:
-    stripped = line.strip().strip("|")
-    return [cell.strip() for cell in stripped.split("|")]
+    stripped = line.strip().removeprefix("|")
+    if stripped.endswith("|") and not stripped.endswith("\\|"):
+        stripped = stripped[:-1]
+    return [cell.replace("\\|", "|").strip() for cell in _SPLIT_ROW_CELL.split(stripped)]
 
 
-def _empty_paragraph_doc(task_input: FormatterInput) -> ContentDocument:
+def _empty_document(task_input: FormatterInput) -> ContentDocument:
     locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
     return ContentDocument(
         schema_version=1,
         locale=locale,
         title=None,
-        blocks=(ParagraphBlock(type="paragraph", text=" "),),
+        blocks=(),
         actions=(),
         meta=DocumentMeta(
             confidence=0.0,

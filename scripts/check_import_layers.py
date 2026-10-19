@@ -125,44 +125,75 @@ def collect_violations() -> list[LayerViolation]:
     violations: list[LayerViolation] = []
     for path in _iter_python_files():
         parts = _module_parts(path)
-        rel = "/".join(parts)
         importer_layer = parts[0]
         if importer_layer not in _ALL_LAYERS:
             continue
-        forbidden = _FORBIDDEN[importer_layer]
-        is_composition_root = rel in _COMPOSITION_ROOT_FILES or f"{rel}.py" in _COMPOSITION_ROOT_FILES
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except SyntaxError as exc:  # pragma: no cover - would already fail ruff/compile
-            violations.append(
-                LayerViolation(rel, exc.lineno or 0, "", f"cannot parse: {exc.msg}"),
-            )
-            continue
-        tc_ranges = _type_checking_ranges(tree)
-        for node in ast.walk(tree):
-            if _in_ranges(getattr(node, "lineno", -1), tc_ranges):
-                continue
-            if isinstance(node, ast.ImportFrom):
-                targets: list[str | None] = [_resolve_import(path, node)]
-            elif isinstance(node, ast.Import):
-                targets = [alias.name for alias in node.names]
-            else:
-                continue
-            for target in targets:
-                layer = _target_layer(target)
-                if layer is None or layer == importer_layer or layer not in forbidden:
-                    continue
-                if is_composition_root and layer == "infrastructure":
-                    continue
-                violations.append(
-                    LayerViolation(
-                        importer=rel,
-                        line=node.lineno,
-                        imported=f"{target}",
-                        message=f"{importer_layer}/ must not import {layer}/",
-                    ),
-                )
+        violations.extend(
+            _file_violations(path, rel="/".join(parts), importer_layer=importer_layer),
+        )
     return violations
+
+
+def _file_violations(path: Path, *, rel: str, importer_layer: str) -> list[LayerViolation]:
+    """Violations inside one file; an unparsable file reports itself instead of crashing."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except SyntaxError as exc:  # pragma: no cover - would already fail ruff/compile
+        return [LayerViolation(rel, exc.lineno or 0, "", f"cannot parse: {exc.msg}")]
+
+    forbidden = _FORBIDDEN[importer_layer]
+    composition_root = rel in _COMPOSITION_ROOT_FILES or f"{rel}.py" in _COMPOSITION_ROOT_FILES
+    tc_ranges = _type_checking_ranges(tree)
+    found: list[LayerViolation] = []
+    for node in ast.walk(tree):
+        # `stmt` is the narrowest base that declares `lineno`; imports are always statements.
+        if not isinstance(node, ast.stmt):
+            continue
+        if _in_ranges(node.lineno, tc_ranges):
+            continue
+        for target in _import_targets(path, node):
+            crossed = _crossed_layer(
+                importer_layer=importer_layer,
+                target=target,
+                forbidden=forbidden,
+                composition_root=composition_root,
+            )
+            if crossed is None:
+                continue
+            found.append(
+                LayerViolation(
+                    importer=rel,
+                    line=node.lineno,
+                    imported=f"{target}",
+                    message=f"{importer_layer}/ must not import {crossed}/",
+                ),
+            )
+    return found
+
+
+def _import_targets(path: Path, node: ast.stmt) -> list[str | None]:
+    """Absolute module names an import statement pulls in; empty for any other statement."""
+    if isinstance(node, ast.ImportFrom):
+        return [_resolve_import(path, node)]
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    return []
+
+
+def _crossed_layer(
+    *,
+    importer_layer: str,
+    target: str | None,
+    forbidden: frozenset[str],
+    composition_root: bool,
+) -> str | None:
+    """Imported layer when the edge is forbidden, else ``None``."""
+    layer = _target_layer(target)
+    if layer is None or layer == importer_layer or layer not in forbidden:
+        return None
+    if composition_root and layer == "infrastructure":
+        return None
+    return layer
 
 
 def main() -> int:

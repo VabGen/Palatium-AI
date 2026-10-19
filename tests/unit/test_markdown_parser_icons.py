@@ -108,11 +108,7 @@ def test_orphan_icon_paragraph_merges_into_following_heading() -> None:
     heading = next(b for b in doc.blocks if isinstance(b, HeadingBlock))
     assert heading.icon == "check"
     assert "Requirements" in heading.text
-    orphans = [
-        b
-        for b in doc.blocks
-        if isinstance(b, ParagraphBlock) and b.icon is not None and not b.text.strip()
-    ]
+    orphans = [b for b in doc.blocks if isinstance(b, ParagraphBlock) and b.icon is not None and not b.text.strip()]
     assert orphans == []
 
 

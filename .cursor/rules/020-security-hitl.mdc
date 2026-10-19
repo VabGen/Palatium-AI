@@ -98,12 +98,18 @@ explicit текстом перед тем как продолжить.
 
 Конфиг Cursor-агента (терминал/MCP) — `.cursor/permissions.json`, схема —
 `cursor-always-local/schemas/permissions.schema.json` (лежит в сборке Cursor).
-Допустимы только ключи: `approvalMode`, `terminalAllowlist`, `mcpAllowlist`,
-`autoRun`/`autoReview` (`unevaluatedProperties: false`); комментарии `//` разрешены.
+Документированные ключи: `terminalAllowlist`, `mcpAllowlist`, `autoRun`; комментарии `//` разрешены.
 
-- `approvalMode`: `manual` (Ask Every Time) · `allowlist` (только из списков) ·
-  `unrestricted` (Always Run, без вопросов). Текущее значение — в файле.
-- **Жёсткие запреты — в `.cursor/hooks.json`, а НЕ в approvalMode** (они действуют
+- **Run Mode файлом НЕ задаётся.** Его выбирает человек в UI:
+  Settings → Agents → Approvals & Execution → Run Mode
+  (Auto-review · Allowlist · Run Everything). `permissions.json` учитывается
+  только когда Run Mode включён там же; текущий режим фиксируется комментарием
+  в `permissions.json` (кто/когда).
+- Ключ `approvalMode` и schema-алиас `autoReview` — недокументированные: docs
+  перечисляют только `mcpAllowlist`/`terminalAllowlist`/`autoRun` и говорят
+  «Unknown keys are ignored», а `approvalMode` ломает выпадающий список Run Mode.
+  В `permissions.json` их не держать (удалено 2026-10-16).
+- **Жёсткие запреты — в `.cursor/hooks.json`, а НЕ в Run Mode** (они действуют
   при любом режиме): `beforeShellExecution` → `deny-dangerous-shell.py` (deny),
   `beforeMCPExecution` → `mcp-rbac-guard.sh` (ask/deny по перечню 070).
 - **Инвариант:** в `mcpAllowlist` только read-инструменты 070
@@ -111,11 +117,14 @@ explicit текстом перед тем как продолжить.
   `web_fallback`, `read_attachment`). Мутации (`save_memory`, `forget_memory`,
   `extract_transcript_memories`, `ingest_document`) туда НЕ добавлять — они
   проходят HITL через `mcp-rbac-guard.sh`.
-- `approvalMode: "unrestricted"` снимает кнопку подтверждения у человека —
-  это ослабление контроля, а не «оптимизация». Переключение в `unrestricted`
-  требует явного подтверждения владельца и фиксируется комментарием в
-  `permissions.json` (кто/когда); помни, что при этом единственной линией
-  защиты остаётся deny-hook + RBAC-guard.
+- `Run Everything` (Always Run) снимает кнопку подтверждения у человека —
+  это ослабление контроля, а не «оптимизация». Переключение требует явного
+  подтверждения владельца и фиксируется комментарием (кто/когда); помни, что
+  единственной линией защиты остаются deny-hook + RBAC-guard, а File-Deletion /
+  External-File / Browser Protection спрашивают независимо от режима.
+- `terminalAllowlist`/`mcpAllowlist`/`autoRun` действуют только в своих режимах
+  (Allowlist / Auto-review) и в Run Everything не консультируются; непустой
+  allowlist делает UI-редактор read-only («Add to allowlist» скрыт).
 - `permissions.json` (dev-time авто-запуск) **не отменяет** HITL продукта
   (`interrupt()`/карточки) — это разные слои: первый про действия агента в IDE,
   второй про действия системы в runtime.

@@ -29,6 +29,9 @@ from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
 
 if TYPE_CHECKING:
+    from palatium_ai.application.services.attachment_reference_resolver import (
+        AttachmentReferenceResolver,
+    )
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.ports.harness import HarnessPort
     from palatium_ai.domain.ports.llm import LLMPort
@@ -49,11 +52,13 @@ class ResearcherAgent(BaseAgent):
         *,
         mcp_tool_call_repository: McpToolCallRecorderPort | None = None,
         capability_index: MCPCapabilityIndex | None = None,
+        file_reference_resolver: AttachmentReferenceResolver | None = None,
     ) -> None:
         super().__init__(harness, config)
         self._llm = llm
         self._mcp_registry = mcp_registry
         self._mcp_tool_call_repository = mcp_tool_call_repository
+        self._file_reference_resolver = file_reference_resolver
         self._tool_executor = ToolExecutor(self._config)
         self._capability_index: MCPCapabilityIndex | None
         if capability_index is not None:
@@ -118,6 +123,7 @@ class ResearcherAgent(BaseAgent):
                         argument_builder=self._argument_builder,
                         mcp_tool_call_repository=self._mcp_tool_call_repository,
                         agent_role=self._config.role,
+                        file_reference_resolver=self._file_reference_resolver,
                     ),
                     task_input,
                     context,
@@ -196,7 +202,8 @@ class ResearcherAgent(BaseAgent):
             enabled=enabled,
             grounding=task_input.context_packet.grounding,
         )
-        mode = str(task_input.context_packet.grounding or "optional")
+        # ``grounding`` is a validated Literal (never empty), so no fallback is needed.
+        mode: str = task_input.context_packet.grounding
         user_text = task_input.context_packet.user_text
         if decision.action == "stub":
             logger.warning(

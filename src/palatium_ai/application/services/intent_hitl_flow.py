@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Literal, cast
+from uuid import UUID
 
 from langgraph.types import Command
 
@@ -30,10 +31,12 @@ from palatium_ai.core.observability.turn_tokens import turn_token_usage
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock, ParagraphBlock
 from palatium_ai.domain.hitl.cards import HITLCardView, clamp_ttl_seconds
+from palatium_ai.domain.hitl.file_choice import FileChoiceCardPolicy
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
 if TYPE_CHECKING:
+    from palatium_ai.application.services.attachment_reference_resolver import AttachmentReferenceResolver
     from palatium_ai.application.services.cost_budget import CostBudgetService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.intent_graph_runner import IntentGraphRunner
@@ -73,6 +76,7 @@ class IntentHitlFlow:
         dialog_turn_store: DialogTurnStore | None = None,
         consolidation: MemoryExtractService | None = None,
         option_synthesizer: OptionSynthesizer | None = None,
+        file_reference_resolver: AttachmentReferenceResolver | None = None,
     ) -> None:
         self._graph_runner = graph_runner
         self._session_service = session_service
@@ -83,6 +87,7 @@ class IntentHitlFlow:
         self._dialog_turn_store = dialog_turn_store
         self._consolidation = consolidation
         self._option_synthesizer = option_synthesizer
+        self._file_reference_resolver = file_reference_resolver
 
     async def process_hitl_choice(
         self,
@@ -105,6 +110,12 @@ class IntentHitlFlow:
         )
         selection = ChoiceResumePolicy.selection_from_card(card, action_id)
         safe_text = ChoiceResumePolicy.graph_user_text(selection)
+        chosen_file = await self._chosen_attachment(
+            action_id=selection.action_id,
+            label=selection.label,
+            thread_id=thread_id,
+            user_id=user_id,
+        )
         # Pending sticky stays in session for SB2 rehydrate only when Continuity
         # trusts a file-bound format/answer — never treat as explicit upload (055).
         await self._session_service.touch_session(
@@ -123,8 +134,55 @@ class IntentHitlFlow:
             user_id=user_id,
             org_id=org_id,
             is_admin=is_admin,
-            attachment_ids=None,
+            attachment_ids=[chosen_file] if chosen_file is not None else None,
         )
+
+    async def _chosen_attachment(
+        self,
+        *,
+        action_id: str,
+        label: str,
+        thread_id: str,
+        user_id: str | None,
+    ) -> UUID | None:
+        """Map a file-choice card option back to one owner-scoped attachment id.
+
+        The card carries the user's own filename, not an id: the id is resolved here
+        from the thread's rows (deterministic, 070). A card that is not ours, or a
+        file deleted between mint and click, yields ``None`` — the turn then runs the
+        ordinary fail-closed path instead of reading a guessed file.
+        """
+        if not FileChoiceCardPolicy.is_file_choice(action_id):
+            return None
+        resolver = self._file_reference_resolver
+        if resolver is None or not (user_id or "").strip():
+            logger.warning(
+                "hitl.file_choice_unresolved",
+                thread_id=thread_id,
+                reason="resolver_unavailable",
+                action_id=action_id,
+            )
+            return None
+        resolution = await resolver.resolve_explicit(
+            user_id=user_id or "",
+            thread_id=thread_id,
+            filename=label,
+        )
+        if resolution.status != "resolved" or resolution.attachment_id is None:
+            logger.info(
+                "hitl.file_choice_unresolved",
+                thread_id=thread_id,
+                reason=resolution.reason,
+                status=resolution.status,
+                action_id=action_id,
+            )
+            return None
+        await write_audit(
+            conversation_id=thread_id,
+            event="hitl_file_choice",
+            metadata={"action_id": action_id, "attachment_id": str(resolution.attachment_id), "reason": resolution.reason},
+        )
+        return resolution.attachment_id
 
     async def acknowledge_quality_approve(
         self,
@@ -591,11 +649,18 @@ class IntentHitlFlow:
         org_id: str | None = None,
         has_turn_attachments: bool = False,
         dialog: DialogTurnWindow | None = None,
+        file_reference: str = "none",
+        execution_error: str | None = None,
     ) -> FormatterTaskResult:
         """Сервер создаёт HITL-карточки; LLM actions не являются источником истины.
 
         ``user_text`` must be the current turn's ask; ``prior_context`` reaches the
         option synthesizer only when it comes from the latest exchange in ``dialog``.
+
+        A failed thread-file re-read (``file_reference=thread_file`` +
+        ``execution_error=attachment_reference_unresolved``) is upgraded from a plain
+        refusal to a card of the thread's actual files, so the user picks one
+        deterministically instead of retyping a name (055, 070).
         """
         from palatium_ai.application.services.interaction_assembler import (
             InteractionAssembler,
@@ -621,6 +686,20 @@ class IntentHitlFlow:
         # Heal degraded block types after LangGraph/checkpointer serde.
         document = parse_content_document(document.model_dump(mode="json"))
         formatted = formatted.model_copy(update={"output": document})
+
+        file_card: HITLCardView | None = None
+        minted = await self._mint_file_choice_card(
+            document=document,
+            thread_id=thread_id,
+            task_id=task_id,
+            user_id=user_id,
+            org_id=org_id,
+            file_reference=file_reference,
+            execution_error=execution_error,
+        )
+        if minted is not None:
+            file_card, document = minted
+            formatted = formatted.model_copy(update={"output": document})
 
         assembled = InteractionAssembler.assemble(
             document,
@@ -712,7 +791,11 @@ class IntentHitlFlow:
             document = assembled.document
         cards: list[HITLCardView] = []
 
-        if plan.choice_actions:
+        if file_card is not None:
+            # Grounded card wins over a generic menu: its options are real files,
+            # never LLM-synthesized labels (070).
+            cards.append(file_card)
+        elif plan.choice_actions:
             choice = await self._hitl_service.create_choice_card(
                 thread_id=thread_id,
                 task_id=task_id,
@@ -742,6 +825,64 @@ class IntentHitlFlow:
                 "hitl_cards": tuple(cards),
             }
         )
+
+    async def _mint_file_choice_card(
+        self,
+        *,
+        document: ContentDocument,
+        thread_id: str,
+        task_id: str,
+        user_id: str | None,
+        org_id: str | None,
+        file_reference: str,
+        execution_error: str | None,
+    ) -> tuple[HITLCardView, ContentDocument] | None:
+        """Upgrade an ambiguous re-read refusal into a card of the thread's files.
+
+        Only a turn that *was* a thread-file re-read (``file_reference=thread_file``)
+        and failed with ``attachment_reference_unresolved`` qualifies: the worker has
+        already refused to guess, so the card asks the user instead (020, 055).
+        """
+        from palatium_ai.domain.agents.researcher import ATTACHMENT_REFERENCE_UNRESOLVED
+        from palatium_ai.domain.hitl.option_synthesis import DiscreteChoiceSynthesisPolicy
+
+        if file_reference != "thread_file" or execution_error != ATTACHMENT_REFERENCE_UNRESOLVED:
+            return None
+        resolver = self._file_reference_resolver
+        if resolver is None or not (user_id or "").strip():
+            return None
+        resolution = await resolver.resolve(user_id=user_id or "", thread_id=thread_id)
+        if resolution.status != "ambiguous":
+            # ``no_match`` means the ask named another document: offering this
+            # thread's files would invite the wrong read (fail-closed, 020).
+            return None
+        names = FileChoiceCardPolicy.distinct_names(resolution.candidates)
+        if not FileChoiceCardPolicy.mintable(names):
+            return None
+        actions = FileChoiceCardPolicy.build_actions(names)
+        merged = DiscreteChoiceSynthesisPolicy.merge_actions_into_document(
+            document,
+            actions,
+            framing_text=FileChoiceCardPolicy.framing(len(actions)),
+            locale=document.locale,
+        )
+        card = await self._hitl_service.create_choice_card(
+            thread_id=thread_id,
+            task_id=task_id,
+            title=document.title or FileChoiceCardPolicy.card_title(),
+            body=None,
+            actions=actions,
+            owner_user_id=user_id,
+            org_id=org_id,
+        )
+        logger.info(
+            "hitl.file_choice_card",
+            thread_id=thread_id,
+            task_id=task_id,
+            files=len(actions),
+            reason=resolution.reason,
+        )
+        return card, merged
 
     async def _session_response_locale(self, *, thread_id: str) -> str:
         """Sticky BCP-47 from session; falls back to last_user_text script signal."""

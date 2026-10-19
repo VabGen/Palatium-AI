@@ -65,10 +65,12 @@ from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
 from palatium_ai.domain.policies.clarification import CLARIFY_MIN_CONFIDENCE, ClarificationGatePolicy
 from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import (
+    FILE_REFERENCE_DEFAULT,
     GROUNDING_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     TRANSFORMATION_DEFAULT,
     ContinuationKind,
+    FileReferenceKind,
     GroundingMode,
     TaskKind,
     TransformationKind,
@@ -103,6 +105,9 @@ class EffectiveRoutingIntent(BaseModel):
     grounding: GroundingMode = GROUNDING_DEFAULT
     grounding_reason: str = Field(default="", max_length=500)
     transformation: TransformationKind = TRANSFORMATION_DEFAULT
+    #: Does the ask operate on a file already bound to the thread (storage re-read)?
+    #: Defaults to ``none``; a fenced upload turn owns its own file (055).
+    file_reference: FileReferenceKind = FILE_REFERENCE_DEFAULT
     continuation_kind: ContinuationKind = "new_topic"
     prior_context: str | None = Field(default=None, max_length=_PRIOR_CAP)
     # Intent may set requires_review due to history-blind clarify — suppress for follow-ups.
@@ -374,6 +379,7 @@ class ContinuityPolicy:
         grounding: GroundingMode = GROUNDING_DEFAULT,
         grounding_reason: str = "",
         transformation: TransformationKind = TRANSFORMATION_DEFAULT,
+        file_reference: FileReferenceKind = FILE_REFERENCE_DEFAULT,
         clarify_underspec_default: bool = False,
     ) -> EffectiveRoutingIntent:
         """Apply UserChoiceIntentPolicy (sole choice-axis owner) then build routing intent."""
@@ -399,15 +405,25 @@ class ContinuityPolicy:
         )
         # Trusted-prior follow-ups suppress history-blind Intent review unless choice HITL.
         suppress = trust_prior_for_workers and not normalized.requires_user_choice
+        # Thread-file re-read is a content operation executed by the worker via MCP:
+        # the Formatter template path cannot read storage, so it must not own this ask
+        # (same reasoning as expand/shorten/rewrite → knowledge_request, 055).
+        task_kind = normalized.task_kind
+        requires_mcp = normalized.requires_mcp
+        if file_reference == "thread_file":
+            if task_kind == "response_formatting":
+                task_kind = "knowledge_request"
+            requires_mcp = True
         return EffectiveRoutingIntent(
-            task_kind=normalized.task_kind,
-            requires_mcp=normalized.requires_mcp,
+            task_kind=task_kind,
+            requires_mcp=requires_mcp,
             requires_user_choice=normalized.requires_user_choice,
             underspecification_kind=normalized.underspecification_kind,
             candidate_capabilities=normalized.candidate_capabilities,
             grounding=normalized.grounding,
             grounding_reason=normalized.grounding_reason,
             transformation=normalized.transformation,
+            file_reference=file_reference,
             continuation_kind=continuation_kind,
             prior_context=cls._clip_prior(prior_context),
             suppress_intent_hitl=suppress,
@@ -488,6 +504,7 @@ class ContinuityPolicy:
                 grounding=snap.grounding,
                 grounding_reason=snap.grounding_reason,
                 transformation=snap.transformation,
+                file_reference=snap.file_reference,
                 clarify_underspec_default=True,
             )
 
@@ -505,6 +522,7 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            file_reference=snap.file_reference,
         )
 
     @classmethod
@@ -554,6 +572,8 @@ class ContinuityPolicy:
         snap.refers_to_prior = False
         snap.requires_user_choice = False
         snap.underspec = "none"
+        # This turn carries its own fence; a storage re-read would fight it (055).
+        snap.file_reference = FILE_REFERENCE_DEFAULT
         snap.caps = tuple(c for c in snap.caps if c != "user_choice")
         if snap.raw_task == "clarification_needed":
             snap.raw_task = "knowledge_request"
@@ -620,6 +640,7 @@ class ContinuityPolicy:
                 grounding=snap.grounding,
                 grounding_reason=snap.grounding_reason,
                 transformation=snap.transformation,
+                file_reference=snap.file_reference,
             )
         user_prior = cls.prior_user_content(dialog)
         if user_prior is None:
@@ -638,6 +659,7 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            file_reference=snap.file_reference,
         )
 
     @classmethod
@@ -682,6 +704,7 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            file_reference=snap.file_reference,
         )
 
 
@@ -699,6 +722,7 @@ class _ResolveSnapshot:
     grounding: GroundingMode
     grounding_reason: str
     transformation: TransformationKind
+    file_reference: FileReferenceKind
     intent_reasoning: str
     confidence: float
     choice_slot_filled: bool
@@ -724,6 +748,7 @@ class _ResolveSnapshot:
             transformation=(
                 TransformPolicy.coerce(raw_intent.transformation) if raw_intent is not None else TRANSFORMATION_DEFAULT
             ),
+            file_reference=raw_intent.file_reference if raw_intent is not None else FILE_REFERENCE_DEFAULT,
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,

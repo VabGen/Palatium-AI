@@ -17,6 +17,7 @@ from palatium_ai.domain.policies import (
     UntrustedContentPolicy,
     UntrustedContentThresholds,
     budget_untrusted_text,
+    count_fence_blocks,
 )
 
 _CLEAN_DOCUMENT = "Договор поставки №42. Сроки поставки согласованы сторонами."
@@ -231,3 +232,11 @@ def test_budget_helper_keeps_both_fences_when_names_match() -> None:
 def test_budget_helper_rejects_a_useless_budget() -> None:
     with pytest.raises(ValueError, match="max_chars"):
         budget_untrusted_text("text", max_chars=8)
+
+
+def test_count_fence_blocks_counts_documents_not_markers() -> None:
+    """Consumers must be able to log how many documents a fence carried (040)."""
+    joined = "\n\n".join([_fenced("a"), _fenced("b"), _fenced("c")])
+    assert count_fence_blocks(joined) == 3
+    assert count_fence_blocks(_fenced("a")) == 1
+    assert count_fence_blocks("plain tool output without fences") == 0

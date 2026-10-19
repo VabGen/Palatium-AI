@@ -11,7 +11,7 @@ from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.llm.json_codec import loads_llm_json
 from palatium_ai.domain.policies.grounding import GroundingPolicy
 from palatium_ai.domain.policies.transform import TransformPolicy
-from palatium_ai.domain.policies.types import GroundingMode, TransformationKind
+from palatium_ai.domain.policies.types import FILE_REFERENCE_DEFAULT, FileReferenceKind, GroundingMode, TransformationKind
 
 _VALID_TASK_KINDS: frozenset[str] = frozenset(
     {
@@ -28,8 +28,13 @@ _VALID_TASK_KINDS: frozenset[str] = frozenset(
 _VALID_UNDERSPEC: frozenset[str] = frozenset({"none", "open_text", "discrete_choice"})
 
 
-def parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
-    """Parse JSON LLM response into IntentClassifierOutput."""
+def parse_classifier_output(raw_content: str, *, has_thread_files: bool = False) -> IntentClassifierOutput:
+    """Parse JSON LLM response into IntentClassifierOutput.
+
+    ``has_thread_files`` is the structural precondition for the ``thread_file`` axis:
+    a re-read can only target a file the dialog actually holds, so the label is
+    down-coerced to ``none`` otherwise (code > model prose, 055).
+    """
     payload = loads_llm_json(raw_content)
     if not isinstance(payload, dict):
         msg = "Intent classifier JSON must be an object"
@@ -45,6 +50,10 @@ def parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
     grounding = _coerce_grounding(payload.get("grounding"), task_kind=task_kind, capabilities=capabilities)
     grounding_reason = str(payload.get("grounding_reason") or payload.get("reason") or "")[:500]
     transformation = _coerce_transformation(payload.get("transformation"))
+    file_reference = _coerce_file_reference(
+        payload.get("file_reference"),
+        has_thread_files=has_thread_files,
+    )
 
     return UserChoiceIntentPolicy.normalize(
         IntentClassifierOutput(
@@ -56,6 +65,7 @@ def parse_classifier_output(raw_content: str) -> IntentClassifierOutput:
             grounding=grounding,
             grounding_reason=grounding_reason,
             transformation=transformation,
+            file_reference=file_reference,
             confidence=float(payload.get("confidence", 0.0)),
             reasoning=str(payload.get("reasoning", "No reasoning provided")),
         ),
@@ -104,3 +114,12 @@ def _coerce_grounding(
 
 def _coerce_transformation(value: object) -> TransformationKind:
     return TransformPolicy.coerce(value)
+
+
+def _coerce_file_reference(value: object, *, has_thread_files: bool) -> FileReferenceKind:
+    """Unknown labels / absent thread files → ``none`` (never a storage read by guess)."""
+    if not has_thread_files:
+        return FILE_REFERENCE_DEFAULT
+    if isinstance(value, str) and value.strip() == "thread_file":
+        return "thread_file"
+    return FILE_REFERENCE_DEFAULT

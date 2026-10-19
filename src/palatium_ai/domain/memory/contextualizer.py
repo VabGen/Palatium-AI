@@ -33,6 +33,9 @@ class ContextualizerInput(BaseModel):
     task_kind: TaskKind | None = None
     requires_mcp: bool = False
     candidate_capabilities: tuple[str, ...] = ()
+    # This turn carries already-fenced uploads: the referent of "the files/documents"
+    # exists outside dialog_history, so a missing-in-history referent is not ambiguity.
+    has_attachment_context: bool = False
 
 
 class ContextualizerOutput(BaseModel):

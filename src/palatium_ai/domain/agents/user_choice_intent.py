@@ -31,8 +31,7 @@ class UserChoiceIntentPolicy:
         caps = tuple(output.candidate_capabilities)
         cap_set = {item.strip().lower() for item in caps}
         underspec: UnderspecificationKind = output.underspecification_kind
-        requires_user_choice = bool(
-            output.requires_user_choice) or underspec == "discrete_choice" or "user_choice" in cap_set
+        requires_user_choice = bool(output.requires_user_choice) or underspec == "discrete_choice" or "user_choice" in cap_set
 
         if requires_user_choice and underspec == "none":
             underspec = "discrete_choice"
@@ -57,12 +56,12 @@ class UserChoiceIntentPolicy:
             reasoning = f"{reasoning}; open_text underspec → clarification_needed"
 
         if (
-                requires_user_choice == output.requires_user_choice
-                and underspec == output.underspecification_kind
-                and task_kind == output.task_kind
-                and requires_mcp == output.requires_mcp
-                and caps == output.candidate_capabilities
-                and reasoning == output.reasoning
+            requires_user_choice == output.requires_user_choice
+            and underspec == output.underspecification_kind
+            and task_kind == output.task_kind
+            and requires_mcp == output.requires_mcp
+            and caps == output.candidate_capabilities
+            and reasoning == output.reasoning
         ):
             return output
 

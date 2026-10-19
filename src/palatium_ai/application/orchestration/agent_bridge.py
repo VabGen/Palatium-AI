@@ -58,6 +58,7 @@ def intent_to_agent_input(
         context={
             "continuation_kind": continuation or "",
             "has_prior_dialog": "true" if task_input.has_prior_dialog else "false",
+            "has_thread_files": "true" if task_input.has_thread_files else "false",
             "_thread_id": thread_id,
         },
     )
@@ -114,6 +115,7 @@ def contextualizer_to_agent_input(
                 list(task_input.candidate_capabilities),
                 ensure_ascii=False,
             ),
+            "has_attachment_context": "true" if task_input.has_attachment_context else "false",
             "_thread_id": thread_id,
         },
     )
@@ -355,6 +357,7 @@ def context_weaver_to_agent_input(
             "grounding_reason": task_input.grounding_reason or "",
             "has_attachment_context": "true" if task_input.has_attachment_context else "false",
             "has_trusted_prior": "true" if task_input.has_trusted_prior else "false",
+            "file_reference": task_input.file_reference,
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },

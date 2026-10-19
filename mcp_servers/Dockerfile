@@ -19,9 +19,9 @@
 ARG PYTHON_VERSION=3.14
 
 # Pinned by digest (025) — same index as the root Dockerfile: `python:3.14-slim` =
-# 3.14.7-slim-trixie (2026-09-19). Bumping PYTHON_VERSION without refreshing the digest
+# 3.14.8-slim-trixie (2026-10-06). Bumping PYTHON_VERSION without refreshing the digest
 # fails the build rather than silently rebuilding on a different base image.
-FROM python:${PYTHON_VERSION}-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS runtime
+FROM python:${PYTHON_VERSION}-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS runtime
 
 ARG MCP_NAME=edms
 ARG MCP_MODULE=mcp_servers.edms.edms_mcp_server

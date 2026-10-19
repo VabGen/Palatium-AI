@@ -54,6 +54,14 @@ TRANSFORMATION_DEFAULT: TransformationKind = "none"
 GroundingMode = Literal["required", "optional", "none"]
 GROUNDING_DEFAULT: GroundingMode = "optional"
 
+# Whether the ask operates on a file already bound to this dialog thread
+# (re-read from storage) instead of one fenced into the current turn.
+# Intent owns the value (structural hint: has_thread_files); ExecutionPlanner maps
+# ``thread_file`` to a direct ``platform.read_attachment`` call. Identity of the file
+# is resolved deterministically in the application layer — never by the LLM (055).
+FileReferenceKind = Literal["none", "thread_file"]
+FILE_REFERENCE_DEFAULT: FileReferenceKind = "none"
+
 # Structural length floor: user turn long enough to be a document/payload vs
 # phatic ping. Shared by Continuity + Critic (055 — one constant, not copies).
 SUBSTANTIVE_USER_PAYLOAD_CHARS = 400
@@ -98,6 +106,7 @@ UntrustedContentAction = Literal["allow", "mask", "quarantine", "reject"]
 __all__ = [
     "CONTENT_GENERATION_CAPABILITY",
     "DOCUMENT_GENERATION_CAPABILITY",
+    "FILE_REFERENCE_DEFAULT",
     "GROUNDING_DEFAULT",
     "LOW_RISK_ROUTE_STRATEGIES",
     "SUBSTANTIVE_USER_PAYLOAD_CHARS",
@@ -106,6 +115,7 @@ __all__ = [
     "AgentRole",
     "ContinuationKind",
     "ExecutionStrategy",
+    "FileReferenceKind",
     "GroundingMode",
     "ModelTier",
     "RouteStrategy",

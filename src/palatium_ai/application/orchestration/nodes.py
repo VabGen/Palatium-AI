@@ -89,6 +89,7 @@ from palatium_ai.domain.memory.recall import MemoryRecallBundle
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies import ContinuityPolicy, MemoryRecallPolicy
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
+from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.parallel_workers import ParallelWorkerPolicy
 
 if TYPE_CHECKING:
@@ -148,6 +149,8 @@ async def continuation_node(
         memory_hints = recall.hint_texts if recall is not None else ()
         budget = state.get("prompt_budget") or MemoryPromptBudget()
         intent_caps = tuple(raw_intent.candidate_capabilities) if raw_intent is not None else ()
+        entry_untrusted_context = state.get("untrusted_context") or ""
+        entry_has_attachments = bool(entry_untrusted_context.strip())
         task_input = ContextualizerInput(
             task_id=selectors.require_task_id(state),
             user_text=selectors.resolved_user_text(state),
@@ -157,6 +160,7 @@ async def continuation_node(
             task_kind=intent_task_kind,
             requires_mcp=intent_requires_mcp,
             candidate_capabilities=intent_caps,
+            has_attachment_context=entry_has_attachments,
         )
         agent_input = contextualizer_to_agent_input(
             task_input,
@@ -171,7 +175,6 @@ async def continuation_node(
         )
         output = getattr(result, "output", None)
         rewritten = output.rewritten_query if output is not None else selectors.resolved_user_text(state)
-        entry_has_attachments = bool((state.get("untrusted_context") or "").strip())
         raw_user = state.get("user_text")
         routing_intent = resolve_routing_intent(
             contextualizer=output,
@@ -183,7 +186,7 @@ async def continuation_node(
         # SB2: rehydrate dialog-bound attachments after Continuity (not sticky poison).
         # Prefer Continuity trust over raw Contextualizer refers_to_prior — recovery of
         # false new_topic sets trust without rewriting the frozen Contextualizer output.
-        untrusted_context = state.get("untrusted_context") or ""
+        untrusted_context = entry_untrusted_context
         rehydrate_refers = (
             routing_intent.trust_prior_for_workers
             if routing_intent.continuation_kind in {"answer", "format"}
@@ -306,6 +309,7 @@ async def intent_classifier_node(
             text=text,
             continuation_kind=None,
             has_prior_dialog=has_prior,
+            has_thread_files=AttachmentStickinessPolicy.thread_has_files(dialog),
         )
         agent_input = intent_to_agent_input(
             task_input,
@@ -389,7 +393,9 @@ async def weaving_node(
             )
             hop = get_hop_collector()
             if hop is not None:
-                hop.apply_strategy_budget(strategy)
+                # HopBudgetPolicy is a domain policy; core cannot import domain (000),
+                # so the collector takes it as an injected scaler port.
+                hop.apply_strategy_budget(strategy, scaler=HopBudgetPolicy.effective_budget_ms)
             return cast("AgentGraphState", {"context_bundle": result}), result
         except ClarifyError as exc:
             logger.info("Context weaver requires clarification", question=str(exc))
@@ -822,6 +828,7 @@ def route_after_critic(state: AgentGraphState) -> Literal["quality_revision", "f
 def _terminal_mcp_worker_failure(state: AgentGraphState) -> bool:
     """True when Researcher already closed on empty/error MCP — no revise."""
     from palatium_ai.domain.agents.researcher import (
+        ATTACHMENT_REFERENCE_UNRESOLVED,
         GROUNDING_REQUIRED_EMPTY,
         MCP_EMPTY_RESULT,
         MCP_TOOL_ERROR,
@@ -837,6 +844,8 @@ def _terminal_mcp_worker_failure(state: AgentGraphState) -> bool:
         MCP_EMPTY_RESULT,
         MCP_TOOL_ERROR,
         GROUNDING_REQUIRED_EMPTY,
+        # The thread's file set cannot change on retry: revision is pure waste.
+        ATTACHMENT_REFERENCE_UNRESOLVED,
     }
 
 

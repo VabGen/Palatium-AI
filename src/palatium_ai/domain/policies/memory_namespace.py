@@ -37,6 +37,9 @@ class MemoryNamespacePolicy:
             "web_fallback",
             "ingest_document",
             "extract_transcript_memories",
+            # Attachment truth is owner-scoped: the actor id decides which files can
+            # ever be read, so a caller-supplied id is overwritten (020 IDOR guard).
+            "read_attachment",
         }
     )
 

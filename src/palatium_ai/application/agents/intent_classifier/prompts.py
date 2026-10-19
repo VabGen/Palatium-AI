@@ -77,6 +77,15 @@ Also decide:
    "user_choice","compose","draft","verbatim_extraction"]
   Prefer ["format"] when continuation_kind=format; include "user_choice" when
   requires_user_choice is true; do not invent "search" without a tool ask.
+- file_reference (does the ask target a file already uploaded in this dialog?):
+  • "thread_file" — the ask is about a file from earlier in the conversation that must be
+    read/found again in storage: «возьми из БД и прочти ещё раз», «что там было в этом
+    файле», «перечитай документ», or a named earlier upload. Set it whenever
+    has_thread_files=true and the ask clearly operates on such a file.
+  • "none" — everything else: a fresh upload rides the current turn, the ask is about
+    pasted text, or it is general knowledge. Also "none" when has_thread_files=false.
+  Do NOT set "thread_file" when the ask is answerable from what you can see in the text;
+  this axis routes to a storage read of the user's own file.
 - confidence: how sure you are of task_kind. Below 0.7 a clarification_needed label is
   treated as a guess and the platform answers on the default path instead.
 - grounding (need for external data — orthogonal to task_kind):
@@ -118,6 +127,12 @@ Examples (input → output axes; reasoning omitted):
 - {"text":"что в моём загруженном файле?","has_prior_dialog":false} → knowledge_request,
   underspecification_kind="none", grounding="required",
   grounding_reason="needs user file contents"
+- {"text":"а из БД взять этот файл и ещё раз прочитать","has_prior_dialog":true,
+  "has_thread_files":true} → knowledge_request, requires_mcp=true,
+  underspecification_kind="none", grounding="required",
+  file_reference="thread_file", grounding_reason="re-read earlier upload"
+- {"text":"перечитай документ","has_prior_dialog":true,"has_thread_files":false} →
+  knowledge_request, grounding="optional", file_reference="none"
 - {"text":"предложи несколько тем на выбор","has_prior_dialog":false} → clarification_needed,
   requires_user_choice=true, underspecification_kind="discrete_choice",
   candidate_capabilities=["user_choice"], grounding="none"
@@ -140,5 +155,5 @@ Respond ONLY with valid JSON:
 {"task_kind":"<kind>","requires_mcp":false,"requires_user_choice":false,
 "underspecification_kind":"none","candidate_capabilities":["..."],
 "grounding":"optional","grounding_reason":"<brief>",
-"transformation":"none",
+"transformation":"none","file_reference":"none",
 "confidence":0.0,"reasoning":"<brief explanation>"}"""

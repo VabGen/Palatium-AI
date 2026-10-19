@@ -8,15 +8,17 @@ import pytest
 
 from pydantic import BaseModel, SecretStr
 
-from palatium_ai.application.agents.formatter.agent import FormatterAgent
 from palatium_ai.application.agents.formatter.config import FORMATTER_CONFIG
+from palatium_ai.application.agents.formatter.repair import complete, generate_document
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.core.config.llm.qwen import QwenLLMConfig
 from palatium_ai.core.exceptions import AgentExecutionError
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
+from palatium_ai.domain.llm.structured_output import strict_json_schema
 from palatium_ai.infrastructure.llm.litellm_adapter import (
     LiteLLMAdapter,
+    build_provider_response_format,
     is_structured_output_unsupported,
 )
 
@@ -24,6 +26,21 @@ from palatium_ai.infrastructure.llm.litellm_adapter import (
 class _Probe(BaseModel):
     task_kind: str
     confidence: float
+
+
+class _MapProbe(BaseModel):
+    """Free-form map field must stay untouched by strictification."""
+
+    labels: dict[str, str]
+    note: str
+
+
+def _no_default_keys(node: object) -> bool:
+    if isinstance(node, list):
+        return all(_no_default_keys(item) for item in node)
+    if isinstance(node, dict):
+        return "default" not in node and _no_default_keys(list(node.values()))
+    return True
 
 
 def _messages() -> list[ChatMessage]:
@@ -50,6 +67,40 @@ def test_unsupported_detector_ignores_invalid_schema_and_timeouts() -> None:
     assert not is_structured_output_unsupported(RuntimeError("invalid_schema: additionalProperties"))
     assert not is_structured_output_unsupported(RuntimeError("invalid schema"))
     assert not is_structured_output_unsupported(TimeoutError())
+
+
+def test_strict_json_schema_requires_every_property() -> None:
+    from palatium_ai.domain.content import ContentDocument
+
+    schema = strict_json_schema(ContentDocument)
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+    # `blocks` carries a default_factory; strict mode must still require it — this is
+    # the field the model silently dropped on the live gateway before this fix.
+    assert "blocks" in schema["required"]
+    assert _no_default_keys(schema)
+
+
+def test_build_provider_response_format_ships_a_strict_clean_schema() -> None:
+    from palatium_ai.domain.content import ContentDocument
+
+    payload = build_provider_response_format("json_schema", ContentDocument)
+    assert payload is not None
+    assert payload["json_schema"]["strict"] is True
+    schema = payload["json_schema"]["schema"]
+    assert set(schema["required"]) == set(schema["properties"])
+    assert _no_default_keys(schema)
+
+
+def test_strict_json_schema_leaves_map_fields_untouched() -> None:
+    schema = strict_json_schema(_MapProbe)
+    labels = schema["properties"]["labels"]
+    # No `properties` key → not an object with fixed keys; the free-form map stays as-is
+    # instead of being collapsed to `additionalProperties: false` + `required`.
+    assert labels["additionalProperties"] == {"type": "string"}
+    assert "properties" not in labels
+    assert "required" not in labels
+    assert set(schema["required"]) == {"labels", "note"}
 
 
 @pytest.mark.asyncio()
@@ -122,21 +173,26 @@ async def test_adapter_keeps_invalid_schema_as_a_provider_error(monkeypatch: pyt
         )
 
 
-def _agent(side_effect: object) -> tuple[FormatterAgent, AsyncMock]:
+def _harness(side_effect: object) -> AsyncMock:
     harness = AsyncMock()
     # Single completion → return_value (LLMCompletion is not a call side-effect iterable).
     if isinstance(side_effect, LLMCompletion):
         harness.call_llm = AsyncMock(return_value=side_effect)
     else:
         harness.call_llm = AsyncMock(side_effect=side_effect)
-    return FormatterAgent(harness, FORMATTER_CONFIG), harness
+    return harness
 
 
 @pytest.mark.asyncio()
 async def test_formatter_complete_uses_text_format() -> None:
     body = "Done. No errors."
-    agent, harness = _agent(LLMCompletion(content=body, model="test"))
-    completion, markdown = await agent._complete([ChatMessage(role="user", content="hi")], max_tokens=32)
+    harness = _harness(LLMCompletion(content=body, model="test"))
+    completion, markdown = await complete(
+        harness=harness,
+        config=FORMATTER_CONFIG,
+        messages=[ChatMessage(role="user", content="hi")],
+        max_tokens=32,
+    )
     assert completion.content == body
     assert markdown == body
     kwargs = harness.call_llm.await_args.kwargs
@@ -187,19 +243,22 @@ async def test_formatter_repair_stays_on_text(monkeypatch: pytest.MonkeyPatch) -
         return good
 
     monkeypatch.setattr(
-        "palatium_ai.application.agents.formatter.agent.markdown_to_content_document",
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
         _parse,
     )
-    agent, harness = _agent(
+    harness = _harness(
         [
             LLMCompletion(content="bad", model="test"),
             LLMCompletion(content="> [!SUCCESS]\n> No errors.", model="test"),
         ],
     )
-    document = await agent._generate_document(
-        [ChatMessage(role="user", content="hi")],
+    document = await generate_document(
+        harness=harness,
+        config=FORMATTER_CONFIG,
+        messages=[ChatMessage(role="user", content="hi")],
         task_input=task_input,
         max_tokens=32,
+        agent_role=FORMATTER_CONFIG.role,
     )
     assert document.blocks[0].type == "callout"
     formats = [call.kwargs["response_format"] for call in harness.call_llm.await_args_list]
@@ -209,7 +268,12 @@ async def test_formatter_repair_stays_on_text(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio()
 async def test_formatter_does_not_fall_back_on_timeout() -> None:
-    agent, harness = _agent(AgentExecutionError("LLM stream timed out"))
+    harness = _harness(AgentExecutionError("LLM stream timed out"))
     with pytest.raises(AgentExecutionError):
-        await agent._complete([ChatMessage(role="user", content="hi")], max_tokens=32)
+        await complete(
+            harness=harness,
+            config=FORMATTER_CONFIG,
+            messages=[ChatMessage(role="user", content="hi")],
+            max_tokens=32,
+        )
     harness.call_llm.assert_awaited_once()

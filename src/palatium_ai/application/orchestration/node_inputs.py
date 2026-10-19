@@ -46,6 +46,7 @@ def build_context_weaver_input(
         route_plan=snapshot.route_plan,
         requires_mcp=snapshot.requires_mcp,
         candidate_capabilities=snapshot.candidate_capabilities,
+        file_reference=snapshot.file_reference,
         grounding=selectors.resolved_grounding(state),
         grounding_reason=selectors.resolved_grounding_reason(state),
         has_attachment_context=bool((state.get("untrusted_context") or "").strip()),

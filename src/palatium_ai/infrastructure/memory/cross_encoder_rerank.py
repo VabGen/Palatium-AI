@@ -6,7 +6,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.core.logging import get_logger
 from palatium_ai.core.types.coerce import coerce_float
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.ports import MemoryPort
@@ -52,7 +55,9 @@ class CrossEncoderRerankMemoryPort:
         passages = [str(item.get("text", "")).strip() for item in candidates]
         try:
             scores = await self._cross_encoder.score_pairs(query=query.strip(), passages=passages)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001  # rerank degrades to unranked hits on scorer failure
+            # 050/040: a degraded rerank must be observable, not silently swallowed.
+            logger.warning("memory.rerank.cross_encoder_failed", error_type=type(exc).__name__)
             return candidates[:safe_limit]
         if len(scores) != len(candidates):
             return candidates[:safe_limit]

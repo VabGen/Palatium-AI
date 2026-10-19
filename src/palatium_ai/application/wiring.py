@@ -29,6 +29,7 @@ from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.attachment_pipeline import AttachmentPipeline
 from palatium_ai.application.services.attachment_read_service import AttachmentReadService
+from palatium_ai.application.services.attachment_reference_resolver import AttachmentReferenceResolver
 from palatium_ai.application.services.attachment_service import AttachmentService
 from palatium_ai.application.services.context_builder import ContextBuilder
 from palatium_ai.application.services.cost_budget import CostBudgetService
@@ -255,6 +256,7 @@ def build_intent_service(
     enable_sleep_time: bool = True,
     graph_write: GraphWritePort | None = None,
     attachment_service: AttachmentService | None = None,
+    file_reference_resolver: AttachmentReferenceResolver | None = None,
 ) -> tuple[IntentService, MemoryExtractService | None, MCPCapabilityIndex, DocumentIngestService]:
     """Создаёт IntentService + optional sleep-time extract worker handle."""
     llm_factory = LLMClientFactory(settings)
@@ -272,7 +274,7 @@ def build_intent_service(
         embedding_client = None
         try:
             embedding_client = create_embedding_client_for_schema(settings, "memory")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # memory embeddings are optional wiring (060)
             logger.warning("Memory embeddings disabled", error=str(exc))
         resolved_memory = PostgresMemoryPort(
             session_factory,
@@ -336,7 +338,12 @@ def build_intent_service(
         capability_index=capability_index,
     )
     critic = CriticAgent(harness, CRITIC_CONFIG)
-    formatter = FormatterAgent(harness, FORMATTER_CONFIG)
+    formatter = FormatterAgent(
+        harness,
+        FORMATTER_CONFIG,
+        mode=settings.formatter.formatter_mode,
+        rollout_pct=settings.formatter.formatter_rollout_pct,
+    )
     option_synthesizer = OptionSynthesizer(
         llm_factory.get_client_for_agent(INTENT_CLASSIFIER_CONFIG),
     )
@@ -347,6 +354,7 @@ def build_intent_service(
         mcp_registry=mcp_registry,
         mcp_tool_call_repository=mcp_tool_call_repository,
         capability_index=capability_index,
+        file_reference_resolver=file_reference_resolver,
     )
     # Composition root (000): construct the roster; the graph builder itself is
     # agent-agnostic and reads node↔agent mapping from the registry (3.2).
@@ -448,6 +456,7 @@ def build_intent_service(
         attachment_service=attachment_service,
         response_cache=response_cache,
         graph_write=graph_write,
+        file_reference_resolver=file_reference_resolver,
     )
     return intent_service, memory_extract, capability_index, document_ingest
 
@@ -457,7 +466,7 @@ async def warm_mcp_capability_cache(index: MCPCapabilityIndex) -> None:
     try:
         count = await index.warm_cache()
         logger.info("MCP capability cache warmed", bindings=count)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # startup cache warm is non-blocking for requests (070)
         logger.warning("MCP capability cache warm failed", error=str(exc))
 
 

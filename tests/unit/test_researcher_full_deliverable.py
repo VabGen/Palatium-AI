@@ -27,7 +27,10 @@ def test_researcher_prompt_requires_verbatim_extract_from_attachment() -> None:
     prompt = RESEARCHER_SYSTEM_PROMPT.lower()
     assert "verbatim" in prompt
     assert "extract" in prompt
-    assert "attachment_context" in prompt
+    assert "attached_files" in prompt
+    # The prompt must not hand the model our internal field names — it echoes them
+    # into user prose (055); the payload keys were renamed for the same reason.
+    assert "attachment_context" not in prompt
     assert "основные пункты" in prompt or "paraphrase" in prompt
     assert "[attachment body truncated]" in RESEARCHER_SYSTEM_PROMPT
 
@@ -35,7 +38,8 @@ def test_researcher_prompt_requires_verbatim_extract_from_attachment() -> None:
 def test_researcher_prompt_uses_memory_for_identity() -> None:
     prompt = RESEARCHER_SYSTEM_PROMPT.lower()
     assert "identity" in prompt or "preference asks" in prompt
-    assert "memory_hints" in prompt
+    assert "user_facts" in prompt
+    assert "memory_hints" not in prompt
     assert "unsafe historical" in prompt or "refuse them" in prompt
 
 
@@ -44,6 +48,15 @@ def test_critic_prompt_rejects_meta_only_generation() -> None:
     assert "draft" in prompt
     assert "compose" in prompt
     assert "meta-only" in prompt or "meta-only promise" in prompt
+
+
+def test_critic_prompt_uses_neutral_payload_names() -> None:
+    """Internal field names must not reach an LLM prompt: the model echoes them into prose."""
+    prompt = CRITIC_SYSTEM_PROMPT.lower()
+    assert "attachment_context" not in prompt
+    assert "attached_files" in prompt
+    assert "prior_context" not in prompt
+    assert "memory_hints" not in prompt
 
 
 def test_generation_completion_budget_higher_than_default() -> None:

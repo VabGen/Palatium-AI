@@ -5,6 +5,10 @@ Run:
 
 Credentials come from the process environment or env/.env (QWEN_API_KEY, QWEN_BASE_URL).
 CI does not select this marker.
+
+Covers both contracts the Formatter ships:
+* legacy — GFM Markdown stream, parsed into ContentDocument (repair loop);
+* schema_first — provider-enforced ``response_format=json_schema`` ContentDocument.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import os
 
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import pytest
 
@@ -22,8 +27,10 @@ from palatium_ai.application.agents.formatter.agent import FormatterAgent
 from palatium_ai.application.agents.formatter.config import FORMATTER_CONFIG
 from palatium_ai.application.agents.formatter.parsing import build_formatter_user_message
 from palatium_ai.application.agents.formatter.prompts import FORMATTER_SYSTEM_PROMPT
+from palatium_ai.application.agents.formatter.repair import generate_document
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.core.config.llm.qwen import QwenLLMConfig
+from palatium_ai.domain.agents.messages import AgentInput
 from palatium_ai.domain.content import CalloutBlock, ContentDocument, HeadingBlock, KeyValueBlock, ListBlock
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion, LLMResponseFormat
 from palatium_ai.infrastructure.llm.litellm_adapter import LiteLLMAdapter
@@ -85,7 +92,7 @@ def _payload(final_text: str, *, style_hint: str, choice: bool = False) -> dict[
     }
 
 
-def _agent() -> FormatterAgent:
+def _agent(*, mode: str = "legacy") -> FormatterAgent:
     _load_env_file()
     key = os.environ.get("QWEN_API_KEY", "").strip()
     if not key:
@@ -96,7 +103,7 @@ def _agent() -> FormatterAgent:
         QwenLLMConfig(api_key=SecretStr(key), base_url=base, default_model=model),
     )
     config = FORMATTER_CONFIG.model_copy(update={"max_retries": 1, "timeout_seconds": 120, "llm_model": model})
-    return FormatterAgent(Harness(llm=adapter), config)
+    return FormatterAgent(Harness(llm=adapter), config, mode=mode)  # type: ignore[arg-type]
 
 
 def _task_input() -> FormatterInput:
@@ -125,18 +132,44 @@ def _task_input() -> FormatterInput:
     )
 
 
-async def _compile(agent: FormatterAgent, payload: dict[str, object]) -> ContentDocument:
-    user = build_formatter_user_message(payload)
+async def _compile_legacy(agent: FormatterAgent, payload: dict[str, object]) -> ContentDocument:
     messages = [
         ChatMessage(role="system", content=FORMATTER_SYSTEM_PROMPT),
-        ChatMessage(role="user", content=user),
+        ChatMessage(role="user", content=build_formatter_user_message(payload)),
     ]
-    return await agent._generate_document(messages, task_input=_task_input(), max_tokens=2048)
+    return await generate_document(
+        harness=agent._harness,
+        config=agent.config,
+        messages=messages,
+        task_input=_task_input(),
+        max_tokens=2048,
+        worker_summary="Done.",
+        agent_role=FORMATTER_CONFIG.role,
+    )
+
+
+async def _compile_schema_first(agent: FormatterAgent) -> ContentDocument:
+    """Drive the real dispatch: agent.run() → _run_schema_first → json_schema call."""
+    task_input = _task_input()
+    agent_input = AgentInput(
+        task_id=UUID(int=1),
+        trace_id="live",
+        instruction="format the worker draft",
+        context={
+            "context_packet_json": task_input.context_packet.model_dump_json(),
+            "worker_summary": task_input.worker_summary or "",
+            "response_locale": task_input.response_locale,
+        },
+    )
+    output = await agent.run(agent_input)
+    assert output.status in {"success", "partial"}, output.error_message
+    assert isinstance(output.output, ContentDocument)
+    return output.output
 
 
 @pytest.mark.asyncio()
 async def test_live_status_is_one_callout() -> None:
-    document = await _compile(_agent(), _payload("Done. No errors.", style_hint="brand_sections_icons"))
+    document = await _compile_legacy(_agent(), _payload("Done. No errors.", style_hint="brand_sections_icons"))
     assert len(document.blocks) == 1
     assert isinstance(document.blocks[0], CalloutBlock)
 
@@ -149,7 +182,7 @@ async def test_live_sections_have_headings_and_a_list() -> None:
         "Next actions: action one; action two.\n"
         "Risk if ignored: consequence."
     )
-    document = await _compile(_agent(), _payload(text, style_hint="brand_sections_icons"))
+    document = await _compile_legacy(_agent(), _payload(text, style_hint="brand_sections_icons"))
     headings = [block for block in document.blocks if isinstance(block, HeadingBlock)]
     lists = [block for block in document.blocks if isinstance(block, ListBlock)]
     assert len(headings) >= 2
@@ -159,7 +192,7 @@ async def test_live_sections_have_headings_and_a_list() -> None:
 @pytest.mark.asyncio()
 async def test_live_metrics_are_a_kv_block() -> None:
     text = "Alpha: 10 units. Beta: 8 units. Gamma: 2 units."
-    document = await _compile(_agent(), _payload(text, style_hint="brand_sections_icons"))
+    document = await _compile_legacy(_agent(), _payload(text, style_hint="brand_sections_icons"))
     kv = [block for block in document.blocks if isinstance(block, KeyValueBlock)]
     assert kv
     assert len(kv[0].items) >= 3
@@ -168,9 +201,27 @@ async def test_live_metrics_are_a_kv_block() -> None:
 @pytest.mark.asyncio()
 async def test_live_choice_is_hitl_actions() -> None:
     text = "User must pick one response layout among three concrete options: Brief, Detailed, Table."
-    document = await _compile(_agent(), _payload(text, style_hint="choice_cards", choice=True))
+    document = await _compile_legacy(_agent(), _payload(text, style_hint="choice_cards", choice=True))
     assert document.meta.interaction == "choice"
     assert len(document.actions) >= 3
+
+
+@pytest.mark.asyncio()
+async def test_live_schema_first_returns_a_valid_document() -> None:
+    """response_format=json_schema path: provider returns a typed ContentDocument."""
+    document = await _compile_schema_first(_agent(mode="schema_first"))
+    assert document.blocks
+    assert document.locale == "en-US"
+    assert document.meta.kind in {
+        "analysis",
+        "recommendation",
+        "response",
+        "letter",
+        "memo",
+        "guide",
+        "report",
+        "faq",
+    }
 
 
 class _GarbageThenReal:
@@ -226,6 +277,14 @@ async def test_live_repair_accepts_a_schema_document() -> None:
             content=build_formatter_user_message(_payload("Done. No errors.", style_hint="brand_sections_icons")),
         ),
     ]
-    document = await agent._generate_document(messages, task_input=_task_input(), max_tokens=2048)
+    document = await generate_document(
+        harness=agent._harness,
+        config=agent.config,
+        messages=messages,
+        task_input=_task_input(),
+        max_tokens=2048,
+        worker_summary="Done.",
+        agent_role=FORMATTER_CONFIG.role,
+    )
     assert document.blocks
     assert port.formats == ["text", "text"] or port.formats == ["text"]

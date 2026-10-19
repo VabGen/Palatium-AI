@@ -21,7 +21,7 @@ from palatium_ai.domain.llm.models import (
     LLMStreamDelta,
     LLMUsage,
 )
-from palatium_ai.domain.llm.structured_output import response_model_for_schema
+from palatium_ai.domain.llm.structured_output import response_model_for_schema, strict_json_schema
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
 
 if TYPE_CHECKING:
@@ -62,7 +62,9 @@ def build_provider_response_format(
             "type": "json_schema",
             "json_schema": {
                 "name": model.__name__,
-                "schema": model.model_json_schema(),
+                # strict: True only binds when the schema actually matches the strict
+                # contract (all props required, additionalProperties: false, no defaults).
+                "schema": strict_json_schema(model),
                 "strict": True,
             },
         }
@@ -151,7 +153,16 @@ def _parse_response_cost(response: object) -> float | None:
         import litellm
 
         computed = litellm.completion_cost(completion_response=response)
-    except TypeError, ValueError, AttributeError, KeyError, RuntimeError:
+    except Exception as exc:  # noqa: BLE001  # cost is best-effort telemetry; the LLM call must not fail (040)
+        # Cost is best-effort telemetry: a missing price card must never fail the LLM
+        # call. LiteLLM raises ModelNotMappedError for gateway tier aliases that are
+        # absent from its table — the gateway is the only component that can price
+        # them, so an unreported cost stays None (never invent a rate, 050).
+        logger.debug(
+            "llm.cost.compute_failed",
+            reason="model_not_in_price_table",
+            detail=redact_text(str(exc)),
+        )
         return from_hidden
     from_table = _coerce_cost_usd(computed)
     if from_table is not None and from_table > 0.0:

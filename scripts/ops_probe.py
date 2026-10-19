@@ -57,8 +57,7 @@ def _request(
         return int(exc.code), exc.read().decode("utf-8", errors="replace")
 
 
-def main() -> int:
-    """Probe health/metrics (and optional kill-switch) on a running API."""
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument(
@@ -66,83 +65,122 @@ def main() -> int:
         action="store_true",
         help="Try kill-switch engage/release (requires development + admin role — skipped if denied)",
     )
-    args = parser.parse_args()
-    base = args.base_url.rstrip("/")
-    results: list[dict[str, object]] = []
-    failed = 0
+    return parser
 
+
+def _check_health(base: str) -> tuple[list[dict[str, object]], int]:
     status, body = _request("GET", f"{base}/health")
     ok = status == 200 and "ok" in body.lower()
-    results.append({"check": "health", "status": status, "ok": ok})
-    if not ok:
-        failed += 1
+    return [{"check": "health", "status": status, "ok": ok}], 0 if ok else 1
 
+
+def _ready_verdict(body: str) -> tuple[bool, str]:
+    """Read the readiness payload: local/dev may be legitimately ``degraded``."""
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return False, "non-JSON body"
+    ready_status = str(payload.get("status", ""))
+    warnings = payload.get("warnings") or []
+    return ready_status in {"ok", "degraded"}, f"status={ready_status}; warnings={len(warnings)}"
+
+
+def _check_ready(base: str) -> tuple[list[dict[str, object]], int]:
     status, body = _request("GET", f"{base}/ready")
-    ready_ok = status == 200
-    ready_note = "parse body.status / warnings (SB4 graph+memory backends)"
-    if ready_ok:
-        try:
-            payload = json.loads(body)
-            ready_status = str(payload.get("status", ""))
-            warnings = payload.get("warnings") or []
-            ready_note = f"status={ready_status}; warnings={len(warnings)}"
-            # Local/dev may be degraded (in_memory graph); still probe endpoint.
-            ready_ok = ready_status in {"ok", "degraded"}
-        except json.JSONDecodeError:
-            ready_ok = False
-            ready_note = "non-JSON body"
-    results.append({"check": "ready", "status": status, "ok": ready_ok, "note": ready_note})
-    if not ready_ok:
-        failed += 1
-
-    status, body = _request("GET", f"{base}/metrics")
-    metrics_ok = status == 200 or status == 401
-    results.append(
-        {
-            "check": "metrics",
-            "status": status,
-            "ok": metrics_ok,
-            "note": "200 public scrape or 401 when METRICS_PUBLIC=false",
-        }
-    )
-    if not metrics_ok:
-        failed += 1
-
-    if args.with_admin:
-        # Dev token cannot mint admin roles (stripped) — expect 403; still probes endpoint existence.
-        user_id = f"ops-probe-{uuid4().hex[:8]}"
-        status, tok_raw = _request(
-            "POST",
-            f"{base}/api/auth/dev-token",
-            body={"user_id": user_id, "roles": ["admin"]},
-        )
-        token = None
-        if status == 200:
-            try:
-                token = json.loads(tok_raw).get("access_token")
-            except json.JSONDecodeError:
-                token = None
-        if isinstance(token, str) and token:
-            st, _ = _request("GET", f"{base}/api/admin/kill-switch", token=token)
-            results.append(
+    if status != 200:
+        return (
+            [
                 {
-                    "check": "kill_switch_get",
-                    "status": st,
-                    "ok": st in {200, 403},
-                    "note": "403 expected when admin role stripped from dev-token",
-                }
-            )
-            if st not in {200, 403}:
-                failed += 1
-        else:
-            results.append(
-                {
-                    "check": "kill_switch_get",
+                    "check": "ready",
                     "status": status,
-                    "ok": status == 404,
-                    "note": "dev-token unavailable outside development",
+                    "ok": False,
+                    "note": "parse body.status / warnings (SB4 graph+memory backends)",
                 }
-            )
+            ],
+            1,
+        )
+    ok, note = _ready_verdict(body)
+    return [{"check": "ready", "status": status, "ok": ok, "note": note}], 0 if ok else 1
+
+
+def _check_metrics(base: str) -> tuple[list[dict[str, object]], int]:
+    status, _ = _request("GET", f"{base}/metrics")
+    ok = status in {200, 401}
+    return (
+        [
+            {
+                "check": "metrics",
+                "status": status,
+                "ok": ok,
+                "note": "200 public scrape or 401 when METRICS_PUBLIC=false",
+            }
+        ],
+        0 if ok else 1,
+    )
+
+
+def _admin_token(base: str) -> tuple[int, str | None]:
+    """Mint a dev admin token; outside development the endpoint is absent (404) by design."""
+    user_id = f"ops-probe-{uuid4().hex[:8]}"
+    status, raw = _request(
+        "POST",
+        f"{base}/api/auth/dev-token",
+        body={"user_id": user_id, "roles": ["admin"]},
+    )
+    if status != 200:
+        return status, None
+    try:
+        token = json.loads(raw).get("access_token")
+    except json.JSONDecodeError:
+        return status, None
+    return status, token if isinstance(token, str) and token else None
+
+
+def _check_kill_switch(base: str) -> tuple[list[dict[str, object]], int]:
+    """Probe the kill-switch endpoint; a stripped admin role answers 403 and is not a failure.
+
+    The dev token cannot mint admin roles, so an unavailable token is reported without
+    counting as a failure — the same "skipped if denied" contract as ``--with-admin``.
+    """
+    status, token = _admin_token(base)
+    if token is None:
+        return [
+            {
+                "check": "kill_switch_get",
+                "status": status,
+                "ok": status == 404,
+                "note": "dev-token unavailable outside development",
+            }
+        ], 0
+    st, _ = _request("GET", f"{base}/api/admin/kill-switch", token=token)
+    ok = st in {200, 403}
+    return (
+        [
+            {
+                "check": "kill_switch_get",
+                "status": st,
+                "ok": ok,
+                "note": "403 expected when admin role stripped from dev-token",
+            }
+        ],
+        0 if ok else 1,
+    )
+
+
+def main() -> int:
+    """Probe health/metrics (and optional kill-switch) on a running API."""
+    args = _build_parser().parse_args()
+    base = args.base_url.rstrip("/")
+
+    checks = [_check_health(base), _check_ready(base), _check_metrics(base)]
+    if args.with_admin:
+        checks.append(_check_kill_switch(base))
+
+    results: list[dict[str, object]] = []
+    failed = 0
+    for result, count in checks:
+        results.extend(result)
+        failed += count
 
     print(json.dumps({"base_url": base, "failed": failed, "results": results}, indent=2))
     if failed:

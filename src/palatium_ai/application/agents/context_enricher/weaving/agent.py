@@ -62,6 +62,7 @@ class ContextWeaverAgent(BaseAgent):
             "grounding_reason",
             "has_attachment_context",
             "has_trusted_prior",
+            "file_reference",
         ]
 
     def get_available_tools(self) -> list[str]:

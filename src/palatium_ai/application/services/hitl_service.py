@@ -674,7 +674,7 @@ class HitlService:
                         reason=decision.reason,
                     )
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001  # notify is best-effort; the card is closed regardless
                 agent_metrics.record_hitl_deny("notify_failed")
         if status == "auto_rejected":
             await self._maybe_deny_resume_interrupt(closed, reason=decision.reason)
@@ -726,7 +726,7 @@ class HitlService:
                         reason=decision.reason,
                     )
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001  # notify is best-effort; the card is closed regardless
                 agent_metrics.record_hitl_deny("notify_failed")
         await self._maybe_deny_resume_interrupt(closed, reason=decision.reason)
         return closed
@@ -745,7 +745,7 @@ class HitlService:
                 card_id=card.card_id,
                 reason=reason,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed deny records the metric instead of raising (020)
             agent_metrics.record_hitl_deny("deny_resume_failed")
 
     async def list_escalated(

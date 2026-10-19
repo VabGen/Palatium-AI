@@ -18,6 +18,9 @@
 | **[adr/0003-postgres-checkpointer-session-ttl.md](adr/0003-postgres-checkpointer-session-ttl.md)** | ADR: short-term = Postgres checkpointer + retention TTL |
 | **[adr/0004-hybrid-memory-not-neo4j-only.md](adr/0004-hybrid-memory-not-neo4j-only.md)** | ADR: Postgres medium + bi-temporal Neo4j; reject Neo4j-only Cortex |
 | **[grounding-mvp-deferrals.md](grounding-mvp-deferrals.md)** | Adaptive Grounding MVP: осознанные deferrals + критерий возврата + staging A/B gate (2026-10-14) |
+| **[formatter-schema-first.md](formatter-schema-first.md)** | Formatter: schema_first-контракт, two-key canary `FORMATTER_ROLLOUT_PCT`, метрики A/B и откат (2026-10-16) |
+| **[internal-vocabulary.md](internal-vocabulary.md)** | Служебные имена полей (`attachment_context`, `prior_context`, …) не попадают в ответ и HITL-карточку: две линии защиты, точки применения, как добавить термин (2026-10-16) |
+| **[../.cursor/plans/file-reread.md](../.cursor/plans/file-reread.md)** | План: ось `file_reference=thread_file` + детерминированный резолв файла из треда, rollout `ATTACHMENTS_FILE_REREAD_PCT` (2026-10-16) |
 | **[audit/latency-audit.md](audit/latency-audit.md)** | Аудит скорости ответа: карта `/intents/process`, узкие места, план P0–P2 (актуально на 2026-10-01) |
 | **[architecture/streaming.md](architecture/streaming.md)** | SSE-контракт `/intents/process/stream`: события, TTFT, fast path (актуально на 2026-10-09) |
 | **[embedded-assistant.md](embedded-assistant.md)** | Embeddable-виджет `<palatium-assistant>`: контракт событий, темизация, доставка, §9 — интеграционный пакет и чек-лист приёмки для команды СЭД |

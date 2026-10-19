@@ -30,7 +30,7 @@ class IntentClassifierAgent(BaseAgent):
         return self._config
 
     def get_required_context_keys(self) -> list[str]:
-        return ["continuation_kind", "has_prior_dialog"]
+        return ["continuation_kind", "has_prior_dialog", "has_thread_files"]
 
     def get_available_tools(self) -> list[str]:
         return []
@@ -61,6 +61,7 @@ class IntentClassifierAgent(BaseAgent):
 
         continuation_kind = input.context.get("continuation_kind") or None
         has_prior_dialog = input.context.get("has_prior_dialog", "false").lower() == "true"
+        has_thread_files = input.context.get("has_thread_files", "false").lower() == "true"
         messages = [
             ChatMessage(role="system", content=INTENT_CLASSIFIER_SYSTEM_PROMPT),
             ChatMessage(
@@ -70,6 +71,7 @@ class IntentClassifierAgent(BaseAgent):
                         "text": input.instruction,
                         "continuation_kind": continuation_kind,
                         "has_prior_dialog": has_prior_dialog,
+                        "has_thread_files": has_thread_files,
                     },
                     ensure_ascii=False,
                 ),
@@ -81,8 +83,8 @@ class IntentClassifierAgent(BaseAgent):
                 messages,
                 response_format="json_object",
             )
-            parsed = parse_classifier_output(completion.content)
-        except Exception as exc:
+            parsed = parse_classifier_output(completion.content, has_thread_files=has_thread_files)
+        except Exception as exc:  # noqa: BLE001  # returns typed AgentOutput failure; nothing propagates (030.8)
             agent_metrics.record_error(self._config.role, type(exc).__name__)
             return AgentOutput(
                 task_id=input.task_id,

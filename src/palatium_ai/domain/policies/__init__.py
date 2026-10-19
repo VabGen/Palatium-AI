@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from .formatter_memory_merge import FormatterMemoryMergeDecision, FormatterMemoryMergePolicy
     from .grounding import GroundingEmptyDecision, GroundingPolicy
     from .hop_budget import HopBudgetDecision, HopBudgetPolicy
+    from .internal_vocabulary import InternalVocabularyPolicy
     from .locale import ReplyLocalePolicy
     from .memory_namespace import MemoryNamespaceBinding, MemoryNamespacePolicy
     from .memory_recall import MemoryRecallDecision, MemoryRecallPolicy
@@ -65,6 +66,7 @@ if TYPE_CHECKING:
         UntrustedContentResult,
         UntrustedContentThresholds,
         budget_untrusted_text,
+        count_fence_blocks,
     )
 
 __all__ = [
@@ -101,6 +103,7 @@ __all__ = [
     "GroundingPolicy",
     "HopBudgetDecision",
     "HopBudgetPolicy",
+    "InternalVocabularyPolicy",
     "MemoryNamespaceBinding",
     "MemoryNamespacePolicy",
     "MemoryRecallDecision",
@@ -131,6 +134,7 @@ __all__ = [
     "UntrustedContentResult",
     "UntrustedContentThresholds",
     "budget_untrusted_text",
+    "count_fence_blocks",
 ]
 
 _LAZY: dict[str, tuple[str, str]] = {
@@ -156,6 +160,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "GroundingPolicy": (".grounding", "GroundingPolicy"),
     "HopBudgetDecision": (".hop_budget", "HopBudgetDecision"),
     "HopBudgetPolicy": (".hop_budget", "HopBudgetPolicy"),
+    "InternalVocabularyPolicy": (".internal_vocabulary", "InternalVocabularyPolicy"),
     "TransformPolicy": (".transform", "TransformPolicy"),
     "TransformRouteDecision": (".transform", "TransformRouteDecision"),
     "MemoryNamespaceBinding": (".memory_namespace", "MemoryNamespaceBinding"),
@@ -189,6 +194,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "UntrustedContentResult": (".untrusted_content", "UntrustedContentResult"),
     "UntrustedContentThresholds": (".untrusted_content", "UntrustedContentThresholds"),
     "budget_untrusted_text": (".untrusted_content", "budget_untrusted_text"),
+    "count_fence_blocks": (".untrusted_content", "count_fence_blocks"),
 }
 
 

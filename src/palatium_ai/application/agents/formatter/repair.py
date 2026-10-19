@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from palatium_ai.application.agents.formatter.budgets import repair_max_tokens, was_truncated
-from palatium_ai.application.agents.formatter.config import LOCALE_REPAIR_ATTEMPTS, REPAIR_ERROR_HEAD
+from palatium_ai.application.agents.formatter.config import (
+    FORMATTER_SCHEMA_REPAIR_ATTEMPTS,
+    LOCALE_REPAIR_ATTEMPTS,
+)
 from palatium_ai.application.agents.formatter.llm_stream import call_formatter_llm, complete
 from palatium_ai.application.agents.formatter.markdown_parser import markdown_to_content_document
 from palatium_ai.application.agents.formatter.parsing import align_formatter_meta
@@ -49,6 +52,14 @@ def hop_skip_repairs() -> bool:
     )
 
 
+def _format_repair_error(exc: Exception) -> str:
+    """Compact structured error for the repair prompt — no noisy ``input_value`` dumps."""
+    if isinstance(exc, ValidationError):
+        compact = [{"field": ".".join(str(x) for x in err["loc"]), "error": err["msg"]} for err in exc.errors()]
+        return json.dumps(compact, ensure_ascii=False)
+    return str(exc)
+
+
 async def generate_document(
     *,
     harness: HarnessPort,
@@ -67,34 +78,47 @@ async def generate_document(
         worker_summary=worker_summary,
     )
     truncated = was_truncated(completion)
-    try:
-        return markdown_to_content_document(markdown or completion.content, task_input)
-    except PARSE_ERRORS as first_error:
-        if hop_skip_repairs():
-            agent_metrics.record_node_execution(agent_role, "hop_budget_skip_schema_repair")
-            raise
-        tokens = repair_max_tokens(max_tokens, truncated=truncated)
-        logger.warning(
-            "formatter markdown invalid, attempting repair",
-            error=str(first_error)[:300],
-            truncated=truncated,
-            repair_max_tokens=tokens,
-        )
-        repair_messages = [
-            *messages,
-            ChatMessage(role="assistant", content=markdown or completion.content),
-            ChatMessage(
-                role="user",
-                content=FORMATTER_REPAIR_PROMPT.format(error=str(first_error)[:REPAIR_ERROR_HEAD]),
-            ),
-        ]
-        repair, repair_md = await complete(
-            harness=harness,
-            config=config,
-            messages=repair_messages,
-            max_tokens=tokens,
-        )
-        return markdown_to_content_document(repair_md or repair.content, task_input)
+    current_raw = markdown or completion.content
+    last_error: Exception | None = None
+
+    for attempt in range(FORMATTER_SCHEMA_REPAIR_ATTEMPTS):
+        try:
+            return markdown_to_content_document(current_raw, task_input)
+        except PARSE_ERRORS as exc:
+            last_error = exc
+            if attempt == FORMATTER_SCHEMA_REPAIR_ATTEMPTS - 1:
+                break
+            if hop_skip_repairs():
+                agent_metrics.record_node_execution(agent_role, "hop_budget_skip_schema_repair")
+                raise
+            tokens = repair_max_tokens(max_tokens, truncated=truncated)
+            logger.warning(
+                "formatter markdown invalid, attempting repair",
+                attempt=attempt + 1,
+                error=str(exc)[:300],
+                truncated=truncated,
+                repair_max_tokens=tokens,
+            )
+            repair_messages = [
+                *messages,
+                ChatMessage(role="assistant", content=current_raw),
+                ChatMessage(
+                    role="user",
+                    content=FORMATTER_REPAIR_PROMPT.format(error=_format_repair_error(exc)),
+                ),
+            ]
+            repair, repair_md = await complete(
+                harness=harness,
+                config=config,
+                messages=repair_messages,
+                max_tokens=tokens,
+            )
+            current_raw = repair_md or repair.content
+            truncated = was_truncated(repair)
+
+    if last_error is None:  # pragma: no cover - FORMATTER_SCHEMA_REPAIR_ATTEMPTS >= 1
+        raise ValueError("formatter schema repair loop exited without an error")
+    raise last_error
 
 
 async def maybe_repair_locale_gated(

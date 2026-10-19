@@ -149,7 +149,13 @@ def _emoji_to_icon_tokens(text: str) -> str:
 
 
 def _split_incomplete_tail(text: str) -> tuple[str, str]:
-    """Hold trailing incomplete emoji or ``<icon…`` so tokens are not split across chunks."""
+    """Hold trailing incomplete ``<hitl-*…``, emoji or ``<icon…`` across chunks."""
+    # HITL first — they are longer and break server-side tag parsing if split.
+    hitl_tail = _incomplete_hitl_tail(text)
+    if hitl_tail is not None:
+        cut = len(text) - len(hitl_tail)
+        return text[:cut], hitl_tail
+
     icon_tail = _incomplete_icon_tail(text)
     if icon_tail is not None:
         cut = len(text) - len(icon_tail)
@@ -184,5 +190,28 @@ def _incomplete_icon_tail(text: str) -> str | None:
         return None
     # Closed with ``>`` but not ``/>`` — malformed; do not carry forever.
     if re.search(r"(?<!/)>", fragment):
+        return None
+    return fragment
+
+
+# ───────────────────── HITL tag tail protection ─────────────────────
+
+_INCOMPLETE_HITL = re.compile(
+    r"<hitl-(?:action|choice)\b[^>]*$",
+    re.IGNORECASE,
+)
+_MAX_HITL_TAIL = 512  # hitl-choice with a long options= JSON array
+
+
+def _incomplete_hitl_tail(text: str) -> str | None:
+    """Hold a trailing incomplete ``<hitl-action/>`` / ``<hitl-choice/>`` across chunks."""
+    match = _INCOMPLETE_HITL.search(text)
+    if match is None:
+        return None
+    fragment = text[match.start() :]
+    if len(fragment) > _MAX_HITL_TAIL:
+        return None
+    # Already closed with ``>`` or ``/>`` — do not hold.
+    if re.search(r"/?>", fragment):
         return None
     return fragment

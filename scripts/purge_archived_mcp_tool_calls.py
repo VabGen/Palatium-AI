@@ -96,7 +96,7 @@ def main() -> int:
         return int(asyncio.run(_run(args)))
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else int(EXIT_INVALID_CONFIG)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # CLI entrypoint maps any failure to an exit code
         print(f"[ERROR] purge_archived_mcp_tool_calls failed: {exc}", file=sys.stderr)
         return int(EXIT_RUNTIME_ERROR)
 

@@ -118,7 +118,7 @@ class ContextBuilder:
                     raise ValueError("empty summary")
                 compact_dialog = f"[context_compacted method=llm tokens_before={tokens_before}]\n{summarized}"
                 method = "llm"
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # summarizer failure degrades to extractive compaction (065)
                 logger.warning(
                     "context_builder.summarizer_failed",
                     thread_id=request.thread_id,

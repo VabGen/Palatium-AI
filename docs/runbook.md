@@ -1410,6 +1410,7 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `ATTACHMENTS_PDF_FIGURE_MAX_PAGES` | `8` | soft-cap vision-вызовов на фигуры |
 | `ATTACHMENTS_ANALYSIS_BACKEND` | `disabled` | `disabled` \| `local` (G15 ADA: dataframe summary CSV/XLSX под HITL) |
 | `ATTACHMENTS_PII_POLICY` | `tag` | G06: `tag` (только флаг) \| `mask` (редакция в `safe_text`) \| `reject` (`pii_detected`) |
+| `ATTACHMENTS_FILE_REREAD_PCT` | `0` | 055/070: покрытие повторного чтения файла из треда. `0` — выключено (**откат одной переменной**), `1..99` — sticky-canary по `hash8(user_id)`, `100` — все вызовы. См. §16.11 |
 
 > Хранилище: `minio` — любой S3-совместимый endpoint. Собственные реестры MinIO
 > **не отдают образы анонимно** — проверено 2026-09: Docker Hub `minio/minio` → denied,
@@ -1480,6 +1481,14 @@ default 200), без классификатора:
 
 Provenance пишется в `ParsedDocument.extraction_source` и в метрику
 `palatium_attachment_parse_total{extraction_source, media_kind}`.
+
+**Кодировка текстовых вложений.** Текст декодируется по цепочке
+`utf-8-sig → utf-8 → cp1251`; если ни одна не подошла, остаётся
+`utf-8, errors="replace"` (U+FFFD) — аплоад не падает, но текст **лоссовый**.
+Каждый такой fallback инкрементирует
+`palatium_utf8_decode_failures_total{kind="text|html"}`: ненулевой прирост =
+реальный дефект кодировки (кракозябры, битый OCR), а не шум. Смотреть при жалобах
+«в ответе вместо кириллицы `?`» и в canary по новым источникам файлов.
 
 **Tesseract runtime.** Python-пакеты `pytesseract`/`Pillow`/`pymupdf` входят в
 Poetry-группу `attachments`. Сам бинарник ставится в образ при
@@ -1915,6 +1924,55 @@ python scripts/attachments_probe.py --preflight-image   # только пров�
   прогон с ненулевым кодом заваливал бы `make up`;
 - при `--skip-s3` проба пропускается вместе с остальными проверками store — этот флаг
   помечает прогон, который init-контейнер не пересоздаёт (`make rebuild-app`).
+
+### 16.11. Повторное чтение файла из треда (055/070)
+
+Запрос «а из БД взять этот файл и ещё раз прочитать» — это отдельная ось Intent
+(`file_reference=thread_file`), а не подсказка в промпте: `ExecutionPlanner` планирует
+прямой `platform.read_attachment`, а `AttachmentReferenceResolver` достаёт `attachment_id`
+из `AttachmentRepositoryPort` (owner + thread, RLS) — **модель никогда не выбирает файл**.
+Если референт неоднозначен, ответ — типизированный отказ с именами файлов; «файл
+отсутствует» без строки в БД и «файл недоступен в хранилище» — разные сообщения (020).
+
+Покрытие регулирует **один** ключ, `ATTACHMENTS_FILE_REREAD_PCT` (sticky по
+`hash8(user_id)`, как `FORMATTER_ROLLOUT_PCT`):
+
+| Значение | Поведение | Когда |
+|---|---|---|
+| `0` | путь выключен, ход идёт прежним маршрутом | **откат**: правка одной переменной, без деплоя |
+| `5` | ~5% пользователей (sticky) | canary |
+| `100` | все вызовы | полный cutover |
+
+Рампа без деплоя: `5 → 25 → 50 → 100`. Метрика исхода резолва —
+`palatium_attachment_read_total{kind="reference_resolved|reference_ambiguous|..."}`
+(новых имён метрик не вводим, 040); отказ резолвера виден в логе
+`attachment_reference.resolve` и в `researcher.file_reference_unresolved`.
+
+**Неоднозначность (несколько файлов в треде).** Если референт не разрешился
+(`reference_ambiguous`) и в треде ≥2 различных имени файлов, вместо текстового
+отказа поднимается HITL-карточка «Выберите файл» (`FileChoiceCardPolicy`,
+`domain/hitl/file_choice.py`). Варианты — это **имена файлов из БД**
+(`AttachmentRepositoryPort.list_for_thread`, owner + RLS), `action_id` —
+чистый ординал `filesel_1..N` (UUID в UI не уходит). Ответ карточки не проходит
+через LLM: `IntentHitlFlow.process_hitl_choice` резолвит имя детерминированно
+(`AttachmentReferenceResolver.resolve_explicit`, при дублях — самая новая строка)
+и вызывает `process_turn(attachment_ids=[...])`. Диагностика:
+
+- карточка не появилась → ожидаемо, если запрос называет чужой документ
+  (`names_foreign_document` / `no_match`): это **fail-closed**, читать другой файл нельзя;
+- карточка есть, ответ не сработал → смотреть `hitl.choice` (одноразовость,
+  TTL) и `attachment_reference.resolve` c `mode="explicit"`.
+
+**Гейт F2 (structured streaming).** `palatium_sse_layout_shift_total{contract}` —
+не просто счётчик: для `contract="structured_incremental"` это **алерт при
+`increase(...[5m]) > 0`** (см. `.cursor/plans/structured-streaming.md` §3).
+Рампа `STREAMING_CONTRACT_ROLLOUT_PCT` останавливается на первом ненулевом
+инкременте: ненулевой shift на структурном контракте = нарушение инварианта
+«показанный кадр не переписывается», а не «терпимый шум» (для `legacy_markdown`
+shift ожидаем и алертом не считается).
+
+Проверка после флипа: в треде с одним загруженным файлом запрос «перечитай этот файл»
+должен дать ответ по содержимому файла, а не «файл не приложен к диалогу».
 
 ---
 

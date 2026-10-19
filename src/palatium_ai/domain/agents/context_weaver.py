@@ -7,7 +7,12 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.mcp.models import ExecutionPlanBundle
-from palatium_ai.domain.policies.types import GROUNDING_DEFAULT, GroundingMode
+from palatium_ai.domain.policies.types import (
+    FILE_REFERENCE_DEFAULT,
+    GROUNDING_DEFAULT,
+    FileReferenceKind,
+    GroundingMode,
+)
 
 from .context_packet import ContextPacket
 from .contracts import TaskResult
@@ -29,6 +34,8 @@ class ContextWeaverInput(BaseModel):
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
     grounding: GroundingMode = Field(default=GROUNDING_DEFAULT)
     grounding_reason: str = Field(default="", max_length=500)
+    # ``thread_file`` → planner binds a direct platform.read_attachment call (070).
+    file_reference: FileReferenceKind = Field(default=FILE_REFERENCE_DEFAULT)
     # True when this turn already carries fenced upload OCR/text (prefer reason_only).
     has_attachment_context: bool = False
     # Continuity trusts dialog prior for workers — prefer reason_only over search_knowledge.

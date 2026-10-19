@@ -56,7 +56,7 @@ def test_apply_strategy_budget_on_collector() -> None:
     from palatium_ai.core.observability.hop_timings import HopTimingCollector
 
     hop = HopTimingCollector(budget_ms=15_000, base_budget_ms=15_000)
-    hop.apply_strategy_budget("format_only")
+    hop.apply_strategy_budget("format_only", scaler=HopBudgetPolicy.effective_budget_ms)
     assert hop.budget_ms == 9_000
-    hop.apply_strategy_budget("retrieve_then_reason")
+    hop.apply_strategy_budget("retrieve_then_reason", scaler=HopBudgetPolicy.effective_budget_ms)
     assert hop.budget_ms == 15_000

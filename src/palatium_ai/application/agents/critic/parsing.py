@@ -1,54 +1,17 @@
 # src/palatium_ai/application/agents/critic/parsing.py
 
-"""Parse Critic LLM JSON."""
+"""Decode Critic input; derive confidence from scores.
+
+Critic LLM output is decoded via provider structured output
+(``response_format="json_schema"`` + ``response_model=CriticOutput``) inside the
+agent, so no manual JSON coercion lives here: the harness/model guarantees the
+shape or the call fails loudly.
+"""
 
 from __future__ import annotations
 
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.critic import CriticInput, CriticOutput
-from palatium_ai.domain.llm.json_codec import loads_llm_json
-
-_SUMMARY_MAX_CHARS = 2000
-
-
-def coerce_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "1"}
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return False
-
-
-def coerce_score(value: object, default: float = 0.0) -> int:
-    if not isinstance(value, (int, float, str)):
-        return int(default)
-    try:
-        score = float(value)
-    except TypeError, ValueError:
-        return int(default)
-    if score != score or score in (float("inf"), float("-inf")):
-        return int(default)
-    return int(min(max(score, 0.0), 10.0))
-
-
-def parse_critic_output(raw_content: str) -> CriticOutput:
-    payload = loads_llm_json(raw_content)
-    if not isinstance(payload, dict):
-        raise ValueError("Critic JSON must be an object")
-
-    raw_summary = payload.get("summary", "No summary provided")
-    summary = str(raw_summary).strip() or "No summary provided"
-    if len(summary) > _SUMMARY_MAX_CHARS:
-        summary = summary[:_SUMMARY_MAX_CHARS].rstrip() + "…"
-
-    return CriticOutput(
-        accuracy_score=coerce_score(payload.get("accuracy_score")),
-        safety_score=coerce_score(payload.get("safety_score")),
-        requires_review=coerce_bool(payload.get("requires_review")),
-        summary=summary,
-    )
 
 
 def confidence_from_scores(output: CriticOutput) -> float:

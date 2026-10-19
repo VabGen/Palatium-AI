@@ -425,6 +425,27 @@
 - **Честно о гейте:** автоматической проверки «спецификация существует» нет — это ревью
   по 088; так и записано в `005` и `086`, чтобы отсутствие автоматизации не выглядело гейтом.
 
+### W7 — Сужение BLE001/C901 и scoped mypy-overrides · **DONE (2026-10-16)**
+- ruff `BLE`: `per-file-ignores` снят целиком (`application/**`, `infrastructure/**`,
+  `scripts/**`, `.cursor/hooks/**`) — 48 сайтов `except Exception` помечены
+  `# noqa: BLE001  # <причина>` по сайту (017), а не по каталогу.
+- ruff `C901` (mccabe, max 10) — блокирующий везде, включая `scripts/` и `mcp_servers/`;
+  функции с CCN 11–17 (`attachments_probe`, `ops_probe`, `smoke_mcp_turn`,
+  `check_import_layers`) декомпозированы на хелперы, новых исключений не заведено.
+- mypy: глобальный `ignore_missing_imports=true` убран — вендоры без `py.typed`
+  перечислены поимённо в `[[tool.mypy.overrides]]`, для `jsonschema` поставлен
+  `types-jsonschema` (стабы вместо подавления); `mypy_path += scripts`.
+- Починены 14 находок strict-прогона; реальные дефекты — недостижимая ветка
+  `sys.platform` в `checkpointer.py` (вынесена в `_IS_WINDOWS`: иначе вердикт гейта
+  зависел от ОС), мёртвый `or ""`/`or "optional"` при `Literal`-полях окружения и
+  grounding, генератор `KeyValueItem`/`StepItem` в `markdown_parser`,
+  отсутствующая аннотация `resolved_grounding`, три неиспользуемых `# type: ignore`.
+- Побочно закрыт предсуществующий дрейф: `ruff format` на 6 отставших файлах и
+  нарушение слоя `core → domain` в `hop_timings.py` (политика бюджета инжектится
+  портом `BudgetScaler`; `core` больше не импортирует `domain`, 000).
+- **DoD:** `ruff check .`, `ruff format --check .`, `check_import_layers.py`,
+  `mypy --strict src/palatium_ai`, `scripts/ci_quality.py` — зелёные. ✔
+
 ---
 
 ## 5. Backlog гейтов (код/инфраструктура)
@@ -434,7 +455,9 @@
 | ruff ratchet (`DTZ,T20,BLE,ASYNC,PERF,PT,RUF,RET,PIE,FURB,ERA,PTH,TID`) | `pyproject.toml` | W1 (+`PERF` проверен в W3) |
 | нагрузочный гейт сложности (`tests/perf/`, маркер `slow`) | `tests/perf/` + `Makefile` (`make perf`) + `.github/workflows/perf-nightly.yml` | W3 ✔ |
 | пагинация: потолок из `core/types/pagination.py` + контракт-тест | `src/palatium_ai/core/types/pagination.py`, `tests/unit/test_sessions_pagination.py` | W3 ✔ |
-| сужение `BLE001` по сайтам (application/infrastructure, 42 сайта) | `pyproject.toml` + `.py` сайтов | backlog (после W6) |
+| сужение `BLE001` по сайтам (application/infrastructure/hooks, 48 сайтов) | `pyproject.toml` + `.py` сайтов | W7 ✔ (2026-10-16) |
+| `C901` на `scripts/`/`mcp_servers/` (декомпозиция вместо исключений) | `pyproject.toml` + `scripts/*.py` | W7 ✔ |
+| scoped `mypy`-overrides вместо глобального `ignore_missing_imports` | `pyproject.toml` (`[[tool.mypy.overrides]]`) + `types-jsonschema` | W7 ✔ |
 | `uv lock --check` | `scripts/ci_security.py` | W2 ✔ |
 | pin-drift GitHub Actions (`uses:` без SHA/версии) | `scripts/ci_security.py` + `tests/unit/test_ci_security_gates.py` | W2 ✔ |
 | frontend CI-job (tsc/eslint/prettier/vitest/build/e2e) | `.github/workflows/ci.yml` (`npm run verify`), `web/package.json` | W4 ✔ |

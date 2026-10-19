@@ -152,6 +152,30 @@ def test_no_rehydrate_on_assistant_only_mention() -> None:
     assert decision.rehydrate_source == "none"
 
 
+def test_answer_binds_the_only_file_of_the_thread() -> None:
+    """answer: a single-file thread is unambiguous, so a paraphrased prior still binds."""
+    doc_id = uuid4()
+    window = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(thread_id="t1", role="user", content="сводка", payload=attachment_ids_payload((doc_id,)), seq=0),
+            DialogTurn(thread_id="t1", role="assistant", content="Сводка по вложению", seq=1),
+        ),
+    )
+    decision = AttachmentStickinessPolicy.decide_rehydrate(
+        continuation_kind="answer",
+        refers_to_prior=True,
+        has_turn_attachments=False,
+        dialog=window,
+        prior_context="Ответ по файлу",
+        trust_prior_for_workers=True,
+        grounding="optional",
+        adaptive_grounding_enabled=True,
+    )
+    assert decision.attachment_ids == (doc_id,)
+    assert decision.rehydrate_source == "message_binding"
+
+
 def test_no_rehydrate_when_prior_matches_no_turn() -> None:
     """No greedy «newest upload» fallback when the Continuity prior matches nothing."""
     window, _doc_id, _webp_id = _two_attachment_thread()

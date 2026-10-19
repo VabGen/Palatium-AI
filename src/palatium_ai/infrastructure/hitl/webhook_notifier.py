@@ -64,7 +64,7 @@ class CompositeHitlNotifier:
         for notifier in self._notifiers:
             try:
                 await notifier.notify_escalation(notice)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # one failing escalation channel must not block the others (020)
                 name = type(notifier).__name__
                 errors.append(f"{name}: {exc}")
                 logger.warning(

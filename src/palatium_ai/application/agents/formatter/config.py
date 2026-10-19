@@ -21,8 +21,10 @@ FORMATTER_CONFIG = AgentConfig(
 
 MIN_PIPELINE_CONFIDENCE = 0.7
 REVIEW_CONFIDENCE_CAP = 0.5
-REPAIR_ERROR_HEAD = 1500
 LOCALE_REPAIR_ATTEMPTS = 2
+# Schema (Markdown→ContentDocument) repair is cheaper than a lost answer: a single
+# attempt left long answers truncated when the second draft also failed to parse.
+FORMATTER_SCHEMA_REPAIR_ATTEMPTS = 3
 
 # Progressive disclosure budgets (065) — never dump researcher/critic state.
 FORMATTER_SOURCE_MAX_CHARS = 8_000
@@ -36,7 +38,7 @@ FORMATTER_FAST_PATH_CONFIDENCE = 0.85
 FORMATTER_PASSTHROUGH_MAX_CHARS = 600
 
 # ContentDocument JSON needs headroom; live truncations at 512 broke UI.
-FORMATTER_MAX_COMPLETION_TOKENS = 4_096
+FORMATTER_MAX_COMPLETION_TOKENS = 8_192
 FORMATTER_MIN_COMPLETION_TOKENS = 1_024
 # Brand/restructure styles: tighter completion so hop budget is not burned on icon sections.
 FORMATTER_BRAND_MAX_COMPLETION_TOKENS = 1_536

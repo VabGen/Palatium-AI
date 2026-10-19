@@ -36,7 +36,7 @@ LITELLM_MASTER_KEY ?= $(shell python scripts/make_helpers.py env-get LITELLM_MAS
 .PHONY: help init install up up-full rebuild-app obs-up obs-down down reset ps logs \
         logs-api logs-litellm verify require-key models test-tier validate list-dbs \
         migrate shell swagger litellm-ui attach-build attach-up attach-down \
-        attach-s3-up attach-s3-down attach-probe perf
+        attach-s3-up attach-s3-down attach-probe perf supply-chain
 
 # ──────────────────────────────────────────────────────────────────────────────
 help:  ## Показать эту справку
@@ -127,6 +127,13 @@ test-tier: require-key ## Тестовый запрос через tier-mid
 
 validate: ## Валидация docker-compose.yml
 	$(COMPOSE) config --quiet && echo "✅ docker-compose.yml валиден"
+
+# Тот же гейт, что в CI-job `supply-chain` (025): собранный runtime-образ, Trivy по fixable
+# HIGH/CRITICAL, SBOM CycloneDX в artifacts/. Подпись (`--sign`) — только в CI: keyless
+# требует OIDC-identity workflow. `make supply-chain SUPPLY_CHAIN_ARGS=--no-build` переиспользует
+# уже собранный образ.
+supply-chain: ## Скан образа (Trivy) + SBOM CycloneDX (подпись — только в CI)
+	@python scripts/ci_supply_chain.py $(SUPPLY_CHAIN_ARGS)
 
 perf: ## Нагрузочные тесты сложности hot-path (маркер slow; вне PR-CI, 080)
 	@uv run pytest tests/perf -q -m slow

@@ -37,7 +37,7 @@ def decode_researcher_input(input_context: dict[str, str]) -> ResearcherInput:
     if raw_dialog:
         try:
             dialog_window = DialogTurnWindow.model_validate_json(raw_dialog)
-        except Exception:
+        except Exception:  # noqa: BLE001  # malformed dialog window degrades to no window
             dialog_window = None
     memory_hints: tuple[str, ...] = ()
     raw_mh = input_context.get("memory_hints_json") or "[]"
@@ -45,7 +45,7 @@ def decode_researcher_input(input_context: dict[str, str]) -> ResearcherInput:
         parsed_mh = json.loads(raw_mh)
         if isinstance(parsed_mh, list):
             memory_hints = tuple(str(h) for h in parsed_mh if str(h).strip())
-    except Exception:
+    except Exception:  # noqa: BLE001  # malformed memory hints degrade to an empty tuple
         memory_hints = ()
     return ResearcherInput(
         task_id=input_context["_task_id"],

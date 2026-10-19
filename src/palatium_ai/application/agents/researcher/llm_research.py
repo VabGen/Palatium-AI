@@ -74,10 +74,10 @@ async def run_llm_research(
                     "grounding": task_input.context_packet.grounding,
                     "route_plan": task_input.context_packet.route_plan,
                     "context_summary": task_input.context_packet.context_summary,
-                    "attachment_context": task_input.context_packet.untrusted_context,
-                    "prior_context": task_input.prior_context,
+                    "attached_files": task_input.context_packet.untrusted_context,
+                    "previous_answer": task_input.prior_context,
                     "revision_feedback": task_input.revision_feedback,
-                    "memory_hints": list(task_input.memory_hints[:4]),
+                    "user_facts": list(task_input.memory_hints[:4]),
                     "skill_catalog": skill_catalog,
                     "skill_references": skill_references,
                     "retrieval_empty": grounding_degraded,
@@ -117,9 +117,8 @@ async def run_llm_research(
             grounding_degraded=True,
             cannot_answer_without_source=False,
         )
-        agent_metrics.record_grounding_degraded(
-            str(task_input.context_packet.grounding or "optional"),
-        )
+        # ``grounding`` is a validated Literal (never empty), so it is passed as-is.
+        agent_metrics.record_grounding_degraded(task_input.context_packet.grounding)
 
     requires_review = output.confidence < config.confidence_threshold
     status: Literal["success", "failure", "partial"] = "partial" if requires_review else "success"
