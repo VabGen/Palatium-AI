@@ -11,6 +11,7 @@ from typing import Protocol
 
 from palatium_ai.domain.graph.temporal import EXPIRED_AT_SENTINEL
 from palatium_ai.domain.graph.write_port import GraphFactRecord, GraphFactUpsert
+from palatium_ai.domain.memory.hebbian import bump_hebbian_weight
 from palatium_ai.domain.policies.graph_fact import GraphFactPolicy
 
 # Fixed templates — never f-string user text into Cypher (070 / 020).
@@ -20,7 +21,8 @@ MATCH (f:MemoryFact {user_id: $user_id, entry_key: $entry_key})
 WHERE f.invalid_at IS NULL
   AND (f.expired_at IS NULL OR f.expired_at > datetime())
 RETURN f.text AS text, f.node_id AS node_id, f.version AS version,
-       coalesce(f.contains_pii, false) AS contains_pii
+       coalesce(f.contains_pii, false) AS contains_pii,
+       coalesce(f.hebbian_weight, 0.0) AS hebbian_weight
 ORDER BY coalesce(f.version, 1) DESC
 LIMIT 1
 """.strip()
@@ -86,6 +88,13 @@ MATCH (f:MemoryFact {user_id: $user_id, entry_key: $entry_key})
 WHERE f.expired_at IS NULL OR f.expired_at > datetime()
 SET f.expired_at = datetime(), f.updated_at = datetime()
 RETURN count(f) AS n
+""".strip()
+
+_SET_HEBBIAN_CYPHER = """
+MATCH (f:MemoryFact {node_id: $node_id})
+SET f.hebbian_weight = $hebbian_weight,
+    f.updated_at = datetime()
+RETURN f.hebbian_weight AS hebbian_weight
 """.strip()
 
 # Bi-temporal active Select for hot-path fusion (SB3); binds $as_of / $user_id / $limit.
@@ -237,9 +246,35 @@ class Neo4jGraphWritePort:
         return _row_int(rows[0].get("n"), default=0) > 0
 
     async def bump_hebbian_on_entry(self, *, user_id: str, entry_key: str) -> float:
-        """Hebbian edge bump is in-memory/eval-gated (M8); Neo4j path is a no-op for now."""
-        _ = (user_id, entry_key)
-        return 0.0
+        """Reinforce the active fact's Hebbian weight (M8 curve, same as in-memory port).
+
+        Read → compute in the domain helper → write. Keeping the formula in one place
+        (``domain.memory.hebbian``) avoids a second copy in Cypher that would drift.
+        Concurrent bumps of the same entry are last-write-wins: the weight is a
+        heuristic signal used only by the promote batch, not a durable fact.
+        """
+        uid = user_id.strip()
+        key = entry_key.strip()
+        if not uid or not key:
+            return 0.0
+        rows = await self._transport.run_write(
+            cypher=_FIND_ACTIVE_CYPHER,
+            params={"user_id": uid, "entry_key": key},
+        )
+        if not rows:
+            return 0.0
+        node_id = str(rows[0].get("node_id", "") or "").strip()
+        if not node_id:
+            return 0.0
+        weight = bump_hebbian_weight(_row_float(rows[0].get("hebbian_weight"), default=0.0))
+        updated = await self._transport.run_write(
+            cypher=_SET_HEBBIAN_CYPHER,
+            params={"node_id": node_id, "hebbian_weight": weight},
+        )
+        if not updated:
+            return 0.0
+        stored = _row_float(updated[0].get("hebbian_weight"), default=weight)
+        return max(0.0, min(1.0, stored))
 
     async def list_active_facts(
         self,

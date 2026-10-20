@@ -96,6 +96,50 @@ LOW_RISK_ROUTE_STRATEGIES: frozenset[RouteStrategy] = frozenset(
     {"format_only"},
 )
 
+# --- Response shape (intent → formatter) ---
+
+# Form of the answer *body*, orthogonal to task_kind and routing. ``auto`` means "no
+# explicit form requested: the Formatter chooses the block composition". The value set
+# is closed (010): a new form is a contract change, not a prompt tweak.
+#   comparison_table    — side-by-side comparison of 2+ objects along attributes.
+#   document_analysis   — sections/risks/recommendations over one document.
+#   plan                — ordered, actionable steps.
+#   prose               — explanation without forced structure.
+# ``choice_cards``/``greeting`` are deliberately absent: requires_user_choice and
+# task_kind=social_conversation + style_hint already own those outcomes (050).
+ResponseShape = Literal[
+    "auto",
+    "comparison_table",
+    "document_analysis",
+    "plan",
+    "prose",
+]
+RESPONSE_SHAPE_DEFAULT: ResponseShape = "auto"
+
+# --- Streaming (SSE) contract per turn ---
+
+# How the user-facing answer is painted during one turn. Closed set (010): a new
+# value is a contract change, not an env tweak.
+#   structured_incremental — ContentDocument blocks are painted as they close; the
+#                            final document is a superset of what was already shown
+#                            (no replace, layout_shift_count == 0).
+#   buffered               — one final frame, no preview (nothing to replace).
+#   legacy_markdown         — GFM token stream + one handover from a worker draft
+#                            (deprecated; keep while the Markdown parser is the fallback).
+StreamingContract = Literal["structured_incremental", "buffered", "legacy_markdown"]
+STREAMING_CONTRACT_DEFAULT: StreamingContract = "legacy_markdown"
+
+# --- Answer writer (single-writer contract, P1a) ---
+
+# Which component owns the user-visible deliverable for one turn. Exactly one writer:
+#   worker    — Researcher/worker writes the final GFM; Formatter renders it
+#               deterministically (no LLM rewrite, no replacement of the draft).
+#   formatter — Formatter is the only writer (restructure, clarify/choice, verbatim,
+#               locale mismatch, revision); the worker draft must not reach the client.
+# Closed set (010): a new owner is a contract change, not an env tweak.
+PresentationOwner = Literal["worker", "formatter"]
+PRESENTATION_OWNER_DEFAULT: PresentationOwner = "formatter"
+
 # --- Untrusted content (attachments, MCP/tool output) ---
 
 # How a payload with detected injection signals may be used. ``allow`` keeps it
@@ -109,6 +153,9 @@ __all__ = [
     "FILE_REFERENCE_DEFAULT",
     "GROUNDING_DEFAULT",
     "LOW_RISK_ROUTE_STRATEGIES",
+    "PRESENTATION_OWNER_DEFAULT",
+    "RESPONSE_SHAPE_DEFAULT",
+    "STREAMING_CONTRACT_DEFAULT",
     "SUBSTANTIVE_USER_PAYLOAD_CHARS",
     "TRANSFORMATION_DEFAULT",
     "VERBATIM_EXTRACTION_CAPABILITY",
@@ -118,7 +165,10 @@ __all__ = [
     "FileReferenceKind",
     "GroundingMode",
     "ModelTier",
+    "PresentationOwner",
+    "ResponseShape",
     "RouteStrategy",
+    "StreamingContract",
     "TaskKind",
     "TransformationKind",
     "UnderspecificationKind",

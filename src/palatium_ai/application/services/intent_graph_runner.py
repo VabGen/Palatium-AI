@@ -223,7 +223,7 @@ class IntentGraphRunner:
             # Dual stream: hops for SSE progress; values for terminal state without a
             # second aget_state round-trip (checkpoint_ns-as-subgraph pitfall — run_config).
             # When TurnSseBridge is bound (process_stream), multiplex answer_delta /
-            # formatter_delta events from mid-node emits.
+            # block_delta events from mid-node emits.
             final_state: AgentGraphState | None = None
             async for event in self._iter_graph_stream_events(
                 graph_input=graph_input,
@@ -263,7 +263,7 @@ class IntentGraphRunner:
         task_id: str,
         thread_id: str,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Yield hop / answer_delta / formatter_delta; ``_values`` carries rolling state."""
+        """Yield hop / answer_delta / block_delta; ``_values`` carries rolling state."""
         bridge = get_turn_sse_bridge()
         if bridge is None:
             async for item in self._graph.astream(

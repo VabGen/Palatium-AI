@@ -170,6 +170,7 @@ def _consume_line(state: _ParseState, raw: str, *, max_chars: int) -> None:
         return
 
     line = raw.strip()
+    indent = _indent_width(raw)
     if not line:
         _consume_blank(state, max_chars=max_chars)
         return
@@ -187,7 +188,7 @@ def _consume_line(state: _ParseState, raw: str, *, max_chars: int) -> None:
 
     bullet_item = _parse_bullet_line(line)
     if bullet_item is not None:
-        _push_bullet_item(state, bullet_item, max_chars=max_chars)
+        _push_bullet_item(state, _flatten_nested_bullet(bullet_item, indent), max_chars=max_chars)
         return
 
     _consume_prose(state, line)
@@ -319,6 +320,23 @@ def _parse_bullet_line(line: str) -> ListItem | None:
     if plain is not None:
         return ListItem(text=_strip_markdown_bold(plain.group(1)))
     return None
+
+
+def _indent_width(raw: str) -> int:
+    prefix = raw[: len(raw) - len(raw.lstrip(" \t"))]
+    return len(prefix.expandtabs(4))
+
+
+def _flatten_nested_bullet(item: ListItem, indent: int) -> ListItem:
+    """Flatten an indented sub-bullet into the parent list (no nested list contract).
+
+    ``ListBlock`` has no nesting level, so a nested item used to lose its hierarchy
+    silently and read as a sibling. A visible marker keeps the sub-point readable
+    without inventing a second list shape (055).
+    """
+    if indent < 2 or item.text.startswith("· "):
+        return item
+    return item.model_copy(update={"text": f"· {item.text}"})
 
 
 def _list_item_from_groups(emphasis_raw: str | None, body_raw: str | None) -> ListItem | None:

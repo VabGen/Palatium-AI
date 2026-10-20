@@ -167,11 +167,15 @@ class AttachmentStickinessPolicy:
         """Resolve attachment UUIDs bound to the Continuity prior — never the «newest upload».
 
         Binding rules (055 — structural, no phrase lists):
-        - ``answer``: a **user** turn carrying the ids may bind by needle. An assistant
-          mention alone never picks a file by itself: with two candidates in the thread a
-          paraphrase cannot say which one the answer used (cross-turn leak). The one safe
-          case is a **single-file thread** — there is no other file to bind, so the upload
-          that produced the continued answer is unambiguous (P0 sticky-context contract).
+        - ``answer``: a **user** turn carrying the ids may bind by needle. Otherwise the
+          bind is the upload set of the user turn the last assistant answer directly
+          follows, when the needle identifies that answer's own content: a follow-up
+          continues the last answer, so its evidence turn is the file set — with two
+          candidates a *per-file* choice would be a guess, the set is not. Strictly
+          adjacent: an answer preceded by a text-only user turn binds nothing, so an
+          older unrelated upload is never resurrected (cross-turn leak). The last safe
+          case stays a **single-file thread** — there is no other file to bind
+          (P0 sticky-context contract).
         - ``format``: the prior *is* the assistant answer being transformed. First the
           assistant turn that the excerpt identifies; when the excerpt is a paraphrase
           and identifies no turn, the last-resort bind is the answer the request
@@ -195,6 +199,9 @@ class AttachmentStickinessPolicy:
         user_ids = _ids_from_user_turn_containing(dialog.turns, needle)
         if user_ids:
             return user_ids, "user_prior"
+        answer_ids = _ids_from_continued_answer_uploads(dialog.turns, needle=needle)
+        if answer_ids:
+            return answer_ids, "message_binding"
         only_file = _single_thread_attachment(dialog.turns)
         if only_file:
             return only_file, "message_binding"
@@ -233,6 +240,33 @@ def _user_attachment_ids_before(
         ids = parse_turn_attachment_ids(turn.payload)
         if ids:
             return ids
+    return ()
+
+
+def _ids_from_continued_answer_uploads(
+    turns: tuple[DialogTurn, ...],
+    *,
+    needle: str,
+) -> tuple[UUID, ...]:
+    """Uploads of the user turn the last assistant answer directly follows.
+
+    ``answer`` continues the last answer, so when the Continuity needle identifies
+    that answer's content, its upload set is the evidence being continued — keeping
+    a multi-file thread bound instead of dropping to no fence. Strictly adjacent:
+    a text-only user turn before the answer binds nothing (no stale resurrection),
+    and a needle matching an *older* answer binds nothing either (that answer is not
+    the one the follow-up continues).
+    """
+    from palatium_ai.domain.memory.turns import parse_turn_attachment_ids
+
+    for idx in range(len(turns) - 1, -1, -1):
+        if turns[idx].role != "assistant":
+            continue
+        if needle not in turns[idx].content:
+            return ()
+        if idx == 0 or turns[idx - 1].role != "user":
+            return ()
+        return parse_turn_attachment_ids(turns[idx - 1].payload)
     return ()
 
 

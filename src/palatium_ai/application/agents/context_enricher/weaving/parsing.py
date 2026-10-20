@@ -8,6 +8,7 @@ import json
 
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.policies.grounding import GroundingPolicy
+from palatium_ai.domain.policies.shape import ShapeRecipePolicy
 from palatium_ai.domain.policies.types import FILE_REFERENCE_DEFAULT
 
 
@@ -24,6 +25,7 @@ def decode_context_weaver_input(input_context: dict[str, str], *, instruction: s
         candidate_capabilities=capabilities,
         grounding=GroundingPolicy.coerce_mode(input_context.get("grounding")),
         grounding_reason=(input_context.get("grounding_reason") or "")[:500],
+        response_shape=ShapeRecipePolicy.coerce(input_context.get("response_shape")),
         has_attachment_context=input_context.get("has_attachment_context", "false").lower() == "true",
         has_trusted_prior=input_context.get("has_trusted_prior", "false").lower() == "true",
         file_reference=input_context.get("file_reference") or FILE_REFERENCE_DEFAULT,  # type: ignore[arg-type]  # Literal registry (017)

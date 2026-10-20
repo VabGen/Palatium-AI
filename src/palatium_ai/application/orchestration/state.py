@@ -17,6 +17,7 @@ from palatium_ai.domain.memory.contextualizer import ContextualizerTaskResult
 from palatium_ai.domain.memory.recall import MemoryRecallBundle
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies import EffectiveRoutingIntent
+from palatium_ai.domain.policies.types import PresentationOwner
 
 
 class AgentGraphState(TypedDict, total=False):
@@ -57,3 +58,6 @@ class AgentGraphState(TypedDict, total=False):
     untrusted_context: str
     # BCP-47 pin for user-facing replies (ReplyLocalePolicy); sticky across turns via session.
     response_locale: str
+    # Single writer for this turn (PresentationOwnershipPolicy); formatter = safe default.
+    presentation_owner: PresentationOwner
+    presentation_owner_reason: str

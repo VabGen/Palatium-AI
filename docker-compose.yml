@@ -29,7 +29,7 @@
 #     --profile observability    Langfuse v3 + ClickHouse (LANGCHAIN_TRACING_V2=true)
 #     --profile mcp-gateway      MCP gateway proxies
 #     --profile docker-mcp / docker-api   MCP servers + API inside Docker
-#     --profile memory-jobs      memory_promote loop (medium → Neo4j; Super Brain SB4)
+#     --profile memory-jobs      memory consolidate loop (promote + retention plan; SB4)
 #
 #   Rebuild only the app tier (infra keeps running):
 #     make rebuild-app   (menu: STACK -> "Rebuild api + MCP")
@@ -54,6 +54,7 @@
 #   docker compose --env-file env/.env up -d --force-recreate litellm
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # docker compose --env-file env/.env --profile docker-mcp --profile docker-api --profile attachments --profile attachments-s3 -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.attachments-av.yml -f docker-compose.attachments-s3.yml up -d --build
+# docker compose --env-file env/.env --profile docker-mcp --profile docker-api --profile attachments --profile attachments-s3 --profile memory-jobs -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.attachments-av.yml -f docker-compose.attachments-s3.yml up -d --build
 # =============================================================================
 
 name: palatium-ai
@@ -931,9 +932,14 @@ services:
       retries: 5
       start_period: 30s
 
-  # Out-of-band medium → Neo4j promote (M3 / Super Brain SB4). Not on the chat hot path.
-  # Requires MEMORY_PROMOTE_USER_IDS (comma-separated) and GRAPH_QUERY_BACKEND=neo4j.
-  memory-promote:
+  # Out-of-band sleep consolidation: medium → Neo4j promote + memory retention plan
+  # (M3 / SB4; 060). Not on the chat hot path. Retention stays dry-run here — the
+  # global retention CronJob owns destructive execute, so this loop cannot delete rows.
+  # Owners are discovered per pass (`--all-users`, SECURITY DEFINER RPC) because the
+  # app role cannot read other tenants' memory rows under FORCE RLS. Set
+  # MEMORY_PROMOTE_ALL_USERS=false to use an explicit MEMORY_PROMOTE_USER_IDS list.
+  # Requires GRAPH_QUERY_BACKEND=neo4j.
+  memory-consolidate:
     profiles: [ "memory-jobs" ]
     image: palatium-ai:local
     depends_on:
@@ -956,6 +962,7 @@ services:
       GRAPHITI_NEO4J_PASSWORD: ${GRAPHITI_NEO4J_PASSWORD:?set GRAPHITI_NEO4J_PASSWORD in env/.env}
       MEMORY_PROMOTE_ENABLED: ${MEMORY_PROMOTE_ENABLED:-true}
       MEMORY_PROMOTE_INTERVAL_SECONDS: ${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}
+      MEMORY_PROMOTE_ALL_USERS: ${MEMORY_PROMOTE_ALL_USERS:-true}
       MEMORY_PROMOTE_USER_IDS: ${MEMORY_PROMOTE_USER_IDS:-}
     read_only: true
     tmpfs:
@@ -970,16 +977,21 @@ services:
     command:
       - |
         set -eu
-        if [ -z "$${MEMORY_PROMOTE_USER_IDS}" ]; then
-          echo "MEMORY_PROMOTE_USER_IDS empty — memory-promote idle (set ids to enable)"
+        if [ "$${MEMORY_PROMOTE_ALL_USERS:-true}" != "true" ] && [ -z "$${MEMORY_PROMOTE_USER_IDS}" ]; then
+          echo "no promote scope (ALL_USERS=false and USER_IDS empty) — memory-consolidate idle"
           while true; do sleep "$${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}"; done
         fi
         while true; do
-          echo "$${MEMORY_PROMOTE_USER_IDS}" | tr ',' '\n' | while read -r uid; do
-            uid=$$(echo "$$uid" | tr -d '[:space:]')
+          set --
+          if [ "$${MEMORY_PROMOTE_ALL_USERS:-true}" = "true" ]; then
+            set -- "$$@" --all-users
+          fi
+          for uid in $$(echo "$${MEMORY_PROMOTE_USER_IDS}" | tr ',' ' '); do
             [ -z "$$uid" ] && continue
-            python -m palatium_ai.jobs.memory_promote --user-id "$$uid" || true
+            set -- "$$@" --user-id "$$uid"
           done
+          # One pass = promote every owner, then one retention sweep (dry-run).
+          python -m palatium_ai.jobs.memory_consolidate "$$@" || true
           sleep "$${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}"
         done
     restart: unless-stopped

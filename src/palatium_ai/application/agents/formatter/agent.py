@@ -17,6 +17,11 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
+from palatium_ai.application.agents.formatter.answer_delta import (
+    emit_document_block,
+    emit_document_title,
+    emit_structured_answer_delta,
+)
 from palatium_ai.application.agents.formatter.budgets import formatter_max_tokens, repair_max_tokens
 from palatium_ai.application.agents.formatter.fallback import failure_or_fallback
 from palatium_ai.application.agents.formatter.llm_stream import (
@@ -30,6 +35,7 @@ from palatium_ai.application.agents.formatter.parsing import (
     decode_formatter_input,
     formatter_attachment_stats,
 )
+from palatium_ai.application.agents.formatter.partial_document import PartialDocumentScanner
 from palatium_ai.application.agents.formatter.prompts import (
     FORMATTER_SCHEMA_PROMPT,
     FORMATTER_SYSTEM_PROMPT,
@@ -51,8 +57,10 @@ from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.models import ChatMessage
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.shape import ShapeRecipePolicy
 
 if TYPE_CHECKING:
+    from palatium_ai.application.agents.formatter.partial_document import PartialFrame
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.agents.formatter import FormatterInput
     from palatium_ai.domain.ports.harness import HarnessPort
@@ -63,6 +71,26 @@ logger = get_logger(__name__)
 _first_token_fallback_watch = first_token_fallback_watch
 _repair_max_tokens = repair_max_tokens
 _FIRST_TOKEN_FALLBACK_SECONDS = FIRST_TOKEN_FALLBACK_SECONDS
+
+
+def _paint_partial_frames(frames: list[PartialFrame], *, painted_prose: bool) -> bool:
+    """Paint one batch of closed document frames; return the prose-painted flag.
+
+    Typed frame first: the client prefers it and renders the same ``BlockRenderer``
+    as the final document. Prose is the append-only fallback for clients that predate
+    the typed frames (dual-emit, like ``text_delta``/``answer_delta`` in Phase 1).
+    The document title is not a block, so it gets its own typed frame before the
+    blocks: painting it as prose first would move the text when blocks take over.
+    """
+    for frame in frames:
+        if frame.index < 0:
+            emit_document_title(frame.text)
+        elif frame.block is not None:
+            emit_document_block(index=frame.index, block=frame.block)
+        if frame.text:
+            emit_structured_answer_delta(frame.text, separator="\n\n" if painted_prose else "")
+            painted_prose = True
+    return painted_prose
 
 
 class FormatterAgent(BaseAgent):
@@ -114,9 +142,11 @@ class FormatterAgent(BaseAgent):
         effective_mode = resolve_formatter_mode(self._mode, self._rollout_pct, user_id_var.get())
         started = perf_counter()
         try:
-            if effective_mode == "schema_first":
-                return await self._run_schema_first(input, task_input)
-            return await self._run_legacy(input, task_input)
+            output = (
+                await self._run_schema_first(input, task_input)
+                if effective_mode == "schema_first"
+                else await self._run_legacy(input, task_input)
+            )
         finally:
             # Mode-split latency for the canary A/B: both cohorts share one process, so
             # comparing schema_first against the legacy baseline needs this label.
@@ -125,9 +155,49 @@ class FormatterAgent(BaseAgent):
                 f"formatter:{effective_mode}",
                 duration_seconds=perf_counter() - started,
             )
+        self._record_shape_verdict(task_input, output)
+        return output
+
+    def _record_shape_verdict(self, task_input: FormatterInput, output: AgentOutput) -> None:
+        """Measure whether an explicitly requested form matched the document.
+
+        Never changes the answer: Pydantic already guarantees a valid document, and the
+        content is correct even when the composition differs (ADR 0005). A repair pass
+        is deliberately absent: the streamed blocks are already painted, so rewriting
+        the document afterwards would replace what the user reads (040 layout shift) —
+        the exact invariant this wave establishes. Mismatch stays a metric.
+        """
+        recipe = ShapeRecipePolicy.resolve(
+            shape=task_input.context_packet.response_shape,
+            task_kind=task_input.context_packet.task_kind,
+        )
+        if recipe is None:
+            return
+        document = output.output
+        if not isinstance(document, ContentDocument):
+            return
+        verdict = ShapeRecipePolicy.validate(document, recipe)
+        agent_metrics.record_response_shape(
+            shape=verdict.shape,
+            outcome="satisfied" if verdict.satisfied else "mismatch",
+        )
+        if not verdict.satisfied:
+            logger.info(
+                "formatter.response_shape.mismatch",
+                task_id=str(task_input.task_id),
+                shape=verdict.shape,
+                reason=verdict.reason,
+            )
 
     async def _run_schema_first(self, input: AgentInput, task_input: FormatterInput) -> AgentOutput:
-        """Provider-enforced ContentDocument json_schema; legacy Markdown is the fallback."""
+        """Provider-enforced ContentDocument json_schema; legacy Markdown is the fallback.
+
+        Streamed, not buffered: the provider emits the JSON incrementally and every
+        block that closes is painted immediately (``structured_incremental``). The
+        final validated document is a superset of the painted prose, so it never
+        replaces it — that is the difference between this contract and a blocking
+        ``json_schema`` call followed by a full-document swap (055).
+        """
         user_payload = build_formatter_user_payload(task_input)
         user_message = build_formatter_user_message(user_payload)
         messages: list[ChatMessage] = [
@@ -140,14 +210,23 @@ class FormatterAgent(BaseAgent):
             style_hint=str(style_hint) if isinstance(style_hint, str) else None,
             final_text_len=len(str(user_payload.get("final_text") or "")),
         )
+        scanner = PartialDocumentScanner()
+        painted_prose = False
+
+        def _on_delta(chunk: str) -> None:
+            nonlocal painted_prose
+            painted_prose = _paint_partial_frames(scanner.feed(chunk), painted_prose=painted_prose)
+
         try:
-            completion = await self._harness.call_llm(
+            completion = await self._harness.call_llm_stream(
                 self._config,
                 messages,
                 response_format="json_schema",
                 response_model=ContentDocument,
                 max_tokens=max_tokens,
+                on_delta=_on_delta,
             )
+            _paint_partial_frames(scanner.pending(), painted_prose=painted_prose)
             document = ContentDocument.model_validate_json(completion.content)
         except StructuredOutputUnsupportedError:
             logger.warning("formatter.schema_first.unsupported", task_id=str(input.task_id))
@@ -226,6 +305,7 @@ class FormatterAgent(BaseAgent):
                 max_tokens=max_tokens,
                 worker_summary=task_input.worker_summary or "",
                 agent_role=self._config.role,
+                allow_worker_fallback=task_input.allow_worker_fallback,
             )
             document = align_formatter_meta(document, task_input)
             document = await maybe_repair_locale_gated(

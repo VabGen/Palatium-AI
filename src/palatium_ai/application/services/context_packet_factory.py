@@ -9,6 +9,7 @@ from palatium_ai.domain.agents.execution import ExecutionStrategy
 from palatium_ai.domain.agents.intent import IntentTaskResult, TaskKind
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
+from palatium_ai.domain.policies.types import RESPONSE_SHAPE_DEFAULT
 
 
 class ContextPacketFactory:
@@ -34,6 +35,7 @@ class ContextPacketFactory:
         task_kind = effective_task_kind if effective_task_kind is not None else raw_kind
         requires_mcp = effective_requires_mcp if effective_requires_mcp is not None else raw_mcp
         candidate_capabilities = effective_capabilities if effective_capabilities is not None else raw_caps
+        response_shape = classification.output.response_shape if classification.output is not None else RESPONSE_SHAPE_DEFAULT
         route = routing.output.route if routing is not None and routing.output is not None else "clarification"
         route_plan = routing.output.plan if routing is not None and routing.output is not None else "No route plan"
 
@@ -45,6 +47,7 @@ class ContextPacketFactory:
             route_plan=route_plan,
             requires_mcp=requires_mcp,
             candidate_capabilities=candidate_capabilities,
+            response_shape=response_shape,
             execution_plan=ToolExecutionPlan(
                 strategy=fallback_strategy,
                 requires_tool_call=False,

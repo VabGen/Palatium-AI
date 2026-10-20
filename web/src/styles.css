@@ -318,6 +318,20 @@ textarea {
   white-space: normal;
 }
 
+/* Typed block preview: the same renderer as the final answer, so only its outer
+   spacing differs from the landed document (wave 2 response shapes). */
+.msg.pending .stream-preview--doc {
+  white-space: normal;
+}
+
+.msg.pending .stream-preview--doc .doc-blocks > *:first-child {
+  margin-top: 0;
+}
+
+.msg.pending .stream-preview--doc .doc-blocks > *:last-child {
+  margin-bottom: 0;
+}
+
 .msg.pending .stream-preview--md > *:first-child {
   margin-top: 0;
 }

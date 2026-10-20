@@ -263,6 +263,16 @@ try:  # pragma: no cover - optional dependency
         "Requested prior-content transformation kind (closed label set).",
         ["kind"],
     )
+    _palatium_response_shape_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_response_shape_total",
+        "Requested answer-body shape and its compliance outcome (closed label sets).",
+        ["shape", "outcome"],
+    )
+    _palatium_answer_writer_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_answer_writer_total",
+        "Turns by resolved answer writer (single-writer contract).",
+        ["owner", "reason"],
+    )
 except ImportError:  # pragma: no cover - fallback
     _palatium_agent_request_duration_seconds = _NoopMetric()
     _palatium_agent_errors_total = _NoopMetric()
@@ -309,6 +319,8 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_grounding_judge_failed_total = _NoopMetric()
     _palatium_grounding_clarification_total = _NoopMetric()
     _palatium_transform_total = _NoopMetric()
+    _palatium_response_shape_total = _NoopMetric()
+    _palatium_answer_writer_total = _NoopMetric()
 
 
 @dataclass
@@ -420,6 +432,22 @@ class AgentMetrics:
         """Count requested prior-content transformation kind (none/restructure/…)."""
         safe = (kind or "none").strip()[:32] or "none"
         _palatium_transform_total.labels(kind=safe).inc()
+
+    def record_response_shape(self, *, shape: str, outcome: str) -> None:
+        """Count the requested shape (outcome=requested) and whether it was met.
+
+        ``outcome`` is a closed value set at the call sites: ``requested`` (axis was
+        carried into the turn), ``satisfied`` / ``mismatch`` (checked on the document).
+        """
+        safe_shape = (shape or "auto").strip()[:32] or "auto"
+        safe_outcome = (outcome or "unknown").strip()[:32] or "unknown"
+        _palatium_response_shape_total.labels(shape=safe_shape, outcome=safe_outcome).inc()
+
+    def record_answer_writer(self, *, owner: str, reason: str) -> None:
+        """Count turns by resolved writer (P1a single-writer axis)."""
+        safe_owner = (owner or "formatter").strip()[:32] or "formatter"
+        safe_reason = (reason or "unknown").strip()[:64] or "unknown"
+        _palatium_answer_writer_total.labels(owner=safe_owner, reason=safe_reason).inc()
 
     def record_grounding_latency(
         self,

@@ -4,9 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * Lightweight SSE parser mirror for answer_delta replace + done lifecycle.
  * Full fetch integration lives behind MSW in e2e; here we unit-test accumulation.
  */
-function accumulateAnswerDeltas(
-  events: Array<{ delta: string; replace?: boolean }>
-): string {
+function accumulateAnswerDeltas(events: Array<{ delta: string; replace?: boolean }>): string {
   let answerAccumulated = '';
   for (const payload of events) {
     if (payload.replace === true) {
@@ -20,8 +18,7 @@ function accumulateAnswerDeltas(
 /** Mirrors client.ts dual-emit rules for text_delta + answer_delta. */
 function accumulateHybridDeltas(
   events: Array<
-    | { kind: 'text'; content: string }
-    | { kind: 'answer'; delta: string; replace?: boolean }
+    { kind: 'text'; content: string } | { kind: 'answer'; delta: string; replace?: boolean }
   >
 ): { text: string; answer: string } {
   let textAccumulated = '';

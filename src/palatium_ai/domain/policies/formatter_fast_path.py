@@ -45,6 +45,9 @@ class FormatterPassthroughSignals(BaseModel):
     requires_review: bool = False
     revision_requested: bool = False
     restructure_requested: bool = False
+    # An explicit ``response_shape`` (not auto) is a composition request: deterministic
+    # passthrough emits plain paragraphs, which would silently ignore it (ADR 0005).
+    shape_requested: bool = False
     underspecification_kind: str = "none"
     # Intent tagged extract/full-text — show worker body as-is (ignore length/structure).
     verbatim_requested: bool = False
@@ -98,6 +101,7 @@ class FormatterFastPathPolicy:
             (passthrough.requires_review, "requires_review"),
             (passthrough.revision_requested, "revision_requested"),
             (passthrough.restructure_requested, "restructure_requested"),
+            (passthrough.shape_requested, "shape_requested"),
             (passthrough.underspecification_kind != "none", "underspecified"),
         )
         hard = next((reason for failed, reason in hard_stops if failed), None)

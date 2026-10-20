@@ -47,11 +47,33 @@ class AttachmentReferenceResolver:
         filename: str = "",
     ) -> FileReferenceResolution:
         """Return a typed resolution; refusals carry user-safe candidate names."""
-        attachments = await self._repository.list_for_thread(thread_id, user_id=user_id)
+        scoped_thread = (thread_id or "").strip()
+        if not scoped_thread:
+            # The read path is thread-scoped by contract (P0-A): without an id no
+            # row can be selected. Log the missing binding instead of letting an
+            # empty result read as "this dialog has no files" (055, 020).
+            logger.warning(
+                "attachment_reference.resolve_failed",
+                thread_id="",
+                reason="thread_id_missing",
+                user_scoped=bool((user_id or "").strip()),
+            )
+            return FileReferenceResolution(status="no_candidates", reason="thread_has_no_files")
+        attachments = await self._repository.list_for_thread(scoped_thread, user_id=user_id)
         candidates = _usable_candidates(attachments)
         resolution = FileReferencePolicy.resolve(candidates, hint_text=hint_text, filename=filename)
         if not candidates and attachments:
             resolution = resolution.model_copy(update={"reason": "thread_files_not_readable"})
+        if resolution.status != "resolved":
+            logger.warning(
+                "attachment_reference.resolve_failed",
+                thread_id=scoped_thread,
+                status=resolution.status,
+                reason=resolution.reason,
+                candidate_count=len(candidates),
+                # Counts only: file names are user content and stay out of logs (020).
+                thread_file_count=len(attachments),
+            )
         agent_metrics.record_attachment_read(
             kind=f"reference_{resolution.status}",
             ocr_applied=False,
@@ -60,6 +82,7 @@ class AttachmentReferenceResolver:
         )
         logger.info(
             "attachment_reference.resolve",
+            thread_id=scoped_thread,
             status=resolution.status,
             reason=resolution.reason,
             candidate_count=len(candidates),
@@ -81,7 +104,7 @@ class AttachmentReferenceResolver:
         the newest usable row wins — the repository lists newest first. Anything else
         is the ordinary fail-closed resolution (020).
         """
-        attachments = await self._repository.list_for_thread(thread_id, user_id=user_id)
+        attachments = await self._repository.list_for_thread((thread_id or "").strip(), user_id=user_id)
         candidates = _usable_candidates(attachments)
         resolution = FileReferencePolicy.resolve(candidates, filename=filename)
         if resolution.status == "ambiguous" and resolution.reason == "explicit_filename_ambiguous":
@@ -95,8 +118,18 @@ class AttachmentReferenceResolver:
                     candidates=(newest.filename,),
                     reason="card_choice_duplicate_name_newest",
                 )
+        if resolution.status != "resolved":
+            logger.warning(
+                "attachment_reference.resolve_explicit_failed",
+                thread_id=(thread_id or "").strip(),
+                status=resolution.status,
+                reason=resolution.reason,
+                candidate_count=len(candidates),
+                thread_file_count=len(attachments),
+            )
         logger.info(
             "attachment_reference.resolve_explicit",
+            thread_id=(thread_id or "").strip(),
             status=resolution.status,
             reason=resolution.reason,
             candidate_count=len(candidates),

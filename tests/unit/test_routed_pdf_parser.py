@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from palatium_ai.domain.ports.document_parser import DocumentParseError, ParsedDocument, ParsedPage
 from palatium_ai.infrastructure.parsing.routed_parser import RoutedDocumentParser
 
 pytestmark = pytest.mark.asyncio
+
+_PARSE_TIMEOUT_SECONDS = 30.0
 
 
 class _Leaf:
@@ -66,7 +70,12 @@ async def test_routed_keeps_rich_pdf_text_layer() -> None:
         )
     )
     ocr = _PdfOcr()
-    routed = RoutedDocumentParser(inner=leaf, model_supports_vision=True, pdf_ocr=ocr)
+    routed = RoutedDocumentParser(
+        inner=leaf,
+        model_supports_vision=True,
+        parse_timeout_seconds=_PARSE_TIMEOUT_SECONDS,
+        pdf_ocr=ocr,
+    )
     parsed = await routed.parse(b"%PDF", mime_type="application/pdf", filename="a.pdf")
     assert parsed.extraction_source == "text_layer"
     assert ocr.calls == 0
@@ -80,7 +89,12 @@ async def test_routed_calls_pdf_ocr_when_layer_sparse() -> None:
         )
     )
     ocr = _PdfOcr()
-    routed = RoutedDocumentParser(inner=leaf, model_supports_vision=True, pdf_ocr=ocr)
+    routed = RoutedDocumentParser(
+        inner=leaf,
+        model_supports_vision=True,
+        parse_timeout_seconds=_PARSE_TIMEOUT_SECONDS,
+        pdf_ocr=ocr,
+    )
     parsed = await routed.parse(b"%PDF", mime_type="application/pdf", filename="a.pdf")
     assert parsed.extraction_source == "ocr"
     assert ocr.calls == 1
@@ -108,6 +122,7 @@ async def test_routed_escalates_to_vision_when_ocr_quality_low() -> None:
     routed = RoutedDocumentParser(
         inner=leaf,
         model_supports_vision=True,
+        parse_timeout_seconds=_PARSE_TIMEOUT_SECONDS,
         pdf_ocr=ocr,
         pdf_vision=vision,
     )
@@ -124,6 +139,38 @@ async def test_routed_fails_closed_without_ocr_backend() -> None:
             extraction_source="text_layer",
         )
     )
-    routed = RoutedDocumentParser(inner=leaf, model_supports_vision=False, pdf_ocr=None)
+    routed = RoutedDocumentParser(
+        inner=leaf,
+        model_supports_vision=False,
+        parse_timeout_seconds=_PARSE_TIMEOUT_SECONDS,
+        pdf_ocr=None,
+    )
     with pytest.raises(DocumentParseError, match="no usable text layer"):
+        await routed.parse(b"%PDF", mime_type="application/pdf", filename="a.pdf")
+
+
+class _HangingLeaf:
+    """Stands in for a parser stuck in an unbounded library call."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def supports(self, mime_type: str) -> bool:
+        return mime_type == "application/pdf"
+
+    async def parse(self, data: bytes, *, mime_type: str, filename: str) -> ParsedDocument:
+        _ = data, mime_type, filename
+        self.calls += 1
+        await asyncio.sleep(30)
+        raise AssertionError("the budget must cancel this parse")
+
+
+async def test_routed_parse_budget_fails_closed() -> None:
+    """Regression: an unbounded parse used to hold ``POST /complete`` forever."""
+    routed = RoutedDocumentParser(
+        inner=_HangingLeaf(),
+        model_supports_vision=False,
+        parse_timeout_seconds=0.01,
+    )
+    with pytest.raises(DocumentParseError, match="time budget"):
         await routed.parse(b"%PDF", mime_type="application/pdf", filename="a.pdf")

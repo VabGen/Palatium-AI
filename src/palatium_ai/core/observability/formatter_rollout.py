@@ -22,7 +22,7 @@ from __future__ import annotations
 import structlog
 
 from palatium_ai.core.config.formatter import FormatterMode
-from palatium_ai.core.observability.redaction import hash8
+from palatium_ai.core.observability.rollout import is_in_rollout
 
 logger = structlog.get_logger(__name__)
 
@@ -38,13 +38,7 @@ def resolve_formatter_mode(
     """Return the effective contract for this caller (pure; no I/O)."""
     if configured_mode != _SCHEMA_FIRST:
         return _LEGACY
-    pct = int(rollout_pct)
-    if pct <= 0:
-        return _LEGACY
-    if pct >= 100:
-        return _SCHEMA_FIRST
-    bucket = int(hash8((user_id or "").strip() or "anonymous"), 16) % 100
-    return _SCHEMA_FIRST if bucket < pct else _LEGACY
+    return _SCHEMA_FIRST if is_in_rollout(user_id, rollout_pct) else _LEGACY
 
 
 def warn_if_schema_first_but_zero_rollout(formatter_mode: FormatterMode, rollout_pct: int) -> None:

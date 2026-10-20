@@ -101,7 +101,10 @@ Git/PR-процесс — `088`. Секреты и RBAC — **020**; верси�
 
 ## Обновления
 
-- покрытие `dependabot.yml`: `pip`, `github-actions`, `npm` (`/web`), `docker` — weekly.
+- покрытие `dependabot.yml`: `uv` (Python), `github-actions`, `npm` (`/web`), `docker` — weekly.
+  Python — именно `uv`, не `pip`: pip-экосистема обновляет только `pyproject.toml`,
+  а гейт `uv sync --frozen` / `uv lock --check` требует синхронный `uv.lock`,
+  поэтому pip-PR приезжают красными независимо от содержимого бампа.
 - Security-обновления приходят независимо от расписания (настройка репозитория),
   routine-бампы схлопываются в групп-PR, чтобы алерты не терялись в шуме.
 

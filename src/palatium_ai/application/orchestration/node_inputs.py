@@ -46,6 +46,7 @@ def build_context_weaver_input(
         route_plan=snapshot.route_plan,
         requires_mcp=snapshot.requires_mcp,
         candidate_capabilities=snapshot.candidate_capabilities,
+        response_shape=snapshot.response_shape,
         file_reference=snapshot.file_reference,
         grounding=selectors.resolved_grounding(state),
         grounding_reason=selectors.resolved_grounding_reason(state),
@@ -166,4 +167,19 @@ def build_formatter_input(
         response_locale=selectors.resolved_response_locale(state),
         dialog_window=state.get("dialog_window"),
         memory_hints=selectors.memory_hints(state),
+        allow_worker_fallback=_allow_worker_fallback(state),
     )
+
+
+def _allow_worker_fallback(state: AgentGraphState) -> bool:
+    """Whether the Formatter may paint the worker draft before its first token.
+
+    The fallback is a legacy TTFT bridge; under an active single-writer contract with
+    the Formatter as owner it would be replaced by the Formatter answer (055). When
+    the axis is off (``mode_formatter``) or this thread is outside the rollout, the
+    legacy behaviour stays.
+    """
+    reason = state.get("presentation_owner_reason")
+    if reason in (None, "mode_formatter", "rollout_excluded"):
+        return True
+    return state.get("presentation_owner") != "formatter"

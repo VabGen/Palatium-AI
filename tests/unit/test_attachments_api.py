@@ -28,6 +28,7 @@ from palatium_ai.domain.attachments.errors import (
     AttachmentNotFoundError,
     AttachmentNotUsableError,
     AttachmentRestoreNotAllowedError,
+    AttachmentThreadRequiredError,
     AttachmentUploadTooLargeError,
 )
 from palatium_ai.domain.attachments.models import Attachment
@@ -268,6 +269,66 @@ def test_init_upload_rejects_unknown_mode(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert response.status_code == 422
     assert service.init_calls == []
+
+
+def test_init_upload_requires_a_thread_for_attach(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: ``attach`` without ``thread_id`` created a file no turn could find.
+
+    The schema refuses it before the handler runs, so no presigned URL is minted
+    and no dead row can be written (020, P0-A).
+    """
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        "/attachments/init",
+        json={
+            "filename": "contract.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 1024,
+            "mode": "attach",
+        },
+    )
+
+    assert response.status_code == 422
+    assert service.init_calls == []
+
+
+def test_init_upload_rejects_a_blank_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A whitespace-only id is stripped and then fails ``min_length`` (020)."""
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        "/attachments/init",
+        json={
+            "thread_id": "   ",
+            "filename": "contract.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 1024,
+            "mode": "attach",
+        },
+    )
+
+    assert response.status_code == 422
+    assert service.init_calls == []
+
+
+def test_init_upload_maps_a_threadless_attach_to_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-HTTP callers hit the same rule in the use-case layer; the API reports it."""
+    client, _ = _client(monkeypatch, error=AttachmentThreadRequiredError())
+
+    response = client.post(
+        "/attachments/init",
+        json={
+            "thread_id": "thread-1",
+            "filename": "contract.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 1024,
+            "mode": "attach",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "thread_id" in response.json()["detail"]
 
 
 def test_init_upload_maps_intake_rejection_to_400(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -770,3 +831,21 @@ def test_dialog_turn_with_unusable_attachment_is_409(monkeypatch: pytest.MonkeyP
     )
 
     assert response.status_code == 409
+
+
+def test_dialog_turn_with_attachment_ids_but_no_thread_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The use-case refuses ids it cannot scope; the API reports it as a bad request shape."""
+    service = _RecordingIntentService(error=AttachmentThreadRequiredError())
+    client = _intents_client(monkeypatch, service)
+
+    response = client.post(
+        "/intents/process",
+        json={
+            "text": "Summarise the attached contract",
+            "thread_id": "thread-1",
+            "attachment_ids": [str(_ATTACHMENT_ID)],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "thread_id" in response.json()["detail"]

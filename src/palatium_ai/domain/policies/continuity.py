@@ -67,11 +67,13 @@ from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import (
     FILE_REFERENCE_DEFAULT,
     GROUNDING_DEFAULT,
+    RESPONSE_SHAPE_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     TRANSFORMATION_DEFAULT,
     ContinuationKind,
     FileReferenceKind,
     GroundingMode,
+    ResponseShape,
     TaskKind,
     TransformationKind,
     UnderspecificationKind,
@@ -105,6 +107,9 @@ class EffectiveRoutingIntent(BaseModel):
     grounding: GroundingMode = GROUNDING_DEFAULT
     grounding_reason: str = Field(default="", max_length=500)
     transformation: TransformationKind = TRANSFORMATION_DEFAULT
+    #: Form of the answer body (auto = no explicit constraint). Presentation axis only:
+    #: Continuity may remap task_kind, but never the requested form (ADR 0005).
+    response_shape: ResponseShape = RESPONSE_SHAPE_DEFAULT
     #: Does the ask operate on a file already bound to the thread (storage re-read)?
     #: Defaults to ``none``; a fenced upload turn owns its own file (055).
     file_reference: FileReferenceKind = FILE_REFERENCE_DEFAULT
@@ -379,6 +384,7 @@ class ContinuityPolicy:
         grounding: GroundingMode = GROUNDING_DEFAULT,
         grounding_reason: str = "",
         transformation: TransformationKind = TRANSFORMATION_DEFAULT,
+        response_shape: ResponseShape = RESPONSE_SHAPE_DEFAULT,
         file_reference: FileReferenceKind = FILE_REFERENCE_DEFAULT,
         clarify_underspec_default: bool = False,
     ) -> EffectiveRoutingIntent:
@@ -423,6 +429,7 @@ class ContinuityPolicy:
             grounding=normalized.grounding,
             grounding_reason=normalized.grounding_reason,
             transformation=normalized.transformation,
+            response_shape=response_shape,
             file_reference=file_reference,
             continuation_kind=continuation_kind,
             prior_context=cls._clip_prior(prior_context),
@@ -504,6 +511,7 @@ class ContinuityPolicy:
                 grounding=snap.grounding,
                 grounding_reason=snap.grounding_reason,
                 transformation=snap.transformation,
+                response_shape=snap.response_shape,
                 file_reference=snap.file_reference,
                 clarify_underspec_default=True,
             )
@@ -522,6 +530,7 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            response_shape=snap.response_shape,
             file_reference=snap.file_reference,
         )
 
@@ -640,6 +649,7 @@ class ContinuityPolicy:
                 grounding=snap.grounding,
                 grounding_reason=snap.grounding_reason,
                 transformation=snap.transformation,
+                response_shape=snap.response_shape,
                 file_reference=snap.file_reference,
             )
         user_prior = cls.prior_user_content(dialog)
@@ -659,6 +669,7 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            response_shape=snap.response_shape,
             file_reference=snap.file_reference,
         )
 
@@ -704,6 +715,7 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            response_shape=snap.response_shape,
             file_reference=snap.file_reference,
         )
 
@@ -722,6 +734,7 @@ class _ResolveSnapshot:
     grounding: GroundingMode
     grounding_reason: str
     transformation: TransformationKind
+    response_shape: ResponseShape
     file_reference: FileReferenceKind
     intent_reasoning: str
     confidence: float
@@ -748,6 +761,7 @@ class _ResolveSnapshot:
             transformation=(
                 TransformPolicy.coerce(raw_intent.transformation) if raw_intent is not None else TRANSFORMATION_DEFAULT
             ),
+            response_shape=(raw_intent.response_shape if raw_intent is not None else RESPONSE_SHAPE_DEFAULT),
             file_reference=raw_intent.file_reference if raw_intent is not None else FILE_REFERENCE_DEFAULT,
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,

@@ -19,6 +19,7 @@ from .errors import (
     AttachmentNotFoundError,
     AttachmentNotUsableError,
     AttachmentRestoreNotAllowedError,
+    AttachmentThreadRequiredError,
     AttachmentTooLargeError,
     AttachmentUploadTooLargeError,
 )
@@ -49,6 +50,7 @@ from .policies import (
     AttachmentLimits,
     AttachmentRetentionPolicy,
     IntakeDecision,
+    ReclaimReason,
 )
 from .read import (
     DEFAULT_READ_MAX_CHARS,
@@ -101,6 +103,7 @@ __all__ = [
     "AttachmentRetentionPolicy",
     "AttachmentScanSummary",
     "AttachmentStatus",
+    "AttachmentThreadRequiredError",
     "AttachmentTooLargeError",
     "AttachmentTurnContext",
     "AttachmentUploadTooLargeError",
@@ -110,6 +113,7 @@ __all__ = [
     "OcrEngine",
     "ParseRouteDecision",
     "ParseStrategy",
+    "ReclaimReason",
     "TextFromChatDecision",
     "TextFromChatRoute",
     "choose_parse_strategy",

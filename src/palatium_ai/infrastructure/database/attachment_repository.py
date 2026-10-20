@@ -41,6 +41,10 @@ if TYPE_CHECKING:
 #: The only status that occupies an upload slot. Once a row leaves it — admitted,
 #: rejected or quarantined — the slot is free again, on purpose (080).
 _IN_FLIGHT_STATUS: AttachmentStatus = "pending"
+#: States where an orphan sweep must not race an upload that can still complete.
+#: ``pending`` is covered by the ticket-expiry rule; ``uploaded``/``scanning`` are
+#: short-lived and belong to ``complete`` (020).
+_IN_FLIGHT_STATES: tuple[AttachmentStatus, ...] = ("pending", "uploaded", "scanning")
 
 
 def _attachment_from_orm(entity: AttachmentORM) -> Attachment:
@@ -323,6 +327,7 @@ class PostgresAttachmentRepository:
         cutoff: datetime,
         *,
         pending_before: datetime,
+        orphan_before: datetime,
         user_id: str,
         limit: int,
     ) -> list[Attachment]:
@@ -343,6 +348,19 @@ class PostgresAttachmentRepository:
                         and_(
                             AttachmentORM.expires_at.is_not(None),
                             AttachmentORM.expires_at <= cutoff,
+                        ),
+                        # An attach row without a thread is unreachable from every
+                        # read path: reclaim it after the grace window instead of
+                        # waiting for its TTL. Index rows are excluded because they
+                        # may already have written knowledge (060).
+                        and_(
+                            AttachmentORM.mode == "attach",
+                            or_(
+                                AttachmentORM.thread_id.is_(None),
+                                func.btrim(AttachmentORM.thread_id) == "",
+                            ),
+                            AttachmentORM.status.not_in(_IN_FLIGHT_STATES),
+                            AttachmentORM.created_at <= orphan_before,
                         ),
                     ),
                 )

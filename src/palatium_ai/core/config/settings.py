@@ -9,6 +9,7 @@ from typing import ClassVar, cast
 from pydantic import Field, computed_field
 from pydantic_settings import SettingsConfigDict
 
+from .answer import AnswerWriterConfig
 from .app import AppConfig
 from .attachments import AttachmentConfig
 from .base import BaseConfig
@@ -53,6 +54,7 @@ class Settings(BaseConfig):
     web: WebConfig = Field(default_factory=WebConfig)
     attachments: AttachmentConfig = Field(default_factory=AttachmentConfig)
     formatter: FormatterConfig = Field(default_factory=FormatterConfig)
+    answer: AnswerWriterConfig = Field(default_factory=AnswerWriterConfig)
     contextualizer: ContextualizerConfig = Field(default_factory=ContextualizerConfig)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(frozen=True)

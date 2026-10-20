@@ -1,4 +1,5 @@
 import type {
+  ContentBlock,
   ContentDocument,
   DialogTurnResponse,
   FormatterTaskResult,
@@ -356,40 +357,38 @@ export async function processIntent(
 
 export type ProcessStreamHopHandler = (node: string) => void;
 export type ProcessStreamDeltaHandler = (delta: string, accumulated: string) => void;
+/** Typed structured preview: one closed ``ContentDocument`` block, append-only. */
+export type ProcessStreamBlockHandler = (index: number, block: ContentBlock) => void;
 
 export type ProcessStreamHandlers = {
   onHop?: ProcessStreamHopHandler;
+  /** Document title frame of the structured contract; arrives before the first block. */
+  onDocumentTitle?: (title: string) => void;
+  /** A closed typed block from the streamed document — render with ``BlockRenderer``. */
+  onBlockDelta?: ProcessStreamBlockHandler;
   /** Formatter GFM tokens — primary pending UI preview (Hybrid Phase 1). */
   onTextDelta?: ProcessStreamDeltaHandler;
   /** Worker / fast-path prose; dual-emit during Formatter stream (fallback until clients migrate). */
   onAnswerDelta?: ProcessStreamDeltaHandler;
-  /** @deprecated Legacy JSON token preview; unused when text_delta is present. */
-  onFormatterDelta?: ProcessStreamDeltaHandler;
   /** Abort in-flight SSE (unmount / new turn). */
   signal?: AbortSignal;
 };
 
 /**
- * Best-effort prose from partial Formatter JSON (W1.4 SSE). Final UI still uses
- * the structured ``result`` event — this is only for progressive preview.
+ * Minimal structural check for a streamed block.
+ *
+ * The final ``result`` stays the source of truth (the document validates it); a
+ * preview frame only needs to be renderable, and a malformed one is dropped rather
+ * than crashing the turn.
  */
-export function previewTextFromFormatterJson(accumulated: string): string {
-  const texts: string[] = [];
-  const re = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(accumulated)) !== null) {
-    const raw = match[1] ?? '';
-    try {
-      texts.push(JSON.parse(`"${raw}"`) as string);
-    } catch {
-      texts.push(raw.replace(/\\n/g, '\n').replace(/\\"/g, '"'));
-    }
-  }
-  return texts.join('\n\n').trim();
+function isStreamContentBlock(value: unknown): value is ContentBlock {
+  if (typeof value !== 'object' || value === null) return false;
+  const type = (value as { type?: unknown }).type;
+  return typeof type === 'string' && type.length > 0;
 }
 
 /**
- * SSE process path (P1.6): hop / answer_delta / formatter_delta then final FormatterTaskResult.
+ * SSE process path (P1.6): hop / answer_delta / text_delta then final FormatterTaskResult.
  * Falls back to non-streaming ``processIntent`` if the stream endpoint is unavailable.
  */
 export async function processIntentStream(
@@ -401,9 +400,7 @@ export async function processIntentStream(
   onHopOrHandlers?: ProcessStreamHopHandler | ProcessStreamHandlers
 ): Promise<FormatterTaskResult> {
   const handlers: ProcessStreamHandlers =
-    typeof onHopOrHandlers === 'function'
-      ? { onHop: onHopOrHandlers }
-      : (onHopOrHandlers ?? {});
+    typeof onHopOrHandlers === 'function' ? { onHop: onHopOrHandlers } : (onHopOrHandlers ?? {});
   if (text.length === 0) {
     throw new Error(t('error.emptyMessage'));
   }
@@ -452,7 +449,6 @@ export async function processIntentStream(
   let buffer = '';
   let result: FormatterTaskResult | null = null;
   let streamError: string | null = null;
-  let formatterAccumulated = '';
   let answerAccumulated = '';
   let textAccumulated = '';
   let hasTextDelta = false;
@@ -479,6 +475,18 @@ export async function processIntentStream(
       handlers.onHop?.(payload.node);
       return;
     }
+    if (eventName === 'document_title' && typeof payload.title === 'string') {
+      handlers.onDocumentTitle?.(payload.title);
+      return;
+    }
+    if (
+      eventName === 'block_delta' &&
+      typeof payload.index === 'number' &&
+      isStreamContentBlock(payload.block)
+    ) {
+      handlers.onBlockDelta?.(payload.index, payload.block);
+      return;
+    }
     if (eventName === 'text_delta' && typeof payload.content === 'string') {
       hasTextDelta = true;
       textAccumulated += payload.content;
@@ -497,13 +505,6 @@ export async function processIntentStream(
       }
       answerAccumulated += payload.delta;
       handlers.onAnswerDelta?.(payload.delta, answerAccumulated);
-      return;
-    }
-    if (eventName === 'formatter_delta' && typeof payload.delta === 'string') {
-      formatterAccumulated += payload.delta;
-      if (!hasTextDelta && answerAccumulated.length === 0) {
-        handlers.onFormatterDelta?.(payload.delta, formatterAccumulated);
-      }
       return;
     }
     if (eventName === 'result' && payload.result && typeof payload.result === 'object') {
@@ -723,11 +724,12 @@ export async function finalizeAttachmentChunks(
 export async function completeAttachmentUpload(
   attachmentId: string,
   userId?: string | null,
-  orgId?: string | null
+  orgId?: string | null,
+  signal?: AbortSignal
 ): Promise<AttachmentResponse> {
   const res = await fetchWithAuth(
     `/attachments/${encodeURIComponent(attachmentId)}/complete`,
-    { method: 'POST' },
+    { method: 'POST', signal },
     userId,
     orgId
   );

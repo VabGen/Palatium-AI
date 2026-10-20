@@ -51,9 +51,11 @@ from palatium_ai.domain.attachments import (
     AttachmentRestoreNotAllowedError,
     AttachmentRestorePayload,
     AttachmentRetentionPolicy,
+    AttachmentThreadRequiredError,
     AttachmentTurnContext,
     AttachmentUploadTooLargeError,
     IntakeDecision,
+    ReclaimReason,
     extraction_source_to_extract_status,
 )
 from palatium_ai.domain.attachments.fence_source import attachment_fence_source
@@ -226,7 +228,17 @@ class AttachmentService:
         expires_in_seconds: int | None = None,
         project_id: str | None = None,
     ) -> AttachmentUploadTicket:
-        """Validate intake, create the PENDING row and issue a presigned PUT URL."""
+        """Validate intake, create the PENDING row and issue a presigned PUT URL.
+
+        ``attach`` mode is dialog-bound by contract: without ``thread_id`` the row
+        could never be listed, resolved or fenced again, so it is refused before
+        any blob or row exists (020, 055). The API schema enforces the same rule;
+        this guard keeps non-HTTP callers honest.
+        """
+        scoped_thread = (thread_id or "").strip() or None
+        if mode == "attach" and scoped_thread is None:
+            raise AttachmentThreadRequiredError()
+
         decision = AttachmentIntakePolicy.validate(
             filename=filename,
             mime_type=mime_type,
@@ -257,7 +269,7 @@ class AttachmentService:
         attachment = Attachment(
             id=attachment_id,
             user_id=user_id,
-            thread_id=thread_id,
+            thread_id=scoped_thread,
             filename=decision.filename,
             mime_type=mime_type,
             size_bytes=size_bytes,
@@ -276,10 +288,10 @@ class AttachmentService:
         )
         await self._audit(
             event="attachment_init",
-            thread_id=thread_id or "",
+            thread_id=scoped_thread or "",
             payload={"attachment_id": str(created.id), "mode": created.mode},
         )
-        logger.info("attachment.init", attachment_id=str(created.id), mode=created.mode, thread_id=thread_id or "")
+        logger.info("attachment.init", attachment_id=str(created.id), mode=created.mode, thread_id=scoped_thread or "")
         return AttachmentUploadTicket(
             attachment_id=created.id,
             upload_url=upload_url,
@@ -602,10 +614,14 @@ class AttachmentService:
         # An intake that never received its bytes is dead once its presigned ticket
         # expired — it must be reclaimable long before the row's own TTL (080).
         pending_before = reference - timedelta(seconds=self._limits.presigned_url_ttl_seconds)
+        # A thread-less attach row is unreachable from every read path; reclaim it
+        # after a grace window instead of waiting for the full attachment TTL (020).
+        orphan_before = reference - timedelta(seconds=self._limits.orphan_grace_seconds)
         batch = self._limits.retention_sweep_batch if limit is None else limit
         candidates = await self._repository.list_reclaimable(
             reference,
             pending_before=pending_before,
+            orphan_before=orphan_before,
             user_id=user_id,
             limit=batch,
         )
@@ -613,12 +629,19 @@ class AttachmentService:
         failed = 0
         skipped = 0
         for attachment in candidates:
-            if not self._is_reclaimable(attachment, now=reference):
-                # Defence in depth: an overly eager adapter must not delete live data.
+            # Defence in depth: an overly eager adapter must not delete live data,
+            # and the audit needs the exact rule that fired (010, 020).
+            reason = AttachmentRetentionPolicy.reclaim_reason(
+                attachment,
+                now=reference,
+                pending_after_seconds=self._limits.presigned_url_ttl_seconds,
+                orphan_after_seconds=self._limits.orphan_grace_seconds,
+            )
+            if reason is None:
                 skipped += 1
                 continue
             try:
-                await self._purge(attachment, user_id=user_id)
+                await self._purge(attachment, user_id=user_id, reason=reason)
             except Exception:  # noqa: BLE001  # one failed purge is counted, the sweep continues (020)
                 failed += 1
                 agent_metrics.record_error("attachments", "retention_sweep_failed")
@@ -640,20 +663,6 @@ class AttachmentService:
             skipped=skipped,
         )
 
-    def _is_reclaimable(self, attachment: Attachment, *, now: datetime) -> bool:
-        """The domain's answer to "may this row be dropped?", applied by both rules.
-
-        Kept as one predicate so the sweep's defence-in-depth check cannot drift
-        from the adapter's candidate query (010).
-        """
-        if AttachmentRetentionPolicy.is_due(attachment, now=now):
-            return True
-        return AttachmentRetentionPolicy.is_stale_pending(
-            attachment,
-            now=now,
-            after_seconds=self._limits.presigned_url_ttl_seconds,
-        )
-
     async def _reclaim_expired(self, *, user_id: str) -> None:
         """Best-effort retention on the owner's read path.
 
@@ -667,7 +676,13 @@ class AttachmentService:
             agent_metrics.record_error("attachments", "retention_sweep_read_path_failed")
             logger.warning("attachment retention sweep failed on the read path")
 
-    async def _purge(self, attachment: Attachment, *, user_id: str) -> None:
+    async def _purge(
+        self,
+        attachment: Attachment,
+        *,
+        user_id: str,
+        reason: ReclaimReason,
+    ) -> None:
         """Drop both objects and the row, then record why it disappeared (020)."""
         await self._delete_chunk_parts(attachment.id, up_to_index=AttachmentIntakePolicy.max_chunk_part_index(self._limits))
         await self._blob_store.delete(attachment.blob_key)
@@ -681,7 +696,7 @@ class AttachmentService:
                 "attachment_id": str(attachment.id),
                 "mode": attachment.mode,
                 "status": attachment.status,
-                "reason": "retention_expired",
+                "reason": reason,
             },
         )
 
@@ -720,6 +735,10 @@ class AttachmentService:
         """
         if not attachment_ids:
             return AttachmentTurnContext()
+        if not (thread_id or "").strip():
+            # Ids without a thread cannot be resolved under the P0-A isolation
+            # contract; refuse instead of dropping the user's file silently (020).
+            raise AttachmentThreadRequiredError()
         if len(attachment_ids) > self._limits.max_attachments_per_turn:
             msg = f"too many attachments for one turn ({len(attachment_ids)})"
             raise ValueError(msg)

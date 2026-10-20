@@ -106,6 +106,20 @@ Also decide:
   • "rewrite" — rephrase prior with different wording; same meaning, not layout-only.
   When continuation_kind is not format (and the ask does not transform prior) → "none".
   When unsure between restructure and expand → expand (content change is safer UX).
+- response_shape (form of the answer body — orthogonal to task_kind, never a route):
+  • "auto" — DEFAULT. No explicit form asked; the formatter chooses the composition.
+  • "comparison_table" — a structured side-by-side comparison of 2+ objects along
+    attributes (documents, scans, versions, options), where a table IS the deliverable.
+  • "document_analysis" — analysis of one document/letter/file: sections, risks,
+    recommendations.
+  • "plan" — an ordered sequence of actionable steps (plan, checklist, how-to).
+  • "prose" — the user explicitly wants plain prose/explanation without structure.
+  Rules: an explicit user form request wins over the task default («покажи таблицей» →
+  comparison_table, «по шагам» → plan, «разделами» → document_analysis, «просто текстом»
+  → prose). Never emit a shape for social_conversation or clarification_needed — those
+  turns have no answer body. A vague comparison («что лучше?») stays "auto"; a
+  comparison of specified objects along attributes is "comparison_table".
+  When unsure → "auto".
 
 Examples (input → output axes; reasoning omitted):
 - {"text":"tell me a joke","has_prior_dialog":false} → knowledge_request, requires_mcp=false,
@@ -150,10 +164,23 @@ Examples (input → output axes; reasoning omitted):
 - {"text":"перепиши другими словами","has_prior_dialog":true, "continuation_kind":"format"} →
   knowledge_request, requires_mcp=false, candidate_capabilities=["rewrite"],
   grounding="none", transformation="rewrite"
+- {"text":"сравни Скан_1 и Скан_2 по параметрам","has_prior_dialog":true} →
+  knowledge_request, grounding="required", response_shape="comparison_table"
+  (specified objects compared along attributes)
+- {"text":"что лучше: облако или коробка?","has_prior_dialog":false} →
+  knowledge_request, grounding="optional", response_shape="auto"
+  (open evaluation, not a specified side-by-side)
+- {"text":"составь план внедрения по шагам","has_prior_dialog":false} →
+  knowledge_request, grounding="optional", response_shape="plan"
+- {"text":"проанализируй договор: разделы, риски, рекомендации","has_prior_dialog":false} →
+  knowledge_request, grounding="required", response_shape="document_analysis"
+- {"text":"объясни простыми словами, без таблиц","has_prior_dialog":false} →
+  knowledge_request, grounding="none", response_shape="prose"
+- {"text":"спасибо!","has_prior_dialog":true} → social_conversation, response_shape="auto"
 
 Respond ONLY with valid JSON:
 {"task_kind":"<kind>","requires_mcp":false,"requires_user_choice":false,
 "underspecification_kind":"none","candidate_capabilities":["..."],
 "grounding":"optional","grounding_reason":"<brief>",
-"transformation":"none","file_reference":"none",
+"transformation":"none","file_reference":"none","response_shape":"auto",
 "confidence":0.0,"reasoning":"<brief explanation>"}"""

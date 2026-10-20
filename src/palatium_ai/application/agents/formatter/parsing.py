@@ -141,6 +141,7 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
         "final_text": final_text,
         "style_hint": resolve_style_hint(task_input),
         "task_kind": task_kind,
+        "response_shape": task_input.context_packet.response_shape,
         "response_locale": locale,
         "format_hints": {
             "requires_review": task_input.requires_review,
@@ -310,4 +311,5 @@ def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:
         response_locale=locale,
         dialog_window=dialog_window,
         memory_hints=memory_hints,
+        allow_worker_fallback=input_context.get("allow_worker_fallback", "true").lower() != "false",
     )

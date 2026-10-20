@@ -10,8 +10,10 @@ from palatium_ai.domain.mcp.models import ExecutionPlanBundle
 from palatium_ai.domain.policies.types import (
     FILE_REFERENCE_DEFAULT,
     GROUNDING_DEFAULT,
+    RESPONSE_SHAPE_DEFAULT,
     FileReferenceKind,
     GroundingMode,
+    ResponseShape,
 )
 
 from .context_packet import ContextPacket
@@ -34,6 +36,8 @@ class ContextWeaverInput(BaseModel):
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
     grounding: GroundingMode = Field(default=GROUNDING_DEFAULT)
     grounding_reason: str = Field(default="", max_length=500)
+    # Presentation axis carried to the Formatter; never used by ExecutionPlanner.
+    response_shape: ResponseShape = Field(default=RESPONSE_SHAPE_DEFAULT)
     # ``thread_file`` → planner binds a direct platform.read_attachment call (070).
     file_reference: FileReferenceKind = Field(default=FILE_REFERENCE_DEFAULT)
     # True when this turn already carries fenced upload OCR/text (prefer reason_only).

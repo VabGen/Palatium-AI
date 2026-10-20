@@ -65,6 +65,10 @@ async def try_cached_formatter_result(
     ctx = get_turn_response_cache()
     if ctx is None or not ctx.cache.enabled:
         return None
+    if task_input.context_packet.response_shape != "auto":
+        # An explicit composition request is generated for this turn: the L1 key does not
+        # carry response_shape, and a cached echo would skip shape verification (ADR 0005).
+        return None
     if not selected_strategy or not ResponseCacheKeyPolicy.is_cacheable_strategy(str(selected_strategy)):
         return None
     hit = await ctx.cache.get(

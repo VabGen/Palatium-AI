@@ -1,6 +1,7 @@
 import {
   INTENT_ATTACHMENT_LIMIT,
   completeAttachmentUpload,
+  fetchAttachment,
   finalizeAttachmentChunks,
   initAttachmentUpload,
   putAttachmentBytes,
@@ -42,6 +43,32 @@ export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
  * ``PUT /content`` — reverse proxies and in-memory stores handle parts more reliably.
  */
 export const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/**
+ * How long one ``POST /complete`` round-trip may stay open before the chip stops
+ * waiting on that request and polls the row instead. The pipeline is synchronous
+ * (scan → parse → OCR → gates), and OCR on a scanned PDF is minutes, not seconds.
+ */
+export const ATTACHMENT_COMPLETE_TIMEOUT_MS = 180_000;
+
+/** Poll cadence after the request budget is spent. */
+export const ATTACHMENT_STATUS_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Poll ceiling (~5 min). A pipeline that never settles must surface as an error
+ * instead of an endless "проверка файла…" spinner — the abort is the only thing
+ * the UI owns here; the server is the authority on the row's final state.
+ * Request budget + poll ceiling outlive the server's parse ceiling, so the client
+ * gives up strictly after the backend has already answered.
+ */
+export const ATTACHMENT_STATUS_POLL_LIMIT = 150;
+
+/** Statuses that still mean "the pipeline has not answered yet". */
+const IN_FLIGHT_STATUSES: ReadonlySet<AttachmentResponse['status']> = new Set([
+  'pending',
+  'uploaded',
+  'scanning',
+]);
 
 /**
  * Paste longer than this becomes a ``text/plain`` attachment chip (mode=attach),
@@ -86,8 +113,7 @@ export function isTabularAttachmentFilename(filename: string): boolean {
 }
 
 /** Mirror of domain ``sanitize_source_refs`` — hide ``file#id8#pN`` noise in chips. */
-const UUID =
-  '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 const SOURCE_REF_PARTS = /^(?<name>.+?)(?:#(?<id>[0-9a-fA-F]{8}))?(?:#p(?<page>\d+))?$/i;
 const BARE_UUID = new RegExp(`^${UUID}$`);
 const ATTACHMENT_UUID_ONLY = new RegExp(`^attachment:(?<id>${UUID})$`, 'i');
@@ -346,6 +372,62 @@ async function deliverBytesViaApi(
 }
 
 /**
+ * Wait for a row the pipeline owns to reach a terminal status.
+ *
+ * Reads through an injected callback so the retry/ceiling logic is unit-testable
+ * without mocking the HTTP client (084: network mocks belong to MSW).
+ */
+export async function pollAttachmentUntilSettled(
+  read: () => Promise<AttachmentResponse>,
+  options: {
+    limit?: number;
+    intervalMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {}
+): Promise<AttachmentResponse> {
+  const limit = options.limit ?? ATTACHMENT_STATUS_POLL_LIMIT;
+  const intervalMs = options.intervalMs ?? ATTACHMENT_STATUS_POLL_INTERVAL_MS;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  for (let attempt = 0; attempt < limit; attempt += 1) {
+    await sleep(intervalMs);
+    const row = await read();
+    if (!IN_FLIGHT_STATUSES.has(row.status)) return row;
+  }
+  throw new Error(t('attach.processingTimeout'));
+}
+
+/**
+ * ``POST /complete`` with a bounded wait.
+ *
+ * Aborting the request does **not** cancel the server-side pipeline, so a client
+ * timeout is not a failure: switch to polling the row and let the server answer.
+ * That keeps the chip honest either way — it never spins on a request that is gone.
+ */
+async function completeWithWatchdog(
+  attachmentId: string,
+  target: UploadTarget
+): Promise<AttachmentResponse> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ATTACHMENT_COMPLETE_TIMEOUT_MS);
+  try {
+    return await completeAttachmentUpload(
+      attachmentId,
+      target.userId,
+      target.orgId,
+      controller.signal
+    );
+  } catch (err) {
+    if (!controller.signal.aborted) throw err;
+    return pollAttachmentUntilSettled(() =>
+      fetchAttachment(attachmentId, target.userId, target.orgId)
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * init → PUT → complete, returning the row in its final pipeline state.
  *
  * The PUT transport follows the URL the server handed back: a real `http(s)` URL is
@@ -366,6 +448,9 @@ export async function uploadAttachment(
 ): Promise<AttachmentResponse> {
   const mimeType = resolveMimeType(file);
   if (mimeType === null) throw new Error(t('attach.unsupportedType'));
+  // ``attach`` is dialog-bound by contract: the server refuses a missing thread (422),
+  // and every later read is thread-scoped, so fail before spending an upload round-trip.
+  if (!target.threadId.trim()) throw new Error(t('attach.noThread'));
 
   onPhase?.('uploading');
   const projectId = (target.projectId || '').trim() || undefined;
@@ -396,5 +481,5 @@ export async function uploadAttachment(
   }
 
   onPhase?.('scanning');
-  return completeAttachmentUpload(ticket.attachment_id, target.userId, target.orgId);
+  return completeWithWatchdog(ticket.attachment_id, target);
 }

@@ -26,17 +26,21 @@ import {
   requestAttachmentIndex,
   requestAttachmentQuarantineRestore,
   listAttachmentConnectors,
-  previewTextFromFormatterJson,
   processIntentStream,
   sendFeedback,
 } from '../api/client';
 import type { AttachmentConnectorSource } from '../api/client';
-import type { ContentDocument, FormatterTaskResult, HITLCardView } from '../types/contentDocument';
+import type {
+  ContentBlock,
+  ContentDocument,
+  FormatterTaskResult,
+  HITLCardView,
+} from '../types/contentDocument';
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
 import { StreamMarkdownPreview } from './StreamMarkdownPreview';
 import { connectSessionSocket, startSessionSocketPing } from '../lib/sessionSocket';
-import { formatNumber, t } from '../i18n';
+import { formatNumber, getI18nLocale, t } from '../i18n';
 import { setPanelOpen, startNewThread as startNewThreadInRuntime } from '../runtime/store';
 import { useAssistantRuntime } from '../runtime/useRuntime';
 import {
@@ -222,6 +226,11 @@ export function ChatShell() {
   const [dragActive, setDragActive] = useState(false);
   /** Progressive SSE preview — always GFM via StreamMarkdownPreview (Path C). */
   const [streamPreview, setStreamPreview] = useState('');
+  /** Typed structured preview (`structured_incremental`): title + closed blocks. */
+  const [streamTitle, setStreamTitle] = useState<string | null>(null);
+  const [streamBlocks, setStreamBlocks] = useState<Array<{ index: number; block: ContentBlock }>>(
+    []
+  );
   /** Preserves bubble height across preview → BlockRenderer to avoid layout jump. */
   const [streamBubbleMinHeight, setStreamBubbleMinHeight] = useState<number | undefined>();
   const messageEndRef = useRef<HTMLDivElement>(null);
@@ -249,7 +258,37 @@ export function ChatShell() {
     }
     streamPreviewPendingRef.current = '';
     setStreamPreview('');
+    setStreamTitle(null);
+    setStreamBlocks([]);
   }, []);
+
+  /** Append-only typed frame; a duplicate index (retry/replay) must not paint twice. */
+  const appendStreamBlock = useCallback((index: number, block: ContentBlock) => {
+    setStreamBlocks(prev => {
+      if (prev.some(item => item.index === index)) return prev;
+      return [...prev, { index, block }].sort((a, b) => a.index - b.index);
+    });
+  }, []);
+
+  /**
+   * Typed preview document: the same shape `BlockRenderer` receives when the turn
+   * finishes, so the handover only adds blocks instead of re-rendering them.
+   * Null until the first block closes: the document title alone is not readable
+   * content (it is hidden by the renderer), so it must not replace the typing
+   * indicator with an empty bubble.
+   * `meta`/`actions` are placeholders — the preview renders content, not HITL.
+   */
+  const streamDocument = useMemo<ContentDocument | null>(() => {
+    if (streamBlocks.length === 0) return null;
+    return {
+      schema_version: 1,
+      locale: getI18nLocale(),
+      title: streamTitle,
+      blocks: streamBlocks.map(item => item.block),
+      actions: [],
+      meta: { confidence: 1, requires_review: false, source_refs: [] },
+    };
+  }, [streamBlocks, streamTitle]);
 
   const lockStreamBubbleHeight = useCallback(() => {
     const el = streamBubbleRef.current;
@@ -658,22 +697,25 @@ export function ChatShell() {
 
     try {
       let hasTextDelta = false;
-      let hasAnswerDelta = false;
+      let hasTypedPreview = false;
       const result = await processIntentStream(text, threadId, userId, orgId, attachmentIds, {
         signal: abort.signal,
+        onDocumentTitle: title => {
+          hasTypedPreview = true;
+          setStreamTitle(title);
+        },
+        onBlockDelta: (index, block) => {
+          hasTypedPreview = true;
+          appendStreamBlock(index, block);
+        },
         onTextDelta: (_delta, accumulated) => {
           hasTextDelta = true;
+          if (hasTypedPreview) return;
           scheduleStreamPreview(accumulated);
         },
         onAnswerDelta: (_delta, accumulated) => {
-          hasAnswerDelta = true;
-          if (hasTextDelta) return;
+          if (hasTypedPreview || hasTextDelta) return;
           scheduleStreamPreview(accumulated);
-        },
-        onFormatterDelta: (_delta, accumulated) => {
-          if (hasTextDelta || hasAnswerDelta) return;
-          const preview = previewTextFromFormatterJson(accumulated);
-          if (preview) scheduleStreamPreview(preview);
         },
       });
       const hydratedCards = await hydratePendingHitlCards(
@@ -757,7 +799,7 @@ export function ChatShell() {
       streamAbortRef.current = abort;
       try {
         let hasTextDelta = false;
-        let hasAnswerDelta = false;
+        let hasTypedPreview = false;
         const result = await processIntentStream(
           userMsg.text,
           threadId,
@@ -766,19 +808,22 @@ export function ChatShell() {
           userMsg.attachmentIds ?? [],
           {
             signal: abort.signal,
+            onDocumentTitle: title => {
+              hasTypedPreview = true;
+              setStreamTitle(title);
+            },
+            onBlockDelta: (index, block) => {
+              hasTypedPreview = true;
+              appendStreamBlock(index, block);
+            },
             onTextDelta: (_delta, accumulated) => {
               hasTextDelta = true;
+              if (hasTypedPreview) return;
               scheduleStreamPreview(accumulated);
             },
             onAnswerDelta: (_delta, accumulated) => {
-              hasAnswerDelta = true;
-              if (hasTextDelta) return;
+              if (hasTypedPreview || hasTextDelta) return;
               scheduleStreamPreview(accumulated);
-            },
-            onFormatterDelta: (_delta, accumulated) => {
-              if (hasTextDelta || hasAnswerDelta) return;
-              const preview = previewTextFromFormatterJson(accumulated);
-              if (preview) scheduleStreamPreview(preview);
             },
           }
         );
@@ -838,6 +883,7 @@ export function ChatShell() {
       userId,
       orgId,
       clearStreamPreview,
+      appendStreamBlock,
       scheduleStreamPreview,
       lockStreamBubbleHeight,
       clearStreamBubbleHeight,
@@ -1032,7 +1078,11 @@ export function ChatShell() {
                 }
               >
                 {showStreamPreview ? (
-                  streamPreview ? (
+                  streamDocument ? (
+                    <div className="stream-preview stream-preview--doc">
+                      <BlockRenderer document={streamDocument} />
+                    </div>
+                  ) : streamPreview ? (
                     <StreamMarkdownPreview markdown={streamPreview} />
                   ) : (
                     <>

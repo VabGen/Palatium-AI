@@ -14,6 +14,8 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
 
+from palatium_ai.domain.policies.types import STREAMING_CONTRACT_DEFAULT, StreamingContract
+
 
 @dataclass(slots=True)
 class TurnSseBridge:
@@ -31,6 +33,10 @@ class TurnSseBridge:
     # The per-turn replace budget is spent; a second reset could only re-paint
     # content the user is already reading (040: layout shift, not a feature).
     answer_replaced: bool = False
+    # Which user-facing streaming contract this turn runs under. Owned here because
+    # every paint goes through this bridge, so it is the only place a node can ask
+    # "may I paint, and will something replace me later?" (055: one contract).
+    stream_contract: StreamingContract = STREAMING_CONTRACT_DEFAULT
 
     async def emit(self, event: dict[str, Any]) -> None:
         """Enqueue one SSE event (non-blocking for the consumer loop)."""
@@ -69,6 +75,15 @@ class TurnSseBridge:
         painted = _collapse_whitespace(self.painted_answer_tail)
         key = _collapse_whitespace(text)
         return bool(key) and key in painted
+
+    def structured_preview_active(self) -> bool:
+        """True when the terminal document paints itself block-by-block.
+
+        An intermediate worker draft must not be painted in that case: nothing will
+        replace it (that is the whole point of the contract), so it would sit above
+        the final answer forever. The typing indicator covers the wait (065/055).
+        """
+        return self.stream_contract == "structured_incremental"
 
 
 #: Kept short: only the most recent paint is needed to recognise a re-emit.

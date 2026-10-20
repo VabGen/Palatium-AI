@@ -330,8 +330,8 @@ class ContentDocument(BaseModel):
     @model_validator(mode="after")
     def _validate_structured_shapes(self) -> ContentDocument:
         """Enforce table/chart shape on every validate path (not only parse_*)."""
-        _validate_table_shapes(self)
-        _validate_chart_shapes(self)
+        for block in self.blocks:
+            validate_content_block(block)
         return self
 
 
@@ -373,27 +373,23 @@ def _structured_block_plain_lines(block: ContentBlock) -> list[str]:
 
 def parse_content_document(payload: object) -> ContentDocument:
     """Validate arbitrary JSON-compatible payload into ContentDocument."""
-    document = ContentDocument.model_validate(payload)
-    _validate_table_shapes(document)
-    _validate_chart_shapes(document)
-    return document
+    return ContentDocument.model_validate(payload)
 
 
-def _validate_table_shapes(document: ContentDocument) -> None:
-    for block in document.blocks:
-        if not isinstance(block, TableBlock):
-            continue
+def validate_content_block(block: ContentBlock) -> None:
+    """Enforce invariants between fields of one block.
+
+    These cannot be expressed in JSON Schema (which the provider enforces), so both
+    the document validator and the incremental stream scanner must apply them: a
+    block that passes here is safe to paint before the document is complete.
+    """
+    if isinstance(block, TableBlock):
         width = len(block.columns)
         for row in block.rows:
             if len(row) != width:
                 raise ValueError(f"table row length {len(row)} != columns length {width}")
-
-
-def _validate_chart_shapes(document: ContentDocument) -> None:
-    for block in document.blocks:
-        if not isinstance(block, ChartBlock):
-            continue
-        n = len(block.labels)
+    elif isinstance(block, ChartBlock):
+        points = len(block.labels)
         for series in block.series:
-            if len(series.values) != n:
-                raise ValueError(f"chart series '{series.name}' length {len(series.values)} != labels {n}")
+            if len(series.values) != points:
+                raise ValueError(f"chart series '{series.name}' length {len(series.values)} != labels {points}")

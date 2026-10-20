@@ -35,6 +35,7 @@ from palatium_ai.domain.attachments import (
     AttachmentNotUsableError,
     AttachmentRestoreNotAllowedError,
     AttachmentScanSummary,
+    AttachmentThreadRequiredError,
     AttachmentUploadTooLargeError,
 )
 from palatium_ai.domain.policies import (
@@ -69,7 +70,7 @@ class _FakeAttachmentRepository:
 
     def __init__(self) -> None:
         self.rows: dict[UUID, Attachment] = {}
-        self.list_reclaimable_calls: list[tuple[datetime, datetime, str, int]] = []
+        self.list_reclaimable_calls: list[tuple[datetime, datetime, datetime, str, int]] = []
         # Test knobs: a store that lies about expiry, and a store that is down.
         self.reclaimable_override: list[Attachment] | None = None
         self.list_reclaimable_error: Exception | None = None
@@ -177,10 +178,11 @@ class _FakeAttachmentRepository:
         cutoff: datetime,
         *,
         pending_before: datetime,
+        orphan_before: datetime,
         user_id: str,
         limit: int,
     ) -> list[Attachment]:
-        self.list_reclaimable_calls.append((cutoff, pending_before, user_id, limit))
+        self.list_reclaimable_calls.append((cutoff, pending_before, orphan_before, user_id, limit))
         if self.list_reclaimable_error is not None:
             raise self.list_reclaimable_error
         if self.reclaimable_override is not None:
@@ -192,6 +194,12 @@ class _FakeAttachmentRepository:
             and (
                 (row.expires_at is not None and row.expires_at <= cutoff)
                 or (row.status == "pending" and row.created_at <= pending_before)
+                or (
+                    row.mode == "attach"
+                    and not (row.thread_id or "").strip()
+                    and row.status not in {"pending", "uploaded", "scanning"}
+                    and row.created_at <= orphan_before
+                )
             )
         ]
         rows.sort(key=lambda row: row.created_at)
@@ -295,6 +303,61 @@ async def _uploaded(
     row = await service.get(attachment_id=ticket.attachment_id, user_id=_USER)
     await blob.put_direct(row.blob_key, payload, content_type=mime_type)
     return await service.complete_upload(attachment_id=ticket.attachment_id, user_id=_USER)
+
+
+async def test_init_upload_refuses_an_attach_without_a_thread() -> None:
+    """Regression: ``thread_id=NULL`` produced a row no read path could ever bind.
+
+    ``attach`` rows are addressed through ``thread_id`` only (listing, ``get_many``,
+    the reference resolver). Accepting the upload without it wrote a file that the
+    next turn could not find, so the row was dead the moment it was created (020).
+    """
+    service, _blob, repository = _stack()
+
+    with pytest.raises(AttachmentThreadRequiredError):
+        await service.init_upload(
+            user_id=_USER,
+            filename="contract.pdf",
+            mime_type="application/pdf",
+            size_bytes=10,
+            mode="attach",
+            thread_id=None,
+        )
+
+    # Refused before a row or a quota slot exists.
+    assert repository.rows == {}
+
+
+async def test_init_upload_refuses_a_blank_thread_for_attach() -> None:
+    """A whitespace-only id is as unreachable as NULL, so it is refused the same way."""
+    service, _blob, repository = _stack()
+
+    with pytest.raises(AttachmentThreadRequiredError):
+        await service.init_upload(
+            user_id=_USER,
+            filename="contract.pdf",
+            mime_type="application/pdf",
+            size_bytes=10,
+            mode="attach",
+            thread_id="   ",
+        )
+
+    assert repository.rows == {}
+
+
+async def test_init_upload_allows_index_without_a_thread() -> None:
+    """The rule is scoped to ``attach``: an ``index`` row is reached by its own id."""
+    service, _blob, repository = _stack()
+
+    ticket = await service.init_upload(
+        user_id=_USER,
+        filename="contract.pdf",
+        mime_type="application/pdf",
+        size_bytes=10,
+        mode="index",
+    )
+
+    assert repository.rows[ticket.attachment_id].thread_id is None
 
 
 async def test_init_upload_rejects_unsupported_media_type() -> None:
@@ -603,6 +666,24 @@ async def test_build_turn_context_empty_ids_returns_no_blocks() -> None:
     context = await service.build_turn_context(attachment_ids=[], user_id=_USER, thread_id=_THREAD)
     assert context.blocks == ()
     assert context.fenced_text == ""
+
+
+async def test_build_turn_context_refuses_ids_without_a_thread() -> None:
+    """Regression: ids with no thread resolved to nothing and the file vanished.
+
+    ``get_many`` is thread-scoped (P0-A), so an empty thread can never match a
+    row. Silently returning ``no blocks`` dropped the user's file from the turn;
+    the contract is a typed refusal the API can surface (020, 055).
+    """
+    service, blob, _repo = _stack()
+    attachment = await _uploaded(service, blob)
+
+    with pytest.raises(AttachmentThreadRequiredError):
+        await service.build_turn_context(
+            attachment_ids=[attachment.id],
+            user_id=_USER,
+            thread_id="   ",
+        )
 
 
 async def test_build_turn_context_rejects_quarantined_attachment() -> None:
@@ -1033,6 +1114,65 @@ async def test_sweep_spares_a_pending_upload_whose_ticket_is_still_valid() -> No
     assert attachment_id in repository.rows
 
 
+async def test_sweep_reclaims_a_threadless_attach_row() -> None:
+    """Regression: a row written with ``thread_id=NULL`` was never collected.
+
+    The TTL rule alone would keep it for seven days even though no read path can
+    address it. After the grace window the orphan rule reclaims it and the audit
+    names the rule that fired, so the owner can tell it apart from a TTL expiry.
+    """
+    service, blob, repository = _stack()
+    attachment = await _uploaded(service, blob)
+    orphan = attachment.model_copy(
+        update={
+            "thread_id": None,
+            "expires_at": None,
+            "created_at": datetime.now(UTC) - timedelta(seconds=DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds + 1),
+        }
+    )
+    await repository.save(orphan)
+
+    result = await service.sweep_expired(user_id=_USER)
+
+    assert result.considered == 1
+    assert result.purged == 1
+    assert orphan.id not in repository.rows
+    assert await blob.exists(orphan.blob_key) is False
+
+
+async def test_sweep_spares_a_threadless_row_inside_the_grace_window() -> None:
+    """The grace keeps a sweep from racing a row that is still being admitted."""
+    service, blob, repository = _stack()
+    attachment = await _uploaded(service, blob)
+    orphan = attachment.model_copy(update={"thread_id": None, "expires_at": None})
+    await repository.save(orphan)
+
+    result = await service.sweep_expired(user_id=_USER)
+
+    assert result.considered == 0
+    assert orphan.id in repository.rows
+
+
+async def test_sweep_never_reclaims_a_threadless_index_row() -> None:
+    """``index`` rows may already have written knowledge; their cascade is not orphan cleanup."""
+    service, blob, repository = _stack()
+    attachment = await _uploaded(service, blob, mode="index")
+    stale = attachment.model_copy(
+        update={
+            "thread_id": None,
+            "expires_at": None,
+            "created_at": datetime.now(UTC) - timedelta(seconds=DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds + 1),
+        }
+    )
+    await repository.save(stale)
+    repository.reclaimable_override = [stale]  # an eager adapter must not win either
+
+    result = await service.sweep_expired(user_id=_USER)
+
+    assert result.skipped == 1
+    assert stale.id in repository.rows
+
+
 async def test_sweep_never_purges_a_row_the_store_reported_wrongly() -> None:
     """Defence in depth: a loose adapter must not be able to delete live data."""
     service, blob, repository = _stack()
@@ -1070,9 +1210,13 @@ async def test_sweep_uses_the_configured_batch_and_is_user_scoped() -> None:
     await service.sweep_expired(user_id=_USER)
     await service.sweep_expired(user_id=_USER, limit=7)
 
-    assert repository.list_reclaimable_calls[0][2] == _USER
-    assert repository.list_reclaimable_calls[0][3] == DEFAULT_ATTACHMENT_LIMITS.retention_sweep_batch
-    assert repository.list_reclaimable_calls[1][3] == 7
+    assert repository.list_reclaimable_calls[0][3] == _USER
+    assert repository.list_reclaimable_calls[0][4] == DEFAULT_ATTACHMENT_LIMITS.retention_sweep_batch
+    assert repository.list_reclaimable_calls[1][4] == 7
+    # The orphan cutoff is derived from the same clock, not from a second ``now``.
+    assert (repository.list_reclaimable_calls[0][0] - repository.list_reclaimable_calls[0][2]) == timedelta(
+        seconds=DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds
+    )
 
 
 async def test_sweep_audits_the_reclamation(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -34,11 +34,16 @@ RetentionClass = Literal[
     "report_only",
 ]
 
-ALL_RETENTION_CLASSES: tuple[RetentionClass, ...] = (
-    "session_transcript",
+# Classes backed by ``memory.entries`` (PII wins on row classification, 060).
+MEMORY_RETENTION_CLASSES: tuple[RetentionClass, ...] = (
     "memory_medium",
     "memory_episode",
     "memory_pii",
+)
+
+ALL_RETENTION_CLASSES: tuple[RetentionClass, ...] = (
+    "session_transcript",
+    *MEMORY_RETENTION_CLASSES,
     "attachment_attach",
     "attachment_index",
     "attachment_pii",

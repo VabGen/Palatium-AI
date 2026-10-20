@@ -33,11 +33,25 @@ async def call_formatter_llm(
     messages: list[ChatMessage],
     max_tokens: int,
     worker_summary: str = "",
+    allow_worker_fallback: bool = True,
 ) -> tuple[LLMCompletion, str]:
     """Stream GFM when an SSE bridge is bound; otherwise one-shot text completion."""
     emitter = FormatterMarkdownEmitter.bind()
     if emitter is None:
         return await complete(harness=harness, config=config, messages=messages, max_tokens=max_tokens)
+
+    if not allow_worker_fallback:
+        # Single-writer formatter-owned turn: the worker draft is not the deliverable,
+        # so painting it first would be replaced by this very stream (055).
+        completion, _ = await complete(
+            harness=harness,
+            config=config,
+            messages=messages,
+            max_tokens=max_tokens,
+            on_delta=emitter.on_delta,
+        )
+        markdown = emitter.finish() or sanitize_markdown_buffer(completion.content)
+        return completion, markdown
 
     on_delta, cancel_watch = first_token_fallback_watch(
         emitter,

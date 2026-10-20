@@ -593,6 +593,7 @@ Ops checklist before staging/prod: [`ops-readiness.md`](ops-readiness.md).
 | Budgeted recall | ≤4 hits / 800 chars, min confidence 0.7, thread+user+org ns | — |
 | DialogTurn payload | ContentDocument JSON for rich UI hydrate | — |
 | Sleep-time | MemoryKeeper queue (`frontier` / `gpt-oss:120b-cloud`), ADD-only | — |
+| Consolidation | `python -m palatium_ai.jobs.memory_consolidate` — promote + `memory_*` retention plan (dry-run); compose profile `memory-jobs` | destructive execute — global retention job |
 | Chat UI transcript | localStorage thread/user/org + `GET .../turns` | — |
 | Eval gates | offline + live LongMemEval-lite (ACL/anaphora/format/keeper) | corpus growth as needed |
 | Graphiti | opt-in `MEMORY_BACKEND=graphiti` → `GraphitiMemoryPort` (Neo4j, `graphiti-core`) | — |

@@ -30,6 +30,10 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from pydantic import TypeAdapter
+
+from palatium_ai.domain.content import ContentBlock
+
 if TYPE_CHECKING:
     from palatium_ai.domain.content import ContentDocument
 
@@ -97,6 +101,8 @@ _REF_DELIMITER_RE = re.compile(r"[\s,;)\]]")
 #: cannot be the start of a fresh term (mirrors the left boundary of ``_TERM_RE``).
 _WORD_CHAR_RE = re.compile(r"[0-9A-Za-z_]")
 _MAX_HELD_REF_CHARS = 256
+#: One adapter for the whole process: the block union is frozen at import time.
+_BLOCK_ADAPTER: TypeAdapter[ContentBlock] = TypeAdapter(ContentBlock)
 
 
 class InternalVocabularyPolicy:
@@ -191,6 +197,19 @@ class InternalVocabularyPolicy:
         if not cls._sanitize_node(payload):
             return document
         return type(document).model_validate(payload)
+
+    @classmethod
+    def sanitize_block(cls, block: ContentBlock) -> ContentBlock:
+        """Sanitize one streamed block (same rules as the whole document).
+
+        Structured preview frames reach the user before the document exists, so the
+        guard cannot wait for ``sanitize_document`` — but it must not grow a second
+        copy of the rules either (050).
+        """
+        payload = block.model_dump(mode="json")
+        if not cls._sanitize_node(payload):
+            return block
+        return _BLOCK_ADAPTER.validate_python(payload)
 
     @classmethod
     def _sanitize_node(cls, node: object) -> bool:

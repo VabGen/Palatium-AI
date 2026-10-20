@@ -16,6 +16,7 @@ from palatium_ai.application.agents.researcher.config import (
     SUMMARY_MAX_CHARS,
     researcher_completion_budget,
     researcher_llm_config,
+    researcher_tool_output_budget,
 )
 from palatium_ai.application.agents.researcher.outcomes import failure_output, soft_empty_output
 from palatium_ai.application.agents.researcher.parsing import (
@@ -506,7 +507,11 @@ async def synthesize_mcp_output(
     """Second agent-loop step: the tool body stays in the prompt, the model writes summary."""
     fenced = summarize_mcp_content(
         outcome,
-        max_chars=task_input.mcp_tool_output_max_chars,
+        max_chars=researcher_tool_output_budget(
+            server_name=server_name,
+            tool_name=tool_name,
+            default_max_chars=task_input.mcp_tool_output_max_chars,
+        ),
         server_name=server_name,
         tool_name=tool_name,
     )

@@ -69,6 +69,7 @@ async def generate_document(
     max_tokens: int,
     worker_summary: str = "",
     agent_role: str,
+    allow_worker_fallback: bool = True,
 ) -> ContentDocument:
     completion, markdown = await call_formatter_llm(
         harness=harness,
@@ -76,6 +77,7 @@ async def generate_document(
         messages=messages,
         max_tokens=max_tokens,
         worker_summary=worker_summary,
+        allow_worker_fallback=allow_worker_fallback,
     )
     truncated = was_truncated(completion)
     current_raw = markdown or completion.content

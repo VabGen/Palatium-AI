@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from .types import (
     GROUNDING_DEFAULT,
     LOW_RISK_ROUTE_STRATEGIES,
+    RESPONSE_SHAPE_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     TRANSFORMATION_DEFAULT,
     AgentRole,
@@ -20,6 +21,7 @@ from .types import (
     ExecutionStrategy,
     GroundingMode,
     ModelTier,
+    ResponseShape,
     RouteStrategy,
     TaskKind,
     TransformationKind,
@@ -52,12 +54,14 @@ if TYPE_CHECKING:
     from .memory_namespace import MemoryNamespaceBinding, MemoryNamespacePolicy
     from .memory_recall import MemoryRecallDecision, MemoryRecallPolicy
     from .parallel_workers import ParallelWorkerPolicy, ParallelWorkersDecision
+    from .presentation import PresentationOwnershipDecision, PresentationOwnershipPolicy
     from .promotion import PromotionPolicy
     from .researcher_tier import ResearcherTierDecision, ResearcherTierPolicy
     from .response_cache import ResponseCacheKeyParts, ResponseCacheKeyPolicy
     from .retention import RetentionDecision, RetentionPolicy, RetentionWindows
     from .retrieval import LAST_RESORT_PLATFORM_TOOLS, RetrievalBindingDecision, RetrievalPolicy
     from .scratchpad import SessionScratchpadPolicy
+    from .shape import ShapeRecipe, ShapeRecipePolicy, ShapeVerdict
     from .transform import TransformPolicy, TransformRouteDecision
     from .untrusted_content import (
         DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
@@ -76,6 +80,7 @@ __all__ = [
     "GROUNDING_DEFAULT",
     "LAST_RESORT_PLATFORM_TOOLS",
     "LOW_RISK_ROUTE_STRATEGIES",
+    "RESPONSE_SHAPE_DEFAULT",
     "SUBSTANTIVE_USER_PAYLOAD_CHARS",
     "TRANSFORMATION_DEFAULT",
     "AckReplyPolicy",
@@ -111,12 +116,15 @@ __all__ = [
     "ModelTier",
     "ParallelWorkerPolicy",
     "ParallelWorkersDecision",
+    "PresentationOwnershipDecision",
+    "PresentationOwnershipPolicy",
     "PromotionPolicy",
     "ReplyLocalePolicy",
     "ResearcherTierDecision",
     "ResearcherTierPolicy",
     "ResponseCacheKeyParts",
     "ResponseCacheKeyPolicy",
+    "ResponseShape",
     "RetentionDecision",
     "RetentionPolicy",
     "RetentionWindows",
@@ -124,6 +132,9 @@ __all__ = [
     "RetrievalPolicy",
     "RouteStrategy",
     "SessionScratchpadPolicy",
+    "ShapeRecipe",
+    "ShapeRecipePolicy",
+    "ShapeVerdict",
     "TaskKind",
     "TransformPolicy",
     "TransformRouteDecision",
@@ -169,6 +180,8 @@ _LAZY: dict[str, tuple[str, str]] = {
     "MemoryRecallPolicy": (".memory_recall", "MemoryRecallPolicy"),
     "ParallelWorkerPolicy": (".parallel_workers", "ParallelWorkerPolicy"),
     "ParallelWorkersDecision": (".parallel_workers", "ParallelWorkersDecision"),
+    "PresentationOwnershipDecision": (".presentation", "PresentationOwnershipDecision"),
+    "PresentationOwnershipPolicy": (".presentation", "PresentationOwnershipPolicy"),
     "PromotionPolicy": (".promotion", "PromotionPolicy"),
     "ReplyLocalePolicy": (".locale", "ReplyLocalePolicy"),
     "ResearcherTierDecision": (".researcher_tier", "ResearcherTierDecision"),
@@ -182,6 +195,9 @@ _LAZY: dict[str, tuple[str, str]] = {
     "RetrievalBindingDecision": (".retrieval", "RetrievalBindingDecision"),
     "RetrievalPolicy": (".retrieval", "RetrievalPolicy"),
     "SessionScratchpadPolicy": (".scratchpad", "SessionScratchpadPolicy"),
+    "ShapeRecipe": (".shape", "ShapeRecipe"),
+    "ShapeRecipePolicy": (".shape", "ShapeRecipePolicy"),
+    "ShapeVerdict": (".shape", "ShapeVerdict"),
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS": (
         ".untrusted_content",
         "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",

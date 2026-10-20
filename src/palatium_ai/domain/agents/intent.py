@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field
 from palatium_ai.domain.policies.types import (
     FILE_REFERENCE_DEFAULT,
     GROUNDING_DEFAULT,
+    RESPONSE_SHAPE_DEFAULT,
     TRANSFORMATION_DEFAULT,
     ContinuationKind,
     FileReferenceKind,
     GroundingMode,
+    ResponseShape,
     TaskKind,
     TransformationKind,
     UnderspecificationKind,
@@ -82,6 +84,14 @@ class IntentClassifierOutput(BaseModel):
             "How to transform prior content when the ask is a format-continuation: "
             "restructure (layout/sections) vs expand/shorten/rewrite (content change). "
             "none when not a prior-transform ask."
+        ),
+    )
+    response_shape: ResponseShape = Field(
+        default=RESPONSE_SHAPE_DEFAULT,
+        description=(
+            "Form of the answer body: auto (formatter chooses), comparison_table, "
+            "document_analysis, plan, prose. Set when the user names a form or the "
+            "deliverable is unambiguously one of these; never for social/clarification."
         ),
     )
     file_reference: FileReferenceKind = Field(

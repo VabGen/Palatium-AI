@@ -16,17 +16,8 @@ FormatterMode = Literal["legacy", "schema_first"]
 
 
 class FormatterConfig(BaseConfig):
-    """Runtime switches for the Formatter agent.
+    """Runtime switches for the Formatter agent."""
 
-    Raw JSON token streaming is a debug aid. Production turns already show
-    plain prose via ``answer_delta`` and the finished document via ``result``.
-    """
-
-    debug_stream_deltas: bool = Field(
-        default=False,
-        validation_alias="FORMATTER_DEBUG_STREAM_DELTAS",
-        description=("When true, FormatterAgent emits raw JSON chunks as formatter_delta. Leave false in production."),
-    )
     formatter_mode: FormatterMode = Field(
         default="legacy",
         validation_alias="FORMATTER_MODE",

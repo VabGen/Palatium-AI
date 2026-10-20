@@ -15,9 +15,11 @@ from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
 from palatium_ai.domain.memory.tool_output import compress_worker_context
 from palatium_ai.domain.policies import (
+    RESPONSE_SHAPE_DEFAULT,
     ContinuityPolicy,
     EffectiveRoutingIntent,
     GroundingMode,
+    ResponseShape,
     budget_untrusted_text,
 )
 
@@ -237,6 +239,14 @@ def resolved_grounding_reason(state: AgentGraphState) -> str:
     if routing is None:
         return ""
     return routing.grounding_reason or ""
+
+
+def resolved_response_shape(state: AgentGraphState) -> ResponseShape:
+    """Answer-body form from Continuity (``auto`` when the user named none)."""
+    routing = routing_intent(state)
+    if routing is None:
+        return RESPONSE_SHAPE_DEFAULT
+    return routing.response_shape
 
 
 def resolved_reasoning(state: AgentGraphState) -> str:

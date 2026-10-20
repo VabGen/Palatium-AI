@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
 from palatium_ai.application.orchestration.nodes import _emit_worker_answer_deltas
+from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge
 from palatium_ai.domain.agents.researcher import ResearcherOutput, ResearcherTaskResult
 
@@ -81,7 +82,7 @@ def test_emit_worker_answer_deltas_from_success_result() -> None:
         "palatium_ai.application.agents.formatter.answer_delta.get_turn_sse_bridge",
         return_value=bridge,
     ):
-        _emit_worker_answer_deltas(result)
+        _emit_worker_answer_deltas(AgentGraphState(presentation_owner="worker"), result)
     assert bridge.queue.get_nowait()["delta"] == "Worker prose ready."
 
 
@@ -100,5 +101,5 @@ def test_emit_worker_answer_deltas_skips_failure() -> None:
         "palatium_ai.application.agents.formatter.answer_delta.get_turn_sse_bridge",
         return_value=bridge,
     ):
-        _emit_worker_answer_deltas(result)
+        _emit_worker_answer_deltas(AgentGraphState(presentation_owner="worker"), result)
     assert bridge.queue.empty()

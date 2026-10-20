@@ -17,11 +17,52 @@ from palatium_ai.domain.ports.retention import RetentionClassReport
 from palatium_ai.infrastructure.retention._scalars import rpc_int
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import RowMapping
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from palatium_ai.domain.ports.blob_store import BlobStorePort
 
 logger = get_logger(__name__)
+
+
+def _row_to_dict(row: RowMapping) -> dict[str, object]:
+    """Map one RPC row onto the purge contract shared by both candidate queries."""
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "blob_key": row["blob_key"],
+        "derived_text_key": row["derived_text_key"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "project_id": row["project_id"],
+        "contains_pii": bool(row["contains_pii"]),
+        "expires_at": row["expires_at"],
+        "created_at": row["created_at"],
+    }
+
+
+def _created_at(row: dict[str, object]) -> datetime:
+    value = row.get("created_at")
+    return value if isinstance(value, datetime) else datetime.min.replace(tzinfo=UTC)
+
+
+def _merge_unique(
+    primary: list[dict[str, object]],
+    extra: list[dict[str, object]],
+    *,
+    limit: int,
+) -> list[dict[str, object]]:
+    """Union two bounded candidate sets, oldest first, without spending a slot twice."""
+    merged: list[dict[str, object]] = []
+    seen: set[object] = set()
+    for row in (*primary, *extra):
+        key = row.get("id")
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    merged.sort(key=_created_at)
+    return merged[:limit]
 
 
 class AttachmentRetentionHandler:
@@ -38,6 +79,7 @@ class AttachmentRetentionHandler:
         blob_store: BlobStorePort,
         pending_ttl_seconds: int,
         max_chunk_part_index: int | None = None,
+        orphan_grace_seconds: int = DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds,
     ) -> None:
         # ``in`` against a str-container widens Literal→str under basedpyright;
         # match keeps the RetentionClass pin.
@@ -51,6 +93,7 @@ class AttachmentRetentionHandler:
         self._windows = windows
         self._blob_store = blob_store
         self._pending_ttl_seconds = max(1, pending_ttl_seconds)
+        self._orphan_grace_seconds = max(1, orphan_grace_seconds)
         self._max_chunk_part_index = (
             max_chunk_part_index
             if max_chunk_part_index is not None
@@ -64,19 +107,28 @@ class AttachmentRetentionHandler:
     async def plan(self, *, limit: int) -> RetentionClassReport:
         now = datetime.now(UTC)
         pending_before = now - timedelta(seconds=self._pending_ttl_seconds)
+        orphan_before = now - timedelta(seconds=self._orphan_grace_seconds)
         async with self._session_factory() as session:
-            candidates = await self._count(session, now=now, pending_before=pending_before)
+            expired = await self._count(session, now=now, pending_before=pending_before)
+            orphans = await self._count_orphans(session, orphan_before=orphan_before)
         decision = RetentionPolicy.decide(self.retention_class)
         return RetentionClassReport(
             retention_class=self.retention_class,
             action=decision.action,
-            candidates=candidates,
-            detail=f"batch_cap={limit};pending_before={pending_before.isoformat()}",
+            # Per-rule counts: a row can match both predicates, so this is an upper
+            # bound. ``execute`` reports the deduplicated batch it actually acted on.
+            candidates=expired + orphans,
+            detail=(
+                f"batch_cap={limit};expired={expired};orphans={orphans};"
+                f"pending_before={pending_before.isoformat()};"
+                f"orphan_before={orphan_before.isoformat()}"
+            ),
         )
 
     async def execute(self, *, limit: int) -> RetentionClassReport:
         now = datetime.now(UTC)
         pending_before = now - timedelta(seconds=self._pending_ttl_seconds)
+        orphan_before = now - timedelta(seconds=self._orphan_grace_seconds)
         batch = max(1, min(limit, self._windows.batch_size))
         decision = RetentionPolicy.decide(self.retention_class)
         async with self._session_factory() as session:
@@ -86,6 +138,14 @@ class AttachmentRetentionHandler:
                 pending_before=pending_before,
                 limit=batch,
             )
+            orphan_rows = await self._list_orphans(
+                session,
+                orphan_before=orphan_before,
+                limit=batch,
+            )
+        # Both predicates can name the same row (expired TTL *and* thread-less);
+        # collapse by id before spending the bounded batch on it twice (080).
+        rows = _merge_unique(rows, orphan_rows, limit=batch)
         purged = 0
         failed = 0
         knowledge_docs = 0
@@ -109,7 +169,10 @@ class AttachmentRetentionHandler:
             candidates=len(rows),
             acted=purged,
             failed=failed,
-            detail=f"knowledge_docs={knowledge_docs};pending_before={pending_before.isoformat()}",
+            detail=(
+                f"knowledge_docs={knowledge_docs};pending_before={pending_before.isoformat()};"
+                f"orphan_before={orphan_before.isoformat()}"
+            ),
         )
 
     async def _count(
@@ -128,6 +191,25 @@ class AttachmentRetentionHandler:
                 """
             ),
             {"now": now, "pending_before": pending_before, "cls": self.retention_class},
+        )
+        return rpc_int(result.scalar_one())
+
+    async def _count_orphans(
+        self,
+        session: AsyncSession,
+        *,
+        orphan_before: datetime,
+    ) -> int:
+        """Thread-less attach rows that no read path can ever bind (020)."""
+        result = await session.execute(
+            text(
+                """
+                SELECT palatium_ai.retention_count_orphan_attachments(
+                  :orphan_before, :cls
+                )
+                """
+            ),
+            {"orphan_before": orphan_before, "cls": self.retention_class},
         )
         return rpc_int(result.scalar_one())
 
@@ -156,21 +238,32 @@ class AttachmentRetentionHandler:
                 "cls": self.retention_class,
             },
         )
-        return [
+        return [_row_to_dict(row) for row in result.mappings().all()]
+
+    async def _list_orphans(
+        self,
+        session: AsyncSession,
+        *,
+        orphan_before: datetime,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        result = await session.execute(
+            text(
+                """
+                SELECT id, user_id, blob_key, derived_text_key, mode, status,
+                       project_id, contains_pii, expires_at, created_at
+                FROM palatium_ai.retention_list_orphan_attachments(
+                  :orphan_before, :lim, :cls
+                )
+                """
+            ),
             {
-                "id": row.id,
-                "user_id": row.user_id,
-                "blob_key": row.blob_key,
-                "derived_text_key": row.derived_text_key,
-                "mode": row.mode,
-                "status": row.status,
-                "project_id": row.project_id,
-                "contains_pii": bool(row.contains_pii),
-                "expires_at": row.expires_at,
-                "created_at": row.created_at,
-            }
-            for row in result.all()
-        ]
+                "orphan_before": orphan_before,
+                "lim": limit,
+                "cls": self.retention_class,
+            },
+        )
+        return [_row_to_dict(row) for row in result.mappings().all()]
 
     async def _purge_one(self, row: dict[str, object]) -> int:
         attachment_id = row["id"]

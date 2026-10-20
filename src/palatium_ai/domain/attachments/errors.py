@@ -31,6 +31,20 @@ class AttachmentIntakeRejectedError(AttachmentError):
         super().__init__(message)
 
 
+class AttachmentThreadRequiredError(AttachmentError):
+    """An attach-mode upload arrived without a dialog thread (020).
+
+    ``attach`` rows are reachable only through ``thread_id`` (``list_for_thread`` /
+    ``get_many`` / the reference resolver). A row created with ``thread_id=NULL``
+    can still be parsed, but no future turn can bind it, so it is dead weight the
+    moment it is written. The API schema already requires the id; this error keeps
+    the same rule in the use-case layer for any non-HTTP caller (055).
+    """
+
+    def __init__(self) -> None:
+        super().__init__("thread_id is required for attach mode")
+
+
 class AttachmentUploadTooLargeError(AttachmentError):
     """A proxied upload body is bigger than the configured intake cap (020).
 
@@ -141,6 +155,7 @@ __all__ = [
     "AttachmentNotFoundError",
     "AttachmentNotUsableError",
     "AttachmentRestoreNotAllowedError",
+    "AttachmentThreadRequiredError",
     "AttachmentTooLargeError",
     "AttachmentUploadTooLargeError",
 ]

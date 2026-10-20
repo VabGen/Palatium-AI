@@ -15,7 +15,8 @@ import pytest
 
 from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
 from palatium_ai.application.agents.formatter.stream_delta import FormatterMarkdownEmitter
-from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge
+from palatium_ai.application.orchestration.state import AgentGraphState
+from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, turn_sse_bridge
 from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
 
 #: Inputs whose internal identifiers must never reach a delta frame (020).
@@ -139,6 +140,110 @@ def test_painted_tail_is_bounded() -> None:
     for _ in range(200):
         bridge.record_answer_frame("x" * 512, replace=False)
     assert len(bridge.painted_answer_tail) == 4096
+
+
+def test_structured_contract_suppresses_the_intermediate_worker_draft() -> None:
+    """Nothing replaces a draft under structured_incremental — so it must not be painted."""
+    from palatium_ai.application.orchestration.nodes import _emit_worker_answer_deltas
+    from palatium_ai.domain.agents.researcher import ResearcherOutput, ResearcherTaskResult
+
+    result = ResearcherTaskResult(
+        task_id="t1",
+        agent_role="researcher",
+        status="success",
+        confidence=0.9,
+        requires_review=False,
+        output=ResearcherOutput(summary="Черновик сравнения.", confidence=0.9),
+    )
+    legacy = TurnSseBridge(stream_contract="legacy_markdown")
+    structured = TurnSseBridge(stream_contract="structured_incremental")
+    state: AgentGraphState = {"presentation_owner": "worker"}
+
+    with turn_sse_bridge(legacy):
+        _emit_worker_answer_deltas(state, result)
+    with turn_sse_bridge(structured):
+        _emit_worker_answer_deltas(state, result)
+
+    assert _drain(legacy) != []
+    assert _drain(structured) == []
+    assert structured.has_emitted_answer is False
+
+
+def test_formatter_owned_turn_never_paints_the_worker_draft() -> None:
+    """A draft the Formatter rewrites would be replaced — the single-writer contract forbids it."""
+    from palatium_ai.application.orchestration.nodes import _emit_worker_answer_deltas
+    from palatium_ai.domain.agents.researcher import ResearcherOutput, ResearcherTaskResult
+
+    result = ResearcherTaskResult(
+        task_id="t1",
+        agent_role="researcher",
+        status="success",
+        confidence=0.9,
+        requires_review=False,
+        output=ResearcherOutput(summary="Черновик для переписывания.", confidence=0.9),
+    )
+    bridge = TurnSseBridge(stream_contract="legacy_markdown")
+    state: AgentGraphState = {"presentation_owner": "formatter"}
+
+    with turn_sse_bridge(bridge):
+        _emit_worker_answer_deltas(state, result)
+
+    assert _drain(bridge) == []
+    assert bridge.has_emitted_answer is False
+
+
+def test_structured_fragments_append_and_never_replace() -> None:
+    from palatium_ai.application.agents.formatter.answer_delta import emit_structured_answer_delta
+
+    bridge = TurnSseBridge(stream_contract="structured_incremental")
+    spy = _LayoutShiftSpy()
+    with turn_sse_bridge(bridge), patch("palatium_ai.application.agents.formatter.answer_delta.agent_metrics", spy):
+        emit_structured_answer_delta("Первый блок.")
+        emit_structured_answer_delta("Первый блок.", separator="\n\n")  # legit repeat
+        emit_structured_answer_delta("Второй блок.", separator="\n\n")
+        frames = _drain(bridge)
+
+    assert _replace_frames(frames) == []
+    assert "".join(str(frame["delta"]) for frame in frames) == ("Первый блок.\n\nПервый блок.\n\nВторой блок.")
+    assert spy.records == []
+
+
+def test_structured_block_frames_are_typed_sanitized_and_append_only() -> None:
+    """block_delta carries the same typed payload the final BlockRenderer consumes."""
+    from palatium_ai.application.agents.formatter.answer_delta import emit_document_block
+    from palatium_ai.domain.content import CodeBlock, ParagraphBlock
+
+    bridge = TurnSseBridge(stream_contract="structured_incremental")
+    spy = _LayoutShiftSpy()
+    with turn_sse_bridge(bridge), patch("palatium_ai.application.agents.formatter.answer_delta.agent_metrics", spy):
+        emit_document_block(index=0, block=ParagraphBlock(text="Смотри memory_hints."))
+        emit_document_block(index=1, block=CodeBlock(language="python", content="prior_context = 1"))
+        frames = _drain(bridge)
+
+    assert [frame["event"] for frame in frames] == ["block_delta", "block_delta"]
+    assert all("replace" not in frame for frame in frames)
+    assert frames[0]["index"] == 0
+    assert frames[0]["block"]["text"] == "Смотри память о вас."
+    # Code is user content, not prose: the guard must not rewrite it (055).
+    assert frames[1]["block"]["content"] == "prior_context = 1"
+    assert spy.records == []
+    assert bridge.sse_ttft_recorded is True
+
+
+def test_stream_contract_follows_the_formatter_two_key_rollout() -> None:
+    from palatium_ai.application.services.intent_service import IntentService
+
+    service = object.__new__(IntentService)
+    service._formatter_mode = "schema_first"
+    service._formatter_rollout_pct = 100
+    assert service._stream_contract("user-1") == "structured_incremental"
+
+    service._formatter_rollout_pct = 0
+    assert service._stream_contract("user-1") == "legacy_markdown"
+
+    service._formatter_mode = "legacy"
+    service._formatter_rollout_pct = 100
+    assert service._stream_contract("user-1") == "legacy_markdown"
 
 
 @pytest.mark.parametrize("text", NO_INTERNAL_TERM_INPUTS)

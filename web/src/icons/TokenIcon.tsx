@@ -69,9 +69,10 @@ type TokenIconProps = {
   turnId?: string | null;
 };
 
-function resolveToken(
-  token: IconToken | string | null | undefined
-): { known: IconToken | null; raw: string | null } {
+function resolveToken(token: IconToken | string | null | undefined): {
+  known: IconToken | null;
+  raw: string | null;
+} {
   if (token == null || token === '') return { known: null, raw: null };
   const raw = String(token).trim().toLowerCase();
   if (!raw) return { known: null, raw: null };

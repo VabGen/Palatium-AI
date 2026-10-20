@@ -27,6 +27,7 @@ from .content_document import (
     TableBlock,
     WidgetBlock,
     parse_content_document,
+    validate_content_block,
 )
 from .markdown_blocks import count_ordered_markers, prose_to_blocks
 
@@ -59,4 +60,5 @@ __all__ = [
     "count_ordered_markers",
     "parse_content_document",
     "prose_to_blocks",
+    "validate_content_block",
 ]

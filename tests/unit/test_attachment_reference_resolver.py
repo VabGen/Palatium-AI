@@ -135,6 +135,68 @@ async def test_named_file_wins_among_several() -> None:
     assert resolution.attachment_id == target.id
 
 
+class _RecordingLogger:
+    """Captures structlog-style ``(event, kwargs)`` pairs from the resolver."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def warning(self, event: str, **kwargs: object) -> None:
+        self.events.append((event, kwargs))
+
+    def info(self, event: str, **kwargs: object) -> None:
+        self.events.append((event, kwargs))
+
+
+@pytest.mark.asyncio()
+async def test_missing_thread_is_logged_instead_of_looking_like_an_empty_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a thread-less re-read produced ``no_candidates`` with no trace.
+
+    Without the id the resolver cannot select a row at all, so an empty result read
+    as "this dialog has no files" and the incident was undebuggable (055).
+    """
+    import palatium_ai.application.services.attachment_reference_resolver as module
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(module, "logger", recorder)
+    repository = _FakeRepository([_attachment("a.pdf")])
+    resolver = AttachmentReferenceResolver(repository=repository)
+
+    resolution = await resolver.resolve(user_id="user-1", thread_id="  ", hint_text="перечитай файл")
+
+    assert resolution.status == "no_candidates"
+    assert repository.calls == []  # never queried with a blank scope
+    event, fields = recorder.events[0]
+    assert event == "attachment_reference.resolve_failed"
+    assert fields["reason"] == "thread_id_missing"
+
+
+@pytest.mark.asyncio()
+async def test_unresolved_reference_logs_counts_not_file_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Diagnostics must be actionable without putting user content in logs (020)."""
+    import palatium_ai.application.services.attachment_reference_resolver as module
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(module, "logger", recorder)
+    resolver = AttachmentReferenceResolver(repository=_FakeRepository([_attachment("a.pdf"), _attachment("b.pdf")]))
+
+    resolution = await resolver.resolve(user_id="user-1", thread_id="thread-1", hint_text="перечитай этот файл")
+
+    assert resolution.status == "ambiguous"
+    event, fields = recorder.events[0]
+    assert event == "attachment_reference.resolve_failed"
+    assert fields["thread_id"] == "thread-1"
+    assert fields["reason"] == "several_thread_files"
+    assert fields["candidate_count"] == 2
+    assert fields["thread_file_count"] == 2
+    assert "a.pdf" not in repr(fields)
+    assert "b.pdf" not in repr(fields)
+
+
 @pytest.mark.asyncio()
 async def test_metrics_record_the_outcome_kind_without_a_new_metric_name() -> None:
     from palatium_ai.core.observability.metrics import agent_metrics

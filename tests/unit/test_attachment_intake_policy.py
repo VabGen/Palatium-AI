@@ -18,7 +18,7 @@ from palatium_ai.domain.attachments.policies import (
     AttachmentRetentionPolicy,
     IntakeDecision,
 )
-from palatium_ai.domain.attachments.types import AttachmentRejectionReason, AttachmentStatus
+from palatium_ai.domain.attachments.types import AttachmentMode, AttachmentRejectionReason, AttachmentStatus
 
 _NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
 
@@ -214,17 +214,20 @@ def _attachment(
     status: AttachmentStatus = "ready",
     created_at: datetime = _NOW,
     rejection_reason: AttachmentRejectionReason | None = None,
+    thread_id: str | None = "thread-1",
+    mode: AttachmentMode = "attach",
 ) -> Attachment:
     """Minimal aggregate for retention checks (no I/O, no pipeline)."""
     attachment_id = uuid4()
     return Attachment(
         id=attachment_id,
         user_id="user-a",
+        thread_id=thread_id,
         filename="invoice.pdf",
         mime_type="application/pdf",
         size_bytes=1024,
         blob_key=f"attachments/{attachment_id}",
-        mode="attach",
+        mode=mode,
         status=status,
         created_at=created_at,
         expires_at=expires_at,
@@ -324,3 +327,66 @@ def test_retention_sweep_batch_has_sane_bounds() -> None:
     assert DEFAULT_ATTACHMENT_LIMITS.retention_sweep_batch >= 1
     with pytest.raises(ValidationError):
         AttachmentLimits(retention_sweep_batch=0)
+
+
+def test_orphan_grace_has_sane_bounds() -> None:
+    """At least an hour, at most a month: a zero grace would race a live upload (020)."""
+    assert DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds >= 3600
+    with pytest.raises(ValidationError):
+        AttachmentLimits(orphan_grace_seconds=0)
+    with pytest.raises(ValidationError):
+        AttachmentLimits(orphan_grace_seconds=31 * 24 * 3600)
+
+
+def test_threadless_attach_row_becomes_an_orphan_after_the_grace() -> None:
+    """Regression: a row with ``thread_id=NULL`` was unreachable but never collected."""
+    grace = DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds
+    orphan = _attachment(thread_id=None, created_at=_NOW - timedelta(seconds=grace), expires_at=None)
+    fresh = _attachment(thread_id=None, created_at=_NOW - timedelta(seconds=grace - 1), expires_at=None)
+
+    assert AttachmentRetentionPolicy.is_orphaned(orphan, now=_NOW, after_seconds=grace)
+    assert not AttachmentRetentionPolicy.is_orphaned(fresh, now=_NOW, after_seconds=grace)
+
+
+def test_blank_thread_counts_as_an_orphan() -> None:
+    """Whitespace is as unreachable as NULL; ``strip`` keeps the rule honest (055)."""
+    grace = DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds
+    blank = _attachment(thread_id="   ", created_at=_NOW - timedelta(seconds=grace), expires_at=None)
+
+    assert AttachmentRetentionPolicy.is_orphaned(blank, now=_NOW, after_seconds=grace)
+
+
+def test_orphan_rule_spares_index_rows_and_in_flight_uploads() -> None:
+    """``index`` rows may own knowledge; in-flight rows belong to another rule."""
+    grace = DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds
+    old = _NOW - timedelta(seconds=grace)
+    assert not AttachmentRetentionPolicy.is_orphaned(
+        _attachment(mode="index", thread_id=None, created_at=old, expires_at=None),
+        now=_NOW,
+        after_seconds=grace,
+    )
+    for status in ("pending", "uploaded", "scanning"):
+        row = _attachment(status=status, thread_id=None, created_at=old, expires_at=None)  # type: ignore[arg-type]
+        assert not AttachmentRetentionPolicy.is_orphaned(row, now=_NOW, after_seconds=grace)
+
+
+def test_reclaim_reason_names_the_rule_that_fired() -> None:
+    """The audit trail must say *why* a file disappeared, not just that it did (020)."""
+    grace = DEFAULT_ATTACHMENT_LIMITS.orphan_grace_seconds
+    ticket_ttl = DEFAULT_ATTACHMENT_LIMITS.presigned_url_ttl_seconds
+
+    def reason(row: object) -> object:
+        return AttachmentRetentionPolicy.reclaim_reason(
+            row,  # type: ignore[arg-type]
+            now=_NOW,
+            pending_after_seconds=ticket_ttl,
+            orphan_after_seconds=grace,
+        )
+
+    assert reason(_attachment(expires_at=_NOW - timedelta(seconds=1))) == "retention_expired"
+    assert (
+        reason(_attachment(status="pending", created_at=_NOW - timedelta(seconds=ticket_ttl), expires_at=None))
+        == "abandoned_upload"
+    )
+    assert reason(_attachment(thread_id=None, created_at=_NOW - timedelta(seconds=grace), expires_at=None)) == "orphaned_attach"
+    assert reason(_attachment(thread_id="thread-1", created_at=_NOW, expires_at=None)) is None

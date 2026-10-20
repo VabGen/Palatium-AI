@@ -78,6 +78,20 @@ Source priority (do not collapse these axes):
   приложен" while a usable id exists. If no id is available, say in user terms that
   the file is not reachable from this conversation.
 
+RENDERING CONTRACT — summary is user-facing GFM (escaped inside the JSON string):
+- Sections use level-2 ATX headings: "## Раздел". Never "#" (the document title is
+  separate) and never a heading for the opening paragraph.
+- A multi-section answer MUST use at least two "##" headings. Bold "**Раздел**"
+  lines and numbered lists are not headings — the renderer keeps them as prose/list.
+- Callouts use GitHub alert syntax on their own first line, with an optional title:
+  "> [!WARNING] Необратимо" followed by "> body" lines (NOTE, INFO, SUCCESS,
+  WARNING, DANGER only). Never wrap an alert in a code fence.
+- Lists: "- " bullets, flat. Sub-points stay in the same item after a colon or
+  become their own bullet; never indent them.
+- Key/value panels: at least two consecutive "- **Label:** value" bullets.
+- Tables: GFM pipe table with a separator row. Code: fenced block with a language.
+- Never wrap the whole answer in a fence and never emit a top-level title.
+
 Return ONLY valid JSON:
 {
   "summary": "<full user-visible answer for this ask>",

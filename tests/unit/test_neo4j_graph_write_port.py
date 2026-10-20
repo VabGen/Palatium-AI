@@ -25,6 +25,8 @@ class _FakeWriteTransport:
             return [self._find_row] if self._find_row is not None else []
         if "RETURN count(f) AS n" in cypher:
             return [{"n": 1}]
+        if "SET f.hebbian_weight" in cypher:
+            return [{"hebbian_weight": params.get("hebbian_weight")}]
         node_id = params.get("node_id") or params.get("old_node_id")
         return [{"node_id": node_id}]
 
@@ -143,6 +145,47 @@ async def test_expire_fact_sets_expired_at() -> None:
     assert "expired_at" in cypher
     assert params["user_id"] == "alice"
     assert params["entry_key"] == "pref-duck"
+
+
+@pytest.mark.asyncio()
+async def test_bump_hebbian_on_entry_reads_then_sets_weight() -> None:
+    old_id = _stable_node_id("u1", "k1", 1)
+    transport = _FakeWriteTransport(
+        find_row={
+            "text": "fact",
+            "node_id": old_id,
+            "version": 1,
+            "contains_pii": False,
+            "hebbian_weight": 0.5,
+        }
+    )
+    port = Neo4jGraphWritePort(transport)
+    weight = await port.bump_hebbian_on_entry(user_id="u1", entry_key="k1")
+    assert weight == pytest.approx(0.55)
+    assert len(transport.calls) == 2
+    find_cypher, find_params = transport.calls[0]
+    set_cypher, set_params = transport.calls[1]
+    assert "hebbian_weight" in find_cypher
+    assert find_params == {"user_id": "u1", "entry_key": "k1"}
+    assert "SET f.hebbian_weight" in set_cypher
+    assert set_params["node_id"] == old_id
+    assert set_params["hebbian_weight"] == pytest.approx(0.55)
+
+
+@pytest.mark.asyncio()
+async def test_bump_hebbian_on_entry_without_active_fact_returns_zero() -> None:
+    transport = _FakeWriteTransport()
+    port = Neo4jGraphWritePort(transport)
+    assert await port.bump_hebbian_on_entry(user_id="u1", entry_key="missing") == 0.0
+    assert len(transport.calls) == 1  # FIND only
+
+
+@pytest.mark.asyncio()
+async def test_bump_hebbian_on_entry_ignores_blank_keys() -> None:
+    transport = _FakeWriteTransport()
+    port = Neo4jGraphWritePort(transport)
+    assert await port.bump_hebbian_on_entry(user_id="  ", entry_key="k1") == 0.0
+    assert transport.calls == []
 
 
 def test_build_graph_write_port_defaults_to_in_memory() -> None:

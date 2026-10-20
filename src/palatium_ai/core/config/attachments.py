@@ -114,6 +114,15 @@ class AttachmentConfig(BaseConfig):
         le=5000,
         validation_alias="ATTACHMENTS_SWEEP_BATCH_SIZE",
     )
+    # Grace before a thread-less ``attach`` row is reclaimed (bounds mirror
+    # AttachmentLimits): long enough not to race an upload, short enough to keep
+    # dead rows from occupying storage for the full attach TTL (020).
+    orphan_grace_seconds: int = Field(
+        default=24 * 3600,
+        ge=3600,
+        le=30 * 24 * 3600,
+        validation_alias="ATTACHMENTS_ORPHAN_GRACE_SECONDS",
+    )
     max_parsed_chars: int = Field(
         default=2_000_000,
         ge=1000,
@@ -190,6 +199,41 @@ class AttachmentConfig(BaseConfig):
     tesseract_cmd: str | None = Field(
         default=None,
         validation_alias="ATTACHMENTS_TESSERACT_CMD",
+    )
+    #: Hard kill for ONE Tesseract invocation (a PDF page or a whole image). Without
+    #: it a pathological raster keeps the child alive indefinitely: the parser thread
+    #: never returns, ``POST /complete`` never answers, and every retry piles another
+    #: process on top (080: no unbounded resource, no hanging request).
+    tesseract_timeout_seconds: float = Field(
+        default=90.0,
+        gt=0.0,
+        le=600.0,
+        validation_alias="ATTACHMENTS_TESSERACT_TIMEOUT_SECONDS",
+    )
+    #: Wall-clock budget for OCR-ing ONE PDF. On exhaustion the pages already read
+    #: are kept (``truncated``) instead of growing the request without a bound.
+    pdf_ocr_budget_seconds: float = Field(
+        default=300.0,
+        gt=0.0,
+        le=1800.0,
+        validation_alias="ATTACHMENTS_PDF_OCR_BUDGET_SECONDS",
+    )
+    #: CPU-bound OCR slots shared by the PDF and image adapters (per process). One
+    #: Tesseract saturates a core per page, so parallel uploads otherwise starve the
+    #: whole box (and the API container's memory limit) until nothing completes.
+    ocr_max_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        validation_alias="ATTACHMENTS_OCR_MAX_CONCURRENCY",
+    )
+    #: Hard ceiling for one document parse — text layer, OCR and Vision escalation
+    #: included. Fail-closed on timeout, so a request always has an answer (030.8).
+    parse_timeout_seconds: float = Field(
+        default=420.0,
+        gt=0.0,
+        le=3600.0,
+        validation_alias="ATTACHMENTS_PARSE_TIMEOUT_SECONDS",
     )
     #: Cap on PDF pages sent to the vision model (cost/latency; G14).
     pdf_vision_max_pages: int = Field(

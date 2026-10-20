@@ -109,6 +109,7 @@ class ContextWeaverAgent(BaseAgent):
             candidate_capabilities=task_input.candidate_capabilities,
             grounding=task_input.grounding,
             grounding_reason=task_input.grounding_reason,
+            response_shape=task_input.response_shape,
             execution_plan=execution_plan,
             context_summary=context_summary,
         )

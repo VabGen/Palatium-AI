@@ -49,6 +49,29 @@ class _StubHarness:
         assert isinstance(item, LLMCompletion)
         return item
 
+    async def call_llm_stream(
+        self,
+        config: AgentConfig,
+        messages: list[object],
+        *,
+        response_format: LLMResponseFormat | None = None,
+        response_model: type[BaseModel] | None = None,
+        on_delta: object = None,
+        max_tokens: int | None = None,
+    ) -> LLMCompletion:
+        """Same scripted response, delivered incrementally so the scanner can paint."""
+        completion = await self.call_llm(
+            config,
+            messages,
+            response_format=response_format,
+            response_model=response_model,
+            max_tokens=max_tokens,
+        )
+        if callable(on_delta):
+            for start in range(0, len(completion.content), 40):
+                on_delta(completion.content[start : start + 40])
+        return completion
+
 
 def _context_packet_json() -> str:
     from palatium_ai.domain.agents.context_packet import ContextPacket
@@ -273,3 +296,63 @@ async def test_run_records_mode_split_latency_for_the_canary() -> None:
     await agent.run(_agent_input())
 
     assert agent_metrics.node_execution_count("formatter", "formatter:schema_first") == before + 1
+
+
+@pytest.mark.asyncio()
+async def test_schema_first_paints_blocks_incrementally_without_replacing() -> None:
+    """The streamed document is a superset of the preview — no replace frame at all."""
+    from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, turn_sse_bridge
+
+    harness = _StubHarness([LLMCompletion(content=_document_json(kind="report"), model="test")])
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+    bridge = TurnSseBridge(stream_contract="structured_incremental")
+
+    with turn_sse_bridge(bridge):
+        output = await agent.run(_agent_input())
+
+    events = []
+    while not bridge.queue.empty():
+        events.append(bridge.queue.get_nowait())
+    frames = [event for event in events if event.get("event") == "answer_delta"]
+    assert frames, "structured contract must paint before the document is validated"
+    assert all("replace" not in frame for frame in frames)
+    painted = "".join(str(frame["delta"]) for frame in frames)
+    # Preview prose == document prose (superset, not a different text).
+    assert "Status" in painted
+    assert "Done" in painted
+    assert "No errors." in painted
+    blocks = [event for event in events if event.get("event") == "block_delta"]
+    assert len(blocks) == 1
+    assert blocks[0]["index"] == 0
+    streamed_block = ContentDocument.model_validate_json(_document_json()).blocks[0]
+    assert blocks[0]["block"] == streamed_block.model_dump(mode="json")
+    assert isinstance(output.output, ContentDocument)
+    # Streamed, not buffered: the same call carries the schema.
+    assert harness.calls == [{"response_format": "json_schema", "response_model": ContentDocument}]
+
+
+@pytest.mark.asyncio()
+async def test_schema_first_paints_nothing_when_the_provider_refuses_streaming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal must not leave a half preview: legacy takes over from a clean slate."""
+    from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, turn_sse_bridge
+
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
+        lambda _raw, _task: _fixed_document(),
+    )
+    harness = _StubHarness(
+        [
+            StructuredOutputUnsupportedError("no json_schema"),
+            LLMCompletion(content="Done. No errors.", model="test"),
+        ]
+    )
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+    bridge = TurnSseBridge(stream_contract="structured_incremental")
+
+    with turn_sse_bridge(bridge):
+        output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    assert [call["response_format"] for call in harness.calls] == ["json_schema", "text"]

@@ -7,7 +7,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
-from palatium_ai.domain.policies.types import GROUNDING_DEFAULT, GroundingMode
+from palatium_ai.domain.policies.types import GROUNDING_DEFAULT, RESPONSE_SHAPE_DEFAULT, GroundingMode, ResponseShape
 
 from .intent import TaskKind
 from .supervisor import WorkerRoute
@@ -32,6 +32,9 @@ class ContextPacket(BaseModel):
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
     grounding: GroundingMode = Field(default=GROUNDING_DEFAULT)
     grounding_reason: str = Field(default="", max_length=500)
+    #: Requested form of the answer body (auto = Formatter chooses). Presentation only:
+    #: never selects a route or a tool (ADR 0005, 055).
+    response_shape: ResponseShape = Field(default=RESPONSE_SHAPE_DEFAULT)
     execution_plan: ToolExecutionPlan
     context_summary: str = Field(min_length=1)
     #: Attachment text for this turn, already wrapped in the untrusted fence by

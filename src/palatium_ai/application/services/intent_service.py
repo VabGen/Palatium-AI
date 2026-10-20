@@ -42,7 +42,9 @@ from palatium_ai.application.services.turn_response_cache import (
     turn_response_cache,
 )
 from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, turn_sse_bridge
+from palatium_ai.core.config.formatter import FormatterMode
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.observability.formatter_rollout import resolve_formatter_mode
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
@@ -52,6 +54,7 @@ from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.memory.turns import attachment_ids_payload
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.types import StreamingContract
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
 _DEFAULT_DIALOG_WINDOW = 12
@@ -108,6 +111,8 @@ class IntentService:
         response_cache: ResponseCacheService | None = None,
         graph_write: GraphWritePort | None = None,
         file_reference_resolver: AttachmentReferenceResolver | None = None,
+        formatter_mode: FormatterMode = "legacy",
+        formatter_rollout_pct: int = 0,
     ) -> None:
         self._session_service = session_service
         self._hitl_service = hitl_service
@@ -119,6 +124,11 @@ class IntentService:
         self._option_synthesizer = option_synthesizer
         self._attachment_service = attachment_service
         self._response_cache = response_cache or ResponseCacheService(None, enabled=False)
+        # The Formatter owns generation; the streaming contract is derived from the
+        # same two-key rollout so the SSE layer can never disagree with the agent
+        # about whether a document will paint itself (055: one contract, one decision).
+        self._formatter_mode: FormatterMode = formatter_mode
+        self._formatter_rollout_pct: int = formatter_rollout_pct
 
         self._graph_runner = IntentGraphRunner(
             graph,
@@ -382,6 +392,7 @@ class IntentService:
                         "requires_user_choice": routing_intent.requires_user_choice,
                         "underspecification_kind": routing_intent.underspecification_kind,
                         "candidate_capabilities": routing_intent.candidate_capabilities,
+                        "response_shape": routing_intent.response_shape,
                         "reasoning": routing_intent.reasoning,
                     }
                 ),
@@ -609,6 +620,13 @@ class IntentService:
             source_content=source_content,
         )
 
+    def _stream_contract(self, user_id: str | None) -> StreamingContract:
+        """Streaming contract for this caller — same two-key rollout as the Formatter."""
+        mode = resolve_formatter_mode(self._formatter_mode, self._formatter_rollout_pct, user_id)
+        if mode == "schema_first":
+            return "structured_incremental"
+        return "legacy_markdown"
+
     @traceable(name="intent_service.process_stream")
     async def process_stream(
         self,
@@ -690,7 +708,7 @@ class IntentService:
         attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
         with (
             turn_response_cache(cache_ctx),
-            turn_sse_bridge(TurnSseBridge()),
+            turn_sse_bridge(TurnSseBridge(stream_contract=self._stream_contract(user_id))),
             turn_attachment_context(attach_ctx),
         ):
             async for event in self._graph_runner.stream_graph(

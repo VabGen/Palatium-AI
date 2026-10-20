@@ -61,7 +61,10 @@ _HITL_CHOICE = re.compile(
 )
 _ATTR = re.compile(r"""(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 _CITE = re.compile(r"\[(\d+)\]")
-_CALLOUT_START = re.compile(r"^>\s*\[!(NOTE|WARNING|DANGER|SUCCESS|INFO)\]\s*$", re.IGNORECASE)
+_CALLOUT_START = re.compile(
+    r"^>\s*\[!(NOTE|WARNING|DANGER|SUCCESS|INFO)\]\s*(?P<title>.*)$",
+    re.IGNORECASE,
+)
 _CALLOUT_BODY = re.compile(r"^>\s?(.*)$")
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
 # Split table cells on unescaped pipes only — GFM allows a literal ``\|`` inside a cell.
@@ -77,6 +80,9 @@ _DIVIDER = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 # Label separator may sit inside the bold (`**Label:** value`) or after it (`**Label**: value`).
 _LABEL_SEP_CHARS = ":—–-"
 _KV_LINE = re.compile(r"^\s*[-*]\s+\*\*(?P<label>.+?)\*\*\s*(?P<sep>[:—–-])?\s*(?P<value>.+)$")
+# Panel without a bullet: `**Label:** value`. Recognised only as 2+ consecutive
+# lines — a lone bold-led paragraph stays prose (055).
+_KV_BARE_LINE = re.compile(r"^\s*\*\*(?P<label>.+?)\*\*\s*(?P<sep>[:—–-])?\s*(?P<value>.+)$")
 _STEPS_ITEM = re.compile(r"^\s*\d+[.)]\s+\*\*(?P<title>.+?)\*\*\s*(?P<sep>[:—–-])?\s*(?P<body>.+)$")
 
 logger = get_logger(__name__)
@@ -301,7 +307,7 @@ def _try_structured_block(lines: list[str], index: int) -> tuple[ContentBlock | 
 
     callout = _CALLOUT_START.match(line.strip())
     if callout:
-        return _consume_callout(lines, index, callout.group(1))
+        return _consume_callout(lines, index, callout.group(1), callout.group("title"))
 
     # Divider must be checked before a table separator: a lone `---` is a divider.
     if _DIVIDER.match(line):
@@ -341,15 +347,27 @@ def _split_label_separator(text: str) -> tuple[str, bool]:
 
 
 def _try_parse_kv_panel(lines: list[str], index: int) -> tuple[KeyValueBlock | None, int]:
-    """Detect 2+ consecutive ``- **Label:** value`` bullets as one definition panel.
+    """Detect 2+ consecutive ``- **Label:** value`` (or bare ``**Label:** value``) lines.
 
-    A single match stays a normal bullet list — the panel needs two pairs to signal
-    "these are parallel parameters, not prose" (055).
+    A single match stays a normal bullet / paragraph — the panel needs two pairs to
+    signal "these are parallel parameters, not prose" (055).
     """
+    for pattern in (_KV_LINE, _KV_BARE_LINE):
+        items, consumed = _collect_kv_items(lines, index, pattern)
+        if len(items) >= 2:
+            return KeyValueBlock(type="kv", items=tuple(items)), consumed
+    return None, 0
+
+
+def _collect_kv_items(
+    lines: list[str],
+    index: int,
+    pattern: re.Pattern[str],
+) -> tuple[list[KeyValueItem], int]:
     items: list[KeyValueItem] = []
     i = index
     while i < len(lines):
-        match = _KV_LINE.match(lines[i])
+        match = pattern.match(lines[i])
         if match is None:
             break
         label, had_inline_sep = _split_label_separator(match.group("label"))
@@ -359,9 +377,7 @@ def _try_parse_kv_panel(lines: list[str], index: int) -> tuple[KeyValueBlock | N
         if label and value:
             items.append(KeyValueItem(label=label[:200], value=value[:2000]))
         i += 1
-    if len(items) >= 2:
-        return KeyValueBlock(type="kv", items=tuple(items)), i - index
-    return None, 0
+    return items, i - index
 
 
 def _try_parse_steps(lines: list[str], index: int) -> tuple[StepsBlock | None, int]:
@@ -388,6 +404,7 @@ def _consume_callout(
     lines: list[str],
     index: int,
     kind: str,
+    title: str,
 ) -> tuple[CalloutBlock, int]:
     tone = _CALLOUT_TONE[kind.upper()]
     body_lines: list[str] = []
@@ -403,7 +420,7 @@ def _consume_callout(
     block = CalloutBlock(
         type="callout",
         tone=tone,
-        title=None,
+        title=_clean_text_field(title.strip()) if title.strip() else None,
         body=body[:4000],
         icon=leading_icon or _CALLOUT_ICON[tone],
     )

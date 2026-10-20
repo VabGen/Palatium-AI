@@ -1405,6 +1405,10 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `ATTACHMENTS_OCR_MIN_CONFIDENCE` | `55` | quality gate: эскалация при mean word confidence Tesseract ниже порога (латинский мусор с рукописной кириллицы) |
 | `ATTACHMENTS_PDF_MIN_AVG_CHARS_PER_PAGE` | `200` | ниже порога PDF считается сканом → OCR-путь |
 | `ATTACHMENTS_TESSERACT_CMD` | — | абсолютный путь к `tesseract`, если не в `PATH` |
+| `ATTACHMENTS_TESSERACT_TIMEOUT_SECONDS` | `90` | жёсткий kill одного вызова Tesseract (страница PDF / одно изображение); `TimeoutExpired` → страница считается нечитаемой, документ → Vision/`parse_failed` |
+| `ATTACHMENTS_PDF_OCR_BUDGET_SECONDS` | `300` | бюджет OCR на один PDF: прочитанные страницы сохраняются (`truncated`), остальные не читаются |
+| `ATTACHMENTS_OCR_MAX_CONCURRENCY` | `1` | слотов локального OCR на процесс API (PDF + изображения делят один семафор); Tesseract и так занимает ядро на страницу |
+| `ATTACHMENTS_PARSE_TIMEOUT_SECONDS` | `420` | жёсткий потолок одного парсинга (text layer + OCR + Vision); истечение → `parse_failed`, а не висящий `POST /complete` |
 | `ATTACHMENTS_PDF_VISION_MAX_PAGES` | `20` | потолок страниц PDF для vision (G14) |
 | `ATTACHMENTS_PDF_FIGURE_ENRICHMENT` | `true` | VLM-дополнение страниц с фигурами при живом text layer |
 | `ATTACHMENTS_PDF_FIGURE_MAX_PAGES` | `8` | soft-cap vision-вызовов на фигуры |
@@ -1529,6 +1533,12 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
    санитайзинг имени) → строка + presigned PUT. Audit: `attachment_init`. Отказ политики —
    400 и `palatium_agent_errors_total{error_type="intake_<reason>"}`.
 
+   `mode=attach` **требует** непустой `thread_id` (схема запроса + guard в
+   `AttachmentService.init_upload`, отказ — 422 `AttachmentThreadRequiredError`). Все пути
+   чтения (`list_for_thread`, `get_many`, reference resolver) thread-scoped, поэтому строка
+   без треда недостижима: её нельзя ни перечислить, ни повторно прочитать, ни сфенсить
+   в следующий ход. `mode=index` от треда не зависит и по-прежнему допускает `thread_id=None`.
+
    Лимит на `init` считает **только in-flight** загрузки треда: `status='pending'` с
    `created_at > now() - ATTACHMENTS_PRESIGNED_TTL_SECONDS`. Уже загруженные/готовые строки
    слот не занимают — иначе abandon’нутый presigned PUT блокировал бы тред на весь
@@ -1624,6 +1634,7 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 
 Ошибки: 404 `AttachmentNotFoundError`; 409 `AttachmentModeMismatchError` /
 `AttachmentNotUsableError`; 413 `AttachmentUploadTooLargeError` (прокси-загрузка сверх лимита);
+422 `AttachmentThreadRequiredError` (`attach` без непустого `thread_id`) и схема запроса;
 400 прочие типизированные; 503 подсистема выключена.
 Каждый запрос проверяет владельца треда (`load_session_for_principal`), и каждый запрос
 к репозиторию явно несёт `user_id` (060 — RLS не отменяет явный предикат).
@@ -1664,9 +1675,17 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
   Если удаление объекта падает — строка **не** удаляется и попадёт в следующий проход (`failed`),
   остальные строки прохода продолжают обрабатываться.
 - Отбор детерминирован: все строки прохода сравниваются с одним tz-aware UTC `now`
-  (`AttachmentRetentionPolicy.is_due`), поэтому живая строка не может быть purged из-за
+  (`AttachmentRetentionPolicy.reclaim_reason`), поэтому живая строка не может быть purged из-за
   пересчёта часов.
-- Audit: `attachment_expired` (reason `retention_expired`); метрика `retention_sweep_failed`.
+- **Осиротевшие `attach`-строки.** Строка `mode=attach` с `thread_id IS NULL` или пустым
+  (после `btrim`) не адресуема ни одним read-path. После `ATTACHMENTS_ORPHAN_GRACE_SECONDS`
+  (default 24h) её забирает тот же sweep (`reason=orphaned_attach`), не дожидаясь `expires_at`.
+  `mode=index` под правило не попадает (может владеть knowledge-документами), in-flight
+  статусы (`pending`/`uploaded`/`scanning`) — тоже: `pending` разбирает правило истёкшего
+  presigned-тикета. SQL — `palatium_ai.retention_{list,count}_orphan_attachments`
+  (миграция `i9d0e1f2a3b4`), частичный индекс `ix_attachments_attach_orphan_created_at`.
+- Audit: `attachment_expired` (`reason` = `retention_expired` / `abandoned_upload` /
+  `orphaned_attach`); метрика `retention_sweep_failed`.
 
 ### 16.7. Наблюдаемость и проверка
 
@@ -2006,6 +2025,19 @@ uv run python -m palatium_ai.jobs.retention --class checkpointer --class attachm
 # uv run python -m palatium_ai.jobs.retention --execute --class memory_pii
 # uv run python -m palatium_ai.jobs.retention --execute --class attachment_index
 # uv run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
+```
+
+Sleep consolidation (promote + `memory_*` retention plan; compose profile `memory-jobs`):
+
+```powershell
+# Promotable-owner discovery (FORCE RLS: a plain SELECT DISTINCT user_id sees one tenant).
+uv run python -m palatium_ai.jobs.memory_promote --all-users
+# Promote named users only, then one memory retention sweep (dry-run).
+uv run python -m palatium_ai.jobs.memory_consolidate --user-id <uuid> --user-id <uuid>
+# Whole stand (compose loop): owners are discovered each pass.
+# docker compose --profile memory-jobs up -d memory-consolidate
+# Apply retention in the same pass (staging only, after reviewing the dry-run):
+# uv run python -m palatium_ai.jobs.memory_consolidate --all-users --execute
 ```
 
 ---

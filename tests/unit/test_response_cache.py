@@ -7,9 +7,17 @@ from uuid import uuid4
 import pytest
 
 from palatium_ai.application.services.response_cache_service import ResponseCacheService
-from palatium_ai.domain.agents.formatter import FormatterTaskResult
+from palatium_ai.application.services.turn_response_cache import (
+    TurnResponseCacheContext,
+    try_cached_formatter_result,
+    turn_response_cache,
+)
+from palatium_ai.domain.agents.context_packet import ContextPacket
+from palatium_ai.domain.agents.formatter import FormatterInput, FormatterTaskResult
 from palatium_ai.domain.content.content_document import ContentDocument, DocumentMeta, ParagraphBlock
+from palatium_ai.domain.mcp.models import ToolExecutionPlan
 from palatium_ai.domain.policies.response_cache import ResponseCacheKeyParts, ResponseCacheKeyPolicy
+from palatium_ai.domain.policies.types import ResponseShape
 from palatium_ai.infrastructure.cache.response_cache import InMemoryResponseCache
 
 
@@ -163,6 +171,57 @@ async def test_response_cache_skips_non_low_risk() -> None:
         )
         is None
     )
+
+
+def _formatter_input(response_shape: ResponseShape) -> FormatterInput:
+    packet = ContextPacket(
+        task_id="t1",
+        user_text="сделай таблицей",
+        task_kind="response_formatting",
+        route="formatter",
+        route_plan="format_only",
+        requires_mcp=False,
+        response_shape=response_shape,
+        execution_plan=ToolExecutionPlan(
+            strategy="format_only",
+            requires_tool_call=False,
+            rationale="test packet",
+        ),
+        context_summary="n/a",
+    )
+    return FormatterInput(
+        task_id="t1",
+        context_packet=packet,
+        worker_summary="prior answer body",
+        response_locale="ru",
+    )
+
+
+@pytest.mark.asyncio()
+async def test_explicit_shape_bypasses_l1_cache() -> None:
+    """A cached echo must not skip shape generation (ADR 0005)."""
+    port = InMemoryResponseCache()
+    svc = ResponseCacheService(port, ttl_seconds=60, enabled=True)
+    await svc.put_if_cacheable(
+        tenant_key="tenant-1",
+        user_text="сделай таблицей",
+        locale="ru",
+        strategy="format_only",
+        result=_sample_result(),
+        source_content="prior answer body",
+    )
+    ctx = TurnResponseCacheContext(cache=svc, tenant_key="tenant-1", user_text="сделай таблицей")
+    with turn_response_cache(ctx):
+        auto_hit = await try_cached_formatter_result(
+            task_input=_formatter_input("auto"),
+            selected_strategy="format_only",
+        )
+        shaped = await try_cached_formatter_result(
+            task_input=_formatter_input("comparison_table"),
+            selected_strategy="format_only",
+        )
+    assert auto_hit is not None
+    assert shaped is None
 
 
 @pytest.mark.asyncio()

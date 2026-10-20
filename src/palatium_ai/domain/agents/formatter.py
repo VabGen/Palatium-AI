@@ -36,6 +36,10 @@ class FormatterInput(BaseModel):
     response_locale: str = Field(default="und", min_length=2, max_length=16)
     dialog_window: DialogTurnWindow | None = None
     memory_hints: tuple[str, ...] = ()
+    # False when this turn is under the single-writer contract and the Formatter is
+    # the owner: painting the worker draft first would be replaced by the Formatter's
+    # own composition (055). Legacy turns keep the early-prose fallback.
+    allow_worker_fallback: bool = True
 
 
 class FormatterTaskResult(TaskResult):

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -76,11 +76,20 @@ class AttachmentLimits(BaseModel):
     #: Rows reclaimed per sweep pass. Bounded on purpose: an unbounded batch would
     #: turn one interactive request into an arbitrarily long delete loop (080).
     retention_sweep_batch: int = Field(default=200, ge=1, le=5000)
+    #: Grace before a thread-less ``attach`` row is reclaimed. Such a row can never be
+    #: bound to a dialog, but the grace keeps a sweep from racing an upload that is
+    #: still completing (020). ``index`` rows are never reclaimed by this rule because
+    #: they may already have written knowledge (060).
+    orphan_grace_seconds: int = Field(default=24 * 3600, ge=3600, le=30 * 24 * 3600)
     #: Per-request body cap for ``POST /{id}/chunks/{index}`` (resumable upload).
     max_chunk_bytes: int = Field(default=8 * 1024 * 1024, ge=64 * 1024, le=64 * 1024 * 1024)
 
 
 DEFAULT_ATTACHMENT_LIMITS = AttachmentLimits()
+
+#: Why a retention pass may drop a row. Closed on purpose: the value is written to
+#: the audit log and any new reason is a conscious contract change (010, 020).
+ReclaimReason = Literal["retention_expired", "abandoned_upload", "orphaned_attach"]
 
 
 class IntakeDecision(BaseModel):
@@ -265,6 +274,36 @@ class AttachmentRetentionPolicy:
     """
 
     @staticmethod
+    def reclaim_reason(
+        attachment: Attachment,
+        *,
+        now: datetime,
+        pending_after_seconds: int,
+        orphan_after_seconds: int,
+    ) -> ReclaimReason | None:
+        """One answer to "may this row be dropped, and why?" (010, 020).
+
+        The audit trail has to say *why* a file disappeared, and the sweep's
+        defence-in-depth check must not drift from the adapter's candidate query.
+        Both therefore read this single predicate instead of re-deriving the rules.
+        """
+        if AttachmentRetentionPolicy.is_due(attachment, now=now):
+            return "retention_expired"
+        if AttachmentRetentionPolicy.is_stale_pending(
+            attachment,
+            now=now,
+            after_seconds=pending_after_seconds,
+        ):
+            return "abandoned_upload"
+        if AttachmentRetentionPolicy.is_orphaned(
+            attachment,
+            now=now,
+            after_seconds=orphan_after_seconds,
+        ):
+            return "orphaned_attach"
+        return None
+
+    @staticmethod
     def is_due(attachment: Attachment, *, now: datetime) -> bool:
         """True when the attachment's TTL has elapsed and its objects may be dropped."""
         _require_aware(now)
@@ -285,6 +324,29 @@ class AttachmentRetentionPolicy:
         _require_aware(now)
         if attachment.status != "pending":
             # Only an unfinished upload can be stale; a shorter TTL never revives it.
+            return False
+        return attachment.created_at + timedelta(seconds=after_seconds) <= now
+
+    @staticmethod
+    def is_orphaned(attachment: Attachment, *, now: datetime, after_seconds: int) -> bool:
+        """True when an ``attach`` row can never be bound to a dialog (020, 060).
+
+        ``attach`` rows are addressed exclusively by ``thread_id``; one written
+        without a thread is unreachable for every read path (listing, ``get_many``,
+        the reference resolver), so it only occupies storage. Two exclusions keep
+        the rule safe:
+
+        * ``index`` rows are out of scope — they may already have written knowledge,
+          whose cascade must not be triggered by an orphan sweep;
+        * uploads still in flight are out of scope — ``is_stale_pending`` owns them,
+          and a grace-cleanup must not race a legitimate ``complete`` call.
+        """
+        _require_aware(now)
+        if attachment.mode != "attach":
+            return False
+        if (attachment.thread_id or "").strip():
+            return False
+        if attachment.status in {"pending", "uploaded", "scanning"}:
             return False
         return attachment.created_at + timedelta(seconds=after_seconds) <= now
 

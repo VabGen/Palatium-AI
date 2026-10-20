@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import TYPE_CHECKING, Protocol
 
 import structlog
@@ -39,6 +41,7 @@ class RoutedDocumentParser:
         *,
         inner: DocumentParserPort,
         model_supports_vision: bool,
+        parse_timeout_seconds: float,
         pdf_ocr: DocumentParserPort | None = None,
         pdf_vision: DocumentParserPort | None = None,
         figure_enricher: _PdfFigureEnricher | None = None,
@@ -49,6 +52,7 @@ class RoutedDocumentParser:
     ) -> None:
         self._inner = inner
         self._model_supports_vision = model_supports_vision
+        self._parse_timeout_seconds = parse_timeout_seconds
         self._pdf_ocr = pdf_ocr
         self._pdf_vision = pdf_vision
         self._figure_enricher = figure_enricher
@@ -62,6 +66,25 @@ class RoutedDocumentParser:
         return self._inner.supports(mime_type)
 
     async def parse(self, data: bytes, *, mime_type: str, filename: str) -> ParsedDocument:
+        """Parse under one wall-clock budget; overrun is a typed refusal (030.8).
+
+        Every upload is a synchronous ``POST /complete``: an unbounded stage would
+        hold the request (and the client's chip) open forever. The budget is the
+        last line of defence behind the per-call OCR/Vision timeouts.
+        """
+        try:
+            async with asyncio.timeout(self._parse_timeout_seconds):
+                return await self._route(data, mime_type=mime_type, filename=filename)
+        except TimeoutError as exc:
+            logger.warning(
+                "document parse exceeded its budget",
+                mime_type=mime_type,
+                budget_seconds=self._parse_timeout_seconds,
+            )
+            msg = "document parse exceeded the configured time budget"
+            raise DocumentParseError(msg) from exc
+
+    async def _route(self, data: bytes, *, mime_type: str, filename: str) -> ParsedDocument:
         """Parse, then for PDF re-route when the text layer is empty/sparse."""
         decision = choose_parse_strategy(
             mime_type=mime_type,

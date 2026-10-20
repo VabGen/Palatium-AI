@@ -27,6 +27,7 @@ from palatium_ai.infrastructure.parsing.image_decode_guard import assert_image_d
 from palatium_ai.infrastructure.parsing.image_ocr import IMAGE_MEDIA_TYPES
 
 if TYPE_CHECKING:
+    from asyncio import Semaphore
     from collections.abc import Iterable
 
 logger = structlog.get_logger(__name__)
@@ -40,12 +41,16 @@ class TesseractImageOcrParser:
         *,
         max_chars: int,
         max_bytes: int,
+        timeout_seconds: float,
+        limiter: Semaphore,
         media_types: Iterable[str] | None = None,
         lang: str = "eng+rus",
         tesseract_cmd: str | None = None,
     ) -> None:
         self._max_chars = max_chars
         self._max_bytes = max_bytes
+        self._timeout_seconds = timeout_seconds
+        self._limiter = limiter
         self._media_types = frozenset(media_types) if media_types is not None else frozenset(IMAGE_MEDIA_TYPES)
         self._lang = lang
         self._tesseract_cmd = (tesseract_cmd or "").strip() or None
@@ -61,7 +66,8 @@ class TesseractImageOcrParser:
             msg = f"image is {len(data)} bytes, over the {self._max_bytes} byte OCR payload cap"
             raise DocumentParseError(msg)
         assert_image_decode_within_budget(data)
-        text, mean_confidence = await asyncio.to_thread(self._transcribe_sync, data, mime_type)
+        async with self._limiter:
+            text, mean_confidence = await asyncio.to_thread(self._transcribe_sync, data, mime_type)
         truncated = len(text) > self._max_chars
         body = text if not truncated else _truncate_at_word(text, self._max_chars)
         return ParsedDocument(
@@ -89,9 +95,28 @@ class TesseractImageOcrParser:
             image = Image.open(BytesIO(data))
             # Explicit load so a truncated payload fails here, not inside tesseract.
             image.load()
-            payload = pytesseract.image_to_data(image, lang=self._lang, output_type=pytesseract.Output.DICT)
+            payload = pytesseract.image_to_data(
+                image,
+                lang=self._lang,
+                timeout=self._timeout_seconds,
+                output_type=pytesseract.Output.DICT,
+            )
         except DocumentParseError:
             raise
+        except RuntimeError as exc:
+            # pytesseract raises a bare RuntimeError when the child hits ``timeout``
+            # (the process is killed for us). Typed refusal → Vision fallback (055).
+            if "timeout" in str(exc).lower():
+                logger.warning("tesseract OCR timed out", timeout_seconds=self._timeout_seconds)
+                msg = "tesseract OCR timed out"
+                raise DocumentParseError(msg) from exc
+            logger.warning(
+                "tesseract OCR failed",
+                error_type=type(exc).__name__,
+                media_type=mime_type,
+            )
+            msg = "tesseract OCR failed"
+            raise DocumentParseError(msg) from exc
         except Exception as exc:
             logger.warning(
                 "tesseract OCR failed",

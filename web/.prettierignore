@@ -7,5 +7,6 @@ node_modules/
 playwright-report/
 test-results/
 .shots/
+.playwright-cli/
 package-lock.json
 custom-elements.json

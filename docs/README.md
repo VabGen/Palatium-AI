@@ -17,6 +17,8 @@
 | **[../.cursor/plans/memory-max-pro.md](../.cursor/plans/memory-max-pro.md)** | План Memory MAX PRO: hybrid cortex, LOCKED решения, волны M0–M8 (актуально на 2026-10-06) |
 | **[adr/0003-postgres-checkpointer-session-ttl.md](adr/0003-postgres-checkpointer-session-ttl.md)** | ADR: short-term = Postgres checkpointer + retention TTL |
 | **[adr/0004-hybrid-memory-not-neo4j-only.md](adr/0004-hybrid-memory-not-neo4j-only.md)** | ADR: Postgres medium + bi-temporal Neo4j; reject Neo4j-only Cortex |
+| **[adr/0005-content-document-response-shapes.md](adr/0005-content-document-response-shapes.md)** | ADR: единый `ContentDocument` + ось `response_shape`; reject per-scenario схем |
+| **[../.cursor/plans/response-shapes.md](../.cursor/plans/response-shapes.md)** | План: ось формы ответа, `ShapeRecipePolicy`, волны 1–4 (актуально на 2026-10-19) |
 | **[grounding-mvp-deferrals.md](grounding-mvp-deferrals.md)** | Adaptive Grounding MVP: осознанные deferrals + критерий возврата + staging A/B gate (2026-10-14) |
 | **[formatter-schema-first.md](formatter-schema-first.md)** | Formatter: schema_first-контракт, two-key canary `FORMATTER_ROLLOUT_PCT`, метрики A/B и откат (2026-10-16) |
 | **[internal-vocabulary.md](internal-vocabulary.md)** | Служебные имена полей (`attachment_context`, `prior_context`, …) не попадают в ответ и HITL-карточку: две линии защиты, точки применения, как добавить термин (2026-10-16) |

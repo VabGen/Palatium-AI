@@ -25,7 +25,8 @@ from palatium_ai.application.services.attachment_service import AttachmentServic
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.intent_service import IntentService
 from palatium_ai.domain.attachments import AttachmentContent, AttachmentScanSummary
-from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
+from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow, parse_turn_attachment_ids
+from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
 from palatium_ai.domain.ports.document_parser import ParsedDocument, ParsedPage
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 from tests.conftest import (
@@ -329,3 +330,12 @@ async def test_p0_followup_untrusted_context_stays_on_thread_attachment() -> Non
     assert _A1_NAME in ctx3, f"turn3 missing A1 source; untrusted_context={ctx3!r}"
     assert _A2_NAME not in ctx3, f"turn3 LEAKED A2; untrusted_context={ctx3!r}"
     assert _A2_BODY not in ctx3, f"turn3 LEAKED A2 body; untrusted_context={ctx3!r}"
+
+    # Step 2 contract: the user turn is the durable link to the uploaded file.
+    # Without it a follow-up has no structural way back to the row (has_thread_files
+    # reads exactly this payload), so the file would look «not attached» (055).
+    turns_t1 = await dialog.list_recent_turns(thread_id=_T1)
+    assert parse_turn_attachment_ids(turns_t1.turns[0].payload) == (a1_id,)
+    assert AttachmentStickinessPolicy.thread_has_files(turns_t1) is True
+    turns_t2 = await dialog.list_recent_turns(thread_id=_T2)
+    assert parse_turn_attachment_ids(turns_t2.turns[0].payload) == (a2_id,)

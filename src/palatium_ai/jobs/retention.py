@@ -22,7 +22,12 @@ from palatium_ai.application.services.retention.orchestrator import RetentionRun
 from palatium_ai.core.config import get_settings
 from palatium_ai.core.logging import get_logger
 from palatium_ai.domain.attachments.policies import AttachmentIntakePolicy, AttachmentLimits
-from palatium_ai.domain.policies.retention import ALL_RETENTION_CLASSES, RetentionClass, RetentionWindows
+from palatium_ai.domain.policies.retention import (
+    ALL_RETENTION_CLASSES,
+    MEMORY_RETENTION_CLASSES,
+    RetentionClass,
+    RetentionWindows,
+)
 from palatium_ai.domain.ports.retention import RetentionClassHandler
 from palatium_ai.infrastructure.blob.factory import build_blob_store
 from palatium_ai.infrastructure.database.runtime import create_session_factory
@@ -46,7 +51,6 @@ EXIT_SUCCESS = 0
 EXIT_INVALID_CONFIG = 2
 EXIT_RUNTIME_ERROR = 3
 
-_MEMORY_CLASSES: tuple[RetentionClass, ...] = ("memory_medium", "memory_episode", "memory_pii")
 _ATTACHMENT_CLASSES: tuple[RetentionClass, ...] = (
     "attachment_attach",
     "attachment_index",
@@ -57,7 +61,7 @@ _DB_CLASSES: frozenset[RetentionClass] = frozenset(
         "session_transcript",
         "checkpointer",
         "knowledge_orphan",
-        *_MEMORY_CLASSES,
+        *MEMORY_RETENTION_CLASSES,
         *_ATTACHMENT_CLASSES,
     }
 )
@@ -110,6 +114,7 @@ def _attachment_limits(settings: Settings) -> AttachmentLimits:
         attach_ttl_seconds=cfg.attach_ttl_seconds,
         index_retention_days=cfg.index_retention_days,
         retention_sweep_batch=cfg.sweep_batch_size,
+        orphan_grace_seconds=cfg.orphan_grace_seconds,
     )
 
 
@@ -126,7 +131,7 @@ def _handlers_for(
         "checkpointer": CheckpointerRetentionHandler(session_factory, windows=windows),
         "knowledge_orphan": KnowledgeOrphanRetentionHandler(session_factory, windows=windows),
     }
-    for memory_class in _MEMORY_CLASSES:
+    for memory_class in MEMORY_RETENTION_CLASSES:
         handlers[memory_class] = MemoryRetentionHandler(
             session_factory,
             retention_class=memory_class,
@@ -140,6 +145,7 @@ def _handlers_for(
             blob_store=blob_store,
             pending_ttl_seconds=limits.presigned_url_ttl_seconds,
             max_chunk_part_index=AttachmentIntakePolicy.max_chunk_part_index(limits),
+            orphan_grace_seconds=limits.orphan_grace_seconds,
         )
     return handlers
 

@@ -41,8 +41,34 @@ RESEARCHER_CONFIG = AgentConfig(
 
 # Align with Formatter source clip so full letters survive the handoff (065).
 SUMMARY_MAX_CHARS = 8_000
+#: A document read is evidence, not a search hit: the generic MCP envelope budget
+#: (``MCP_TOOL_OUTPUT_MAX_CHARS``, 3000) reduces a thread-file re-read to a snippet.
+#: Floor for ``platform.read_attachment`` output; the global knob may still raise it.
+#: Kept below the turn's attachment budget (24k) so one document fits one prompt (065).
+READ_ATTACHMENT_OUTPUT_MAX_CHARS = 12_000
 RESEARCHER_DEFAULT_MAX_TOKENS = 2_048
 RESEARCHER_GENERATION_MAX_TOKENS = 4_096
+
+#: Host-local tool whose payload is document text rather than a search envelope (070).
+_READ_ATTACHMENT_BINDING = ("platform", "read_attachment")
+
+
+def researcher_tool_output_budget(
+    *,
+    server_name: str,
+    tool_name: str,
+    default_max_chars: int,
+) -> int:
+    """Char budget for one MCP payload in the synthesis prompt (065).
+
+    ``read_attachment`` returns the document itself, so it is budgeted as evidence
+    (``READ_ATTACHMENT_OUTPUT_MAX_CHARS`` floor); retrieval tools keep the smaller
+    envelope budget configured for the agent.
+    """
+    if (server_name, tool_name) == _READ_ATTACHMENT_BINDING:
+        return max(default_max_chars, READ_ATTACHMENT_OUTPUT_MAX_CHARS)
+    return default_max_chars
+
 
 _GENERATION_CAPS: frozenset[str] = frozenset(
     {

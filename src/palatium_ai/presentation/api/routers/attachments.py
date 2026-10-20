@@ -5,11 +5,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from palatium_ai.domain.attachments.errors import (
     AttachmentConnectorUnavailableError,
@@ -18,6 +18,7 @@ from palatium_ai.domain.attachments.errors import (
     AttachmentNotFoundError,
     AttachmentNotUsableError,
     AttachmentRestoreNotAllowedError,
+    AttachmentThreadRequiredError,
     AttachmentUploadTooLargeError,
 )
 from palatium_ai.domain.hitl.cards import HITLCardView
@@ -44,13 +45,17 @@ AttachmentStatus = Literal[
     "indexed",
 ]
 
+#: A dialog thread id is non-blank by contract: a whitespace-only value would
+#: create an attach row that no read path can ever bind (020, 055).
+ThreadId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+
 
 class InitUploadRequest(BaseModel):
     """Client-declared metadata for an upload that will be PUT straight to storage."""
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
     filename: str = Field(min_length=1, max_length=255)
     mime_type: str = Field(min_length=1, max_length=255)
     size_bytes: int = Field(gt=0)
@@ -129,7 +134,7 @@ class IndexRequest(BaseModel):
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
     document_title: str | None = Field(default=None, max_length=256)
 
 
@@ -138,7 +143,7 @@ class RestoreRequest(BaseModel):
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
 
 
 class AnalyzeRequest(BaseModel):
@@ -146,7 +151,7 @@ class AnalyzeRequest(BaseModel):
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
     instruction: str = Field(min_length=1, max_length=4_000)
 
 
@@ -173,7 +178,7 @@ class ConnectorImportRequest(BaseModel):
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
     remote_ref: str = Field(min_length=1, max_length=512)
     project_id: str | None = Field(default=None, max_length=128)
 
@@ -250,6 +255,10 @@ def _error_status(exc: AttachmentError) -> int:
         (AttachmentModeMismatchError, AttachmentNotUsableError, AttachmentRestoreNotAllowedError),
     ):
         return status.HTTP_409_CONFLICT
+    if isinstance(exc, AttachmentThreadRequiredError):
+        # A malformed request rather than a state conflict: an ``attach`` upload has
+        # no meaning without the dialog it belongs to (020, P0-A).
+        return status.HTTP_422_UNPROCESSABLE_CONTENT
     return status.HTTP_400_BAD_REQUEST
 
 

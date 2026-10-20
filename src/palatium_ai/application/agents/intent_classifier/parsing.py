@@ -10,6 +10,7 @@ from palatium_ai.domain.agents.intent import IntentClassifierOutput, TaskKind, U
 from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.llm.json_codec import loads_llm_json
 from palatium_ai.domain.policies.grounding import GroundingPolicy
+from palatium_ai.domain.policies.shape import ShapeRecipePolicy
 from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import FILE_REFERENCE_DEFAULT, FileReferenceKind, GroundingMode, TransformationKind
 
@@ -66,6 +67,7 @@ def parse_classifier_output(raw_content: str, *, has_thread_files: bool = False)
             grounding_reason=grounding_reason,
             transformation=transformation,
             file_reference=file_reference,
+            response_shape=ShapeRecipePolicy.coerce(payload.get("response_shape")),
             confidence=float(payload.get("confidence", 0.0)),
             reasoning=str(payload.get("reasoning", "No reasoning provided")),
         ),

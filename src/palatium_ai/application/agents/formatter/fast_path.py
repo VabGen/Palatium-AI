@@ -113,6 +113,7 @@ def _passthrough_signals(
         requires_review=task_input.requires_review,
         revision_requested=bool((task_input.revision_feedback or "").strip()),
         restructure_requested=task_kind == "response_formatting",
+        shape_requested=task_input.context_packet.response_shape != "auto",
         underspecification_kind=task_input.underspecification_kind,
         verbatim_requested=VERBATIM_EXTRACTION_CAPABILITY in caps,
     )

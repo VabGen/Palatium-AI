@@ -21,6 +21,7 @@ from palatium_ai.domain.attachments.errors import (
     AttachmentError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
+    AttachmentThreadRequiredError,
 )
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.presentation.resources import get_app_resources
@@ -55,6 +56,8 @@ def _map_runtime_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     if isinstance(exc, AttachmentNotUsableError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, AttachmentThreadRequiredError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
     if isinstance(exc, AttachmentError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     raise exc

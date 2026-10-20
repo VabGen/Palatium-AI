@@ -33,6 +33,7 @@ from palatium_ai.application.orchestration.agent_bridge import (
 from palatium_ai.application.orchestration.node_runtime import run_logged_node
 from palatium_ai.application.orchestration.snapshot import OrchestrationSnapshot
 from palatium_ai.application.orchestration.state import AgentGraphState
+from palatium_ai.application.orchestration.writer import current_owner, decide_and_record
 from palatium_ai.application.services.intent_hitl_flow import max_quality_revisions
 from palatium_ai.application.services.memory_recall import recall_for_thread
 from palatium_ai.application.services.routing_intent_resolver import resolve_routing_intent
@@ -80,6 +81,7 @@ from palatium_ai.domain.agents.execution import (
     RESEARCHER_STRATEGIES,
     WORKER_STRATEGIES,
 )
+from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.agents.intent import IntentClassifierInput
 from palatium_ai.domain.agents.researcher import ResearcherInput
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
@@ -385,10 +387,15 @@ async def weaving_node(
             )
             agent_metrics.record_grounding_mode(str(task_input.grounding))
             agent_metrics.record_transform(kind=selectors.resolved_transformation(state))
+            response_shape = str(selectors.resolved_response_shape(state))
+            if response_shape != "auto":
+                # Only explicit requests are interesting here; auto is the every-turn default.
+                agent_metrics.record_response_shape(shape=response_shape, outcome="requested")
             logger.info(
                 "agent.turn.grounding",
                 grounding=task_input.grounding,
                 grounding_reason=task_input.grounding_reason or "",
+                response_shape=response_shape,
                 strategy=strategy,
             )
             hop = get_hop_collector()
@@ -396,7 +403,18 @@ async def weaving_node(
                 # HopBudgetPolicy is a domain policy; core cannot import domain (000),
                 # so the collector takes it as an injected scaler port.
                 hop.apply_strategy_budget(strategy, scaler=HopBudgetPolicy.effective_budget_ms)
-            return cast("AgentGraphState", {"context_bundle": result}), result
+            # One decision per turn, before any worker runs: the researcher must not
+            # paint a draft the Formatter will own, and the Formatter must know
+            # whether it may render deterministically (P1a/P1b).
+            owner = decide_and_record(state)
+            return cast(
+                "AgentGraphState",
+                {
+                    "context_bundle": result,
+                    "presentation_owner": owner.owner,
+                    "presentation_owner_reason": owner.reason,
+                },
+            ), result
         except ClarifyError as exc:
             logger.info("Context weaver requires clarification", question=str(exc))
             return cast(
@@ -410,12 +428,31 @@ async def weaving_node(
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_WEAVING, state=state, run=run)
 
 
-def _emit_worker_answer_deltas(result: object) -> None:
-    """Stream worker prose early (before Critic) for user-visible SSE TTFT."""
+def _structured_preview_active() -> bool:
+    """True when the terminal Formatter paints the document itself (no draft)."""
+    from palatium_ai.application.services.turn_sse_bridge import get_turn_sse_bridge
+
+    bridge = get_turn_sse_bridge()
+    return bridge is not None and bridge.structured_preview_active()
+
+
+def _emit_worker_answer_deltas(state: AgentGraphState, result: object) -> None:
+    """Stream worker prose early (before Critic) for user-visible SSE TTFT.
+
+    Only on worker-owned turns: there the final document is rendered from exactly
+    this prose, so the draft is not replaced. On formatter-owned turns the draft
+    would be overwritten by the Formatter's own composition — the layout shift the
+    single-writer contract removes (055). Under ``structured_incremental`` the
+    terminal document paints itself block by block, so nothing is painted here.
+    """
     from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
     from palatium_ai.application.agents.researcher.parsing import FAILURE_PLACEHOLDER_SUMMARY
     from palatium_ai.domain.agents.researcher import ResearcherTaskResult
 
+    if current_owner(state) != "worker":
+        return
+    if _structured_preview_active():
+        return
     if not isinstance(result, ResearcherTaskResult):
         return
     if result.status == "failure" or result.output is None:
@@ -473,7 +510,7 @@ async def researcher_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
-        _emit_worker_answer_deltas(result)
+        _emit_worker_answer_deltas(state, result)
         update: dict[str, object] = {"execution": result}
         if result.cannot_answer_without_source:
             question = (
@@ -508,7 +545,7 @@ async def coder_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
-        _emit_worker_answer_deltas(result)
+        _emit_worker_answer_deltas(state, result)
         return cast("AgentGraphState", {"execution": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_CODER, state=state, run=run)
@@ -534,7 +571,7 @@ async def analyst_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
-        _emit_worker_answer_deltas(result)
+        _emit_worker_answer_deltas(state, result)
         return cast("AgentGraphState", {"execution": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_ANALYST, state=state, run=run)
@@ -615,7 +652,7 @@ async def parallel_workers_node(
 
         research_result, analyst_result = await asyncio.gather(_run_researcher(), _run_analyst())
         merged = merge_parallel_worker_results(research_result, analyst_result)  # type: ignore[arg-type]
-        _emit_worker_answer_deltas(merged)
+        _emit_worker_answer_deltas(state, merged)
         return cast("AgentGraphState", {"execution": merged}), merged
 
     return await run_logged_node(
@@ -637,6 +674,66 @@ async def quality_revision_node(state: AgentGraphState) -> AgentGraphState:
         "revision_feedback": summary,
         "revisions_count": int(state.get("revisions_count") or 0) + 1,
     }
+
+
+def _try_worker_owned_document(
+    agent: FormatterAgent,
+    state: AgentGraphState,
+    task_input: FormatterInput,
+) -> FormatterTaskResult | None:
+    """Render the worker draft without an LLM, or hand the turn to the Formatter.
+
+    The fallback also restores early TTFT: a draft is painted once before the LLM
+    pass (legacy contract allows exactly one handover; structured preview paints
+    its own blocks and is left silent).
+    """
+    from palatium_ai.application.agents.formatter.answer_delta import (
+        emit_answer_deltas,
+        emit_document_block,
+        emit_document_title,
+    )
+    from palatium_ai.application.agents.formatter.worker_writer import render_worker_document
+
+    decision = render_worker_document(
+        task_input,
+        worker_confidence=selectors.resolved_worker_confidence(state),
+    )
+    if not decision.rendered or decision.document is None:
+        agent_metrics.record_node_execution(agent.config.role, f"worker_writer:fallback:{decision.reason}")
+        logger.info(
+            "formatter.worker_writer.fallback",
+            task_id=str(task_input.task_id),
+            reason=decision.reason,
+        )
+        if not _structured_preview_active():
+            emit_answer_deltas(task_input.worker_summary or "")
+        return None
+
+    document = decision.document
+    if _structured_preview_active():
+        # The deterministic document already exists: paint it additively, so a
+        # worker-owned turn keeps early TTFT instead of waiting for the final result.
+        if document.title:
+            emit_document_title(document.title)
+        for index, block in enumerate(document.blocks):
+            emit_document_block(index=index, block=block)
+    agent_metrics.record_node_execution(agent.config.role, "emit:deterministic_gfm")
+    logger.info(
+        "formatter.worker_writer",
+        task_id=str(task_input.task_id),
+        reason=decision.reason,
+        blocks=len(document.blocks),
+        locale=document.locale,
+    )
+    status: Literal["success", "partial"] = "partial" if task_input.requires_review else "success"
+    return FormatterTaskResult(
+        task_id=task_input.task_id,
+        agent_role=agent.config.role,
+        status=status,
+        confidence=document.meta.confidence,
+        requires_review=task_input.requires_review,
+        output=document,
+    )
 
 
 @traceable(name=NODE_FORMATTER)
@@ -666,6 +763,10 @@ async def formatter_node(
             if cached.output is not None:
                 emit_answer_deltas(cached.output.plain_text())
             return cast("AgentGraphState", {"formatted": cached}), cached
+        if current_owner(state) == "worker":
+            worker_result = _try_worker_owned_document(agent, state, task_input)
+            if worker_result is not None:
+                return cast("AgentGraphState", {"formatted": worker_result}), worker_result
         fast = try_formatter_fast_path(
             task_input=task_input,
             task_kind=snapshot.task_kind,
@@ -675,10 +776,6 @@ async def formatter_node(
         )
         if fast is not None:
             return cast("AgentGraphState", {"formatted": fast}), fast
-        # Early TTFT: stream worker prose while Formatter LLM compiles ContentDocument.
-        from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
-
-        emit_answer_deltas(task_input.worker_summary or "")
         agent_input = formatter_to_agent_input(
             task_input,
             trace_id=_trace_id(state),

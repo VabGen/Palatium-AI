@@ -55,6 +55,7 @@ alwaysApply: false
 | `palatium_attachment_parse_total` | `extraction_source`, `media_kind` |
 | `palatium_llm_ttft_seconds` | — (first LLM stream token) |
 | `palatium_sse_ttft_seconds` | — (first user-visible `answer_delta`) |
+| `palatium_answer_writer_total` | `owner`, `reason` (single-writer axis) |
 
 ## Audit log — hash-chained
 

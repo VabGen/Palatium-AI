@@ -4,7 +4,10 @@
 
 version: 2
 updates:
-  - package-ecosystem: pip
+  # `uv`, не `pip`: pip-экосистема правит только pyproject.toml, а гейт
+  # `uv sync --frozen` / `uv lock --check` (025) требует синхронный uv.lock.
+  # С pip все Python-PR приезжают красными ещё до ревью версий.
+  - package-ecosystem: uv
     directory: "/"
     schedule:
       interval: weekly

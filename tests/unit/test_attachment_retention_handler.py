@@ -43,7 +43,12 @@ async def test_attachment_handler_plan_counts(monkeypatch: pytest.MonkeyPatch) -
         assert pending_before < now
         return 7
 
+    async def _count_orphans(session: object, *, orphan_before: datetime) -> int:
+        assert orphan_before < datetime.now(UTC)
+        return 2
+
     monkeypatch.setattr(handler, "_count", _count)
+    monkeypatch.setattr(handler, "_count_orphans", _count_orphans)
     session = AsyncMock()
     factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -51,9 +56,11 @@ async def test_attachment_handler_plan_counts(monkeypatch: pytest.MonkeyPatch) -
     handler._session_factory = factory
 
     report = await handler.plan(limit=10)
-    assert report.candidates == 7
+    # Per-rule counts are summed; ``execute`` reports the deduplicated batch.
+    assert report.candidates == 9
     assert report.action == "delete"
     assert report.retention_class == "attachment_attach"
+    assert "expired=7;orphans=2" in report.detail
 
 
 @pytest.mark.asyncio()
@@ -96,7 +103,16 @@ async def test_attachment_handler_execute_purges(monkeypatch: pytest.MonkeyPatch
         assert row["id"] == attachment_id
         return 2
 
+    async def _list_orphans(
+        session: object,
+        *,
+        orphan_before: datetime,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        return []
+
     monkeypatch.setattr(handler, "_list", _list)
+    monkeypatch.setattr(handler, "_list_orphans", _list_orphans)
     monkeypatch.setattr(handler, "_purge_one", _purge)
     session = AsyncMock()
     factory = MagicMock()
@@ -108,6 +124,61 @@ async def test_attachment_handler_execute_purges(monkeypatch: pytest.MonkeyPatch
     assert report.acted == 1
     assert report.failed == 0
     assert "knowledge_docs=2" in report.detail
+
+
+@pytest.mark.asyncio()
+async def test_attachment_handler_execute_dedupes_rows_named_by_both_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row can be expired *and* thread-less; the bounded batch must spend it once."""
+    blob = AsyncMock()
+    attachment_id = uuid4()
+    handler = AttachmentRetentionHandler(
+        MagicMock(),
+        retention_class="attachment_attach",
+        windows=RetentionWindows(batch_size=50),
+        blob_store=blob,
+        pending_ttl_seconds=900,
+        max_chunk_part_index=0,
+    )
+    row: dict[str, object] = {
+        "id": attachment_id,
+        "user_id": "u1",
+        "blob_key": f"attachments/{attachment_id}",
+        "derived_text_key": None,
+        "mode": "attach",
+        "status": "ready",
+        "project_id": None,
+        "contains_pii": False,
+        "expires_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+    }
+    purged: list[object] = []
+
+    async def _list(session: object, *, now: datetime, pending_before: datetime, limit: int) -> list[dict[str, object]]:
+        return [row]
+
+    async def _list_orphans(session: object, *, orphan_before: datetime, limit: int) -> list[dict[str, object]]:
+        return [row]
+
+    async def _purge(candidate: dict[str, object]) -> int:
+        purged.append(candidate["id"])
+        return 0
+
+    monkeypatch.setattr(handler, "_list", _list)
+    monkeypatch.setattr(handler, "_list_orphans", _list_orphans)
+    monkeypatch.setattr(handler, "_purge_one", _purge)
+    session = AsyncMock()
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=None)
+    handler._session_factory = factory
+
+    report = await handler.execute(limit=10)
+
+    assert purged == [attachment_id]
+    assert report.candidates == 1
+    assert report.acted == 1
 
 
 @pytest.mark.asyncio()

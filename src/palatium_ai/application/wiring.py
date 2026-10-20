@@ -457,6 +457,8 @@ def build_intent_service(
         response_cache=response_cache,
         graph_write=graph_write,
         file_reference_resolver=file_reference_resolver,
+        formatter_mode=settings.formatter.formatter_mode,
+        formatter_rollout_pct=settings.formatter.formatter_rollout_pct,
     )
     return intent_service, memory_extract, capability_index, document_ingest
 
@@ -527,6 +529,7 @@ def build_attachment_limits(settings: Settings) -> AttachmentLimits:
         attach_ttl_seconds=cfg.attach_ttl_seconds,
         index_retention_days=cfg.index_retention_days,
         retention_sweep_batch=cfg.sweep_batch_size,
+        orphan_grace_seconds=cfg.orphan_grace_seconds,
     )
 
 
