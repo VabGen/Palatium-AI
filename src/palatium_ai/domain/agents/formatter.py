@@ -11,6 +11,7 @@ from palatium_ai.domain.agents.contracts import TaskResult
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.memory import DialogTurnWindow
+from palatium_ai.domain.policies.types import TRANSFORMATION_DEFAULT, TransformationKind
 
 # Canonical structured answer (no markdown fallback field).
 FormatterOutput = ContentDocument
@@ -36,6 +37,14 @@ class FormatterInput(BaseModel):
     response_locale: str = Field(default="und", min_length=2, max_length=16)
     dialog_window: DialogTurnWindow | None = None
     memory_hints: tuple[str, ...] = ()
+    # Kinds aligned 1:1 with ``memory_hints`` (060 MemoryType); empty = unknown.
+    # Personalisation needs the kind: a pinned ask («сравни файлы») is not a preference.
+    memory_hint_kinds: tuple[str, ...] = ()
+    # How a format-continuation transforms prior (none/restructure/expand/shorten/rewrite).
+    # A content transform is answered from ``prior_context``/worker text, never the thread.
+    transformation: TransformationKind = TRANSFORMATION_DEFAULT
+    # Continuity-trusted prior answer being transformed (presentation fallback source).
+    prior_context: str | None = None
     # False when this turn is under the single-writer contract and the Formatter is
     # the owner: painting the worker draft first would be replaced by the Formatter's
     # own composition (055). Legacy turns keep the early-prose fallback.

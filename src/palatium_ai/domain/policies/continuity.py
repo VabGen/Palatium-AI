@@ -92,6 +92,10 @@ _HITL_RESUME_MARKER = "HITL_CHOICE_RESUME"
 # Rewrite enrichment beyond typo/whitespace cleanup → depends on prior (055 structural).
 _REWRITE_ENRICHMENT_MIN_CHARS = 24
 _REWRITE_NOVEL_TOKEN_MIN_CHARS = 4
+# A rewrite may enrich an underspecified ask; past this growth a **fully specified**
+# ask must keep most of its content words or the rewrite replaced the ask (055).
+_REWRITE_MAX_GROWTH = 2
+_REWRITE_MIN_BALLOON_CHARS = 48
 # A content-bearing ask token: long enough not to be a preposition/conjunction, and
 # compared on a prefix fold so inflection ("вопроса"/"вопрос") still matches.
 _ASK_TOKEN_MIN_CHARS = 5
@@ -182,6 +186,11 @@ class ContinuityPolicy:
         underspecified ask ("дай короткую сводку" → "Сводка причин роста цен")
         keeps at least one token and is allowed. An ask without content tokens is
         underspecified by construction — any enrichment is allowed.
+
+        Inflation is a second structural signal: when the rewrite grows the ask past
+        ``_REWRITE_MAX_GROWTH`` and keeps less than half of its content words, it is a
+        topic substitution dressed as enrichment, not a rewrite of this ask. The raw
+        ask then wins (055 blocking, no phrase lists).
         """
         asked = _content_tokens(user_text)
         if not asked:
@@ -189,11 +198,13 @@ class ContinuityPolicy:
         produced = _tokens(rewritten)
         if not produced:
             return False
-        for token in asked:
-            prefix = token[:_ASK_TOKEN_PREFIX_CHARS]
-            if any(candidate.startswith(prefix) for candidate in produced):
-                return True
-        return False
+        survived = sum(
+            1 for token in asked if any(candidate.startswith(token[:_ASK_TOKEN_PREFIX_CHARS]) for candidate in produced)
+        )
+        if survived == 0:
+            return False
+        ballooned = _rewrite_ballooned(len(user_text), len(rewritten))
+        return not (ballooned and survived * 2 < len(asked))
 
     @staticmethod
     def prior_assistant_content(
@@ -848,6 +859,12 @@ def _tokens(text: str) -> tuple[str, ...]:
 def _content_tokens(text: str) -> tuple[str, ...]:
     """Tokens long enough to carry the request (skips prepositions structurally)."""
     return tuple(token for token in _tokens(text) if len(token) >= _ASK_TOKEN_MIN_CHARS)
+
+
+def _rewrite_ballooned(raw_chars: int, rewritten_chars: int) -> bool:
+    """True when a rewrite expands the ask beyond enrichment scale."""
+    threshold = max(raw_chars * _REWRITE_MAX_GROWTH, _REWRITE_MIN_BALLOON_CHARS)
+    return rewritten_chars >= threshold
 
 
 def _map_answer_task(

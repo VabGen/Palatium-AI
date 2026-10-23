@@ -333,3 +333,66 @@ def test_rehydrate_format_uses_prior_attachment_ids() -> None:
     assert decision.attachment_ids == (doc_id,)
     assert decision.reason == "rehydrate_prior_attachments"
     assert decision.rehydrate_source == "message_binding"
+
+
+def test_content_transform_never_rehydrates_prior_attachment() -> None:
+    """Regression: «перепиши ответ короче» became «сравнение файлов».
+
+    The prior answer is the source of a content transform. Re-fencing the file that
+    produced it let the worker re-analyse the document and lose the ask (055).
+    """
+    doc_id = uuid4()
+    window = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(
+                thread_id="t1",
+                role="user",
+                content="вот обращение",
+                payload=attachment_ids_payload((doc_id,)),
+                seq=0,
+            ),
+            DialogTurn(
+                thread_id="t1",
+                role="assistant",
+                content="Уважаемая Татьяна Васильевна! Ответ на обращение…",
+                seq=1,
+            ),
+        ),
+    )
+    for transformation in ("shorten", "rewrite", "expand"):
+        decision = AttachmentStickinessPolicy.decide_rehydrate(
+            continuation_kind="format",
+            refers_to_prior=True,
+            has_turn_attachments=False,
+            dialog=window,
+            prior_context="Уважаемая Татьяна Васильевна! Ответ на обращение…",
+            trust_prior_for_workers=True,
+            transformation=transformation,
+        )
+        assert decision.attachment_ids == ()
+        assert decision.rehydrate_source == "none"
+        assert decision.reason == "clear_pending:transform_over_prior"
+        assert decision.clear_pending is True
+
+
+def test_format_restructure_still_binds_prior_attachment() -> None:
+    """Layout-only restructure is not a content transform: the bind is unchanged."""
+    doc_id = uuid4()
+    window = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(thread_id="t1", role="user", content="вот обращение", payload=attachment_ids_payload((doc_id,)), seq=0),
+            DialogTurn(thread_id="t1", role="assistant", content="Ответ на обращение…", seq=1),
+        ),
+    )
+    decision = AttachmentStickinessPolicy.decide_rehydrate(
+        continuation_kind="format",
+        refers_to_prior=True,
+        has_turn_attachments=False,
+        dialog=window,
+        prior_context="Ответ на обращение…",
+        trust_prior_for_workers=True,
+        transformation="restructure",
+    )
+    assert decision.attachment_ids == (doc_id,)

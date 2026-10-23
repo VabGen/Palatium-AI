@@ -23,6 +23,7 @@ from palatium_ai.domain.content.markdown_blocks import plain_paragraph_count
 from palatium_ai.domain.llm.response_parser import parse_llm_response
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import (
     CONTENT_GENERATION_CAPABILITY,
     DOCUMENT_GENERATION_CAPABILITY,
@@ -125,6 +126,15 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
     )
     user_text = (task_input.context_packet.user_text or "").strip()
     task_kind = task_input.context_packet.task_kind
+    content_transform = TransformPolicy.needs_reason_over_prior(task_input.transformation)
+    if content_transform and not source:
+        # The target of expand/shorten/rewrite is the prior answer, never the ask:
+        # a composer that receives only ``user_text`` answers the instruction instead of
+        # transforming the text (055).
+        source = _clip(
+            mechanical_cleanup((task_input.prior_context or "").strip()),
+            FORMATTER_SOURCE_MAX_CHARS,
+        )
     social_synthesis = _needs_social_synthesis(task_kind=task_kind, source=source)
     # Empty final_text signals "compose a reply"; never echo the user's phatic line.
     final_text = "" if social_synthesis else source or mechanical_cleanup(user_text)
@@ -134,6 +144,8 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
     merge = FormatterMemoryMergePolicy.decide(
         memory_hints=task_input.memory_hints,
         has_source_content=bool(source),
+        hit_kinds=task_input.memory_hint_kinds or None,
+        content_transform=content_transform,
     )
     memory_block = "\n".join(f"- {h}" for h in merge.hints) if merge.hints else ""
 
@@ -150,6 +162,9 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
             "revision_feedback": task_input.revision_feedback,
         },
     }
+    if content_transform:
+        # Explicit intent for the composer: transform this text, do not answer a topic.
+        payload["transformation"] = task_input.transformation
     if not source:
         payload["user_text"] = user_text
         payload["dialog_history"] = _formatter_dialog_block(
@@ -299,6 +314,15 @@ def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:
     except ValueError, TypeError:
         memory_hints = ()
 
+    memory_hint_kinds: tuple[str, ...] = ()
+    raw_mhk = input_context.get("memory_hint_kinds_json") or "[]"
+    try:
+        parsed_mhk = json.loads(raw_mhk)
+        if isinstance(parsed_mhk, list):
+            memory_hint_kinds = tuple(str(k) for k in parsed_mhk)
+    except ValueError, TypeError:
+        memory_hint_kinds = ()
+
     return FormatterInput(
         task_id=input_context.get("_task_id", packet.task_id),
         context_packet=packet,
@@ -311,5 +335,8 @@ def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:
         response_locale=locale,
         dialog_window=dialog_window,
         memory_hints=memory_hints,
+        memory_hint_kinds=memory_hint_kinds,
+        transformation=TransformPolicy.coerce(input_context.get("transformation")),
+        prior_context=input_context.get("prior_context") or None,
         allow_worker_fallback=input_context.get("allow_worker_fallback", "true").lower() != "false",
     )

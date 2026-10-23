@@ -25,7 +25,7 @@ from palatium_ai.domain.policies import (
     budget_untrusted_text,
 )
 from palatium_ai.domain.policies.attachment_focus import AttachmentPromptPolicy
-from palatium_ai.domain.policies.types import ATTACHMENT_FOCUS_DEFAULT, AttachmentFocus
+from palatium_ai.domain.policies.types import ATTACHMENT_FOCUS_DEFAULT, AttachmentFocus, TransformationKind
 
 _CONTEXT_PACKET_FACTORY = ContextPacketFactory()
 logger = get_logger(__name__)
@@ -83,6 +83,21 @@ def memory_hints(state: AgentGraphState) -> tuple[str, ...]:
     if recall is None:
         return ()
     return tuple(getattr(recall, "hint_texts", ()) or ())
+
+
+def memory_hint_kinds(state: AgentGraphState) -> tuple[str, ...]:
+    """MemoryType per hint, aligned with ``memory_hints`` (060).
+
+    Consumers that personalise (Formatter) must tell a preference from a pinned ask;
+    empty means "kind unknown", which keeps the legacy first-N slice.
+    """
+    recall = state.get("memory_recall")
+    if recall is None:
+        return ()
+    hint_items = getattr(recall, "hint_items", None)
+    if not callable(hint_items):
+        return ()
+    return tuple(str(kind) for _text, kind in hint_items())
 
 
 def resolved_response_locale(state: AgentGraphState) -> str:
@@ -224,9 +239,9 @@ def resolved_task_kind(state: AgentGraphState) -> TaskKind:
     return ensure_routing_intent(state).task_kind
 
 
-def resolved_transformation(state: AgentGraphState) -> str:
+def resolved_transformation(state: AgentGraphState) -> TransformationKind:
     """Transformation axis from ContinuityPolicy (none/restructure/expand/shorten/rewrite)."""
-    return str(ensure_routing_intent(state).transformation)
+    return ensure_routing_intent(state).transformation
 
 
 def resolved_requires_mcp(state: AgentGraphState) -> bool:

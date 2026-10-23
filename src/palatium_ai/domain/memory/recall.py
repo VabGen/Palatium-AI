@@ -47,18 +47,51 @@ class MemoryRecallBundle(BaseModel):
     @property
     def hint_texts(self) -> tuple[str, ...]:
         """Texts only (for ContextualizerInput), under the same char budget."""
+        return tuple(text for text, _kind in self.hint_items())
+
+    def hint_items(self) -> tuple[tuple[str, str], ...]:
+        """Budgeted ``(text, kind)`` pairs — consumers that personalise need the kind.
+
+        Built once so ``hint_texts`` and the Formatter's kind filter cannot drift out
+        of alignment on a clipped/truncated hit (065, 010).
+        """
         if not self.hits:
             return ()
-        texts: list[str] = []
+        items: list[tuple[str, str]] = []
         used = 0
         for hit in self.hits[: self.max_items]:
             text = hit.text.strip()
             if not text:
                 continue
-            if used + len(text) + 1 > self.max_chars and texts:
+            if used + len(text) + 1 > self.max_chars and items:
                 break
-            if used + len(text) + 1 > self.max_chars and not texts:
+            if used + len(text) + 1 > self.max_chars and not items:
                 text = text[: max(0, self.max_chars - 1)]
-            texts.append(text)
+            items.append((text, hit.kind))
             used += len(text) + 1
-        return tuple(texts)
+        return tuple(items)
+
+    def restrict_kinds(
+        self,
+        *,
+        kinds: tuple[str, ...] | None = None,
+        pin_kinds: tuple[str, ...] | None = None,
+    ) -> MemoryRecallBundle:
+        """Drop hits outside ``kinds`` (durable) / ``pin_kinds`` (scratchpad pins).
+
+        Used when a later policy step narrows the recall axis: a content transform
+        must not keep task facts or pinned asks recalled under an earlier
+        ``knowledge_request`` label (055). ``None`` leaves that source unrestricted.
+        """
+        durable = {kind.strip().lower() for kind in kinds} if kinds is not None else None
+        pinned = {kind.strip().lower() for kind in pin_kinds} if pin_kinds is not None else None
+        if durable is None and pinned is None:
+            return self
+        kept: list[MemoryHit] = []
+        for hit in self.hits:
+            allowed = pinned if hit.source == "scratchpad" else durable
+            if allowed is None or hit.kind.strip().lower() in allowed:
+                kept.append(hit)
+        if len(kept) == len(self.hits):
+            return self
+        return self.model_copy(update={"hits": tuple(kept)})

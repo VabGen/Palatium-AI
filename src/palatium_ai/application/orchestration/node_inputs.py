@@ -167,6 +167,9 @@ def build_formatter_input(
         response_locale=selectors.resolved_response_locale(state),
         dialog_window=state.get("dialog_window"),
         memory_hints=selectors.memory_hints(state),
+        memory_hint_kinds=selectors.memory_hint_kinds(state),
+        transformation=selectors.resolved_transformation(state),
+        prior_context=selectors.resolved_prior_assistant_content(state),
         allow_worker_fallback=_allow_worker_fallback(state),
     )
 

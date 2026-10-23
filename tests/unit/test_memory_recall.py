@@ -19,6 +19,45 @@ def test_recall_bundle_respects_char_budget() -> None:
     assert block.startswith("- [fact]")
 
 
+def test_restrict_kinds_filters_pins_only_when_asked() -> None:
+    """A content transform narrows pins too; other axes keep query-independent notes."""
+    hits = (
+        MemoryHit(text="сравни файлы", kind="fact", score=10_000, source="scratchpad"),
+        MemoryHit(text="меня зовут Геннадий", kind="preference", score=9_999, source="scratchpad"),
+        MemoryHit(text="port 5433", kind="fact", score=10, source="medium"),
+    )
+    bundle = MemoryRecallBundle(thread_id="t", hits=hits)
+
+    narrowed = bundle.restrict_kinds(kinds=("preference",), pin_kinds=("preference",))
+    assert [hit.text for hit in narrowed.hits] == ["меня зовут Геннадий"]
+
+    # Without pin_kinds the pin survives even when durable hits are narrowed.
+    durable_only = bundle.restrict_kinds(kinds=("preference",))
+    assert "сравни файлы" in [hit.text for hit in durable_only.hits]
+
+
+@pytest.mark.asyncio()
+async def test_recall_pin_kinds_filters_scratchpad_pins() -> None:
+    """Regression: a pinned ask («сравни файлы») must not seed a content-transform turn."""
+    from palatium_ai.domain.memory.scratchpad import ScratchpadSlot, SessionScratchpad
+
+    pad = SessionScratchpad(
+        thread_id="t-pin",
+        slots=(
+            ScratchpadSlot(key="u:files", text="сравни файлы", kind="fact"),
+            ScratchpadSlot(key="u:name", text="меня зовут Геннадий", kind="preference"),
+        ),
+    )
+    bundle = await recall_for_thread(
+        None,
+        thread_id="t-pin",
+        query="перепиши ответ короче",
+        scratchpad=pad,
+        pin_kinds=("preference",),
+    )
+    assert [hit.text for hit in bundle.hits] == ["меня зовут Геннадий"]
+
+
 @pytest.mark.asyncio()
 async def test_recall_for_thread_searches_namespace() -> None:
     port = InMemoryMemoryPort()

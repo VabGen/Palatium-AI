@@ -101,6 +101,7 @@ from palatium_ai.domain.policies import ContinuityPolicy, MemoryRecallPolicy
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.parallel_workers import ParallelWorkerPolicy
+from palatium_ai.domain.policies.types import TRANSFORMATION_DEFAULT
 
 if TYPE_CHECKING:
     from palatium_ai.application.agents.analyst import AnalystAgent
@@ -150,9 +151,11 @@ async def continuation_node(
         raw_intent = classification.output if classification is not None else None
         intent_task_kind = raw_intent.task_kind if raw_intent is not None else None
         intent_requires_mcp = bool(raw_intent.requires_mcp) if raw_intent is not None else False
+        intent_transformation = raw_intent.transformation if raw_intent is not None else TRANSFORMATION_DEFAULT
         intent_decision = MemoryRecallPolicy.decide(
             task_kind=intent_task_kind,
             requires_mcp=intent_requires_mcp,
+            transformation=intent_transformation,
         )
         recall = await _maybe_deferred_durable_recall(
             state,
@@ -216,6 +219,7 @@ async def continuation_node(
             trust_prior_for_workers=routing_intent.trust_prior_for_workers,
             grounding=routing_intent.grounding,
             adaptive_grounding_enabled=is_adaptive_grounding_enabled(user_id_var.get()),
+            transformation=routing_intent.transformation,
         )
         agent_metrics.record_attachment_sticky(action=rehydrate.reason)
         logger.info(
@@ -253,6 +257,7 @@ async def continuation_node(
         routed_decision = MemoryRecallPolicy.decide(
             task_kind=routing_intent.task_kind,
             requires_mcp=routing_intent.requires_mcp,
+            transformation=routing_intent.transformation,
         )
         recall_after = recall
         widened = routed_decision.kinds is None and intent_decision.kinds is not None
@@ -262,6 +267,14 @@ async def continuation_node(
                 decision=routed_decision,
                 existing_override=recall,
                 query=effective_user_text,
+            )
+        elif recall_after is not None and routed_decision.pin_kinds is not None:
+            # Continuity/Intent disagree on the transform axis: the earlier recall may
+            # carry task facts and pinned intents. A content transform reads prior text,
+            # so narrow the bundle instead of spending a second durable query (060/055).
+            recall_after = recall_after.restrict_kinds(
+                kinds=routed_decision.kinds,
+                pin_kinds=routed_decision.pin_kinds,
             )
         update: AgentGraphState = {
             "contextualization": result,
@@ -292,6 +305,7 @@ async def _maybe_deferred_durable_recall(
     allowed = bool(getattr(decision, "allowed", False))
     reason = str(getattr(decision, "reason", "unknown"))
     kinds = getattr(decision, "kinds", None)
+    pin_kinds = getattr(decision, "pin_kinds", None)
     if not allowed:
         logger.info("memory_recall.skipped", reason=reason)
         agent_metrics.record_memory_recall_source(source="skipped_policy")
@@ -313,6 +327,7 @@ async def _maybe_deferred_durable_recall(
         min_confidence=ctx.min_confidence,
         scratchpad=ctx.scratchpad,
         kinds=kinds,
+        pin_kinds=pin_kinds,
         graph_write=ctx.graph_write,
         as_of=ctx.as_of,
     )

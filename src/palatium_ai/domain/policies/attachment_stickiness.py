@@ -25,11 +25,12 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.policies.grounding import GroundingPolicy
-from palatium_ai.domain.policies.types import GROUNDING_DEFAULT
+from palatium_ai.domain.policies.transform import TransformPolicy
+from palatium_ai.domain.policies.types import GROUNDING_DEFAULT, TRANSFORMATION_DEFAULT
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
-    from palatium_ai.domain.policies.types import ContinuationKind, GroundingMode
+    from palatium_ai.domain.policies.types import ContinuationKind, GroundingMode, TransformationKind
 
 RehydrateSource = Literal["user_prior", "message_binding", "none"]
 
@@ -98,15 +99,30 @@ class AttachmentStickinessPolicy:
         trust_prior_for_workers: bool = False,
         grounding: GroundingMode | str | None = GROUNDING_DEFAULT,
         adaptive_grounding_enabled: bool = False,
+        transformation: TransformationKind | str = TRANSFORMATION_DEFAULT,
     ) -> AttachmentRehydrateDecision:
         """After Continuity: optionally re-fence dialog-bound attachments for format.
 
         Rehydrate only when Continuity trusted prior for workers — a bare
         ``continuation_kind=format`` after false-format demote must clear sticky,
         not bring the PDF fence back (055).
+
+        A content transform (expand / shorten / rewrite) is answered from the prior
+        **text**, not from its source file: fencing the last turn's upload lets the
+        worker re-analyse that document and lose the ask ("перепиши ответ короче"
+        turned into "сравнение файлов"). The transformation axis therefore wins over
+        the positional bind (055).
         """
         if has_turn_attachments:
             return AttachmentRehydrateDecision(reason="already_fenced", rehydrate_source="none")
+        if TransformPolicy.needs_reason_over_prior(transformation):
+            # The prior assistant answer IS the source. Keep no fence: an attachment
+            # would re-open a topic the transform must not answer.
+            return AttachmentRehydrateDecision(
+                clear_pending=True,
+                reason="clear_pending:transform_over_prior",
+                rehydrate_source="none",
+            )
         if not GroundingPolicy.allows_sticky_attachment_rehydrate(
             enabled=adaptive_grounding_enabled,
             grounding=grounding,

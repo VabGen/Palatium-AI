@@ -25,6 +25,13 @@ def test_formatter_prompt_shrunk_at_least_forty_percent() -> None:
     assert len(FORMATTER_SYSTEM_PROMPT) <= int(_BASELINE_CHARS * 0.6)
 
 
+def test_formatter_prompt_keeps_transform_rule_for_shorten_rewrite() -> None:
+    # Regression: "перепиши ответ короче" was answered as a file comparison because
+    # the composer saw no explicit transform intent and pulled the thread topic (055).
+    assert "transformation ∈ {expand, shorten, rewrite}" in FORMATTER_SYSTEM_PROMPT
+    assert "compare files" in FORMATTER_SYSTEM_PROMPT
+
+
 def test_formatter_prompt_keeps_behavior_and_drops_format_rules() -> None:
     # Security fence + the current GFM-era input marker and style hints stay; the legacy
     # JSON-prompt tokens (closed enums in prose, JSON-only output) must never come back.

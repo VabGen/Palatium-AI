@@ -48,3 +48,31 @@ def test_unknown_task_kind_fail_closed_to_recall() -> None:
     decision = MemoryRecallPolicy.decide(task_kind=None, requires_mcp=False)
     assert decision.allowed is True
     assert decision.reason == "unknown_task_kind"
+
+
+def test_content_transform_recalls_preferences_and_filters_pins() -> None:
+    """A rewrite reads the prior answer; pinned asks/facts would re-open the old topic.
+
+    Regression: stale scratchpad pin «сравни файлы» rode every turn as a hint and
+    steered «перепиши ответ короче» back into a file comparison (055, 060).
+    """
+    for transformation in ("shorten", "rewrite", "expand"):
+        decision = MemoryRecallPolicy.decide(
+            task_kind="knowledge_request",
+            requires_mcp=False,
+            transformation=transformation,
+        )
+        assert decision.allowed is True
+        assert decision.kinds == ("preference",)
+        assert decision.pin_kinds == ("preference",)
+        assert decision.reason == f"transform:{transformation}:preference"
+
+
+def test_restructure_is_not_a_content_transform() -> None:
+    decision = MemoryRecallPolicy.decide(
+        task_kind="response_formatting",
+        requires_mcp=False,
+        transformation="restructure",
+    )
+    assert decision.allowed is False
+    assert decision.pin_kinds is None

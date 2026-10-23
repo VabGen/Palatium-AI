@@ -1038,6 +1038,7 @@ def test_prior_context_clipped_to_worker_budget() -> None:
     assert effective.prior_context is not None
     assert len(effective.prior_context) == DEFAULT_PROMPT_BUDGET.worker_summary_max_chars
 
+
 def test_rewrite_that_replaces_the_ask_is_pinned_back_to_the_user_turn() -> None:
     """Regression: a Contextualizer rewrite must not answer an earlier question.
 
@@ -1077,6 +1078,27 @@ def test_rewrite_enrichment_of_an_underspecified_ask_is_kept() -> None:
 
 def test_ask_without_content_words_allows_enrichment() -> None:
     assert ContinuityPolicy.rewrite_preserves_ask(user_text="а он?", rewritten="кто такой заявитель?")
+
+
+def test_ballooned_rewrite_that_keeps_one_token_is_pinned_back() -> None:
+    """Regression: an 8× rewrite sharing one word with the ask replaced the ask.
+
+    The old check accepted any surviving content token, so a terse ask («анализ
+    скан 1») could be rewritten into a long unrelated topic that happened to reuse
+    «анализ». Past enrichment scale the ask must keep most of its words (055).
+    """
+    raw = "перепиши ответ на обращение более короткое"
+    rewritten = "Сравнение файлов: в диалоге есть несколько документов, поэтому покажите обращение, которое нужно переписать."
+    assert ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten="Ответ на обращение сокращён.")
+    assert not ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten=rewritten)
+    assert (
+        ContinuityPolicy.resolve_effective_user_text(
+            raw_user_text=raw,
+            rewritten_query=rewritten,
+            has_turn_attachments=False,
+        )
+        == raw
+    )
 
 
 def test_named_thread_file_forces_the_storage_axis() -> None:
@@ -1126,6 +1148,7 @@ def test_named_thread_file_does_not_override_a_new_upload() -> None:
         thread_file_named=True,
     )
     assert effective.file_reference == "none"
+
 
 def test_named_thread_file_clears_a_false_clarify() -> None:
     """Naming the file fills the referent; a clarify label cannot withhold the read."""

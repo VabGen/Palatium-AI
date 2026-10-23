@@ -54,16 +54,20 @@ async def recall_for_thread(
     min_confidence: float = _DEFAULT_MIN_CONFIDENCE,
     scratchpad: SessionScratchpad | None = None,
     kinds: tuple[str, ...] | None = None,
+    pin_kinds: tuple[str, ...] | None = None,
     graph_write: GraphWritePort | None = None,
     as_of: datetime | None = None,
 ) -> MemoryRecallBundle:
     """Pin scratchpad slots first, then durable medium + active L4 facts.
 
     ``kinds`` optionally restricts durable hits to MemoryType values (e.g. preference
-    for capability_discovery). Scratchpad pins are never filtered by kind.
+    for capability_discovery). Pins are usually kept regardless of kind — they are
+    query-independent thread notes. ``pin_kinds`` narrows them too, for a content
+    transform whose source is the prior answer, not a pinned earlier ask (055).
     ``as_of`` pins the bi-temporal view of L4 (default: now, UTC) so every recall in
     one turn sees the same graph snapshot.
     """
+    allowed_pin_kinds = {kind.strip().lower() for kind in pin_kinds} if pin_kinds is not None else None
     pinned = [
         MemoryHit(
             text=h.text,
@@ -73,6 +77,7 @@ async def recall_for_thread(
             source="scratchpad",
         )
         for h in (scratchpad.as_memory_hits() if scratchpad is not None else [])
+        if allowed_pin_kinds is None or h.kind.strip().lower() in allowed_pin_kinds
     ]
     if not query.strip():
         if pinned:

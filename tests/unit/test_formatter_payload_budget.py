@@ -146,6 +146,31 @@ def test_social_with_worker_draft_presents_worker() -> None:
     assert "user_text" not in payload
 
 
+def test_content_transform_uses_prior_answer_as_target_and_drops_hints() -> None:
+    """Regression: «перепиши ответ короче» composed «Сравнение файлов».
+
+    Without a worker draft the composer must transform the prior answer, not the ask,
+    and remembered topics must not ride along (055, 060).
+    """
+    task = FormatterInput(
+        task_id="t1",
+        context_packet=_packet(
+            user_text="перепиши ответ на обращение более короткое",
+            task_kind="knowledge_request",
+        ),
+        worker_summary="",
+        prior_context="Уважаемая Татьяна Васильевна! Ответ на ваше обращение рассмотрен.",
+        transformation="shorten",
+        memory_hints=("привет я геннадий а ты", "сравни файлы"),
+        memory_hint_kinds=("fact", "fact"),
+    )
+    payload = build_formatter_user_payload(task)
+    assert payload["transformation"] == "shorten"
+    assert payload["final_text"].startswith("Уважаемая Татьяна Васильевна!")
+    assert "user_facts" not in payload
+    assert "Сравнение файлов" not in str(payload)
+
+
 def test_user_message_is_xml_wrapped() -> None:
     msg = build_formatter_user_message({"final_text": "hi", "style_hint": "brand_sections_icons"})
     assert msg.startswith("<formatter_input>")
