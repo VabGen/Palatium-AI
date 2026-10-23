@@ -15,10 +15,13 @@ from palatium_ai.domain.memory.hebbian import bump_hebbian_weight
 from palatium_ai.domain.policies.graph_fact import GraphFactPolicy
 
 # Fixed templates — never f-string user text into Cypher (070 / 020).
-# Active = not invalidated and not yet system-expired (NULL legacy or far-future sentinel).
+# Active = visible *now*: not invalidated yet and not system-expired. ``invalid_at`` is
+# compared instead of tested for NULL because a scheduled (future-dated) supersede must
+# not make the still-current fact invisible to the next write — that would CREATE a
+# second version for the same key instead of superseding.
 _FIND_ACTIVE_CYPHER = """
 MATCH (f:MemoryFact {user_id: $user_id, entry_key: $entry_key})
-WHERE f.invalid_at IS NULL
+WHERE (f.invalid_at IS NULL OR f.invalid_at > datetime())
   AND (f.expired_at IS NULL OR f.expired_at > datetime())
 RETURN f.text AS text, f.node_id AS node_id, f.version AS version,
        coalesce(f.contains_pii, false) AS contains_pii,
@@ -35,52 +38,64 @@ SET f.importance = $importance,
 RETURN f.node_id AS node_id
 """.strip()
 
-_CREATE_CYPHER = """
-CREATE (f:MemoryFact {
-  node_id: $node_id,
-  user_id: $user_id,
-  entry_key: $entry_key,
-  text: $text,
-  kind: $kind,
-  importance: $importance,
-  confidence: $confidence,
-  version: $version,
-  thread_id: $thread_id,
-  source_namespace: $source_namespace,
-  source_type: $source_type,
-  contains_pii: $contains_pii,
-  valid_at: datetime($valid_at),
-  created_at: datetime(),
-  invalid_at: null,
-  expired_at: datetime($sentinel)
-})
+# ``MERGE`` on the deterministic ``node_id`` instead of ``CREATE`` (M5 audit F6): a
+# re-run of the same version (retry, or two promoters that both passed the old
+# read-then-write check) must converge on one node, not add a twin active fact. The
+# uniqueness constraint in ``neo4j_schema`` is the hard guarantee; MERGE makes the
+# ordinary repeat a no-op. ``ON MATCH`` deliberately does not touch ``valid_at`` /
+# ``created_at`` / ``expired_at``: the match means "this version already exists", so
+# rewriting its lifecycle would erase history (or revive a forgotten fact).
+_NODE_SET_ON_CREATE = """
+  f.user_id = $user_id,
+  f.entry_key = $entry_key,
+  f.text = $text,
+  f.kind = $kind,
+  f.importance = $importance,
+  f.confidence = $confidence,
+  f.version = $version,
+  f.thread_id = $thread_id,
+  f.source_namespace = $source_namespace,
+  f.source_type = $source_type,
+  f.contains_pii = $contains_pii,
+  f.valid_at = datetime($valid_at),
+  f.created_at = datetime(),
+  f.invalid_at = null,
+  f.expired_at = datetime($sentinel)
+""".rstrip()
+
+_NODE_SET_ON_MATCH = """
+  f.text = $text,
+  f.kind = $kind,
+  f.importance = $importance,
+  f.confidence = $confidence,
+  f.updated_at = datetime()
+""".rstrip()
+
+_CREATE_CYPHER = f"""
+MERGE (f:MemoryFact {{node_id: $node_id}})
+ON CREATE SET {_NODE_SET_ON_CREATE}
+ON MATCH SET {_NODE_SET_ON_MATCH}
 RETURN f.node_id AS node_id
 """.strip()
 
-_SUPERSEDE_CYPHER = """
-MATCH (old:MemoryFact {node_id: $old_node_id})
-SET old.invalid_at = datetime(), old.updated_at = datetime()
-CREATE (f:MemoryFact {
-  node_id: $node_id,
-  user_id: $user_id,
-  entry_key: $entry_key,
-  text: $text,
-  kind: $kind,
-  importance: $importance,
-  confidence: $confidence,
-  version: $version,
-  thread_id: $thread_id,
-  source_namespace: $source_namespace,
-  source_type: $source_type,
-  contains_pii: $contains_pii,
-  valid_at: datetime($valid_at),
-  created_at: datetime(),
-  invalid_at: null,
-  expired_at: datetime($sentinel)
-})
-CREATE (f)-[:SUPERSEDES]->(old)
+_SUPERSEDE_CYPHER = f"""
+MATCH (old:MemoryFact {{node_id: $old_node_id}})
+SET old.invalid_at = datetime($valid_at), old.updated_at = datetime()
+MERGE (f:MemoryFact {{node_id: $node_id}})
+ON CREATE SET {_NODE_SET_ON_CREATE}
+ON MATCH SET {_NODE_SET_ON_MATCH}
+MERGE (f)-[:SUPERSEDES]->(old)
 SET old.superseded_by = $node_id
 RETURN f.node_id AS node_id
+""".strip()
+
+# Highest version across *all* nodes of the key, including superseded and expired ones.
+# Create path only: after a forget the active fact is gone, and restarting at version 1
+# would collide with the expired node's deterministic ``node_id`` (MERGE would then
+# "match" a forgotten fact and update its text while it stays expired — invisible).
+_MAX_VERSION_CYPHER = """
+MATCH (f:MemoryFact {user_id: $user_id, entry_key: $entry_key})
+RETURN coalesce(max(f.version), 0) AS max_version
 """.strip()
 
 _EXPIRE_CYPHER = """
@@ -98,13 +113,21 @@ RETURN f.hebbian_weight AS hebbian_weight
 """.strip()
 
 # Bi-temporal active Select for hot-path fusion (SB3); binds $as_of / $user_id / $limit.
-_LIST_ACTIVE_CYPHER = """
-MATCH (f:MemoryFact)
-WHERE f.user_id = $user_id
+#
+# Thread scoping is TWO fixed shapes, never one query with an optional predicate.
+# ``$thread_id = '' OR f.thread_id = $thread_id OR f.thread_id IS NULL OR f.thread_id = ''``
+# is a disjunction over an indexed property: the planner cannot use
+# ``memory_fact_user_thread`` for it and falls back to scanning every ``MemoryFact``
+# (observed ``t_first`` ≈ 51 s on the recall hot path). With a thread bound the
+# composite index is usable; without one the predicate is simply absent, so the
+# shape stays a single index seek on ``user_id`` (080: no unbounded scan).
+_ACTIVE_FACT_FILTER = """
   AND (f.valid_at IS NULL OR f.valid_at <= datetime($as_of))
   AND (f.invalid_at IS NULL OR f.invalid_at > datetime($as_of))
   AND (f.expired_at IS NULL OR f.expired_at > datetime($as_of))
-  AND ($thread_id = '' OR f.thread_id = $thread_id OR f.thread_id IS NULL OR f.thread_id = '')
+""".rstrip()
+
+_ACTIVE_FACT_RETURN = """
 RETURN f.node_id AS node_id, f.user_id AS user_id, f.entry_key AS entry_key,
        f.text AS text, f.kind AS kind, coalesce(f.importance, 0.0) AS importance,
        coalesce(f.confidence, 0.0) AS confidence, coalesce(f.version, 1) AS version,
@@ -112,6 +135,19 @@ RETURN f.node_id AS node_id, f.user_id AS user_id, f.entry_key AS entry_key,
        coalesce(f.contains_pii, false) AS contains_pii
 ORDER BY coalesce(f.importance, 0.0) DESC, coalesce(f.confidence, 0.0) DESC
 LIMIT $limit
+""".rstrip()
+
+_LIST_ACTIVE_CYPHER = f"""
+MATCH (f:MemoryFact)
+WHERE f.user_id = $user_id{_ACTIVE_FACT_FILTER}{_ACTIVE_FACT_RETURN}
+""".strip()
+
+# Empty ``thread_id`` keeps the previous semantics (all user facts active at ``as_of``);
+# a bound thread adds equality on the indexed property instead of a disjunction.
+_LIST_ACTIVE_THREAD_CYPHER = f"""
+MATCH (f:MemoryFact)
+WHERE f.user_id = $user_id
+  AND f.thread_id = $thread_id{_ACTIVE_FACT_FILTER}{_ACTIVE_FACT_RETURN}
 """.strip()
 
 
@@ -208,7 +244,17 @@ class Neo4jGraphWritePort:
             )
             return _row_node_id(rows, fallback=old_node_id)
 
-        version = 1 if action == "create" else max(1, old_version) + 1
+        if action == "create":
+            # Not always 1: a forgotten key keeps its historical versions, and reusing
+            # version 1 would MERGE into the expired node instead of recording a new fact.
+            rows = await self._transport.run_write(
+                cypher=_MAX_VERSION_CYPHER,
+                params={"user_id": command.user_id, "entry_key": command.entry_key},
+            )
+            highest = _row_int(rows[0].get("max_version"), default=0) if rows else 0
+            version = max(1, highest + 1)
+        else:
+            version = max(1, old_version) + 1
         node_id = _stable_node_id(command.user_id, command.entry_key, version)
         base_params: dict[str, object] = {
             "node_id": node_id,
@@ -290,15 +336,17 @@ class Neo4jGraphWritePort:
             moment = moment.replace(tzinfo=UTC)
         as_of_iso = moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
         safe_limit = max(1, min(int(limit), 32))
-        rows = await self._transport.run_write(
-            cypher=_LIST_ACTIVE_CYPHER,
-            params={
-                "user_id": user_id.strip(),
-                "as_of": as_of_iso,
-                "limit": safe_limit,
-                "thread_id": (thread_id or "").strip(),
-            },
-        )
+        scope_thread = (thread_id or "").strip()
+        params: dict[str, object] = {
+            "user_id": user_id.strip(),
+            "as_of": as_of_iso,
+            "limit": safe_limit,
+        }
+        cypher = _LIST_ACTIVE_CYPHER
+        if scope_thread:
+            cypher = _LIST_ACTIVE_THREAD_CYPHER
+            params["thread_id"] = scope_thread
+        rows = await self._transport.run_write(cypher=cypher, params=params)
         out: list[GraphFactRecord] = []
         for row in rows:
             text = str(row.get("text", "") or "").strip()

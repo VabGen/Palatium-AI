@@ -78,6 +78,7 @@ async def _offline_l1(iterations: int) -> int:
     )
     await svc.put_if_cacheable(
         tenant_key="bench-tenant",
+        thread_key="bench-thread",
         user_text="привет",
         locale="ru",
         strategy="format_only",
@@ -88,6 +89,7 @@ async def _offline_l1(iterations: int) -> int:
         t0 = time.perf_counter()
         hit = await svc.get(
             tenant_key="bench-tenant",
+            thread_key="bench-thread",
             user_text="привет",
             locale="ru",
             strategy="format_only",

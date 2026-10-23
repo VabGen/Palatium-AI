@@ -23,9 +23,12 @@ from palatium_ai.domain.content import (
     CodeBlock,
     ContentDocument,
     DocumentMeta,
+    ListBlock,
+    ListItem,
     ParagraphBlock,
 )
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
+from palatium_ai.domain.policies.assistant_identity import ASSISTANT_NAME
 from palatium_ai.domain.policies.internal_vocabulary import (
     INTERNAL_TERM_REPLACEMENTS,
     InternalVocabularyPolicy,
@@ -206,3 +209,141 @@ def test_streamed_answer_deltas_are_sanitized() -> None:
     delta = str(bridge.queue.get_nowait()["delta"])
     assert InternalVocabularyPolicy.find_terms(delta) == ()
     assert "`" not in delta
+
+
+def test_style_hint_identifier_never_reaches_the_answer() -> None:
+    """Live leak: the model named the composition style it was told to follow."""
+    cleaned = InternalVocabularyPolicy.sanitize_text(
+        "Документ структурирован с использованием разделов и иконок, как того требует стиль `restructure_sections_icons`."
+    )
+
+    assert "restructure_sections_icons" not in cleaned
+    assert "стиль" not in cleaned
+    assert cleaned.startswith("Документ структурирован с использованием разделов и иконок.")
+
+
+@pytest.mark.parametrize("style", ("brand_sections_icons", "plain_text", "social_reply"))
+def test_style_identifier_alone_is_replaced_not_dropped(style: str) -> None:
+    """A clause that is *only* a style name is dropped; a bare token keeps a sentence."""
+    cleaned = InternalVocabularyPolicy.sanitize_text(f"Оформление: {style}")
+
+    assert style not in cleaned
+    assert cleaned.strip() != ""
+
+
+def test_style_meta_clause_removal_is_idempotent() -> None:
+    once = InternalVocabularyPolicy.sanitize_text("Готово, оформил в стиле brand_sections_icons. Текст ниже.")
+
+    assert once == "Готово. Текст ниже."
+    assert InternalVocabularyPolicy.sanitize_text(once) == once
+
+
+@pytest.mark.parametrize(
+    "leak, expected",
+    (
+        ("Меня зовут Formatter. Я здесь, чтобы помочь.", f"Меня зовут {ASSISTANT_NAME}. Я здесь, чтобы помочь."),
+        ("Я — Researcher в универсальной платформе.", f"Я — {ASSISTANT_NAME} в универсальной платформе."),
+        ("I am a Researcher worker in a platform.", f"I am {ASSISTANT_NAME} in a platform."),
+        ("I'm the Critic of this pipeline.", f"I'm {ASSISTANT_NAME} of this pipeline."),
+    ),
+)
+def test_self_identification_with_an_internal_role_is_rewritten(leak: str, expected: str) -> None:
+    """Live leak: "как тебя зовут" was answered by the Formatter role prompt."""
+    assert InternalVocabularyPolicy.sanitize_text(leak) == expected
+
+
+def test_role_name_outside_a_self_identification_is_left_alone() -> None:
+    """A role word may be genuine document content; rewriting it would corrupt the answer."""
+    text = "the researcher found the analyst report"
+
+    assert InternalVocabularyPolicy.sanitize_text(text) == text
+
+
+def test_stream_holds_the_self_identification_opener_across_a_chunk_boundary() -> None:
+    opener = "Меня зовут "
+
+    assert InternalVocabularyPolicy.safe_cut(opener) == 0
+
+
+def test_page_address_markers_never_reach_the_answer() -> None:
+    """Live leak: the model copied ``[[page 1]]`` from the attachment fence verbatim."""
+    text = "Полный текст файла «Шаблон обложки (1).docx»\n\n[[page 1]]\n\nфилиал СЭД"
+
+    assert "page" not in InternalVocabularyPolicy.sanitize_text(text).lower()
+    assert InternalVocabularyPolicy.sanitize_text(text) == "Полный текст файла «Шаблон обложки (1).docx»\n\nфилиал СЭД"
+
+
+def test_page_marker_removal_keeps_ordinary_citations() -> None:
+    """``[1]`` is our own citation contract — it must survive untouched (070)."""
+    text = "Источник: регламент [1], страница 4."
+
+    assert InternalVocabularyPolicy.sanitize_text(text) == text
+
+
+def test_stream_holds_a_partial_page_marker_across_a_chunk_boundary() -> None:
+    """Painting ``[[pa`` would leave the prefix behind once the sanitiser strips it."""
+    assert InternalVocabularyPolicy.safe_cut("Отчёт [[page 1") < len("Отчёт [[page 1")
+
+
+@pytest.mark.parametrize(
+    "leak, expected",
+    (
+        ("- **bold** — Выявлены главные идеи.", "- Выявлены главные идеи."),
+        ("1. **none** — Используйте нехлорированную воду.", "1. Используйте нехлорированную воду."),
+        ("- **bold:** Выявлены главные идеи.", "- Выявлены главные идеи."),
+    ),
+)
+def test_formatting_keyword_printed_instead_of_applied_is_dropped(leak: str, expected: str) -> None:
+    """Live leak: the model echoed our playbook ("a bold label") as the label itself."""
+    assert InternalVocabularyPolicy.sanitize_text(leak) == expected
+
+
+def test_a_real_bold_label_and_a_style_word_in_prose_are_kept() -> None:
+    """Only the placeholder shape is a defect; the word inside a sentence is content."""
+    text = "**Срок:** 10 дней. None of the files were attached."
+
+    assert InternalVocabularyPolicy.sanitize_text(text) == text
+
+
+def test_emphasis_field_carrying_a_style_keyword_is_dropped_but_text_survives() -> None:
+    document = _document(
+        ListBlock(
+            items=(
+                ListItem(text="Выявлены главные идеи", emphasis="bold"),
+                ListItem(text="Используйте нехлорированную воду", emphasis="none"),
+                ListItem(text="Срок", emphasis="Срок"),
+            )
+        )
+    )
+
+    cleaned = InternalVocabularyPolicy.sanitize_document(document)
+
+    items = cleaned.blocks[0].items
+    assert [item.emphasis for item in items] == [None, None, "Срок"]
+    assert items[0].text == "Выявлены главные идеи"
+
+
+def test_stream_holds_a_style_placeholder_split_across_chunks() -> None:
+    """``**bold`` + ``** — text`` in two frames would leak the keyword."""
+    assert InternalVocabularyPolicy.safe_cut("Начало. **bold") < len("Начало. **bold")
+
+
+def test_a_block_that_held_only_a_page_marker_is_dropped() -> None:
+    """An empty text is invalid and padded whitespace would fake content (050)."""
+    document = _document(
+        ParagraphBlock(text="[[page 1]]"),
+        ParagraphBlock(text="филиал СЭД"),
+        ListBlock(items=(ListItem(text="[[page 2]]"), ListItem(text="[[page 3]]"))),
+    )
+
+    cleaned = InternalVocabularyPolicy.sanitize_document(document)
+
+    assert [block.type for block in cleaned.blocks] == ["paragraph"]
+    assert cleaned.blocks[0].text == "филиал СЭД"
+
+
+def test_streamed_block_of_pure_notation_is_not_painted() -> None:
+    assert InternalVocabularyPolicy.sanitize_block(ParagraphBlock(text="[[page 1]]")) is None
+    kept = InternalVocabularyPolicy.sanitize_block(ParagraphBlock(text="Итог: [[page 1]]"))
+    assert kept is not None
+    assert kept.text == "Итог:"

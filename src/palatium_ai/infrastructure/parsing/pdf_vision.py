@@ -94,9 +94,39 @@ class GatewayPdfVisionParser:
         rasters = await asyncio.to_thread(self._rasterize_pages, data, page_numbers=None)
         if not rasters:
             raise DocumentParseError("pdf vision produced no pages")
+        truncated = len(rasters) < self._count_pages(data)
+        return await self._transcribe_rasters(rasters, truncated=truncated)
 
+    async def parse_pages(
+        self,
+        data: bytes,
+        *,
+        page_numbers: tuple[int, ...],
+    ) -> ParsedDocument:
+        """VLM pass for a subset of pages — page-level OCR fallback (055).
+
+        The OCR parser leaves a failed page empty while the rest of the document is
+        fine; sending only that page here keeps a single timeout from re-billing the
+        whole document to the vision model.
+        """
+        if not page_numbers:
+            raise DocumentParseError("pdf vision page fallback needs at least one page")
+        rasters = await asyncio.to_thread(self._rasterize_pages, data, page_numbers=page_numbers)
+        if not rasters:
+            raise DocumentParseError("pdf vision produced no pages")
+        return await self._transcribe_rasters(
+            rasters,
+            truncated=len(rasters) < len(page_numbers),
+        )
+
+    async def _transcribe_rasters(
+        self,
+        rasters: list[tuple[int, bytes]],
+        *,
+        truncated: bool,
+    ) -> ParsedDocument:
+        """Transcribe rasterized pages under the per-document char cap."""
         pages: list[ParsedPage] = []
-        truncated = len(rasters) < self._count_pages(data) or False
         total_chars = 0
         for number, png in rasters:
             text = await self._transcribe(png, system=_VISION_SYSTEM_PROMPT, user=_VISION_USER_PROMPT)

@@ -34,6 +34,10 @@ class MCPCapabilityIndex:
         self._cache_ttl_seconds = cache_ttl_seconds
         self._cached_bindings: list[MCPCapabilityBinding] | None = None
         self._cached_at: float = 0.0
+        #: Servers whose discovery raised during the last pass. A required-MCP turn
+        #: with no binding + a degraded server is a degradation, not "nothing found"
+        #: (Level 5; the alternative is answering with no data at all).
+        self._degraded_servers: tuple[str, ...] = ()
 
     async def warm_cache(self) -> int:
         """Prefetch capability index at startup (non-blocking for first request)."""
@@ -96,15 +100,25 @@ class MCPCapabilityIndex:
         listed = await asyncio.gather(
             *[self._safe_list_summaries(server_name) for server_name in server_names],
         )
+        degraded: list[str] = []
         for server_name, tools in zip(server_names, listed, strict=True):
+            if tools is None:
+                degraded.append(server_name)
+                continue
             for tool in tools:
                 bindings.extend(_summary_to_bindings(server_name, tool))
 
+        self._degraded_servers = tuple(degraded)
         self._cached_bindings = bindings
         self._cached_at = now
         return list(bindings)
 
-    async def _safe_list_summaries(self, server_name: str) -> list[MCPToolSummary]:
+    def degraded_servers(self) -> tuple[str, ...]:
+        """Servers that failed discovery in the last pass (empty when all answered)."""
+        return self._degraded_servers
+
+    async def _safe_list_summaries(self, server_name: str) -> list[MCPToolSummary] | None:
+        """``None`` marks an unreachable server; an empty list is a healthy zero-tool one."""
         try:
             return await self._registry.list_tool_summaries(server_name)
         except Exception as exc:  # noqa: BLE001  # one unreachable MCP server must not fail discovery (070)
@@ -113,7 +127,7 @@ class MCPCapabilityIndex:
                 server=server_name,
                 error=str(exc),
             )
-            return []
+            return None
 
 
 def _summary_to_bindings(server_name: str, tool: MCPToolSummary) -> list[MCPCapabilityBinding]:

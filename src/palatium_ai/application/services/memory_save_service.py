@@ -17,12 +17,14 @@ from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
 from palatium_ai.domain.memory.pii import resolve_contains_pii
 from palatium_ai.domain.memory.save_payload import MemorySavePayload
+from palatium_ai.domain.memory.types import MEMORY_EXPLICIT_WRITE_KEY
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
     from palatium_ai.application.services.hitl_service import HitlService
+    from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
     from palatium_ai.domain.ports.mcp import MCPRegistryPort, McpToolCallRecorderPort
 
 logger = get_logger(__name__)
@@ -46,11 +48,13 @@ class MemorySaveService:
         mcp_registry: MCPRegistryPort,
         redis_client: Redis | None = None,
         mcp_tool_call_repository: McpToolCallRecorderPort | None = None,
+        scratchpad: SessionScratchpadService | None = None,
     ) -> None:
         self._hitl = hitl_service
         self._mcp_registry = mcp_registry
         self._redis = redis_client
         self._mcp_tool_call_repository = mcp_tool_call_repository
+        self._scratchpad = scratchpad
         self._memory_pending: dict[str, MemorySavePayload] = {}
 
     @traceable(name="memory_save.request")
@@ -106,6 +110,9 @@ class MemorySaveService:
             # User-approved HITL write — trusted for Select min_confidence gate.
             "confidence": 1.0,
             "importance": 1.0,
+            # Deliberate durable memory: recall may cross threads for this entry even
+            # when it is a fact (inferred facts stay thread-scoped — P0-B bleed).
+            MEMORY_EXPLICIT_WRITE_KEY: True,
         }
         task_id = f"{MEM_SAVE_TASK_PREFIX}{uuid4().hex[:12]}"
         payload = MemorySavePayload(
@@ -176,18 +183,45 @@ class MemorySaveService:
         if outcome.is_error:
             msg = "save_memory MCP call failed"
             raise RuntimeError(msg)
+        superseded = await self._supersede_thread_cache(payload)
         logger.info(
             "memory_save.committed",
             task_id=task_id,
             thread_id=payload.thread_id,
             entry_key=payload.entry_key,
+            scratchpad_superseded=len(superseded),
         )
         return {
             "content": outcome.content,
             "entry_key": payload.entry_key,
             "namespace_kind": payload.namespace_kind,
             "scope_id": payload.scope_id,
+            "scratchpad_superseded": len(superseded),
         }
+
+    async def _supersede_thread_cache(self, payload: MemorySavePayload) -> tuple[str, ...]:
+        """Drop thread pins that the approved write just made stale (060: write fans out).
+
+        Medium/L4 now hold the new value, but recall injects scratchpad pins *ahead*
+        of durable hits — a pre-write pin would keep answering the old value in the
+        same thread. Best-effort: a cache miss must not turn a committed write into
+        a reported failure.
+        """
+        if self._scratchpad is None:
+            return ()
+        try:
+            value = json.loads(payload.value_json)
+        except json.JSONDecodeError:
+            logger.warning("memory_save.value_json_corrupt", task_id=payload.task_id)
+            return ()
+        text = str(value.get("text") or "").strip() if isinstance(value, dict) else ""
+        if not text:
+            return ()
+        try:
+            return await self._scratchpad.supersede_matching(thread_id=payload.thread_id, text=text)
+        except Exception as exc:  # noqa: BLE001  # cache cleanup must not fake a failed write (060)
+            logger.warning("memory_save.scratchpad_supersede_failed", thread_id=payload.thread_id, error=str(exc))
+            return ()
 
     async def discard_pending(self, *, task_id: str) -> None:
         await self._delete_pending(task_id)

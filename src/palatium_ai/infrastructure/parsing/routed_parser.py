@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 import structlog
 
@@ -19,7 +19,7 @@ from palatium_ai.domain.attachments.parse_routing import (
     ocr_text_is_usable,
     text_layer_is_sufficient,
 )
-from palatium_ai.domain.ports.document_parser import DocumentParseError, ParsedDocument
+from palatium_ai.domain.ports.document_parser import DocumentParseError, ParsedDocument, ParsedPage
 
 if TYPE_CHECKING:
     from palatium_ai.domain.ports.document_parser import DocumentParserPort
@@ -31,6 +31,17 @@ class _PdfFigureEnricher(Protocol):
     """Optional VLM figure pass for text-layer PDFs (G14)."""
 
     async def enrich_figures(self, data: bytes, base: ParsedDocument) -> ParsedDocument: ...
+
+
+class _PageVision(Protocol):
+    """Optional per-page VLM pass used when only some OCR pages failed (055)."""
+
+    async def parse_pages(
+        self,
+        data: bytes,
+        *,
+        page_numbers: tuple[int, ...],
+    ) -> ParsedDocument: ...
 
 
 class RoutedDocumentParser:
@@ -129,7 +140,12 @@ class RoutedDocumentParser:
             total_chars=probed.total_chars,
             pages=probed.page_count,
         )
-        return await self._progressive_pdf_scan(data, mime_type=mime_type, filename=filename)
+        return await self._progressive_pdf_scan(
+            data,
+            mime_type=mime_type,
+            filename=filename,
+            page_count=max(probed.page_count, 1),
+        )
 
     async def _progressive_pdf_scan(
         self,
@@ -137,19 +153,15 @@ class RoutedDocumentParser:
         *,
         mime_type: str,
         filename: str,
+        page_count: int,
     ) -> ParsedDocument:
-        """Tesseract OCR first; escalate to Vision on failure / low quality (2026)."""
+        """Tesseract OCR first; escalate page-by-page, then document-wide (2026)."""
         ocr_doc: ParsedDocument | None = None
         if self._pdf_ocr is not None:
             try:
                 ocr_doc = await self._pdf_ocr.parse(data, mime_type=mime_type, filename=filename)
-                if ocr_text_is_usable(
-                    ocr_doc.flow_text,
-                    min_chars=self._ocr_min_chars,
-                    min_printable_ratio=self._ocr_min_printable_ratio,
-                    mean_confidence=ocr_doc.ocr_mean_confidence,
-                    min_confidence=self._ocr_min_confidence,
-                ):
+                ocr_doc = await self._recover_failed_pages(data, ocr_doc, page_count=page_count)
+                if self._ocr_is_usable(ocr_doc):
                     return ocr_doc
                 logger.info(
                     "pdf OCR quality insufficient; escalating to vision",
@@ -174,6 +186,80 @@ class RoutedDocumentParser:
             return ocr_doc
         msg = "pdf has no usable text layer and OCR/vision fallback is unavailable"
         raise DocumentParseError(msg)
+
+    def _ocr_is_usable(self, doc: ParsedDocument) -> bool:
+        """Whole-document quality gate (060 progressive escalation, unchanged)."""
+        return ocr_text_is_usable(
+            doc.flow_text,
+            min_chars=self._ocr_min_chars,
+            min_printable_ratio=self._ocr_min_printable_ratio,
+            mean_confidence=doc.ocr_mean_confidence,
+            min_confidence=self._ocr_min_confidence,
+        )
+
+    async def _recover_failed_pages(
+        self,
+        data: bytes,
+        ocr_doc: ParsedDocument,
+        *,
+        page_count: int,
+    ) -> ParsedDocument:
+        """Replace only the pages OCR missed or garbled with Vision output.
+
+        Sending the whole document to Vision because one page timed out used to
+        re-bill every page to the model (observed ~15 s/page). The OCR text for the
+        good pages is kept verbatim; only ``bad`` page numbers are rasterized.
+        """
+        page_vision = self._page_vision()
+        if page_vision is None:
+            return ocr_doc
+        by_number = {page.number: page.text for page in ocr_doc.pages}
+        bad = tuple(
+            number
+            for number in range(1, page_count + 1)
+            if not ocr_text_is_usable(
+                by_number.get(number, ""),
+                min_chars=self._ocr_min_chars,
+                min_printable_ratio=self._ocr_min_printable_ratio,
+            )
+        )
+        if not bad:
+            return ocr_doc
+        try:
+            recovered = await page_vision.parse_pages(data, page_numbers=bad)
+        except DocumentParseError:
+            logger.warning(
+                "pdf page vision fallback failed; keeping OCR pages",
+                pages=len(bad),
+            )
+            return ocr_doc
+        recovered_text = {page.number: page.text for page in recovered.pages if page.text.strip()}
+        if not recovered_text:
+            return ocr_doc
+        merged = dict(by_number)
+        merged.update(recovered_text)
+        pages = tuple(ParsedPage(number=number, text=merged[number]) for number in sorted(merged))
+        logger.info(
+            "pdf OCR pages escalated to vision individually",
+            failed_pages=len(bad),
+            recovered_pages=len(recovered_text),
+        )
+        return ocr_doc.model_copy(
+            update={
+                "pages": pages,
+                "truncated": ocr_doc.truncated or recovered.truncated,
+                "extraction_source": "vision",
+                # The mean is document-wide; pages with low confidence were replaced,
+                # so keeping the old value would fail a page that Vision just fixed.
+                "ocr_mean_confidence": None,
+            }
+        )
+
+    def _page_vision(self) -> _PageVision | None:
+        """The Vision parser's page-level entry point, when this build has one."""
+        if self._pdf_vision is None or not hasattr(self._pdf_vision, "parse_pages"):
+            return None
+        return cast("_PageVision", self._pdf_vision)
 
 
 __all__ = ["RoutedDocumentParser"]

@@ -127,7 +127,7 @@ async def test_cross_encoder_rerank_reorders() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_promote_xmemory_and_bayesian_and_hebbian() -> None:
+async def test_promote_xmemory_and_bayesian() -> None:
     memory = InMemoryMemoryPort()
     graph = InMemoryGraphWritePort()
     ns = user_namespace("m8")
@@ -150,7 +150,6 @@ async def test_promote_xmemory_and_bayesian_and_hebbian() -> None:
         thresholds=PromotionThresholds(min_access_frequency=3, min_importance=0.4),
         xmemory_decouple=True,
         bayesian_trust=True,
-        hebbian_edge_bump=True,
     )
     promoted = await service.run_batch(user_id="m8", limit=8)
     assert promoted == 1

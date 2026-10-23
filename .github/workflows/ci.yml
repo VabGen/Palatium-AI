@@ -82,6 +82,64 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Postgres-backed integration suite (075). The durable extract queue (M3) and the
+  # Postgres search paths only execute against a real database: without DATABASE_URL the
+  # fixtures used to call pytest.skip, so the SQL (SKIP LOCKED claim, lease renew, DLQ
+  # transition, RLS-scoped reads) was never exercised by any gate. `PALATIUM_REQUIRE_DB=1`
+  # is the other half of that fix — a misconfigured job now fails instead of silently
+  # skipping back to "green, nothing tested".
+  #
+  # Service image is the same digest as docker-compose.yml (asserted by
+  # tests/unit/test_ci_integration_db_job.py, so the two pins cannot drift apart).
+  # Credentials are CI placeholders and match conftest's test defaults on purpose.
+  integration-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18@sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: postgres
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # Alembic reads Settings (POSTGRES_*), the tests read DATABASE_URL — both must agree.
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: postgres
+      POSTGRES_SCHEMA: palatium_ai
+      DATABASE_URL: postgresql+asyncpg://postgres:test@localhost:5432/postgres
+      PALATIUM_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Schema comes from migrations, never from test code (075): an integration test that
+      # creates its own tables would pass on a schema production does not have.
+      - name: Migrations (schema before tests)
+        run: uv run alembic upgrade head
+
+      - name: Integration suite
+        run: uv run pytest tests/integration -q -m "not live and not llm_live and not slow"
+
   # Supply chain релизного артефакта (`025`): скан образа, SBOM, keyless-подпись SBOM.
   # Отдельно от `security`, потому что здесь собирается образ и тянется база уязвимостей —
   # своя стоимость и свой таймаут. `id-token: write` нужен только `cosign`: подпись

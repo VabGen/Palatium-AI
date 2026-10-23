@@ -2277,6 +2277,7 @@ name = "palatium-ai"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "cryptography" },
@@ -2371,6 +2372,7 @@ type-check = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.13.0,<4.0.0" },
     { name = "alembic", specifier = ">=1.19.1,<2.0.0" },
     { name = "argon2-cffi", marker = "extra == 'attachments'", specifier = ">=25.1.0,<26.0.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.40.0" },

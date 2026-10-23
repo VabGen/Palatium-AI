@@ -20,6 +20,9 @@ from palatium_ai.domain.content import ActionSpec
 
 #: Server-owned namespace for picked-file actions (never a raw attachment id).
 FILE_CHOICE_ACTION_PREFIX = "filesel_"
+#: Explicit "use the whole set" option. It carries no id: the resume path re-fences
+#: the turn's own uploads from the session (never the thread's older files).
+ALL_FILES_ACTION_ID = f"{FILE_CHOICE_ACTION_PREFIX}all"
 #: Cards stay scannable; the plain refusal text keeps listing what does not fit.
 MAX_FILE_CHOICE_OPTIONS = 8
 _NAME_MAX_CHARS = 200
@@ -59,10 +62,19 @@ class FileChoiceCardPolicy:
         return len(cls.distinct_names(names)) >= _MIN_OPTIONS
 
     @classmethod
-    def build_actions(cls, names: Sequence[str]) -> tuple[ActionSpec, ...]:
-        """One action per distinct thread file; label is the user's own filename."""
+    def build_actions(
+        cls,
+        names: Sequence[str],
+        *,
+        include_all: bool = False,
+    ) -> tuple[ActionSpec, ...]:
+        """One action per distinct file; label is the user's own filename.
+
+        ``include_all`` appends an explicit whole-set option (current-upload turns
+        where "по всем файлам" is a legitimate answer to the ambiguity card).
+        """
         distinct = cls.distinct_names(names)
-        return tuple(
+        actions = [
             ActionSpec(
                 action_id=f"{FILE_CHOICE_ACTION_PREFIX}{index}",
                 label=name,
@@ -70,16 +82,33 @@ class FileChoiceCardPolicy:
                 style="primary" if index == 1 else "secondary",
             )
             for index, name in enumerate(distinct, start=1)
-        )
+        ]
+        if include_all and distinct:
+            actions.append(
+                ActionSpec(
+                    action_id=ALL_FILES_ACTION_ID,
+                    label="Все файлы",
+                    kind="custom",
+                    style="secondary",
+                )
+            )
+        return tuple(actions)
 
     @staticmethod
     def is_file_choice(action_id: str) -> bool:
-        """True only for an id this policy minted (``filesel_<ordinal>``)."""
+        """True for an id this policy minted (``filesel_<ordinal>`` / ``filesel_all``)."""
         cleaned = (action_id or "").strip()
+        if cleaned == ALL_FILES_ACTION_ID:
+            return True
         if not cleaned.startswith(FILE_CHOICE_ACTION_PREFIX):
             return False
         ordinal = cleaned[len(FILE_CHOICE_ACTION_PREFIX) :]
         return ordinal.isdigit() and int(ordinal) >= 1
+
+    @staticmethod
+    def is_all_files(action_id: str) -> bool:
+        """True for the explicit whole-set option (never a filename)."""
+        return (action_id or "").strip() == ALL_FILES_ACTION_ID
 
     @staticmethod
     def framing(count: int) -> str:
@@ -92,6 +121,7 @@ class FileChoiceCardPolicy:
 
 
 __all__ = [
+    "ALL_FILES_ACTION_ID",
     "FILE_CHOICE_ACTION_PREFIX",
     "MAX_FILE_CHOICE_OPTIONS",
     "FileChoiceCardPolicy",

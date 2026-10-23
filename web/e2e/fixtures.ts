@@ -129,7 +129,9 @@ export function stubPastedTextUpload(server: MockServer, text: string, filename?
  * Если обработчик не вызвал preventDefault — вставляем текст сами, как браузер.
  */
 export async function pasteIntoComposer(page: Page, text: string): Promise<void> {
-  const box = page.getByRole('textbox');
+  // `.composer-textarea`, а не роль `textbox`: в композере есть ещё поле project id,
+  // и ролевой локатор стал неоднозначным (strict mode).
+  const box = page.locator('.composer-textarea');
   await box.focus();
   await box.evaluate((el, value) => {
     const target = el as HTMLTextAreaElement;
@@ -270,6 +272,9 @@ export function defaultApi(): MockServer {
   const server = new MockServer();
   server.always('auth.dev-token', { json: { access_token: 'e2e-token' } });
   server.always('sessions.turns', { json: { items: [] } });
+  // Виджет спрашивает источники вложений при монтировании: пустой список —
+  // валидный ответ («источников нет»), а не отсутствие мока.
+  server.always('attachments.connectors', { json: { sources: [] } });
   return server;
 }
 

@@ -25,6 +25,38 @@ def test_memory_key_avoids_colon_uri_scheme_shape() -> None:
     assert ":" not in hashed
 
 
+def test_memory_key_is_deterministic_across_retries() -> None:
+    """M3 audit E3: at-least-once delivery must upsert, not duplicate."""
+    first = _memory_key(None, "User prefers concise bullet lists")
+    second = _memory_key(None, "User prefers concise bullet lists")
+    assert first == second
+    # Same fact with different surrounding whitespace is still the same key.
+    assert _memory_key(None, "  User prefers   concise bullet lists\n") == first
+    # Different text must stay a different fact.
+    assert _memory_key(None, "User prefers long prose") != first
+
+
+@pytest.mark.asyncio()
+async def test_reclaimed_job_does_not_duplicate_memory_entries() -> None:
+    """A retried extract job re-persists the same facts under the same keys (E3)."""
+    port = InMemoryMemoryPort()
+    registry = make_platform_mcp_registry(memory_port=port)
+    service = MemoryFactPersistenceService(registry)
+    job = MemoryExtractJob(thread_id="thread-retry", task_id="task-retry", user_id="user-retry")
+    fact = MemoryFactCandidate(
+        text="User prefers concise bullet lists",
+        kind="preference",
+        confidence=0.9,
+        key_hint=None,
+    )
+
+    assert await service.persist_facts(job=job, facts=(fact,)) == 1
+    assert await service.persist_facts(job=job, facts=(fact,)) == 1
+
+    hits = await port.search(namespace=user_namespace("user-retry"), query="bullet", limit=10)
+    assert len(hits) == 1
+
+
 @pytest.mark.asyncio()
 async def test_persist_facts_uses_save_memory_mcp() -> None:
     port = InMemoryMemoryPort()

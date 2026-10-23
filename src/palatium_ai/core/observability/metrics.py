@@ -126,15 +126,34 @@ try:  # pragma: no cover - optional dependency
         "palatium_memory_extract_dead_letter_total",
         "Extract jobs in dead-letter status.",
     )
+    _palatium_memory_extract_enqueue_refused_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_memory_extract_enqueue_refused_total",
+        "Extract enqueues refused by a capacity ceiling (M3 E7).",
+        ["reason"],
+    )
     _palatium_memory_recall_at_k: _PromGauge | _NoopMetric = _PromGauge(
         "palatium_memory_recall_at_k",
         "Offline eval Recall@k (Pushgateway / nightly); not runtime hit-rate (040 / M7).",
         ["k"],
     )
+    # Not a failure: the policy decided this turn has nothing recallable (060/080).
+    # Separate from *_enqueue_refused_total, which means "wanted to, capacity said no".
+    _palatium_memory_extract_skipped_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_memory_extract_skipped_total",
+        "Extract jobs not enqueued because the turn carries nothing recallable.",
+        ["reason"],
+    )
     _palatium_memory_promote_errors_total: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_memory_promote_errors_total",
         "Medium→graph promote batch failures.",
         ["error_type"],
+    )
+    # A blocked PII supersede is *not* an error: the batch did the right thing. It is a
+    # durable human decision nobody has requested yet (M5 audit F3), so it needs its own
+    # series — counting it as an error would keep the error alert firing forever.
+    _palatium_memory_promote_blocked_pii_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_memory_promote_blocked_pii_total",
+        "Promote candidates held back because a PII fact would be silently flipped.",
     )
     _palatium_memory_recall_source_total: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_memory_recall_source_total",
@@ -291,8 +310,11 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_memory_extract_queue_depth = _NoopMetric()
     _palatium_memory_extract_queue_lag_seconds = _NoopMetric()
     _palatium_memory_extract_dead_letter_total = _NoopMetric()
+    _palatium_memory_extract_enqueue_refused_total = _NoopMetric()
+    _palatium_memory_extract_skipped_total = _NoopMetric()
     _palatium_memory_recall_at_k = _NoopMetric()
     _palatium_memory_promote_errors_total = _NoopMetric()
+    _palatium_memory_promote_blocked_pii_total = _NoopMetric()
     _palatium_memory_recall_source_total = _NoopMetric()
     _palatium_attachment_sticky_total = _NoopMetric()
     _palatium_context_tokens_used = _NoopMetric()
@@ -332,6 +354,8 @@ class AgentMetrics:
     _errors: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _escalations: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _hitl_denies: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
+    _extract_refusals: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
+    _extract_skips: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _rbac_denies: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _context_tokens: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _secret_redactions: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
@@ -588,6 +612,28 @@ class AgentMetrics:
         _palatium_memory_extract_queue_lag_seconds.set(max(0.0, float(lag_seconds)))
         _palatium_memory_extract_dead_letter_total.set(max(0, int(dead)))
 
+    def record_memory_extract_enqueue_refused(self, *, reason: str) -> None:
+        """Count a refused enqueue by ceiling: ``queue_full`` (global) or ``tenant_full`` (M3 E7)."""
+        safe_reason = (reason or "unknown").strip()[:32] or "unknown"
+        with self._lock:
+            self._extract_refusals[safe_reason] += 1
+        _palatium_memory_extract_enqueue_refused_total.labels(reason=safe_reason).inc()
+
+    def memory_extract_enqueue_refused_count(self, reason: str) -> int:
+        with self._lock:
+            return self._extract_refusals[reason]
+
+    def record_memory_extract_skipped(self, *, reason: str) -> None:
+        """Count turns whose extract was skipped by policy, not by capacity (060)."""
+        safe_reason = (reason or "unknown").strip()[:64] or "unknown"
+        with self._lock:
+            self._extract_skips[safe_reason] += 1
+        _palatium_memory_extract_skipped_total.labels(reason=safe_reason).inc()
+
+    def memory_extract_skipped_count(self, reason: str) -> int:
+        with self._lock:
+            return self._extract_skips[reason]
+
     def record_memory_recall_at_k(self, *, k: int, value: float) -> None:
         """Publish offline-eval Recall@k (0..1). Runtime traffic must not call this."""
         safe_k = str(max(1, min(int(k), 50)))
@@ -598,6 +644,10 @@ class AgentMetrics:
         """Count a promote-batch failure (job / GraphWritePort)."""
         safe = (error_type or "runtime").strip()[:64] or "runtime"
         _palatium_memory_promote_errors_total.labels(error_type=safe).inc()
+
+    def record_memory_promote_blocked_pii(self, *, count: int = 1) -> None:
+        """Count PII supersedes withheld for a human decision (M5 audit F3)."""
+        _palatium_memory_promote_blocked_pii_total.inc(max(1, int(count)))
 
     def record_memory_recall_source(self, *, source: str) -> None:
         """Count hot-path Select by source (scratchpad/medium/graph/skipped_*)."""

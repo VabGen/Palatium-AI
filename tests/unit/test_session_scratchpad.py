@@ -185,6 +185,99 @@ async def test_scratchpad_survives_anaphoric_recall_without_durable_hit() -> Non
 
 
 @pytest.mark.asyncio()
+async def test_scratchpad_supersede_matching_drops_stale_pins_for_the_written_subject() -> None:
+    """Write fan-out (060): a pre-write pin must not outrank the value just approved."""
+    port = InMemoryMemoryPort()
+    service = SessionScratchpadService(port)
+    await service.save(
+        SessionScratchpad(
+            thread_id="t-supersede",
+            slots=(
+                ScratchpadSlot(key="u:old", text="Запомни, порт базы данных 5432"),
+                ScratchpadSlot(key="u:dinner", text="Хочу на ужин утку"),
+            ),
+        )
+    )
+
+    removed = await service.supersede_matching(thread_id="t-supersede", text="порт базы данных 5433")
+
+    assert removed == ("Запомни, порт базы данных 5432",)
+    after = await service.load(thread_id="t-supersede")
+    assert [slot.text for slot in after.slots] == ["Хочу на ужин утку"]
+
+
+@pytest.mark.asyncio()
+async def test_scratchpad_supersede_matching_keeps_an_identical_pin() -> None:
+    """The written text is the current truth — an exact pin is not stale."""
+    port = InMemoryMemoryPort()
+    service = SessionScratchpadService(port)
+    await service.save(
+        SessionScratchpad(
+            thread_id="t-supersede-2",
+            slots=(ScratchpadSlot(key="u:port", text="порт базы данных 5433"),),
+        )
+    )
+
+    assert await service.supersede_matching(thread_id="t-supersede-2", text="порт базы данных 5433") == ()
+    assert len((await service.load(thread_id="t-supersede-2")).slots) == 1
+
+
+@pytest.mark.asyncio()
+async def test_scratchpad_forget_matching_drops_only_the_forgotten_subject() -> None:
+    """Forget fan-out (060): the pin of a deleted fact must not keep answering it."""
+    port = InMemoryMemoryPort()
+    service = SessionScratchpadService(port)
+    pad = SessionScratchpad(
+        thread_id="t-forget",
+        slots=(
+            ScratchpadSlot(key="u:port", text="Запомни, порт базы данных 5433"),
+            ScratchpadSlot(key="u:dinner", text="Хочу на ужин утку"),
+        ),
+    )
+    await service.save(pad)
+
+    removed = await service.forget_matching(thread_id="t-forget", subject="порт базы данных 5433")
+
+    assert removed == ("Запомни, порт базы данных 5433",)
+    after = await service.load(thread_id="t-forget")
+    assert [slot.text for slot in after.slots] == ["Хочу на ужин утку"]
+    recall = await recall_for_thread(
+        port,
+        thread_id="t-forget",
+        query="на каком порту база данных",
+        limit=4,
+        scratchpad=after,
+    )
+    assert not any("5433" in hit.text for hit in recall.hits)
+
+
+@pytest.mark.asyncio()
+async def test_scratchpad_forget_matching_keeps_unrelated_subject_with_shared_verb() -> None:
+    """Overlap policy (055): sharing one word is not the same subject."""
+    port = InMemoryMemoryPort()
+    service = SessionScratchpadService(port)
+    await service.save(
+        SessionScratchpad(
+            thread_id="t-forget-2",
+            slots=(ScratchpadSlot(key="u:coffee", text="люблю кофе"),),
+        )
+    )
+
+    removed = await service.forget_matching(thread_id="t-forget-2", subject="люблю чай")
+
+    assert removed == ()
+    assert (await service.load(thread_id="t-forget-2")).slots
+
+
+@pytest.mark.asyncio()
+async def test_scratchpad_forget_matching_is_noop_when_nothing_matches() -> None:
+    port = InMemoryMemoryPort()
+    service = SessionScratchpadService(port)
+    assert await service.forget_matching(thread_id="t-empty", subject="лунный грунт") == ()
+    assert (await service.load(thread_id="t-empty")).slots == ()
+
+
+@pytest.mark.asyncio()
 async def test_recall_pins_scratchpad_ahead_of_durable() -> None:
     port = InMemoryMemoryPort()
     await port.put(

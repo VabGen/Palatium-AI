@@ -31,6 +31,7 @@ from .types import (
 
 if TYPE_CHECKING:
     from .ack_reply import AckReplyPolicy
+    from .attachment_selection import AttachmentSelection, AttachmentSelectionPolicy
     from .attachment_stickiness import (
         AttachmentRehydrateDecision,
         AttachmentStickinessDecision,
@@ -86,6 +87,8 @@ __all__ = [
     "AckReplyPolicy",
     "AgentRole",
     "AttachmentRehydrateDecision",
+    "AttachmentSelection",
+    "AttachmentSelectionPolicy",
     "AttachmentStickinessDecision",
     "AttachmentStickinessPolicy",
     "ClarificationGatePolicy",
@@ -98,6 +101,8 @@ __all__ = [
     "CriticPolicy",
     "EffectiveRoutingIntent",
     "ExecutionStrategy",
+    "ExtractAdmissionDecision",
+    "ExtractAdmissionPolicy",
     "FormatterFastPathDecision",
     "FormatterFastPathPolicy",
     "FormatterMemoryMergeDecision",
@@ -150,6 +155,8 @@ __all__ = [
 
 _LAZY: dict[str, tuple[str, str]] = {
     "AckReplyPolicy": (".ack_reply", "AckReplyPolicy"),
+    "AttachmentSelection": (".attachment_selection", "AttachmentSelection"),
+    "AttachmentSelectionPolicy": (".attachment_selection", "AttachmentSelectionPolicy"),
     "AttachmentStickinessPolicy": (".attachment_stickiness", "AttachmentStickinessPolicy"),
     "AttachmentStickinessDecision": (".attachment_stickiness", "AttachmentStickinessDecision"),
     "AttachmentRehydrateDecision": (".attachment_stickiness", "AttachmentRehydrateDecision"),
@@ -162,6 +169,8 @@ _LAZY: dict[str, tuple[str, str]] = {
     "ContextualizerPolicy": (".contextualizer", "ContextualizerPolicy"),
     "CriticGateDecision": (".critic", "CriticGateDecision"),
     "CriticPolicy": (".critic", "CriticPolicy"),
+    "ExtractAdmissionDecision": (".extract_admission", "ExtractAdmissionDecision"),
+    "ExtractAdmissionPolicy": (".extract_admission", "ExtractAdmissionPolicy"),
     "FormatterFastPathDecision": (".formatter_fast_path", "FormatterFastPathDecision"),
     "FormatterFastPathPolicy": (".formatter_fast_path", "FormatterFastPathPolicy"),
     "FormatterPassthroughSignals": (".formatter_fast_path", "FormatterPassthroughSignals"),

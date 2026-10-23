@@ -43,7 +43,6 @@ def build_memory_promotion_service(
         ),
         xmemory_decouple=settings.memory.xmemory_decouple,
         bayesian_trust=settings.memory.bayesian_trust,
-        hebbian_edge_bump=settings.memory.hebbian_edge_bump,
     )
 
 

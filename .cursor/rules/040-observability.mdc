@@ -48,7 +48,10 @@ alwaysApply: false
 | `palatium_memory_extract_queue_depth` | — |
 | `palatium_memory_extract_queue_lag_seconds` | — |
 | `palatium_memory_extract_dead_letter_total` | — |
+| `palatium_memory_extract_enqueue_refused_total` | `reason` (`queue_full` глобальный потолок / `tenant_full` доля владельца; M3 E7) |
+| `palatium_memory_extract_skipped_total` | `reason` (`task_kind:<kind>` / `strategy:<strategy>`; политика допуска extract, не отказ ёмкости; 060) |
 | `palatium_memory_promote_errors_total` | `error_type` |
+| `palatium_memory_promote_blocked_pii_total` | — (не ошибка: PII-supersede ждёт человека; F3) |
 | `palatium_memory_recall_source_total` | `source` (`scratchpad` / `medium` / `graph` / `skipped_policy` / `empty`) |
 | `palatium_attachment_sticky_total` | `action` (sticky entry / rehydrate / clear) |
 | `palatium_context_tokens_used` | `agent_type` |

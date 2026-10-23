@@ -15,6 +15,7 @@ from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.intent_turn_helpers import (
     assistant_turn_content,
     assistant_turn_payload,
+    enqueue_turn_extract,
     response_preview,
     write_audit,
 )
@@ -29,14 +30,19 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.turn_tokens import turn_token_usage
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.attachments.context import AttachmentTurnContext
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.turns import DialogTurnWindow
+from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
+    from palatium_ai.application.services.attachment_reference_resolver import (
+        AttachmentReferenceResolver,
+    )
     from palatium_ai.application.services.cost_budget import CostBudgetService
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
@@ -99,6 +105,7 @@ class IntentGraphRunner:
         mcp_tool_output_max_chars: int = 3000,
         turn_hop_budget_ms: int = 15_000,
         graph_write: GraphWritePort | None = None,
+        file_reference_resolver: AttachmentReferenceResolver | None = None,
     ) -> None:
         self._graph = graph
         self._session_service = session_service
@@ -116,6 +123,7 @@ class IntentGraphRunner:
         self._mcp_tool_output_max_chars = mcp_tool_output_max_chars
         self._turn_hop_budget_ms = turn_hop_budget_ms
         self._graph_write = graph_write
+        self._file_reference_resolver = file_reference_resolver
         self._attach_hitl_cards: AttachHitlCards | None = None
 
     def bind_attach_hitl_cards(self, attach: AttachHitlCards) -> None:
@@ -143,6 +151,7 @@ class IntentGraphRunner:
         tenant_key: str | None = None,
         revision_feedback: str | None = None,
         untrusted_context: str = "",
+        attachment_context: AttachmentTurnContext | None = None,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AgentGraphState:
@@ -155,6 +164,7 @@ class IntentGraphRunner:
             org_id=org_id,
             revision_feedback=revision_feedback,
             untrusted_context=untrusted_context,
+            attachment_context=attachment_context,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )
@@ -194,6 +204,7 @@ class IntentGraphRunner:
         tenant_key: str | None = None,
         revision_feedback: str | None = None,
         untrusted_context: str = "",
+        attachment_context: AttachmentTurnContext | None = None,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
@@ -206,6 +217,7 @@ class IntentGraphRunner:
             org_id=org_id,
             revision_feedback=revision_feedback,
             untrusted_context=untrusted_context,
+            attachment_context=attachment_context,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )
@@ -269,7 +281,7 @@ class IntentGraphRunner:
             async for item in self._graph.astream(
                 graph_input,
                 config=run_config,
-                stream_mode=["updates", "values"],
+                stream_mode=["tasks", "values"],
             ):
                 async for event in self._events_from_astream_item(
                     item,
@@ -301,7 +313,7 @@ class IntentGraphRunner:
         aiter = self._graph.astream(
             graph_input,
             config=run_config,
-            stream_mode=["updates", "values"],
+            stream_mode=["tasks", "values"],
         ).__aiter__()
 
         # typeshed types ``__anext__`` / ``Queue.get`` as Awaitable, but create_task
@@ -349,8 +361,14 @@ class IntentGraphRunner:
         if not isinstance(item, tuple) or len(item) != 2:
             return
         mode, chunk = item
-        if mode == "updates" and isinstance(chunk, dict):
-            for node_name in chunk:
+        if mode == "tasks" and isinstance(chunk, dict):
+            # `tasks` шлёт два события на узел: старт (payload без `result`) и
+            # финиш. Индикатору нужен СТАРТ: фаза должна называть шаг, который
+            # выполняется сейчас. Финиш повторил бы имя и откатил фазу назад.
+            if "result" in chunk:
+                return
+            node_name = chunk.get("name")
+            if node_name:
                 yield {
                     "event": "hop",
                     "node": str(node_name),
@@ -375,6 +393,7 @@ class IntentGraphRunner:
         org_id: str | None,
         revision_feedback: str | None,
         untrusted_context: str,
+        attachment_context: AttachmentTurnContext | None,
         exclude_trailing_user: bool,
         trace_id: str | None,
     ) -> dict[str, Any]:
@@ -454,6 +473,12 @@ class IntentGraphRunner:
             "revisions_count": 0,
             "response_locale": response_locale,
             "untrusted_context": untrusted_context,
+            "attachment_context": attachment_context or AttachmentTurnContext(),
+            "thread_file_named": await self._names_thread_file(
+                text=text,
+                thread_id=thread_id,
+                user_id=user_id,
+            ),
         }
         if revision_feedback and revision_feedback.strip():
             graph_input["revision_feedback"] = revision_feedback.strip()[:4_000]
@@ -467,6 +492,46 @@ class IntentGraphRunner:
         if self._scratchpad is None:
             return None
         return await self._scratchpad.load(thread_id=thread_id)
+
+    async def _names_thread_file(
+        self,
+        *,
+        text: str,
+        thread_id: str,
+        user_id: str | None,
+    ) -> bool:
+        """True when the ask deterministically names a file this dialog already holds.
+
+        Intent's ``file_reference`` axis is one LLM judgement over a free-form ask and
+        misses paraphrases ("покажи текст файла Кодекс корпоративной этики"), which
+        then routed a storage re-read into a knowledge search and ended in "nothing
+        found" (055). The attachment registry is a fact, so a *named* match is applied
+        before any routing: ``ambiguous`` / ``single_thread_file`` stay Intent-driven,
+        otherwise an unrelated ask could drag the dialog's only document into the answer.
+        """
+        resolver = self._file_reference_resolver
+        owner = (user_id or "").strip()
+        if resolver is None or not owner or not (thread_id or "").strip() or not text.strip():
+            return False
+        try:
+            resolution = await resolver.resolve(
+                user_id=owner,
+                thread_id=thread_id,
+                hint_text=text,
+            )
+        except Exception:
+            # Resolution is an optimisation of the axis, not a gate: a broken registry
+            # must degrade to the previous behaviour, never fail the turn (030.8).
+            logger.exception("thread file reference resolution failed", thread_id=thread_id)
+            return False
+        named = FileReferencePolicy.is_named_reference(resolution)
+        if named:
+            logger.info(
+                "attachment.thread_file_named",
+                thread_id=thread_id,
+                reason=resolution.reason,
+            )
+        return named
 
     async def _emit_hop_observability(
         self,
@@ -578,24 +643,29 @@ class IntentGraphRunner:
         execution_error = execution.error if execution is not None else None
         has_turn_attachments = bool((final_state.get("untrusted_context") or "").strip())
 
+        # A graph gate may have minted the turn's card already (memory mutation): that
+        # card is the only path to the side effect, so synthesized menus/review cards
+        # must not replace it (020, 055). Off-graph pauses never reach this method.
+        pre_minted_cards = isinstance(formatted, FormatterTaskResult) and bool(formatted.hitl_cards)
         if isinstance(formatted, FormatterTaskResult):
-            formatted = await self._attach_hitl_cards(
-                formatted,
-                thread_id=thread_id,
-                task_id=task_id,
-                selected_strategy=selected_strategy,
-                task_kind=resolved_task_kind,
-                requires_user_choice=resolved_requires_user_choice,
-                underspecification_kind=resolved_underspec,
-                user_text=text,
-                prior_context=prior_context if isinstance(prior_context, str) else None,
-                user_id=user_id,
-                org_id=org_id,
-                has_turn_attachments=has_turn_attachments,
-                dialog=final_state.get("dialog_window"),
-                file_reference=resolved_file_reference,
-                execution_error=execution_error,
-            )
+            if not pre_minted_cards:
+                formatted = await self._attach_hitl_cards(
+                    formatted,
+                    thread_id=thread_id,
+                    task_id=task_id,
+                    selected_strategy=selected_strategy,
+                    task_kind=resolved_task_kind,
+                    requires_user_choice=resolved_requires_user_choice,
+                    underspecification_kind=resolved_underspec,
+                    user_text=text,
+                    prior_context=prior_context if isinstance(prior_context, str) else None,
+                    user_id=user_id,
+                    org_id=org_id,
+                    has_turn_attachments=has_turn_attachments,
+                    dialog=final_state.get("dialog_window"),
+                    file_reference=resolved_file_reference,
+                    execution_error=execution_error,
+                )
             logger.info(
                 "agent.turn.reasoning",
                 thread_id=thread_id,
@@ -642,9 +712,11 @@ class IntentGraphRunner:
                     "operation": operation,
                 },
             )
-            if self._consolidation is not None and formatted.status == "success":
+            if formatted.status == "success":
                 # Memory write path ≠ answer path: still enqueue when HITL review is pending.
-                await self._consolidation.enqueue(
+                await enqueue_turn_extract(
+                    self._consolidation,
+                    final_state,
                     thread_id=thread_id,
                     task_id=task_id,
                     user_id=user_id,

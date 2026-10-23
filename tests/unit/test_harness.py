@@ -15,6 +15,12 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
+from palatium_ai.domain.llm.models import (
+    ChatMessage,
+    LLMCompletion,
+    LLMResponseFormat,
+    LLMUsage,
+)
 
 
 class _Out(BaseModel):
@@ -57,6 +63,36 @@ _CONFIG = AgentConfig(
     allowed_tools=(),
     confidence_threshold=0.7,
 )
+# One retry: a failed attempt must be visible without a multi-second backoff chain.
+_RETRY_CONFIG = _CONFIG.model_copy(update={"max_retries": 2})
+
+
+class _FlakyLLM:
+    """Fails the first call, answers the retry — the shape a provider blip leaves behind."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def generate(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
+        timeout_seconds: float | None = None,
+    ) -> LLMCompletion:
+        _ = messages, temperature, max_tokens, response_format, response_model, timeout_seconds
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("upstream returned 502")
+        return LLMCompletion(
+            content="{}",
+            model=model or "tier-mid",
+            usage=LLMUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        )
 
 
 @pytest.mark.asyncio()
@@ -114,3 +150,21 @@ async def test_harness_execute_with_guardrails_redacts_context_secret() -> None:
     assert agent.seen is not None
     assert "hunter2" not in agent.seen.context["dialog_window_json"]
     assert agent_metrics.secret_redaction_count("intent_classifier", "assembled_context.dialog_window_json") >= 1
+
+
+@pytest.mark.asyncio()
+async def test_call_llm_records_retried_attempt() -> None:
+    """A failed attempt leaves a log+metric, so a slow hop is distinguishable from a cold one.
+
+    Without it the harness only exposes the final outcome: "14 s intent_classifier" could be
+    a cold provider, a retried 5xx, or a single slow completion (040 — every call is visible).
+    """
+    llm = _FlakyLLM()
+    harness = Harness(llm=llm)
+    before = agent_metrics.error_count("intent_classifier", "llm_attempt_failed")
+
+    completion = await harness.call_llm(_RETRY_CONFIG, [ChatMessage(role="user", content="hi")])
+
+    assert completion.content == "{}"
+    assert llm.calls == 2
+    assert agent_metrics.error_count("intent_classifier", "llm_attempt_failed") == before + 1

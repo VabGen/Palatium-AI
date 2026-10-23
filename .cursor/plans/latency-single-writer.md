@@ -57,6 +57,7 @@ TTFV ≈ 2 s — доминирует по обеим осям. Поэтому s
 ```python
 PresentationOwner = Literal["worker", "formatter"]
 
+
 class PresentationOwnershipPolicy:
     def decide(
         self,

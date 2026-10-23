@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from palatium_ai.domain.content.code_text import normalize_code_entities
+
 IconToken = Literal[
     "calendar",
     "mail",
@@ -131,6 +133,12 @@ class CodeBlock(BaseModel):
     type: Literal["code"] = "code"
     language: str = Field(default="text", min_length=1, max_length=40)
     content: str = Field(min_length=1, max_length=50_000)
+
+    @field_validator("content")
+    @classmethod
+    def _verbatim_source(cls, value: str) -> str:
+        """Keep code text literal — undo a provider's HTML-entity escaping (E2E-05)."""
+        return normalize_code_entities(value)
 
 
 class FormulaBlock(BaseModel):

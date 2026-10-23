@@ -94,6 +94,65 @@ def test_widget_href_rejects_javascript_and_relative() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_ensure_session_for_principal_materialises_fresh_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A client-minted thread gets a session row before a HITL card is minted.
+
+    ``GET /hitl/{card_id}`` runs with ``allow_missing=False``; without the row it
+    returns 404 *after* a successful mutation (attachment index/restore, memory write).
+    """
+    from palatium_ai.presentation.security import ownership
+    from palatium_ai.presentation.security.principal import AuthPrincipal
+
+    load = AsyncMock(return_value=None)
+    monkeypatch.setattr(ownership, "load_session_for_principal", load)
+    session_service = SimpleNamespace(touch_session=AsyncMock(return_value="row"))
+
+    result = await ownership.ensure_session_for_principal(
+        request=MagicMock(),
+        principal=AuthPrincipal(subject="user-1", org_id="org-1", roles=frozenset({"user"})),
+        session_service=session_service,  # type: ignore[arg-type]
+        thread_id="thread-fresh",
+        last_operation="attachment_index_requested",
+    )
+
+    assert result == "row"
+    assert load.await_args is not None
+    assert load.await_args.kwargs["allow_missing"] is True
+    session_service.touch_session.assert_awaited_once()
+    kwargs = session_service.touch_session.await_args.kwargs
+    assert kwargs["thread_id"] == "thread-fresh"
+    assert kwargs["user_id"] == "user-1"
+    assert kwargs["context_patch"]["last_operation"] == "attachment_index_requested"
+    assert kwargs["status"] == "active"
+
+
+@pytest.mark.asyncio()
+async def test_ensure_session_for_principal_never_touches_denied_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ownership denial propagates and must not create or rebind a session row."""
+    from fastapi import HTTPException
+
+    from palatium_ai.presentation.security import ownership
+    from palatium_ai.presentation.security.principal import AuthPrincipal
+
+    monkeypatch.setattr(
+        ownership,
+        "load_session_for_principal",
+        AsyncMock(side_effect=HTTPException(status_code=403, detail="Not allowed to access this session")),
+    )
+    session_service = SimpleNamespace(touch_session=AsyncMock())
+
+    with pytest.raises(HTTPException):
+        await ownership.ensure_session_for_principal(
+            request=MagicMock(),
+            principal=AuthPrincipal(subject="user-attacker", org_id="org-1", roles=frozenset({"user"})),
+            session_service=session_service,  # type: ignore[arg-type]
+            thread_id="thread-secret",
+            last_operation="attachment_index_requested",
+        )
+    session_service.touch_session.assert_not_called()
+
+
+@pytest.mark.asyncio()
 async def test_intent_process_rejects_foreign_thread_before_graph() -> None:
     session_service = SimpleNamespace(
         get_session=AsyncMock(

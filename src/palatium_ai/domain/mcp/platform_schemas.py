@@ -159,7 +159,9 @@ class PlatformGraphQueryInput(BaseModel):
         max_length=8_000,
         description=(
             "Read-only Cypher with $param placeholders (no string concat). "
-            "For bi-temporal MemoryFact reads use $as_of with ACTIVE_FACT_AS_OF_PREDICATE."
+            "Reads of :MemoryFact must carry the full bi-temporal predicate for every fact alias "
+            "(valid_at/invalid_at/expired_at + datetime($as_of)) — binding $as_of without filtering "
+            "on it is refused; $as_of defaults to now."
         ),
     )
     params_json: str = Field(

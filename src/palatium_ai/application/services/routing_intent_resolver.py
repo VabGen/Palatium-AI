@@ -21,6 +21,7 @@ def resolve_routing_intent(
     raw_intent: IntentClassifierOutput | None,
     has_turn_attachments: bool = False,
     user_text: str | None = None,
+    thread_file_named: bool = False,
 ) -> EffectiveRoutingIntent:
     """Single entry for continuity remap after IntentClassifier."""
     return ContinuityPolicy.resolve(
@@ -29,4 +30,5 @@ def resolve_routing_intent(
         raw_intent=raw_intent,
         has_turn_attachments=has_turn_attachments,
         user_text=user_text,
+        thread_file_named=thread_file_named,
     )

@@ -76,8 +76,19 @@ BUDGETED_SERVICES = (*CEILING_REQUIRED, "minio", "mcp-edms", "mcp-analytics")
 # exactly how the VM-wide OOM killer gets invoked — and how Postgres lands in crash-recovery.
 OBSERVABILITY_SERVICES = ("clickhouse", "langfuse-web", "langfuse-worker")
 
-# Docker VM size at which core + observability can peak together: 9344 MiB of declared
-# ceilings, rounded up to the practical `memory=12GB` in %USERPROFILE%\.wslconfig.
+# Langfuse v3 runs two Node processes whose heap must be sized *explicitly*: V8 derives
+# its old space from the cgroup ceiling, and both containers were observed crash-looping
+# at ~376 MB of a ~392 MB heap ("Reached heap limit Allocation failed") while their
+# ceilings were 768m/512m. The heap floors below are the measured fix, not round numbers:
+# lowering one is a decision that needs a fresh heap profile, not a YAML tweak.
+LANGFUSE_HEAP_FLOOR_MIB = {"langfuse-web": 2048, "langfuse-worker": 512}
+
+# Node needs room above the V8 old space for the young generation, code space, stacks
+# and native buffers; a heap that equals its cgroup dies before the GC can help.
+V8_NON_HEAP_HEADROOM_BYTES = 256 * _MIB
+
+# Docker VM size at which core + observability can peak together; rounded up to the
+# practical `memory=12GB` in %USERPROFILE%\.wslconfig.
 OBSERVABILITY_VM_FLOOR_MIB = 12 * 1024
 
 
@@ -223,7 +234,8 @@ def test_observability_service_declares_a_memory_ceiling(service_name: str) -> N
 
 
 def test_observability_is_profile_gated_because_it_cannot_fit_the_default_vm() -> None:
-    """`make up-full` adds ~3328 MiB on top of a ~6016 MiB core — past the 7884 MiB VM.
+    """`make up-full` adds the observability ceilings on top of the core ones — past the
+    default Docker VM.
 
     Three things must stay true, and none of them is visible from the YAML alone: the
     default launch fits the default VM (so the profile gate is a memory decision, not
@@ -243,6 +255,62 @@ def test_observability_is_profile_gated_because_it_cannot_fit_the_default_vm() -
     assert combined_mib <= OBSERVABILITY_VM_FLOOR_MIB, (
         f"core {core_mib} + observability {observability_mib} = {combined_mib} MiB exceeds the "
         f"documented {OBSERVABILITY_VM_FLOOR_MIB} MiB floor: raise the floor or lower a ceiling"
+    )
+
+
+@pytest.mark.parametrize("service_name", tuple(LANGFUSE_HEAP_FLOOR_MIB))
+def test_langfuse_node_heap_is_explicit_and_leaves_cgroup_headroom(service_name: str) -> None:
+    """A heap left to V8's cgroup default turns the ceiling into the crash loop.
+
+    Langfuse web spent 2026-10-22 restarting every 40-90 s at ~376 MB of a ~392 MB heap
+    while its container carried ``mem_limit: 768m`` and no ``NODE_OPTIONS``: V8 sizes old
+    space from the cgroup, so the process hit the limit before the GC had room to work.
+    The explicit heap (plus headroom for young generation, code space and buffers) is the
+    fix; deleting either half silently restores the same loop.
+    """
+    environment = _service(service_name).get("environment", {})
+    node_options = str(environment.get("NODE_OPTIONS", ""))
+
+    match = re.search(r"--max-old-space-size=(\d+)", node_options)
+    assert match, f"{service_name} must pin --max-old-space-size in NODE_OPTIONS, got {node_options!r}"
+
+    heap = int(match.group(1)) * _MIB
+    floor = LANGFUSE_HEAP_FLOOR_MIB[service_name] * _MIB
+    assert heap >= floor, (
+        f"{service_name} heap is {heap // _MIB} MiB, below the measured floor {floor // _MIB} MiB — "
+        "this is the size that already OOM'd in production"
+    )
+
+    limit = _ceiling_bytes(service_name)
+    assert heap + V8_NON_HEAP_HEADROOM_BYTES <= limit, (
+        f"{service_name} V8 heap {heap // _MIB} MiB inside a {limit // _MIB} MiB cgroup leaves less than "
+        f"{V8_NON_HEAP_HEADROOM_BYTES // _MIB} MiB for everything that is not old space"
+    )
+
+
+def test_langfuse_redis_never_sends_an_empty_password() -> None:
+    """`REDIS_AUTH=""` is not "no auth": it makes the client send an ``AUTH ""`` frame.
+
+    Reproduced on this stack's Valkey 8.1.10: an AUTH frame with an empty password and no
+    ``requirepass`` configured answers ``ERR AUTH <password> called without any password
+    configured for the default user``, so a local stack (empty ``REDIS_PASSWORD``) left
+    langfuse-worker unable to drain its queues after Redis restarted. A connection string
+    without userinfo expresses "no auth" unambiguously; the ``:+`` branch keeps the
+    password out of the URL when it is unset and injects the very same variable the
+    ``redis`` service reads for ``--requirepass`` (one source of truth, 020).
+    """
+    anchor = _compose()["x-langfuse-env"]
+
+    assert "REDIS_AUTH" not in anchor, (
+        "REDIS_AUTH cannot express 'no auth' for Langfuse — an empty value is still sent as an AUTH frame"
+    )
+    assert anchor["REDIS_CONNECTION_STRING"] == "redis://${REDIS_PASSWORD:+:$REDIS_PASSWORD@}redis:6379", (
+        "Langfuse must reach Valkey through a connection string whose userinfo disappears when REDIS_PASSWORD is empty"
+    )
+
+    redis_password = str(_service("redis")["environment"]["REDIS_PASSWORD"])
+    assert "${REDIS_PASSWORD" in redis_password, (
+        "the server's --requirepass input and Langfuse's credentials must come from the same variable (020)"
     )
 
 

@@ -152,3 +152,80 @@ def test_refusal_message_never_lists_more_than_five_names() -> None:
 def test_unresolved_resolution_carries_no_attachment_id() -> None:
     resolution = FileReferencePolicy.resolve([], hint_text="")
     assert resolution.attachment_id is None
+
+
+def test_assistant_prose_word_does_not_select_an_unrelated_file() -> None:
+    """Regression: «кто заявитель и истец» in a thread with two files is ambiguous.
+
+    The previous assistant answer mentions «обращение» in ordinary prose; that word
+    must not resolve ``Обращение.docx`` and read a file the turn never named (055).
+    """
+    letter = _candidate("Обращение.docx")
+    code = _candidate("Кодекс_корпоративной_этики_V2_0_ред_10(1).docx")
+    resolution = FileReferencePolicy.resolve([letter, code], hint_text="кто заявитель и истец")
+    assert resolution.status == "ambiguous"
+    assert resolution.reason == "several_thread_files"
+    assert resolution.attachment_id is None
+
+
+@pytest.mark.parametrize("text", ("составь ответ на обращение", "в ответ на ваше обращением"))
+def test_plain_word_in_user_text_is_not_a_document_reference(text: str) -> None:
+    """A generic word is prose, not a name: the thread has two files → card, no read."""
+    resolution = FileReferencePolicy.resolve(
+        [
+            _candidate("Обращение.docx"),
+            _candidate("Кодекс_корпоративной_этики_V2_0_ред_10(1).docx"),
+        ],
+        hint_text=text,
+    )
+    assert resolution.status == "ambiguous"
+    assert resolution.attachment_id is None
+
+
+def test_name_shaped_stem_still_resolves() -> None:
+    """User-authored name-shaped stem (digits or several words) remains sufficient."""
+    target = _candidate("Годовой отчет 2025.pdf")
+    resolution = FileReferencePolicy.resolve(
+        [target, _candidate("Обращение.docx")],
+        hint_text="перечитай годовой отчет 2025 ещё раз",
+    )
+    assert resolution.status == "resolved"
+    assert resolution.attachment_id == target.attachment_id
+    assert resolution.reason == "name_in_turn_text"
+
+def test_multi_word_title_resolves_the_named_thread_file() -> None:
+    """Regression: «Кодекс_корпоративной_этики_V2_0_ред_10(1).docx» must be re-read.
+
+    The underscore-separated file name never appears verbatim in the ask, so a
+    turn that named it fell into ``ambiguous`` and refused to read storage. A
+    contiguous run of the name's words is a name reference (055).
+    """
+    letter = _candidate("Обращение.docx")
+    code = _candidate("Кодекс_корпоративной_этики_V2_0_ред_10(1).docx")
+    resolution = FileReferencePolicy.resolve(
+        [letter, code],
+        hint_text="покажи полный текст файла Кодекс корпоративной этики",
+    )
+    assert resolution.status == "resolved"
+    assert resolution.attachment_id == code.attachment_id
+    assert resolution.reason == "name_in_turn_text"
+
+
+def test_short_generic_phrase_does_not_select_a_file_by_title_run() -> None:
+    """A run needs substantive words: «что по рынку» is prose, not a title."""
+    report = _candidate("Отчет по рынку 2025.docx")
+    other = _candidate("Обращение.docx")
+    resolution = FileReferencePolicy.resolve([report, other], hint_text="что по рынку")
+    assert resolution.status == "ambiguous"
+    assert resolution.attachment_id is None
+
+def test_only_a_named_reference_promotes_the_turn_to_a_storage_read() -> None:
+    """``single_thread_file`` is a convenience pick, not evidence the ask is about it."""
+    only = _candidate("СФУТ 9.03-2025.pdf")
+    named = FileReferencePolicy.resolve(
+        [only, _candidate("ГОСТ 34.602-2020.docx")],
+        hint_text="перечитай СФУТ 9.03-2025 ещё раз",
+    )
+    single = FileReferencePolicy.resolve([only], hint_text="а что там по срокам?")
+    assert FileReferencePolicy.is_named_reference(named) is True
+    assert FileReferencePolicy.is_named_reference(single) is False

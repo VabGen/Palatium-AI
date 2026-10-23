@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -98,7 +99,10 @@ class TesseractImageOcrParser:
             payload = pytesseract.image_to_data(
                 image,
                 lang=self._lang,
-                timeout=self._timeout_seconds,
+                # pytesseract annotates ``timeout`` as int (default 0) although it feeds
+                # ``subprocess.communicate``, which takes float. Ceil keeps the budget
+                # bounded: int() would turn a sub-second budget into 0 == "no timeout".
+                timeout=max(1, math.ceil(self._timeout_seconds)),
                 output_type=pytesseract.Output.DICT,
             )
         except DocumentParseError:

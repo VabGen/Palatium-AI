@@ -13,7 +13,7 @@ from palatium_ai.application.services.hitl_service import HitlInvalidActionError
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal
-from palatium_ai.presentation.security.ownership import load_session_for_principal
+from palatium_ai.presentation.security.ownership import ensure_session_for_principal
 
 router = APIRouter()
 
@@ -74,12 +74,12 @@ async def request_memory_save(body: MemorySaveRequest, request: Request) -> HITL
     if resources.memory_save_service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Memory save unavailable")
 
-    await load_session_for_principal(
+    await ensure_session_for_principal(
         request=request,
         principal=principal,
         session_service=resources.session_service,
         thread_id=body.thread_id,
-        allow_missing=False,
+        last_operation="memory_save",
     )
 
     try:
@@ -109,12 +109,12 @@ async def request_memory_forget(body: MemoryForgetRequest, request: Request) -> 
             detail="Memory forget unavailable",
         )
 
-    await load_session_for_principal(
+    await ensure_session_for_principal(
         request=request,
         principal=principal,
         session_service=resources.session_service,
         thread_id=body.thread_id,
-        allow_missing=False,
+        last_operation="memory_forget",
     )
 
     try:
@@ -141,12 +141,12 @@ async def request_memory_extract(body: MemoryExtractRequest, request: Request) -
             detail="Memory extract enqueue unavailable",
         )
 
-    await load_session_for_principal(
+    await ensure_session_for_principal(
         request=request,
         principal=principal,
         session_service=resources.session_service,
         thread_id=body.thread_id,
-        allow_missing=False,
+        last_operation="memory_extract",
     )
 
     try:

@@ -5,11 +5,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
+from palatium_ai.core.logging import get_logger
 from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.core.observability.audit import get_audit_logger
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
+from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.policies.extract_admission import ExtractAdmissionPolicy
+
+if TYPE_CHECKING:
+    from palatium_ai.application.orchestration.state import AgentGraphState
+    from palatium_ai.application.services.memory_extract import MemoryExtractService
+
+logger = get_logger(__name__)
 
 PENDING_ATTACHMENT_IDS_KEY = "pending_attachment_ids"
 
@@ -45,6 +56,60 @@ async def write_audit(*, conversation_id: str, event: str, metadata: dict[str, s
         event=event,
         metadata=metadata,
     )
+
+
+def resolved_turn_kind(final_state: AgentGraphState) -> str:
+    """Task kind of the finished turn (routing intent wins over raw classification)."""
+    routing_intent = final_state.get("routing_intent")
+    if routing_intent is not None:
+        return str(routing_intent.task_kind)
+    classification = final_state.get("classification")
+    if isinstance(classification, IntentTaskResult) and classification.output is not None:
+        return str(classification.output.task_kind)
+    return "clarification_needed"
+
+
+async def enqueue_turn_extract(
+    consolidation: MemoryExtractService | None,
+    final_state: AgentGraphState,
+    *,
+    thread_id: str,
+    task_id: str,
+    user_id: str | None,
+    org_id: str | None,
+) -> str:
+    """Enqueue sleep-time extract only when the turn holds something recallable (060).
+
+    One job = one MemoryKeeper LLM call over the last dialog window, so admission is
+    a domain decision (``ExtractAdmissionPolicy``), not ``status == "success"`` —
+    otherwise every "спасибо" pays for a frontier-tier extraction (080).
+    Returns the decision reason for callers that log/assert it.
+    """
+    from palatium_ai.application.orchestration import selectors as orch_selectors
+
+    if consolidation is None:
+        return "disabled"
+    task_kind = resolved_turn_kind(final_state)
+    strategy = orch_selectors.selected_strategy(final_state)
+    admission = ExtractAdmissionPolicy.decide(task_kind=task_kind, strategy=strategy)
+    if admission.admit:
+        await consolidation.enqueue(
+            thread_id=thread_id,
+            task_id=task_id,
+            user_id=user_id,
+            org_id=org_id,
+        )
+        return admission.reason
+    agent_metrics.record_memory_extract_skipped(reason=admission.reason)
+    logger.info(
+        "memory_extract.skipped",
+        reason=admission.reason,
+        task_kind=task_kind,
+        strategy=strategy,
+        thread_id=thread_id,
+        task_id=task_id,
+    )
+    return admission.reason
 
 
 def tenant_budget_key(*, user_id: str | None, org_id: str | None, thread_id: str) -> str:

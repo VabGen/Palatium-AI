@@ -27,7 +27,7 @@ import type { MockServer } from './mock-server';
 
 /** Отправить сообщение так, как это делает человек: ввод + клик отправки. */
 async function ask(page: Page, text: string): Promise<void> {
-  await page.getByRole('textbox').fill(text);
+  await page.locator('.composer-textarea').fill(text);
   await page.getByRole('button', { name: 'Отправить сообщение' }).click();
 }
 
@@ -47,7 +47,7 @@ test.describe('атрибуты хоста', () => {
     page,
   }) => {
     const server = defaultApi();
-    server.reply('intents.process', {
+    server.reply('intents.process.stream', {
       json: { task_id: 'task-1', output: answerDocument('Черновик письма готов.') },
     });
     await stubSessionSocket(page);
@@ -55,7 +55,7 @@ test.describe('атрибуты хоста', () => {
     await openWidget(page);
 
     await expect(page.getByRole('button', { name: 'Новый диалог' })).toBeVisible();
-    await page.getByRole('textbox').fill('Составь письмо');
+    await page.locator('.composer-textarea').fill('Составь письмо');
     await page.getByRole('button', { name: 'Отправить сообщение' }).click();
     await expect(page.locator('.msg.assistant:not(.pending)')).toHaveCount(1);
     const turnsBefore = server.callsTo('sessions.turns').length;
@@ -67,7 +67,10 @@ test.describe('атрибуты хоста', () => {
 
     await expect(page.getByRole('button', { name: 'New chat' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Новый диалог' })).toHaveCount(0);
-    await expect(page.getByRole('textbox')).toHaveAttribute('placeholder', 'Message Palatium…');
+    await expect(page.locator('.composer-textarea')).toHaveAttribute(
+      'placeholder',
+      'Message Palatium…'
+    );
     // Язык фрагмента меняется вместе с интерфейсом: иначе скринридер читает
     // английский текст русским голосом.
     await expect(page.locator('palatium-assistant')).toHaveAttribute('lang', 'en');
@@ -109,7 +112,7 @@ test.describe('локаль контекста', () => {
 
   test("форматы даты и числа следуют языку host'а, а не языку браузера", async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', {
+    server.reply('intents.process.stream', {
       json: formatterResult({ output: null, hitl_cards: [toolCard()] }),
     });
     await stubSessionSocket(page);
@@ -122,7 +125,7 @@ test.describe('локаль контекста', () => {
     await sendHostContext(page, hostContextForTest({ localization: 'RU' }));
     await expect(page.getByRole('button', { name: 'Новый диалог' })).toBeVisible();
 
-    await page.getByRole('textbox').fill('Отправь письмо через EDMS');
+    await page.locator('.composer-textarea').fill('Отправь письмо через EDMS');
     await page.getByRole('button', { name: 'Отправить сообщение' }).click();
 
     const expiry = page.locator('.hitl-meta span').filter({ hasText: 'Истекает' });
@@ -262,7 +265,9 @@ test.describe('непрерывность диалога', () => {
     server.reply('sessions.turns', {
       json: { items: [dialogTurn('user', 'Вопрос до перезагрузки', 1)] },
     });
-    server.reply('intents.process', { json: { task_id: 'task-1', output: answerDocument() } });
+    server.reply('intents.process.stream', {
+      json: { task_id: 'task-1', output: answerDocument() },
+    });
     await trackThreadEvents(page);
     await stubSessionSocket(page);
     await server.install(page);
@@ -284,9 +289,9 @@ test.describe('непрерывность диалога', () => {
     // который виджет отправляет ДАЛЬШЕ: он должен уйти в тред host'а, иначе
     // продолжение диалога создало бы второй, параллельный тред.
     await ask(page, 'Продолжаем');
-    expect((server.lastCall('intents.process')?.body as { thread_id: string }).thread_id).toBe(
-      restored
-    );
+    expect(
+      (server.lastCall('intents.process.stream')?.body as { thread_id: string }).thread_id
+    ).toBe(restored);
 
     // Эха нет: id прислал host, значит он его уже знает. Объявить виджет вправе
     // только свой тред (и то лишь если не успел получить контекст) — но не этот.

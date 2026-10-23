@@ -92,6 +92,10 @@ _HITL_RESUME_MARKER = "HITL_CHOICE_RESUME"
 # Rewrite enrichment beyond typo/whitespace cleanup → depends on prior (055 structural).
 _REWRITE_ENRICHMENT_MIN_CHARS = 24
 _REWRITE_NOVEL_TOKEN_MIN_CHARS = 4
+# A content-bearing ask token: long enough not to be a preposition/conjunction, and
+# compared on a prefix fold so inflection ("вопроса"/"вопрос") still matches.
+_ASK_TOKEN_MIN_CHARS = 5
+_ASK_TOKEN_PREFIX_CHARS = 5
 
 
 class EffectiveRoutingIntent(BaseModel):
@@ -148,12 +152,48 @@ class ContinuityPolicy:
         attachment-blind and will anaphora-bind prior assistant topics into
         ``rewritten_query`` («дай сводку» → prior file summary), which then
         frames Researcher and option synthesizer away from the new document (055).
+
+        A rewrite may *enrich* an underspecified ask, never *replace* it: if it
+        dropped the user's own request, the raw ask wins (see
+        ``rewrite_preserves_ask``). Without this a mis-rewrite turns every
+        follow-up into the previous question and the turn is answered for an ask
+        the user never made.
         """
         raw = raw_user_text.strip()
         if has_turn_attachments and raw:
             return raw
         rewritten = rewritten_query.strip()
+        if rewritten and raw and not ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten=rewritten):
+            return raw
         return rewritten or raw
+
+    @staticmethod
+    def rewrite_preserves_ask(*, user_text: str, rewritten: str) -> bool:
+        """True when a Contextualizer rewrite still concerns the user's own ask.
+
+        Structural test, no phrase lists: at least one content-bearing token of the
+        user turn (>= ``_ASK_TOKEN_MIN_CHARS``, alphanumeric) must survive as a
+        prefix of some rewrite token. The prefix fold tolerates inflection
+        ("сводку"→"сводка", "текст"→"текста") while keeping distinct stems apart.
+
+        A rewrite that shares nothing with the ask replaced it: the model answered
+        an earlier question ("покажи текст файла" → "Кто является истцом…"), which
+        is the "replies with the previous answer" defect. Enrichment of an
+        underspecified ask ("дай короткую сводку" → "Сводка причин роста цен")
+        keeps at least one token and is allowed. An ask without content tokens is
+        underspecified by construction — any enrichment is allowed.
+        """
+        asked = _content_tokens(user_text)
+        if not asked:
+            return True
+        produced = _tokens(rewritten)
+        if not produced:
+            return False
+        for token in asked:
+            prefix = token[:_ASK_TOKEN_PREFIX_CHARS]
+            if any(candidate.startswith(prefix) for candidate in produced):
+                return True
+        return False
 
     @staticmethod
     def prior_assistant_content(
@@ -447,6 +487,7 @@ class ContinuityPolicy:
         raw_intent: IntentClassifierOutput | None,
         has_turn_attachments: bool = False,
         user_text: str | None = None,
+        thread_file_named: bool = False,
     ) -> EffectiveRoutingIntent:
         """Сводит continuity + Intent в один EffectiveRoutingIntent.
 
@@ -457,8 +498,20 @@ class ContinuityPolicy:
 
         ``user_text``: raw turn ask (pre-rewrite). Used only to detect false
         ``new_topic`` when Contextualizer enriched the query from prior.
+
+        ``thread_file_named``: the ask deterministically names a file this dialog
+        holds (resolved in code, not by the model). Intent's ``file_reference`` is
+        one LLM judgement over a free-form ask and misses paraphrases; a named
+        thread file is a fact, so it sets the axis before any remap. A fenced
+        upload turn still owns its own file (``has_turn_attachments``).
         """
         snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
+        if thread_file_named:
+            snap.file_reference = "thread_file"
+            if snap.kind == "clarify":
+                # The named file IS the referent: there is nothing left to clarify, and
+                # a clarification turn would never dispatch the storage read (055).
+                snap.kind = "answer"
         assistant_prior = cls.prior_assistant_content(contextualizer, dialog)
         if snap.choice_slot_filled:
             snap.requires_user_choice = False
@@ -590,8 +643,15 @@ class ContinuityPolicy:
 
     @staticmethod
     def _demote_false_format(snap: _ResolveSnapshot) -> None:
-        """Structural gate: Intent clarify-slot / social beats false Contextualizer format."""
+        """Structural gate: Intent clarify-slot / social / no-back-reference beats format."""
         if snap.kind != "format":
+            return
+        if not snap.refers_to_prior:
+            # Contextualizer contract: format ALWAYS transforms prior content, so it
+            # must report refers_to_prior=true. A format label without that flag is an
+            # inconsistent (or stale) classification; answering it from ``prior_context``
+            # replays the previous turn. Fail safe: treat the ask as self-contained.
+            snap.kind = "new_topic"
             return
         if snap.raw_task == "social_conversation":
             snap.kind = "new_topic"
@@ -768,6 +828,26 @@ class _ResolveSnapshot:
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,
             ctx_confidence=float(contextualizer.confidence) if contextualizer is not None else 1.0,
         )
+
+
+def _tokens(text: str) -> tuple[str, ...]:
+    """Case-folded alphanumeric tokens (punctuation is not part of a token)."""
+    out: list[str] = []
+    current: list[str] = []
+    for ch in text.casefold():
+        if ch.isalnum():
+            current.append(ch)
+        elif current:
+            out.append("".join(current))
+            current = []
+    if current:
+        out.append("".join(current))
+    return tuple(out)
+
+
+def _content_tokens(text: str) -> tuple[str, ...]:
+    """Tokens long enough to carry the request (skips prepositions structurally)."""
+    return tuple(token for token in _tokens(text) if len(token) >= _ASK_TOKEN_MIN_CHARS)
 
 
 def _map_answer_task(

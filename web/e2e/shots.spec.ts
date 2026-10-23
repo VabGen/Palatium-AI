@@ -44,7 +44,7 @@ test('светлая тема: пустой диалог', async ({ page }) => {
 
 test('светлая тема: карточка инструмента и панель памяти', async ({ page }) => {
   const server = defaultApi();
-  server.reply('intents.process', {
+  server.reply('intents.process.stream', {
     json: {
       task_id: 'task-1',
       output: answerDocument(),
@@ -56,7 +56,7 @@ test('светлая тема: карточка инструмента и пан
   await server.install(page);
   await openWidget(page);
   await page.getByRole('button', { name: 'Тема: светлая' }).click();
-  await page.getByRole('textbox').fill('Отправь письмо контрагенту');
+  await page.locator('.composer-textarea').fill('Отправь письмо контрагенту');
   await page.getByRole('button', { name: 'Отправить сообщение' }).click();
   await page.locator('.hitl-card').waitFor();
   await page.getByRole('button', { name: 'Память' }).click();

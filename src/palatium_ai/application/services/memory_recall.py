@@ -21,6 +21,7 @@ from palatium_ai.domain.memory.scoring import (
     lexical_relevance,
     recency_score,
 )
+from palatium_ai.domain.memory.types import MEMORY_EXPLICIT_WRITE_KEY
 
 if TYPE_CHECKING:
     from palatium_ai.domain.graph.write_port import GraphFactRecord, GraphWritePort
@@ -178,7 +179,10 @@ async def _select_durable_hits(
     for idx, (namespace, item) in enumerate(ranked):
         if _is_user_namespace(namespace):
             kind = str(item.get("kind", "fact")).strip().lower() or "fact"
-            if kind not in _USER_NS_HOT_PATH_KINDS:
+            # Preference-shaped user memory always applies; a fact is recallable
+            # cross-thread only when a human explicitly approved the write (R2.1) —
+            # extract-inferred facts stay thread-scoped (P0-B bleed).
+            if kind not in _USER_NS_HOT_PATH_KINDS and not _is_explicit_write(item):
                 continue
         hit = _durable_hit_from_item(
             item,
@@ -201,6 +205,16 @@ async def _select_durable_hits(
 
 def _is_user_namespace(namespace: tuple[str, ...]) -> bool:
     return bool(namespace) and namespace[0] == "user"
+
+
+def _is_explicit_write(item: dict[str, object]) -> bool:
+    """True for entries a human approved via HITL (never inferred by extract)."""
+    raw = item.get(MEMORY_EXPLICIT_WRITE_KEY)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes"}
+    return raw == 1
 
 
 async def _select_graph_hits(

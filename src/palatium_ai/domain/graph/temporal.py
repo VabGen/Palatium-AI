@@ -14,6 +14,9 @@ from datetime import UTC, datetime
 # concrete ``expired_at`` to avoid UnknownPropertyKeyWarning (Phase 4).
 EXPIRED_AT_SENTINEL = "9999-12-31T23:59:59Z"
 
+# Parameter name every bi-temporal ``MemoryFact`` read must bind (see ``assert_fact_read_is_temporal``).
+AS_OF_PARAM = "as_of"
+
 # Parameterized Cypher fragment for ``graph_query`` (caller binds $as_of + $user_id).
 # ``datetime($as_of)`` — Neo4j stores bi-temporal props as DateTime; raw string compare
 # silently yields no rows (Wave M5 live verify 2026-10-06).
@@ -45,3 +48,13 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=UTC)
     return value
+
+
+def as_of_param_value(as_of: datetime | None) -> str:
+    """Bind value for ``$as_of``: requested moment or now, always UTC ``Z`` ISO-8601.
+
+    ``datetime($as_of)`` in Cypher parses ISO-8601; the ``Z`` suffix avoids the
+    ``+00:00``/offset handling differences between Neo4j versions.
+    """
+    moment = datetime.now(UTC) if as_of is None else _aware(as_of)
+    return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")

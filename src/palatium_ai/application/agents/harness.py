@@ -370,7 +370,22 @@ class Harness:
                 raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
             except Exception as exc:  # noqa: BLE001  # retry loop captures any provider failure before raising (030)
                 last_error = exc
-                if attempt >= config.max_retries - 1:
+                # A retried attempt is invisible otherwise: only the final outcome leaves
+                # the harness, so a 14 s hop cannot be told apart from a cold provider or
+                # a retried 5xx. Type only — the message may echo provider payload (020).
+                retrying = attempt < config.max_retries - 1
+                agent_metrics.record_error(config.role, "llm_attempt_failed")
+                logger.warning(
+                    "llm.attempt_failed",
+                    agent=config.name,
+                    agent_role=config.role,
+                    model=resolved_model,
+                    attempt=attempt + 1,
+                    max_retries=config.max_retries,
+                    error_type=type(exc).__name__,
+                    retrying=retrying,
+                )
+                if not retrying:
                     break
                 await asyncio.sleep(2**attempt)
 

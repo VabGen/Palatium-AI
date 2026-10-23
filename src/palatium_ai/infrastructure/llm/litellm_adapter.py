@@ -23,6 +23,7 @@ from palatium_ai.domain.llm.models import (
 )
 from palatium_ai.domain.llm.structured_output import response_model_for_schema, strict_json_schema
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
+from palatium_ai.infrastructure.llm.shared_transport import shared_client_session
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -271,6 +272,9 @@ class LiteLLMAdapter:
             "api_key": self._api_key,
             "api_base": self._base_url,
         }
+        # A shared session is what keeps LiteLLM from opening (and leaking) one aiohttp
+        # session per request; the loop-scoped registry lives in shared_transport.
+        params["shared_session"] = shared_client_session()
         # Per-call dynamic timeout wins over provider default (Phase 4).
         effective_timeout = timeout_seconds if timeout_seconds is not None else self._timeout_seconds
         if effective_timeout is not None:

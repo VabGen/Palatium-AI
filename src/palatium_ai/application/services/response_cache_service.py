@@ -2,8 +2,9 @@
 
 """Application facade for L1 FormatterTaskResult caching (P0.2).
 
-Stores low-risk exact-repeat results keyed by tenant + user text + locale +
-strategy + source fingerprint. Live path probes in formatter_node (W1.2).
+Stores self-contained low-risk exact repeats keyed by tenant + thread + user text +
+locale + strategy + source + prior-dialog fingerprints. Live path probes in
+formatter_node (W1.2); prior-dependent turns never read or write this layer.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ logger = get_logger(__name__)
 
 
 class ResponseCacheService:
-    """Lookup / store low-risk turn results under tenant-keyed L1 hashes."""
+    """Lookup / store low-risk turn results under tenant+thread-keyed L1 hashes."""
 
     def __init__(
         self,
@@ -43,10 +44,12 @@ class ResponseCacheService:
         self,
         *,
         tenant_key: str,
+        thread_key: str,
         user_text: str,
         locale: str,
         strategy: ExecutionStrategy | str,
         source_content: str,
+        prior_fingerprint: str,
     ) -> ResponseCacheKeyParts | None:
         if not ResponseCacheKeyPolicy.is_cacheable_strategy(str(strategy)):
             return None
@@ -55,32 +58,38 @@ class ResponseCacheService:
             return None
         return ResponseCacheKeyParts(
             tenant_key=tenant_key.strip() or "anon",
+            thread_key=thread_key.strip() or "none",
             model=f"strategy:{strategy}",
             system_fingerprint=ResponseCacheKeyPolicy.system_fingerprint_for(str(strategy)),
             user_norm=user_norm,
             strategy=strategy,  # type: ignore[arg-type]  # gated by is_cacheable_strategy (017)
             locale=(locale or "und").strip()[:16] or "und",
             source_fingerprint=ResponseCacheKeyPolicy.fingerprint_source(source_content),
+            prior_fingerprint=prior_fingerprint or "none",
         )
 
     async def get(
         self,
         *,
         tenant_key: str,
+        thread_key: str,
         user_text: str,
         locale: str,
         strategy: ExecutionStrategy | str,
         source_content: str = "",
+        prior_fingerprint: str = "none",
     ) -> FormatterTaskResult | None:
-        """Probe L1 for an exact-repeat of a cacheable strategy."""
+        """Probe L1 for an exact repeat of a self-contained cacheable turn."""
         if not self._enabled or self._port is None:
             return None
         parts = self._key_parts(
             tenant_key=tenant_key,
+            thread_key=thread_key,
             user_text=user_text,
             locale=locale,
             strategy=strategy,
             source_content=source_content,
+            prior_fingerprint=prior_fingerprint,
         )
         if parts is None:
             return None
@@ -96,6 +105,7 @@ class ResponseCacheService:
         logger.info(
             "response_cache.hit",
             strategy=str(strategy),
+            thread_key=thread_key,
             key_suffix=key[-12:],
             user_text=user_text[:50],
         )
@@ -105,23 +115,41 @@ class ResponseCacheService:
         self,
         *,
         tenant_key: str,
+        thread_key: str,
         user_text: str,
         locale: str,
         strategy: ExecutionStrategy | str,
         result: FormatterTaskResult,
         source_content: str = "",
+        prior_fingerprint: str = "none",
+        continuation_kind: str | None = None,
+        trust_prior_for_workers: bool = False,
+        has_turn_attachments: bool = False,
     ) -> None:
-        """Store successful low-risk results for exact repeats."""
+        """Store successful self-contained low-risk results for exact repeats."""
         if not self._enabled or self._port is None:
             return
         if result.status == "failure":
             return
+        if result.hitl_cards:
+            # A card is one-shot server-side: a replayed cached answer would show a
+            # card that can never be resolved, so a turn that mints one is not cacheable.
+            return
+        if not ResponseCacheKeyPolicy.is_turn_cacheable(
+            strategy=str(strategy),
+            continuation_kind=continuation_kind,
+            trust_prior_for_workers=trust_prior_for_workers,
+            has_turn_attachments=has_turn_attachments,
+        ):
+            return
         parts = self._key_parts(
             tenant_key=tenant_key,
+            thread_key=thread_key,
             user_text=user_text,
             locale=locale,
             strategy=strategy,
             source_content=source_content,
+            prior_fingerprint=prior_fingerprint,
         )
         if parts is None:
             return

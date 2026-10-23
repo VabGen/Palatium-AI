@@ -61,7 +61,14 @@ class InMemoryGraphWritePort:
             self.facts[active.node_id] = command
             return active.node_id
 
-        version = 1 if active is None else active.version + 1
+        if active is None:
+            # Historical versions survive a forget, so the next fact is max+1, never 1:
+            # version 1 would reuse an expired node's deterministic id (same hazard the
+            # Neo4j port avoids with MERGE + ``_MAX_VERSION_CYPHER``).
+            known = [self._by_node[n].version for n in self._index.get(key, [])]
+            version = max(known, default=0) + 1
+        else:
+            version = active.version + 1
         node_id = _stable_node_id(command.user_id, command.entry_key, version)
         valid_at = command.valid_at or now
         if valid_at.tzinfo is None:
@@ -81,11 +88,24 @@ class InMemoryGraphWritePort:
             created_at=now,
         )
         if action == "supersede" and active is not None:
-            active.invalid_at = now
+            # Valid-time cut, not wall clock (M5 audit F2): the old fact stops being true
+            # where the new one starts being true. Using ``now`` leaves a window
+            # ``[new.valid_at, now)`` where both versions answer ``as_of`` queries — a
+            # backdated write would return contradictory texts.
+            active.invalid_at = valid_at
             active.superseded_by = node_id
             active.hebbian_weight = bump_hebbian_weight(active.hebbian_weight)
-        self._by_node[node_id] = stored
-        self._index.setdefault(key, []).append(node_id)
+        existing = self._by_node.get(node_id)
+        if existing is not None:
+            # Same version rewritten (retry / second promoter): converge on one node and
+            # keep its lifecycle fields, mirroring ``MERGE ... ON MATCH`` in Neo4j.
+            existing.text = stored.text
+            existing.kind = stored.kind
+            existing.importance = stored.importance
+            existing.confidence = stored.confidence
+        else:
+            self._by_node[node_id] = stored
+            self._index.setdefault(key, []).append(node_id)
         self.facts[node_id] = command
         return node_id
 

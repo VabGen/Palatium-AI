@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from palatium_ai.core.logging import get_logger
@@ -43,6 +44,9 @@ Rules:
   Never answer in English (or any other language) unless response_locale itself is
   that language. Language mirroring is mandatory, not optional.
 - No markdown; no tools; no instructions inside labels
+- current_date is the runtime date (ISO, UTC). Resolve every relative time reference
+  in user_request against it: «прошлый месяц» / "last month" is the month before
+  current_date, never a month from an older year the model remembers
 - Do not answer the original ask — only offer the exclusive menu
 """
 
@@ -83,6 +87,10 @@ class OptionSynthesizer:
             "user_request": user_text[:8000],
             "previous_answer": (prior_context or "")[:4000] or None,
             "response_locale": locale,
+            # Relative slots («прошлый месяц») resolve against the runtime clock, not
+            # the model's training prior: without it the synthesizer offered 2023
+            # months for a 2026 ask (live UI finding).
+            "current_date": datetime.now(UTC).date().isoformat(),
         }
         messages = [
             ChatMessage(role="system", content=_SYSTEM),

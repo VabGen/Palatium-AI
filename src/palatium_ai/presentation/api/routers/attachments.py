@@ -25,7 +25,10 @@ from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal
-from palatium_ai.presentation.security.ownership import load_session_for_principal
+from palatium_ai.presentation.security.ownership import (
+    ensure_session_for_principal,
+    load_session_for_principal,
+)
 
 if TYPE_CHECKING:
     # Type-only: presentation may not import application at runtime (000).
@@ -300,20 +303,12 @@ async def _bind_thread_for_hitl(
     later ``GET /hitl/{card_id}`` (``allow_missing=False``) returns 404 Session not
     found after a successful restore/index toast (055).
     """
-    principal = get_principal(request)
-    session_service = get_app_resources(request.app).session_service
-    await load_session_for_principal(
+    await ensure_session_for_principal(
         request=request,
-        principal=principal,
-        session_service=session_service,
+        principal=get_principal(request),
+        session_service=get_app_resources(request.app).session_service,
         thread_id=thread_id,
-        allow_missing=True,
-    )
-    await session_service.touch_session(
-        thread_id=thread_id,
-        user_id=principal.subject,
-        context_patch={"last_operation": last_operation},
-        status="active",
+        last_operation=last_operation,
     )
 
 

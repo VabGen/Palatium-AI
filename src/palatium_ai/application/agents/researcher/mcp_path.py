@@ -47,6 +47,7 @@ from palatium_ai.domain.agents.messages import AgentOutput
 from palatium_ai.domain.agents.researcher import (
     ATTACHMENT_REFERENCE_UNRESOLVED,
     MCP_EMPTY_RESULT,
+    MCP_SERVER_UNAVAILABLE,
     MCP_TOOL_ERROR,
     RESEARCHER_TOOL_ARGS_INVALID,
     ResearcherInput,
@@ -153,9 +154,16 @@ async def _build_file_reread_arguments(
 
 
 def _file_reference_hint(task_input: ResearcherInput) -> str:
-    """Text the resolver may read a file name from: this ask + trusted prior."""
-    parts = [task_input.context_packet.user_text, task_input.prior_context or "", *task_input.memory_hints]
-    return "\n".join(part for part in parts if part.strip())
+    """Text the resolver may read a file name from: the user's own ask only.
+
+    Assistant prose (``prior_context``) and extracted memory hints are NOT
+    evidence of which file the user meant. The previous answer routinely says
+    «обращение», «документ», «кодекс» in ordinary prose; feeding it here made a
+    bare word resolve to an unrelated thread file and read it (cross-file
+    bleed, 055/020). User asks that do not name a file fall through to the
+    ``ambiguous`` refusal → file-choice card instead of a silent wrong read.
+    """
+    return task_input.context_packet.user_text
 
 
 def _require_researcher_input(task_input: object) -> ResearcherInput:
@@ -200,6 +208,17 @@ async def execute_mcp_capability(
 
     binding = await resolve_mcp_tool_binding(deps, task_input)
     if binding is None:
+        if deps.capability_index.degraded_servers() and task_input.context_packet.requires_mcp:
+            # The turn cannot be answered without external data, and the module that
+            # would supply it is down: say so instead of answering from the model alone
+            # (Level 5 graceful degradation, 055).
+            logger.warning(
+                "researcher.mcp_degraded_no_binding",
+                task_id=task_input.task_id,
+                degraded_servers=list(deps.capability_index.degraded_servers()),
+            )
+            agent_metrics.record_error(deps.agent_role, "mcp_server_unavailable")
+            return failure_output(task_uuid, summary=None, error=MCP_SERVER_UNAVAILABLE)
         return None
     server_name, tool_name = binding
 
@@ -466,6 +485,13 @@ async def mcp_outcome_to_output(
 ) -> AgentOutput:
     task_input = _require_researcher_input(task_input)
     raw = mcp_joined_text(outcome)
+    if outcome.error_code == "server_unavailable":
+        logger.warning(
+            "researcher.mcp_server_unavailable",
+            tool=f"{server_name}.{tool_name}",
+            task_id=str(task_uuid),
+        )
+        return failure_output(task_uuid, summary=None, error=MCP_SERVER_UNAVAILABLE)
     if outcome.is_error:
         return failure_output(task_uuid, summary=None, error=MCP_TOOL_ERROR)
     if mcp_payload_is_empty(raw):

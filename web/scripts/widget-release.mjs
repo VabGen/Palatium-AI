@@ -37,8 +37,12 @@ const CEM_ARTIFACT = join(DIST, 'custom-elements.json');
  * Поднять бюджет = осознанное решение с обновлением плана, а не правка «чтобы CI был зелёным».
  */
 // Hotfix 1.1: react-markdown + remark-gfm in stream preview (DoD, evolution plan).
-// Raise only with plan note (084).
-const BUDGET_KIB = 210;
+// 2026-10-22: `thinking-orbs@0.3.2` — индикатор «агент работает» (+10.68 KiB gzip:
+// 198.42 → 209.10 против прежнего потолка 210). В single-file IIFE библиотека не
+// делится на чанк, а 8 из 9 состояний не tree-shake'атся: реестр `MODE_FRAMES`
+// тянется целиком. Raise only with plan note (084) — заметка в
+// `.cursor/plans/web-embed-assistant.md`, раздел «Замеры».
+const BUDGET_KIB = 224;
 
 /** Кибибайт, а не «kB»: бюджет считаем в KiB, отчёт сборки печатает kB (10^3) — числа близки, но единицы разные. */
 const KIB = 1024;

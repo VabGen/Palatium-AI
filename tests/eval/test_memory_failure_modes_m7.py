@@ -111,8 +111,8 @@ async def test_g1_silent_memory_death_low_confidence_empty_not_exception() -> No
 async def test_g1_error_compounding_extract_idempotent() -> None:
     """Duplicate extract enqueue must not multiply jobs (Error Compounding)."""
     queue = InMemoryExtractJobQueue(max_queue=8)
-    assert await queue.enqueue(thread_id="g1-ec", task_id="same", user_id="u")
-    assert await queue.enqueue(thread_id="g1-ec", task_id="same", user_id="u")
+    assert await queue.enqueue(thread_id="g1-ec", task_id="same", user_id="u") == "queued"
+    assert await queue.enqueue(thread_id="g1-ec", task_id="same", user_id="u") == "queued"
     stats = await queue.stats()
     assert stats.depth == 1
 
@@ -121,8 +121,8 @@ async def test_g1_error_compounding_extract_idempotent() -> None:
 async def test_g1_storage_exhaustion_queue_cap() -> None:
     """Queue at capacity rejects new work (Storage Exhaustion)."""
     queue = InMemoryExtractJobQueue(max_queue=1)
-    assert await queue.enqueue(thread_id="g1-se", task_id="a")
-    assert await queue.enqueue(thread_id="g1-se", task_id="b") is False
+    assert await queue.enqueue(thread_id="g1-se", task_id="a") == "queued"
+    assert await queue.enqueue(thread_id="g1-se", task_id="b") == "queue_full"
 
 
 @pytest.mark.asyncio()
@@ -249,3 +249,4 @@ def test_m7_promote_error_and_recall_metric_apis() -> None:
     """Registry methods are callable (Prom or Noop); no exception on publish path."""
     agent_metrics.record_memory_promote_error(error_type="ValueError")
     agent_metrics.record_memory_recall_at_k(k=4, value=0.91)
+    agent_metrics.record_memory_promote_blocked_pii(count=2)

@@ -59,6 +59,10 @@ def intent_to_agent_input(
             "continuation_kind": continuation or "",
             "has_prior_dialog": "true" if task_input.has_prior_dialog else "false",
             "has_thread_files": "true" if task_input.has_thread_files else "false",
+            # Plurality/modality of THIS turn: the model needs the real count to label
+            # ``attachment_scope`` instead of guessing it from prose (010, 055).
+            "attachment_count": str(task_input.attachment_count),
+            "attachment_kinds": ",".join(task_input.attachment_kinds),
             "_thread_id": thread_id,
         },
     )

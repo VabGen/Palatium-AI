@@ -8,4 +8,9 @@ from typing import Literal
 
 MemoryType = Literal["preference", "fact", "incident", "episode"]
 
-__all__ = ["MemoryType"]
+#: Value marker for a write a human explicitly approved («запомни …», 020/060).
+#: Hot-path recall treats these as deliberate durable memory: an approved fact may
+#: cross threads, while facts *inferred* by extract stay thread-scoped (P0-B bleed).
+MEMORY_EXPLICIT_WRITE_KEY = "explicit_write"
+
+__all__ = ["MEMORY_EXPLICIT_WRITE_KEY", "MemoryType"]

@@ -39,6 +39,7 @@ beforeEach(() => {
 describe('processIntentStream typed frames', () => {
   it('forwards document_title and typed block_delta frames in order', async () => {
     const body = sse([
+      { event: 'hop', data: { node: 'researcher' } },
       { event: 'document_title', data: { title: 'Сравнение файлов' } },
       {
         event: 'block_delta',
@@ -63,12 +64,16 @@ describe('processIntentStream typed frames', () => {
     );
 
     const titles: string[] = [];
+    const hops: string[] = [];
     const blocks: Array<{ index: number; block: ContentBlock }> = [];
     const result = await processIntentStream('сравни', 'th-1', null, null, [], {
+      onHop: node => hops.push(node),
       onDocumentTitle: title => titles.push(title),
       onBlockDelta: (index, block) => blocks.push({ index, block }),
     });
 
+    // Узел графа — единственный сигнал «что сейчас происходит» для индикатора.
+    expect(hops).toEqual(['researcher']);
     expect(titles).toEqual(['Сравнение файлов']);
     expect(blocks.map(item => item.index)).toEqual([0, 1]);
     expect(blocks[1].block).toMatchObject({ type: 'table', columns: ['Поле', 'v1', 'v2'] });

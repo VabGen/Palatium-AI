@@ -8,11 +8,11 @@ import asyncio
 import re
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.domain.memory.pii import mask_memory_value, memory_contains_pii
-from palatium_ai.domain.memory.promotion import PromotionCandidate
+from palatium_ai.domain.memory.promotion import DEFAULT_PROMOTE_CLAIM_SECONDS, PromotionCandidate
 from palatium_ai.infrastructure.memory.user_scope import resolve_user_id
 
 
@@ -21,6 +21,7 @@ class _AccessMeta:
     access_frequency: int = 0
     last_accessed: datetime | None = None
     promoted_at: datetime | None = None
+    promote_claimed_at: datetime | None = None
 
 
 class InMemoryMemoryPort:
@@ -32,11 +33,19 @@ class InMemoryMemoryPort:
         self._meta: dict[tuple[tuple[str, ...], str], _AccessMeta] = {}
 
     async def put(self, *, namespace: tuple[str, ...], key: str, value: dict[str, object]) -> None:
-        """Upsert a memory item under namespace/key."""
+        """Upsert a memory item under namespace/key.
+
+        Mirrors the Postgres conflict branch: new content (text/kind) is no longer
+        "promoted", so the next batch can carry it to the graph (M5 audit F5).
+        """
         async with self._lock:
             slot = (namespace, key)
+            previous = self._items.get(slot)
+            meta = self._meta.setdefault(slot, _AccessMeta())
+            if previous is not None and _promoted_content(previous) != _promoted_content(value):
+                meta.promoted_at = None
+                meta.promote_claimed_at = None
             self._items[slot] = dict(value)
-            self._meta.setdefault(slot, _AccessMeta())
 
     async def get(self, *, namespace: tuple[str, ...], key: str) -> dict[str, object] | None:
         """Fetch one item or None."""
@@ -112,6 +121,8 @@ class InMemoryMemoryPort:
                 meta = self._meta.get((namespace, entry_key), _AccessMeta())
                 if meta.promoted_at is not None:
                     continue
+                if not _claim_is_available(meta.promote_claimed_at, now=datetime.now(UTC)):
+                    continue
                 if meta.access_frequency < min_access_frequency:
                     continue
                 importance = max(
@@ -142,8 +153,38 @@ class InMemoryMemoryPort:
                     break
             return out
 
+    async def claim_promotion(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        key: str,
+        lease_seconds: int = DEFAULT_PROMOTE_CLAIM_SECONDS,
+    ) -> bool:
+        """Reserve the row for one promoter; the lock is the compare-and-set."""
+        async with self._lock:
+            slot = (namespace, key)
+            if slot not in self._items:
+                return False
+            meta = self._meta.setdefault(slot, _AccessMeta())
+            now = datetime.now(UTC)
+            if meta.promoted_at is not None:
+                return False
+            if not _claim_is_available(meta.promote_claimed_at, now=now, lease_seconds=lease_seconds):
+                return False
+            meta.promote_claimed_at = now
+            return True
+
+    async def release_promotion(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Drop the reservation after a non-promoting outcome."""
+        async with self._lock:
+            meta = self._meta.get((namespace, key))
+            if meta is None or meta.promote_claimed_at is None:
+                return False
+            meta.promote_claimed_at = None
+            return True
+
     async def mark_promoted(self, *, namespace: tuple[str, ...], key: str) -> bool:
-        """Stamp promoted_at; returns True when a row was updated."""
+        """Stamp promoted_at and drop the claim; returns True when a row was updated."""
         async with self._lock:
             slot = (namespace, key)
             if slot not in self._items:
@@ -152,4 +193,19 @@ class InMemoryMemoryPort:
             if meta.promoted_at is not None:
                 return False
             meta.promoted_at = datetime.now(UTC)
+            meta.promote_claimed_at = None
             return True
+
+
+def _promoted_content(value: dict[str, object]) -> tuple[str, str]:
+    """Fields the promoted graph fact is built from (text + kind), not provenance."""
+    return (str(value.get("text", "")).strip(), str(value.get("kind", "fact")).strip().lower())
+
+
+def _claim_is_available(
+    claimed_at: datetime | None,
+    *,
+    now: datetime,
+    lease_seconds: int = DEFAULT_PROMOTE_CLAIM_SECONDS,
+) -> bool:
+    return claimed_at is None or claimed_at <= now - timedelta(seconds=max(1, lease_seconds))

@@ -75,7 +75,10 @@ class DiscreteChoiceSynthesisPolicy:
             return False
         if not requires_user_choice and underspecification_kind != "discrete_choice":
             return False
-        return not plan.choice_actions
+        # Synthesis only fills a choice the policy already found *required*: an
+        # answered read-only turn is not a clarification, so there is nothing to
+        # synthesize (E2E-07 — the card verdict lives in one place, 055).
+        return plan.required_choice and not plan.choice_actions
 
     @classmethod
     def merge_actions_into_document(

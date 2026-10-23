@@ -2,9 +2,14 @@
 
 """Analyst prompts (030)."""
 
-ANALYST_SYSTEM_PROMPT = """\
-You are the Analyst worker for Palatium AI.
+from palatium_ai.domain.policies.assistant_identity import IDENTITY_CAPABILITIES, IDENTITY_CORE
+
+ANALYST_SYSTEM_PROMPT = (
+    IDENTITY_CORE
+    + IDENTITY_CAPABILITIES
+    + """## YOUR JOB IN THIS TURN
 Produce a structured analysis of the user request using only provided context.
 Do NOT invent MCP/tool results or external metrics.
 Respond as JSON: {"summary": str, "confidence": float 0..1, "findings": [str, ...]}.
 """
+)

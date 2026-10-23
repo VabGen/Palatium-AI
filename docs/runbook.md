@@ -759,6 +759,14 @@ Formatter, меньше repair, `web_fallback` только при пустом 
 уже превышенном бюджете). Поднять `TURN_HOP_BUDGET_MS` — только если осознанно
 сдвигаете алерт `PalatiumTurnHopBudgetExceeded`, не «ускорение».
 
+**Медленный узел на LLM — retry или холодный провайдер?** Смотреть
+`llm.attempt_failed` (WARNING, `agent_role`, `attempt`, `max_retries`,
+`error_type`, `retrying`): метрика `palatium_agent_errors_total{error_type="llm_attempt_failed"}`.
+Есть строки с `retrying=True` → время ушло на ретрай (5xx/сброс, холодный гейтвей),
+лечится прогревом/повтором; нет строк, но узел медленный → один медленный
+completion у провайдера (tier/сеть), ретраев не было. Без этого сигнала оба
+случая в логе выглядят одинаково: успешный ход пишет только финальный `200`.
+
 ### 3.17c. ClamAV `freshclam` → HTTP 403 / 429 от CDN
 
 **Симптом:** `403`/`429`, cool-down до timestamp в `/var/log/clamav/freshclam.log`,
@@ -878,6 +886,61 @@ docker exec palatium-ai-redis-1 valkey-cli config get maxmemory-policy   # → n
 > `maxmemory-policy noeviction` — не тюнинг, а часть контракта: при `allkeys-lru` ключ
 > `palatium:kill_switch:engaged` может быть вытеснен под давлением, и аварийная остановка
 > молча перестанет действовать (020, fail-closed). Не менять на `allkeys-*`.
+
+### 3.20. Langfuse: `Reached heap limit` в цикле / worker `ERR AUTH`
+
+**Симптом:** `langfuse-web` перезапускается каждые 40–90 с, в логах
+`FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory`
+(heap ≈ 380 MB); `langfuse-worker` после рестарта Redis пишет
+`ERR AUTH <password> called without any password configured for the default user`
+и не разбирает очереди.
+
+**Причины — две и независимые:**
+
+1. **Устаревший контейнер.** `restart: unless-stopped` перезапускает *тот же* контейнер,
+   поэтому правки `mem_limit` / `NODE_OPTIONS` в compose к уже созданному контейнеру
+   **не применяются**. V8 выводит old space из cgroup, и при старом `mem_limit: 768m`
+   heap упирается в ~384 MB — ровно цифра из лога. Лечится только пересозданием.
+2. **Пустой, но заданный `REDIS_AUTH`.** `REDIS_AUTH=""` — это не «без пароля»:
+   клиент отправляет фрейм `AUTH ""`, а Valkey без `requirepass` отвечает ошибкой
+   (проверено: `valkey-cli AUTH ""`). Поэтому Langfuse получает
+   `REDIS_CONNECTION_STRING` без userinfo, а не трио `REDIS_HOST/PORT/AUTH`.
+
+**Диагностика (сначала посмотреть, а не тюнить):**
+
+```powershell
+# потолок и heap у РАБОТАЮЩЕГО контейнера, а не в compose
+docker inspect palatium-ai-langfuse-web-1 `
+  --format 'mem={{.HostConfig.Memory}} oom={{.State.OOMKilled}} restarts={{.RestartCount}}'
+docker inspect palatium-ai-langfuse-web-1 --format '{{json .Config.Env}}' | Select-String NODE_OPTIONS
+
+# что реально отрендерилось из compose
+docker compose --env-file env/.env --profile observability config |
+  Select-String 'REDIS_CONNECTION_STRING|max-old-space-size'
+```
+
+Если `HostConfig.Memory` не совпадает с `mem_limit` из compose — контейнер устарел,
+и `docker restart` ничего не изменит.
+
+**Фикс — пересоздать, не перезапускать:**
+
+```powershell
+docker compose --env-file env/.env --profile observability up -d --force-recreate --no-deps `
+  langfuse-web langfuse-worker
+
+# проверка: heap задан явно, потолок новый, AUTH-предупреждений нет
+docker inspect palatium-ai-langfuse-web-1 --format 'mem={{.HostConfig.Memory}}'
+docker stats --no-stream palatium-ai-langfuse-web-1
+docker logs --tail 50 palatium-ai-langfuse-web-1
+```
+
+Если OOM повторяется **при явном heap 2 GiB** — это утечка или аномально тяжёлый ingest:
+нужен heap snapshot, а не очередное увеличение потолка (050).
+
+> Сумма потолков core + observability (~11.9 GiB) не влезает в дефолтную Docker-VM
+> (7884 MiB): `make up-full` требует VM ≥ 12 GiB (`%USERPROFILE%\.wslconfig`,
+> `memory=12GB`). На меньшей VM потолок `langfuse-web` не спасает — срабатывает
+> OOM-killer всей VM и выбирает самый крупный RSS (обычно Postgres).
 
 ---
 
@@ -1405,9 +1468,9 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `ATTACHMENTS_OCR_MIN_CONFIDENCE` | `55` | quality gate: эскалация при mean word confidence Tesseract ниже порога (латинский мусор с рукописной кириллицы) |
 | `ATTACHMENTS_PDF_MIN_AVG_CHARS_PER_PAGE` | `200` | ниже порога PDF считается сканом → OCR-путь |
 | `ATTACHMENTS_TESSERACT_CMD` | — | абсолютный путь к `tesseract`, если не в `PATH` |
-| `ATTACHMENTS_TESSERACT_TIMEOUT_SECONDS` | `90` | жёсткий kill одного вызова Tesseract (страница PDF / одно изображение); `TimeoutExpired` → страница считается нечитаемой, документ → Vision/`parse_failed` |
-| `ATTACHMENTS_PDF_OCR_BUDGET_SECONDS` | `300` | бюджет OCR на один PDF: прочитанные страницы сохраняются (`truncated`), остальные не читаются |
-| `ATTACHMENTS_OCR_MAX_CONCURRENCY` | `1` | слотов локального OCR на процесс API (PDF + изображения делят один семафор); Tesseract и так занимает ядро на страницу |
+| `ATTACHMENTS_TESSERACT_TIMEOUT_SECONDS` | `30` | жёсткий kill одного вызова Tesseract (страница PDF / одно изображение). Истёкшая страница остаётся пустой и уходит в Vision **постранично**; остальные страницы сохраняют OCR-текст (раньше таймаут останавливал весь документ) |
+| `ATTACHMENTS_PDF_OCR_BUDGET_SECONDS` | `300` | бюджет OCR на один PDF: прочитанные страницы сохраняются (`truncated`), остальные не читаются. Страница, начатая после исчерпания бюджета, не OCR-ится; её таймаут урезается остатком бюджета |
+| `ATTACHMENTS_OCR_MAX_CONCURRENCY` | `1` | слотов локального OCR на процесс API (PDF + изображения делят один семафор). Слот берётся **на страницу**, не на документ: при `>1` один многолистовой скан идёт параллельно, а не только параллельные загрузки. Tesseract занимает ядро на страницу — поднимать только при реально свободных ядрах и запасе памяти контейнера |
 | `ATTACHMENTS_PARSE_TIMEOUT_SECONDS` | `420` | жёсткий потолок одного парсинга (text layer + OCR + Vision); истечение → `parse_failed`, а не висящий `POST /complete` |
 | `ATTACHMENTS_PDF_VISION_MAX_PAGES` | `20` | потолок страниц PDF для vision (G14) |
 | `ATTACHMENTS_PDF_FIGURE_ENRICHMENT` | `true` | VLM-дополнение страниц с фигурами при живом text layer |
@@ -1480,7 +1543,7 @@ default 200), без классификатора:
 |---|---|
 | `text/*`, `docx`, `xlsx`, `pptx`, `html` | text layer |
 | PDF с достаточным слоем | text layer (`pypdf`); опционально figure enrichment (VLM) |
-| PDF-скан / пустой слой | **Tesseract OCR → Vision** (quality gate) → `parse_failed` |
+| PDF-скан / пустой слой | **Tesseract OCR → Vision** (постранично для таймаутнувших/нечитаемых страниц; quality gate) → `parse_failed` |
 | `image/*` | **Tesseract → Vision** (`auto`); `gateway` = Vision first |
 
 Provenance пишется в `ParsedDocument.extraction_source` и в метрику

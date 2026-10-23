@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from palatium_ai.application.agents.analyst import AnalystAgent
 from palatium_ai.application.agents.coder import CoderAgent
@@ -33,12 +34,14 @@ from palatium_ai.application.orchestration import nodes
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.core.types.graph_nodes import (
     NODE_ANALYST,
+    NODE_ATTACHMENT_SELECTION,
     NODE_CODER,
     NODE_CONTEXT_ENRICHER_CONTINUATION,
     NODE_CONTEXT_ENRICHER_WEAVING,
     NODE_CRITIC,
     NODE_FORMATTER,
     NODE_INTENT_CLASSIFIER,
+    NODE_MEMORY_MUTATION,
     NODE_PARALLEL_WORKERS,
     NODE_QUALITY_REVISION,
     NODE_RESEARCHER,
@@ -46,6 +49,10 @@ from palatium_ai.core.types.graph_nodes import (
     GraphNodeId,
 )
 from palatium_ai.domain.agents.base import BaseAgent
+
+if TYPE_CHECKING:
+    from palatium_ai.application.services.attachment_prepare import AttachmentPrepareService
+    from palatium_ai.application.services.memory_mutation import MemoryMutationGate
 
 __all__ = ["BoundNode", "GraphAgents", "NodeCallable", "bind_agent", "bind_plain_node"]
 
@@ -92,6 +99,13 @@ class GraphAgents:
     analyst_agent: AnalystAgent
     continuation_agent: ContextualizerAgent
     weaving_agent: ContextWeaverAgent
+    #: Deterministic memory-mutation gate (no agent). Off by default so unit graphs
+    #: that never classify a mutation keep their lean roster; with a gate wired the
+    #: node is part of the topology and route_after_intent may select it.
+    memory_mutation_gate: MemoryMutationGate | None = None
+    #: Current-turn attachment selection + Map-Reduce. Optional so unit graphs stay
+    #: lean; without it the node passes through to Continuity (no card can be minted).
+    attachment_prepare: AttachmentPrepareService | None = None
 
     def bindings(self, harness: Harness) -> tuple[BoundNode, ...]:
         """Node id → bound node callable, in graph order (the registry table).
@@ -110,6 +124,8 @@ class GraphAgents:
         """
         return (
             bind_agent(NODE_INTENT_CLASSIFIER, self.intent_agent, nodes.intent_classifier_node, harness),
+            self._bind_attachment_selection(),
+            self._bind_memory_mutation(),
             bind_agent(
                 NODE_CONTEXT_ENRICHER_CONTINUATION,
                 self.continuation_agent,
@@ -131,6 +147,32 @@ class GraphAgents:
             bind_plain_node(NODE_QUALITY_REVISION, nodes.quality_revision_node),
             bind_agent(NODE_FORMATTER, self.formatter_agent, nodes.formatter_node, harness),
         )
+
+    def _bind_attachment_selection(self) -> BoundNode:
+        """Attachment stage; route selects it only when the turn holds >1 file."""
+        service = self.attachment_prepare
+
+        async def _run(state: AgentGraphState) -> AgentGraphState:
+            if service is None:  # pragma: no cover - route gate keeps it unreachable
+                return AgentGraphState()
+            return await nodes.attachment_selection_node(state, service)
+
+        return (NODE_ATTACHMENT_SELECTION, _run)
+
+    def _bind_memory_mutation(self) -> BoundNode:
+        """Memory-mutation gate; route selects it only for a classified mutation.
+
+        Without a wiring gate the node stays unreachable (no hook may select it), so
+        unit graphs keep their lean roster while the topology stays static.
+        """
+        gate = self.memory_mutation_gate
+
+        async def _run(state: AgentGraphState) -> AgentGraphState:
+            if gate is None:  # pragma: no cover - route_after_intent never selects it
+                return AgentGraphState()
+            return await nodes.memory_mutation_node(state, gate)
+
+        return (NODE_MEMORY_MUTATION, _run)
 
     def _bind_parallel_workers(self, harness: Harness) -> BoundNode:
         """Fan-out node shares researcher + analyst agents (P2.15)."""

@@ -78,6 +78,10 @@ exit-код, fail-closed) — **035**. Гейты фронтенда — **084**
 - Порядок «схема → приложение»: приложение не обязано переживать несовместимую схему, оно
   обязано не стартовать на ней (fail fast, 035).
 - Multi-replica: миграцию выполняет один инстанс, остальные поднимаются после успеха.
+- CI проверяет сам путь миграций: job `integration-db` накатывает `alembic upgrade head` на
+  **чистый** кластер (pgvector, digest = compose) и только затем гоняет `tests/integration`.
+  Схема для тестов берётся из миграций, а не создаётся тестовым кодом — иначе зелёный тест
+  доказывает существование схемы, которой в проде нет.
 
 ## Границы: что здесь и чего здесь нет
 
@@ -94,6 +98,7 @@ exit-код, fail-closed) — **035**. Гейты фронтенда — **084**
 | lock, digest-пины base image, SHA-пины Actions, `pip-audit` | `scripts/ci_security.py` (CI-job `security`) | дрейф lock/пинов, untriaged advisory |
 | Trivy image (fixable HIGH/CRITICAL) + SBOM CycloneDX + keyless-подпись и verify | `scripts/ci_supply_chain.py` (CI-job `supply-chain`) | находка с доступным фиксом без триажа; SBOM без сходящейся подписи |
 | ruff, mypy `--strict`, pytest + coverage, evals, маркеры долгов | `scripts/ci_quality.py` (CI-job `quality`) | регрессия качества |
+| Postgres-интеграция (схема из миграций, `tests/integration`) | CI-job `integration-db` + `PALATIUM_REQUIRE_DB=1` | SQL-путь без БД (снова тихий skip), расхождение digest'а сервиса с compose |
 | `docker compose config --quiet` | `Makefile validate`, CI-job `compose` | невалидный compose, отсутствующая обязательная переменная |
 | Контракт контейнера и образа | `tests/unit/test_container_hardening.py`, `tests/unit/test_dockerfile_build_contract.py` | снятый потолок/`shm_size`, сломанный wiring |
 | Фронтенд (типы, линт, тесты, CEM, SRI, E2E+a11y) | CI-job `frontend` | дрейф виджета (084) |

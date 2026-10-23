@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast, get_args
 
 # --- Agent registry (000, 030) ---
 
@@ -61,6 +61,42 @@ GROUNDING_DEFAULT: GroundingMode = "optional"
 # is resolved deterministically in the application layer — never by the LLM (055).
 FileReferenceKind = Literal["none", "thread_file"]
 FILE_REFERENCE_DEFAULT: FileReferenceKind = "none"
+
+# Which attachments of the current turn the ask targets (Level 1 priority hierarchy).
+#   auto   — no explicit plurality; a general ask covers every eligible file;
+#   all    — the ask explicitly covers the whole set ("по всем документам");
+#   single — the ask is about one file in the singular; several eligible files
+#            then require the file-choice card before any worker runs (020, 055).
+# Closed set (010): a new value is a contract change, not a prompt tweak.
+AttachmentScope = Literal["auto", "all", "single"]
+ATTACHMENT_SCOPE_DEFAULT: AttachmentScope = "auto"
+
+# Modality filter for the ask ("что на картинке" vs "проанализируй договор").
+#   any      — no modality named; every selected scope is eligible;
+#   image    — image/* uploads only (WebP/PNG/JPEG scans, OCR path);
+#   document — PDF/DOCX/XLSX/text uploads only.
+# Closed set (010); the mime → kind mapping lives in ``domain.attachments.context``.
+AttachmentModality = Literal["image", "document"]
+AttachmentKind = Literal["any", "image", "document"]
+ATTACHMENT_KIND_DEFAULT: AttachmentKind = "any"
+
+# Whether the ask targets the files uploaded in *this* turn (the Intent Guard).
+#   current_uploads — the uploads are the subject of the ask (default; fail-safe);
+#   none            — the ask is explicitly not about them ("вопрос не про файлы"):
+#                     the fenced text is withheld from every prompt, so a chitchat
+#                     or memory turn cannot quote a document the user asked to ignore.
+# Default keeps the evidence: dropping a fence the model needed causes invention,
+# which is the more dangerous error (055). Only an explicit intent label detaches it.
+AttachmentFocus = Literal["current_uploads", "none"]
+ATTACHMENT_FOCUS_DEFAULT: AttachmentFocus = "current_uploads"
+
+# Interactive memory mutation (E2E-01/03). Orthogonal to task_kind: the ask is an
+# execution against the memory gate, so a worker must never answer it from prose.
+#   save   — «запомни …»: stage platform.save_memory behind a HITL card;
+#   forget — «забудь …»: resolve the stored entry, then stage platform.forget_memory.
+# Closed set (010): a new mutation is a contract change, not a prompt tweak.
+MemoryMutationKind = Literal["none", "save", "forget"]
+MEMORY_MUTATION_DEFAULT: MemoryMutationKind = "none"
 
 # Structural length floor: user turn long enough to be a document/payload vs
 # phatic ping. Shared by Continuity + Critic (055 — one constant, not copies).
@@ -147,12 +183,40 @@ PRESENTATION_OWNER_DEFAULT: PresentationOwner = "formatter"
 # nothing reach the prompt and require human review (020, OWASP LLM01).
 UntrustedContentAction = Literal["allow", "mask", "quarantine", "reject"]
 
+# --- Formatter composition style (presentation axis) ---
+
+# Soft composition bias handed to the Formatter as ``style_hint``. Closed set (010):
+# a new style is a prompt/contract change. Defined here (not in the agent package) so
+# the outbound sanitiser can strip these identifiers without a domain→application
+# import; ``application/agents/formatter/config.py`` re-exports them (010).
+FormatterStyleHint = Literal[
+    "brand_sections_icons",
+    "restructure_sections_icons",
+    "choice_cards",
+    "clarify_open",
+    "revise_keep_structure",
+    "plain_text",
+    "content_generation",
+    "document_generation",
+    "social_reply",
+]
+#: Runtime view of the Literal — one source, no hand-maintained copy (010).
+FORMATTER_STYLE_HINTS: tuple[FormatterStyleHint, ...] = cast(
+    "tuple[FormatterStyleHint, ...]",
+    get_args(FormatterStyleHint),
+)
+
 __all__ = [
+    "ATTACHMENT_FOCUS_DEFAULT",
+    "ATTACHMENT_KIND_DEFAULT",
+    "ATTACHMENT_SCOPE_DEFAULT",
     "CONTENT_GENERATION_CAPABILITY",
     "DOCUMENT_GENERATION_CAPABILITY",
     "FILE_REFERENCE_DEFAULT",
+    "FORMATTER_STYLE_HINTS",
     "GROUNDING_DEFAULT",
     "LOW_RISK_ROUTE_STRATEGIES",
+    "MEMORY_MUTATION_DEFAULT",
     "PRESENTATION_OWNER_DEFAULT",
     "RESPONSE_SHAPE_DEFAULT",
     "STREAMING_CONTRACT_DEFAULT",
@@ -160,10 +224,16 @@ __all__ = [
     "TRANSFORMATION_DEFAULT",
     "VERBATIM_EXTRACTION_CAPABILITY",
     "AgentRole",
+    "AttachmentFocus",
+    "AttachmentKind",
+    "AttachmentModality",
+    "AttachmentScope",
     "ContinuationKind",
     "ExecutionStrategy",
     "FileReferenceKind",
+    "FormatterStyleHint",
     "GroundingMode",
+    "MemoryMutationKind",
     "ModelTier",
     "PresentationOwner",
     "ResponseShape",

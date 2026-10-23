@@ -86,6 +86,41 @@ Also decide:
     pasted text, or it is general knowledge. Also "none" when has_thread_files=false.
   Do NOT set "thread_file" when the ask is answerable from what you can see in the text;
   this axis routes to a storage read of the user's own file.
+- attachment_scope (which files of THIS turn the ask targets — only when attachment_count > 0):
+  • "auto" — DEFAULT: no explicit plurality; a general ask («сделай выжимку», «план по
+    документам») covers every eligible file.
+  • "all" — the ask explicitly covers the whole set («по всем трём», «по всем документам»).
+  • "single" — the ask is about ONE file in the singular («дай текст файла», «сделай
+    реферирование файла»). A singular pointer at the upload — «этот документ», «этот
+    файл», «данное приложение», "this document" — is a singular ask too, whatever the
+    verb («что в этом документе?», «что написано в этом файле?»), even without the
+    word «один». With two or more files this makes the platform ask the user which
+    file to use instead of guessing — so use it only for genuine singular asks.
+  Never set "single" when the ask is about the whole set, and never "all" for one file.
+- attachment_kind (modality the ask names — only when attachment_count > 0):
+  • "any" — DEFAULT: no modality named.
+  • "image" — the ask is about a picture/scan/screenshot/photo («что на картинке»,
+    «прочитай скан»). Documents are then ignored.
+  • "document" — the ask is about a document/pdf/table/text («проанализируй договор»).
+    Images are then ignored.
+  Judge the named medium, not keywords about content.
+- attachment_focus (are this turn's uploads the subject of the ask?):
+  • "current_uploads" — DEFAULT: the ask concerns them, or no file is attached.
+  • "none" — the ask explicitly sets the files aside: «вопрос не про файлы»,
+    «не смотри в документ», a question about the dialog/persona/memory, a greeting or
+    thanks sent together with an upload. The fenced text is then withheld from every
+    prompt — use it only when the user's own words detach the files from the ask.
+- memory_mutation (explicit memory write/delete — orthogonal to task_kind):
+  • "save" — the user orders you to remember a fact/preference («запомни, что…»,
+    «не забудь…», "remember that…"). Put ONLY the atomic fact into memory_text.
+  • "forget" — the user orders you to delete a stored fact («забудь про…»,
+    «удали из памяти…», "forget…"). Put the subject to delete into memory_text.
+  • "none" — everything else, including questions ABOUT memory («что ты помнишь
+    про…?»), greetings, and text that merely mentions remembering.
+  For save/forget: task_kind=tool_execution, requires_mcp=true, grounding="none";
+  memory_key = a short latin slug for the subject (db_port, manager_name) so a later
+  correction updates the same entry. Do not answer the write yourself: the platform
+  asks the user to approve the mutation, and no mutation happens without that.
 - confidence: how sure you are of task_kind. Below 0.7 a clarification_needed label is
   treated as a guess and the platform answers on the default path instead.
 - grounding (need for external data — orthogonal to task_kind):
@@ -141,6 +176,16 @@ Examples (input → output axes; reasoning omitted):
 - {"text":"что в моём загруженном файле?","has_prior_dialog":false} → knowledge_request,
   underspecification_kind="none", grounding="required",
   grounding_reason="needs user file contents"
+- {"text":"что в этом документе?","has_prior_dialog":false,"attachment_count":2} →
+  knowledge_request, attachment_scope="single", grounding="required"
+  (a singular demonstrative — «этот документ», "this document" — targets ONE of the
+  uploads; with several files the platform must ask which one, not summarize all)
+- {"text":"что написано в этом документе?","has_prior_dialog":false,"attachment_count":2} →
+  knowledge_request, attachment_scope="single", grounding="required"
+  (the same singular pointer with another verb: «в этом документе» still means one)
+- {"text":"сравни оба файла","has_prior_dialog":false,"attachment_count":2} →
+  knowledge_request, attachment_scope="all", grounding="required"
+  (explicit plurality — every upload is in scope)
 - {"text":"а из БД взять этот файл и ещё раз прочитать","has_prior_dialog":true,
   "has_thread_files":true} → knowledge_request, requires_mcp=true,
   underspecification_kind="none", grounding="required",
@@ -177,10 +222,21 @@ Examples (input → output axes; reasoning omitted):
 - {"text":"объясни простыми словами, без таблиц","has_prior_dialog":false} →
   knowledge_request, grounding="none", response_shape="prose"
 - {"text":"спасибо!","has_prior_dialog":true} → social_conversation, response_shape="auto"
+- {"text":"Запомни, что порт базы теперь 5433","has_prior_dialog":false} →
+  tool_execution, requires_mcp=true, memory_mutation="save",
+  memory_text="порт базы теперь 5433", memory_key="db_port", grounding="none"
+- {"text":"Забудь про мой рабочий порт базы","has_prior_dialog":true} →
+  tool_execution, requires_mcp=true, memory_mutation="forget",
+  memory_text="рабочий порт базы", memory_key="db_port", grounding="none"
+- {"text":"что ты помнишь про порт базы?","has_prior_dialog":true} →
+  knowledge_request, requires_mcp=true, memory_mutation="none"
 
 Respond ONLY with valid JSON:
 {"task_kind":"<kind>","requires_mcp":false,"requires_user_choice":false,
 "underspecification_kind":"none","candidate_capabilities":["..."],
 "grounding":"optional","grounding_reason":"<brief>",
-"transformation":"none","file_reference":"none","response_shape":"auto",
+"transformation":"none","file_reference":"none",
+"attachment_scope":"auto","attachment_kind":"any","attachment_focus":"current_uploads",
+"response_shape":"auto",
+"memory_mutation":"none","memory_text":"","memory_key":"",
 "confidence":0.0,"reasoning":"<brief explanation>"}"""

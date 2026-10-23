@@ -13,6 +13,7 @@ from palatium_ai.application.services.memory_consolidate_service import (
     MemoryConsolidateService,
 )
 from palatium_ai.domain.hitl.cards import HITLCardView, HITLResolveRequest
+from palatium_ai.domain.memory.extract_queue import ExtractEnqueueResult
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 from tests.conftest import make_platform_mcp_registry
 
@@ -28,7 +29,7 @@ class _FakeConsolidation:
         task_id: str,
         user_id: str | None = None,
         org_id: str | None = None,
-    ) -> bool:
+    ) -> ExtractEnqueueResult:
         self.jobs.append(
             {
                 "thread_id": thread_id,
@@ -37,7 +38,7 @@ class _FakeConsolidation:
                 "org_id": org_id,
             }
         )
-        return True
+        return "queued"
 
 
 @pytest.fixture()

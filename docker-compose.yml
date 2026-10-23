@@ -59,6 +59,69 @@
 
 name: palatium-ai
 
+# Shared Langfuse v3 environment. Defined outside ``services`` so web and worker merge
+# ONE map (upstream requires the two to agree on every storage/auth setting), while
+# runtime knobs such as the V8 heap stay per-container.
+#
+# Host/port/user/db are literals: they describe how these two containers find each
+# other, and each extra $VAR would have to be declared in all nine env templates.
+x-langfuse-env: &langfuse-env
+  # --- Postgres: transactional data (users, projects, prompts, API keys) ---
+  DATABASE_URL: ${LANGFUSE_DB_URL:-postgresql://postgres:1234@postgres:5432/langfuse}
+  # --- ClickHouse: trace/observation/scores OLAP store (new in v3) ---
+  CLICKHOUSE_URL: "http://clickhouse:8123"
+  CLICKHOUSE_MIGRATION_URL: "clickhouse://clickhouse:9000"
+  CLICKHOUSE_USER: "langfuse"
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in env/.env}
+  CLICKHOUSE_DB: "langfuse"
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  # --- Valkey: ingestion queue + cache (v3 no longer queues in Postgres) ---
+  # Connection string, NOT the REDIS_HOST/PORT/AUTH trio. With the trio Langfuse sends
+  # `AUTH ""` when REDIS_AUTH is defined-but-empty, and a passwordless Valkey answers
+  # `ERR AUTH <password> called without any password configured for the default user`
+  # — the worker then keeps failing its queue connections after a Redis restart
+  # (observed 2026-10-22). The `:+` branch drops the userinfo entirely when
+  # REDIS_PASSWORD is unset, which is exactly "no auth", while a set password keeps the
+  # one source of truth the `redis` service reads for `--requirepass` (020). The value
+  # is injected into a URL verbatim, so a non-local password must be URL-safe.
+  REDIS_CONNECTION_STRING: "redis://${REDIS_PASSWORD:+:$REDIS_PASSWORD@}redis:6379"
+  # --- Auth + at-rest encryption (ENCRYPTION_KEY must be 64 hex chars) ---
+  NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-in-production-min-32-chars}
+  SALT: ${LANGFUSE_SALT:-change-me-in-production-min-32-chars}
+  NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?set LANGFUSE_ENCRYPTION_KEY (64 hex chars) in env/.env}
+  # --- S3 (silo): every ingested event is persisted here before ClickHouse ---
+  # Bucket name is a literal so it matches what silo-init creates; credentials and
+  # region reuse the store's existing keys — one source of truth for the store (010).
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "langfuse"
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: ${ATTACHMENTS_MINIO_REGION:-us-east-1}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: "langfuse"
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: ${ATTACHMENTS_MINIO_REGION:-us-east-1}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  TELEMETRY_ENABLED: "false"
+  # --- First-boot provisioning: org/project + the API keys env/.env hands the app ---
+  # Labels are literals. The two key lines are the important part: they seed Langfuse
+  # with *exactly* the credentials the application sends, so tracing works on first
+  # boot instead of requiring a manual UI round-trip that silently breaks it.
+  LANGFUSE_INIT_ORG_ID: "palatium"
+  LANGFUSE_INIT_ORG_NAME: "Palatium AI"
+  LANGFUSE_INIT_PROJECT_ID: "palatium-ai"
+  LANGFUSE_INIT_PROJECT_NAME: "palatium-ai"
+  LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+  LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+  LANGFUSE_INIT_USER_EMAIL: "admin@palatium.local"
+  LANGFUSE_INIT_USER_NAME: "admin"
+  LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-palatium-langfuse-admin}
+
 services:
   # ============================================================
   # Data stores
@@ -155,6 +218,13 @@ services:
   # "disengaged" (kill_switch.py is_engaged → False). Under an LRU policy the emergency
   # stop could be evicted and silently release itself. noeviction makes a full instance
   # fail writes loudly instead of dropping the switch (020: fail closed).
+  #
+  # AOF rewrites: Docker Desktop's virtualised disk answers fsync in tens of ms, which
+  # surfaced as "Asynchronous AOF fsync is taking too long (disk is busy?)" and as
+  # 30 s queue socket timeouts in langfuse-worker. The dataset here is a few MiB, so
+  # the rewrite thresholds are widened (200% / 128 MiB) to stop needless background
+  # rewrites competing with the everysec fsync. `everysec` stays: durability is a
+  # security property (kill switch), not a latency knob (020).
   redis:
     image: valkey/valkey:8.1.10-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
     restart: unless-stopped
@@ -172,6 +242,7 @@ services:
       - |
         set -e
         ARGS="--appendonly yes --appendfsync everysec \
+        --auto-aof-rewrite-percentage 200 --auto-aof-rewrite-min-size 128mb \
         --maxmemory 128mb --maxmemory-policy noeviction"
         if [ -n "$$REDIS_PASSWORD" ]; then
           exec valkey-server $$ARGS --requirepass "$$REDIS_PASSWORD"
@@ -281,6 +352,13 @@ services:
       # and every cache call would fail. In-network the service name is the only route.
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # Overrides the value ``env_file`` brings in, and deliberately so: the redis
+      # service above interpolates ``${REDIS_PASSWORD}`` from the compose environment,
+      # while ``env_file: env/.env`` can carry a different value (a shell override or a
+      # stale local file). LiteLLM would then send AUTH to a server started without
+      # ``--requirepass`` ("AUTH called without any password configured"), or the
+      # reverse. One interpolation source for both sides removes the mismatch (020).
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
 
       # =====================================================================
       # TIER MAPPING — вот здесь задаётся какой провайдер обслуживает tier.
@@ -538,7 +616,12 @@ services:
     profiles: [ "observability" ]
     image: clickhouse/clickhouse-server:25.12-alpine@sha256:7d93fb39bb2bfc8509bd621241db974e41041ac0ae626a5b06e172431fc709f7
     restart: unless-stopped
-    mem_limit: 2048m
+    # Langfuse's trace store for one dev/team stack — 1 GiB covers the ingest batches
+    # of this deployment. The 2 GiB this ceiling used to hold now keeps langfuse-web's
+    # V8 heap alive under multi-KB trace payloads (the "Reached heap limit" crash loop):
+    # the observability profile is one budget, and ClickHouse was the over-provisioned
+    # half of it (see the ceiling budget note at the top of the file).
+    mem_limit: 1024m
     environment:
       # User/database are structural — part of this service's internal contract, not
       # operator knobs. Written as literals on purpose: every additional $VAR in this
@@ -566,63 +649,20 @@ services:
     profiles: [ "observability" ]
     image: langfuse/langfuse:3@sha256:a343f64e035eb01aeea358703a0428945d909d01e19452509a5a830862dda878
     restart: unless-stopped
-    mem_limit: 768m
+    # V8 sizes its old space from the cgroup ceiling, and v3 web crash-looped with
+    # "Reached heap limit Allocation failed" at 768m/1024m heap while ingesting
+    # multi-KB traces. 2 GiB heap + a 2.5 GiB cgroup keep GC headroom above the live
+    # set instead of dying on the default; the extra MiB are funded by the ClickHouse
+    # ceiling above, so the observability profile stays inside the same VM budget.
+    mem_limit: 2560m
     ports:
       - "127.0.0.1:${LANGFUSE_PUBLISH_PORT:-3000}:3000"
-    # Anchor on first use so web and worker can never drift: upstream requires the two
-    # to agree on every storage/auth setting, and a half-updated pair fails at ingest.
-    environment: &langfuse-env
-      # --- Postgres: transactional data (users, projects, prompts, API keys) ---
-      DATABASE_URL: ${LANGFUSE_DB_URL:-postgresql://postgres:1234@postgres:5432/langfuse}
-      # --- ClickHouse: trace/observation/scores OLAP store (new in v3) ---
-      # Host/port/user/db are literals: they describe how these two containers find each
-      # other, and each extra $VAR would have to be declared in all nine env templates.
-      CLICKHOUSE_URL: "http://clickhouse:8123"
-      CLICKHOUSE_MIGRATION_URL: "clickhouse://clickhouse:9000"
-      CLICKHOUSE_USER: "langfuse"
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in env/.env}
-      CLICKHOUSE_DB: "langfuse"
-      CLICKHOUSE_CLUSTER_ENABLED: "false"
-      # --- Valkey: ingestion queue + cache (v3 no longer queues in Postgres) ---
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_AUTH: ${REDIS_PASSWORD:-}
-      # --- Auth + at-rest encryption (ENCRYPTION_KEY must be 64 hex chars) ---
-      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-in-production-min-32-chars}
-      SALT: ${LANGFUSE_SALT:-change-me-in-production-min-32-chars}
-      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
-      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?set LANGFUSE_ENCRYPTION_KEY (64 hex chars) in env/.env}
-      # --- S3 (silo): every ingested event is persisted here before ClickHouse ---
-      # Bucket name is a literal so it matches what silo-init creates; credentials and
-      # region reuse the store's existing keys — one source of truth for the store (010).
-      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "langfuse"
-      LANGFUSE_S3_EVENT_UPLOAD_REGION: ${ATTACHMENTS_MINIO_REGION:-us-east-1}
-      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
-      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
-      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
-      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
-      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
-      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: "langfuse"
-      LANGFUSE_S3_MEDIA_UPLOAD_REGION: ${ATTACHMENTS_MINIO_REGION:-us-east-1}
-      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
-      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${ATTACHMENTS_MINIO_ACCESS_KEY:-palatium-minio}
-      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${ATTACHMENTS_MINIO_SECRET_KEY:-palatium-local-only}
-      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
-      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
-      TELEMETRY_ENABLED: "false"
-      # --- First-boot provisioning: org/project + the API keys env/.env hands the app ---
-      # Labels are literals. The two key lines are the important part: they seed Langfuse
-      # with *exactly* the credentials the application sends, so tracing works on first
-      # boot instead of requiring a manual UI round-trip that silently breaks it.
-      LANGFUSE_INIT_ORG_ID: "palatium"
-      LANGFUSE_INIT_ORG_NAME: "Palatium AI"
-      LANGFUSE_INIT_PROJECT_ID: "palatium-ai"
-      LANGFUSE_INIT_PROJECT_NAME: "palatium-ai"
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-      LANGFUSE_INIT_USER_EMAIL: "admin@palatium.local"
-      LANGFUSE_INIT_USER_NAME: "admin"
-      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-palatium-langfuse-admin}
+    # Shared storage/auth settings come from the single top-level anchor; only the
+    # runtime knob differs per container (the worker keeps its own ceiling and does
+    # not inherit a 2 GiB heap it can never use).
+    environment:
+      <<: *langfuse-env
+      NODE_OPTIONS: "--max-old-space-size=2048"
     depends_on:
       postgres:
         condition: service_healthy
@@ -639,9 +679,14 @@ services:
     profiles: [ "observability" ]
     image: langfuse/langfuse-worker:3@sha256:8a28c946bb5401eef488153fa294db5a79bd99dd5c90db8e4d39559374c9ebd3
     restart: unless-stopped
-    mem_limit: 512m
+    # Explicit heap: with no NODE_OPTIONS V8 sizes old space from the 512m cgroup,
+    # so the queue consumer GC-thrashed while draining ClickHouse batches and missed
+    # its Redis socket deadlines ("Expecting data ... in 30000ms"). 512m heap inside
+    # 768m keeps the blocking connection responsive without copying the web ceiling.
+    mem_limit: 768m
     environment:
       <<: *langfuse-env
+      NODE_OPTIONS: "--max-old-space-size=512"
     depends_on:
       # The worker drains what the web container queued, so it must not start before the
       # queue's dependencies exist — otherwise it crash-loops on the first poll.
@@ -964,7 +1009,16 @@ services:
       MEMORY_PROMOTE_INTERVAL_SECONDS: ${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}
       MEMORY_PROMOTE_ALL_USERS: ${MEMORY_PROMOTE_ALL_USERS:-true}
       MEMORY_PROMOTE_USER_IDS: ${MEMORY_PROMOTE_USER_IDS:-}
+      # The root filesystem is read-only and only /tmp is a tmpfs. Without a writable
+      # target the hash-chained audit writer crashed the pass with
+      # "OSError: [Errno 30] Read-only file system: 'logs/audit-chain.log'".
+      # A dedicated volume (never the API's own chain) keeps the job's promote/retention
+      # trail across restarts; code falls back to /tmp if the mount is absent.
+      AUDIT_LOG_FILE: /app/logs/audit-chain.log
     read_only: true
+    volumes:
+      # Single writer: only this job writes its own chain; the API keeps its tmpfs copy.
+      - palatium_audit_logs:/app/logs
     tmpfs:
       - /tmp:size=32m,mode=1777
     security_opt:
@@ -1007,6 +1061,9 @@ volumes:
   # the data volume the OLAP store runs on.
   palatium_clickhouse:
   palatium_clickhouse_logs:
+  # Hash-chained audit trail of the out-of-band memory job (040). Kept apart from the
+  # API's tmpfs log: one writer per chain, and promote/retention events survive restarts.
+  palatium_audit_logs:
 
 networks:
   default:

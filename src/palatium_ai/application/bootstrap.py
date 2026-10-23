@@ -51,6 +51,7 @@ from palatium_ai.infrastructure.embeddings.factory import create_embedding_clien
 from palatium_ai.infrastructure.export.pdf import ContentDocumentPdfExporter
 from palatium_ai.infrastructure.graph.factory import build_graph_ports
 from palatium_ai.infrastructure.knowledge.postgres_knowledge_port import PostgresKnowledgePort
+from palatium_ai.infrastructure.llm.shared_transport import aclose_shared_client_sessions
 from palatium_ai.infrastructure.mcp.consul_source import ConsulMCPSource
 from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
 from palatium_ai.infrastructure.mcp.registry import MCPRegistry
@@ -224,10 +225,6 @@ def _build_memory_port(settings: Settings, session_factory: async_sessionmaker[A
 
         port = CrossEncoderRerankMemoryPort(port, TokenOverlapCrossEncoder())
         logger.info("MemoryPort: cross-encoder rerank enabled (M8)")
-    if settings.memory.binary_quantize_rerank:
-        # Helpers live in domain.memory.binary_quantize; bit(4096) column + HNSW
-        # is a separate migration (060). Flag is parsed so ops can flip without code churn.
-        logger.info("MEMORY_BINARY_QUANTIZE_RERANK set (Hamming helpers ready; ANN column not migrated)")
     return port
 
 
@@ -391,7 +388,14 @@ async def startup(settings: Settings) -> AppResources:
         # Same repository the read path uses: the registry of what this thread holds
         # is single-sourced, not a second store (050).
         file_reference_resolver = AttachmentReferenceResolver(repository=attachment_ports.repository)
-    intent_service, memory_extract, capability_index, document_ingest_service = build_intent_service(
+    (
+        intent_service,
+        memory_extract,
+        capability_index,
+        document_ingest_service,
+        memory_save_service,
+        memory_forget_service,
+    ) = build_intent_service(
         settings,
         mcp_registry,
         session_service=session_service,
@@ -435,18 +439,8 @@ async def startup(settings: Settings) -> AppResources:
         dialog_turn_store=dialog_turn_store,
         mcp_tool_call_repository=mcp_tool_call_repository,
     )
-    memory_save_service = MemorySaveService(
-        hitl_service=hitl_service,
-        mcp_registry=mcp_registry,
-        redis_client=redis_client,
-        mcp_tool_call_repository=mcp_tool_call_repository,
-    )
-    memory_forget_service = MemoryForgetService(
-        hitl_service=hitl_service,
-        mcp_registry=mcp_registry,
-        redis_client=redis_client,
-        mcp_tool_call_repository=mcp_tool_call_repository,
-    )
+    # Reuse the instances the graph's memory-mutation gate already stashed pendings in;
+    # a second pair would mint cards whose task ids no service can resume (060).
     memory_extract_hitl_service: MemoryExtractHitlService | None = None
     if memory_extract is not None:
         memory_extract_hitl_service = MemoryExtractHitlService(
@@ -591,4 +585,6 @@ async def shutdown(resources: AppResources) -> None:
         await _aclose_optional(resources.graph_port)
         await _aclose_optional(resources.graph_write_port)
     await _aclose_optional(resources.web_search_port)
+    # Last: no LLM call may outlive the loop; closes the session shared by all agents.
+    await aclose_shared_client_sessions()
     logger.info("Goodbye")

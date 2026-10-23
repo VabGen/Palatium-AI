@@ -54,6 +54,9 @@ class HitlCardPlan(BaseModel):
     promoted_from: PromotedFrom = "none"
     force_structural: bool = False
     required_choice: bool = False
+    #: Intent tagged a choice on a turn that already answered a read-only ask.
+    #: The answer is delivered and no card is minted; the log keeps the cause.
+    ignored_user_choice: bool = False
 
 
 class HitlInteractionPolicy:
@@ -61,6 +64,13 @@ class HitlInteractionPolicy:
 
     _MAX_PROMOTED_OPTIONS = 12
     _MIN_CHOICE_OPTIONS = 2
+    #: Turns whose deliverable *is* the answer about the assistant itself. A
+    #: capability or small-talk enumeration is content, not an exclusive menu:
+    #: promoting it to a required card swallowed the answer the user asked for
+    #: (live UI: «Что ты умеешь?» became "choose one of 5 capabilities").
+    _INFORMATIONAL_TASK_KINDS: frozenset[str] = frozenset(
+        {"capability_discovery", "social_conversation"}
+    )
 
     @classmethod
     def plan(
@@ -80,10 +90,18 @@ class HitlInteractionPolicy:
                 reason="no_document",
             )
 
+        # A choice card is a *clarification*: the turn stops and asks because work
+        # cannot proceed. An answered read-only ask (fact, lookup) delivers its
+        # document; an over-tagged Intent choice must not turn it into a write-style
+        # confirmation menu (E2E-07, 020: HITL is for actions, not reads).
+        clarification_turn = cls._is_clarification_turn(selected_strategy, task_kind)
+        effective_user_choice = requires_user_choice and clarification_turn
+        ignored_user_choice = requires_user_choice and not clarification_turn
+
         # Upload-grounded turn without an Intent choice axis: do not promote
         # list/steps/actions into exclusive menus (Formatter may echo a prior
         # topic as bullets → fake HITL about the wrong file, 055).
-        if has_turn_attachments and not requires_user_choice:
+        if has_turn_attachments and not effective_user_choice:
             return HitlCardPlan(
                 choice_actions=(),
                 mint_quality_review=requires_review,
@@ -92,11 +110,27 @@ class HitlInteractionPolicy:
                 promoted_from="none",
                 force_structural=False,
                 required_choice=False,
+                ignored_user_choice=ignored_user_choice,
+            )
+
+        # An informational turn (capabilities, small talk) asks to be *told*, not
+        # asked to pick: its list is the answer body. Minting it as the only
+        # selector hides that answer behind a click nobody requested (020).
+        if cls._is_informational_turn(task_kind, effective_user_choice):
+            return HitlCardPlan(
+                choice_actions=(),
+                mint_quality_review=requires_review,
+                reason="informational_answer",
+                menu_shaped=cls._is_menu_shaped(document),
+                promoted_from="none",
+                force_structural=False,
+                required_choice=False,
+                ignored_user_choice=ignored_user_choice,
             )
 
         menu_shaped = cls._is_menu_shaped(document)
         interaction = getattr(document.meta, "interaction", "none") or "none"
-        if (requires_user_choice or menu_shaped) and interaction == "none":
+        if (effective_user_choice or menu_shaped) and interaction == "none":
             interaction = "choice"
 
         promoted_from: PromotedFrom = "none"
@@ -109,7 +143,7 @@ class HitlInteractionPolicy:
                 selected_strategy=selected_strategy,
                 task_kind=task_kind,
                 interaction=interaction,
-                requires_user_choice=requires_user_choice,
+                requires_user_choice=effective_user_choice,
                 menu_shaped=menu_shaped,
             )
 
@@ -119,14 +153,15 @@ class HitlInteractionPolicy:
             selected_strategy=selected_strategy,
             task_kind=task_kind,
             interaction=interaction,
-            requires_user_choice=requires_user_choice,
+            requires_user_choice=effective_user_choice,
             menu_shaped=menu_shaped,
         )
-        force_structural = menu_shaped and not requires_user_choice and interaction in {"choice", "confirm"}
+        force_structural = menu_shaped and not effective_user_choice and interaction in {"choice", "confirm"}
         mint_quality_review = requires_review
         reason = (
             f"interaction={interaction}; choices={len(choice_actions)}; "
             f"review={requires_review}; requires_user_choice={requires_user_choice}; "
+            f"clarification_turn={clarification_turn}; "
             f"menu_shaped={menu_shaped}; promoted_from={promoted_from}; "
             f"force_structural={force_structural}; required_choice={required_choice}"
         )
@@ -136,7 +171,7 @@ class HitlInteractionPolicy:
             # ending with "which version?") must not kill a usable answer. Fail-closed
             # only when Intent/structure truly demand exclusive cards.
             if cls._can_downgrade_rhetorical_choice(
-                requires_user_choice=requires_user_choice,
+                requires_user_choice=effective_user_choice,
                 menu_shaped=menu_shaped,
                 selected_strategy=selected_strategy,
                 task_kind=task_kind,
@@ -150,6 +185,7 @@ class HitlInteractionPolicy:
                     promoted_from=promoted_from,
                     force_structural=False,
                     required_choice=False,
+                    ignored_user_choice=ignored_user_choice,
                 )
             return HitlCardPlan(
                 choice_actions=(),
@@ -159,6 +195,7 @@ class HitlInteractionPolicy:
                 promoted_from=promoted_from,
                 force_structural=force_structural,
                 required_choice=True,
+                ignored_user_choice=ignored_user_choice,
             )
 
         return HitlCardPlan(
@@ -169,7 +206,38 @@ class HitlInteractionPolicy:
             promoted_from=promoted_from,
             force_structural=force_structural,
             required_choice=required_choice,
+            ignored_user_choice=ignored_user_choice,
         )
+
+    @classmethod
+    def _is_informational_turn(
+        cls,
+        task_kind: str | None,
+        effective_user_choice: bool,
+    ) -> bool:
+        """True when the turn must deliver prose/facts, never a blocking selector.
+
+        Only the closed axis decides (055): unknown kinds keep the fail-closed
+        structural behaviour, and an explicit clarification choice still wins.
+        """
+        return task_kind in cls._INFORMATIONAL_TASK_KINDS and not effective_user_choice
+
+    @classmethod
+    def _is_clarification_turn(
+        cls,
+        selected_strategy: ExecutionStrategy | str | None,
+        task_kind: str | None,
+    ) -> bool:
+        """True when the turn exists to ask the user, not to deliver an answer.
+
+        An unclassified turn (``task_kind is None``, e.g. a domain-only caller) is
+        treated as a clarification: without a known kind we cannot assert the ask
+        was already answered, so the choice contract stays fail-closed.
+        """
+        _ = cls
+        if task_kind is None:
+            return True
+        return _strategy_value(selected_strategy) == "clarify" or task_kind == "clarification_needed"
 
     @classmethod
     def _can_downgrade_rhetorical_choice(

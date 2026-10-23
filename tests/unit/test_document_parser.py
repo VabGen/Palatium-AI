@@ -189,6 +189,39 @@ async def test_docx_parser_extracts_paragraphs_and_table_cells() -> None:
     assert "Owner" in parsed.pages[0].text
 
 
+async def test_docx_parser_emits_a_merged_cell_once() -> None:
+    """``_Row.cells`` repeats a merged cell per spanned column (observed as 4x text)."""
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    table = document.add_table(rows=1, cols=4)
+    table.cell(0, 0).merge(table.cell(0, 3)).text = "Докладные записки по премированию"
+    buffer = BytesIO()
+    document.save(buffer)
+
+    parsed = await DocxParser(max_chars=10_000).parse(buffer.getvalue(), mime_type=_DOCX_MIME, filename="a.docx")
+
+    assert parsed.pages[0].text.count("Докладные записки по премированию") == 1
+
+
+async def test_docx_parser_keeps_separate_cells_with_the_same_text() -> None:
+    """Dedup is by cell identity: two real cells may legitimately say the same words."""
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    table = document.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].text = "нет"
+    table.rows[0].cells[1].text = "нет"
+    buffer = BytesIO()
+    document.save(buffer)
+
+    parsed = await DocxParser(max_chars=10_000).parse(buffer.getvalue(), mime_type=_DOCX_MIME, filename="a.docx")
+
+    assert parsed.pages[0].text == "нет\tнет"
+
+
 async def test_docx_parser_rejects_corrupt_package_with_a_typed_error() -> None:
     pytest.importorskip("docx")
     parser = DocxParser(max_chars=10_000)

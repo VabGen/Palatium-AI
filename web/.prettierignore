@@ -10,3 +10,6 @@ test-results/
 .playwright-cli/
 package-lock.json
 custom-elements.json
+# Локальный скретч (`.gitignore` → `.local/`): Prettier 3 не читает .gitignore, и
+# одноразовый скрипт из `.local/` валил бы `format:check` всего `web/` (017).
+.local/

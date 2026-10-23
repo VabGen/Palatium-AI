@@ -36,8 +36,10 @@ alwaysApply: true
 - **Документация:** индекс — `docs/README.md`; ADR — `docs/adr/` (формат — `docs/adr/README.md`);
   маркеры долгов `MARKER(owner, ticket, date): …` проверяет `scripts/check_todos.py`
   (086, CI + pre-commit).
-- Нагрузочные (сложность hot-path) тесты — `tests/perf/` под маркером `slow`:
-  вне PR-пути (`make perf`, `.github/workflows/perf-nightly.yml`), гейт — 080.
+- Нагрузочные тесты — `tests/perf/` под маркером `slow`: сложность hot-path (счёт
+ инструкций, `test_hot_path_scaling.py`) и query p95 памяти на реальном pgvector
+ (`test_memory_query_latency.py`); вне PR-пути (`make perf`,
+ `.github/workflows/perf-nightly.yml` — jobs `hot-paths` / `memory-query-latency`), гейт — 080.
 - Исходники: `src/palatium_ai/` — 5 слоёв (см. 000-architecture).
 - Точка входа API: `presentation/api/` → routers. WS: `presentation/websockets/`.
   Composition root (DI) — см. 000; запуск: `python -m palatium_ai` (или uvicorn-скриптом).

@@ -1236,6 +1236,8 @@ class AttachmentService:
             fenced_text=wrap_untrusted_tool_output(fence_body, source=source),
             action=prepared.action,
             page_count=attachment.page_count or 0,
+            mime_type=attachment.mime_type,
+            text_state="extracted",
         )
 
     def _missing_text_block(self, attachment: Attachment, *, source: str) -> AttachmentContextBlock:
@@ -1257,6 +1259,8 @@ class AttachmentService:
             fenced_text=wrap_untrusted_tool_output(notice, source=source),
             action="allow",
             page_count=attachment.page_count or 0,
+            mime_type=attachment.mime_type,
+            text_state="missing",
         )
 
     async def _reviewed_body(self, attachment: Attachment) -> _ReviewedBody:

@@ -12,6 +12,7 @@ from palatium_ai.core.logging import get_logger
 from palatium_ai.domain.memory.namespaces import thread_namespace
 from palatium_ai.domain.memory.scratchpad import ScratchpadSlot, SessionScratchpad
 from palatium_ai.domain.memory.turns import DialogTurnWindow
+from palatium_ai.domain.policies.memory_mutation import MemoryMutationPolicy
 from palatium_ai.domain.policies.scratchpad import SessionScratchpadPolicy
 
 if TYPE_CHECKING:
@@ -82,6 +83,47 @@ class SessionScratchpadService:
         if updated.slots != current.slots:
             await self.save(updated)
         return updated
+
+    async def forget_matching(self, *, thread_id: str, subject: str) -> tuple[str, ...]:
+        """Drop pinned slots about ``subject`` after a forget was approved (060 fan-out).
+
+        The scratchpad is a cheap cache of the thread's salient notes, injected into
+        recall ahead of durable memory. A forgotten fact left pinned here keeps being
+        answered in the same thread even though medium/L4 were cleared, so forget must
+        clear every tier that can re-inject it. Returns the removed texts for audit.
+        """
+        target = subject.strip()
+        if self._memory_port is None or not target:
+            return ()
+        current = await self.load(thread_id=thread_id)
+        removed = tuple(slot.text for slot in current.slots if MemoryMutationPolicy.shares_subject(slot.text, target))
+        if not removed:
+            return ()
+        kept = tuple(slot for slot in current.slots if slot.text not in removed)
+        await self.save(SessionScratchpad(thread_id=current.thread_id, slots=kept))
+        return removed
+
+    async def supersede_matching(self, *, thread_id: str, text: str) -> tuple[str, ...]:
+        """Drop stale pins for the subject an approved write just replaced (060 fan-out).
+
+        Pins score above durable hits, so a pre-write pin («порт 5432») would keep
+        outranking the value the human just approved («порт 5433») in this thread.
+        The written text itself is kept — it is the current truth.
+        """
+        target = text.strip()
+        if self._memory_port is None or not target:
+            return ()
+        current = await self.load(thread_id=thread_id)
+        removed = tuple(
+            slot.text
+            for slot in current.slots
+            if slot.text.strip() != target and MemoryMutationPolicy.shares_subject(slot.text, target)
+        )
+        if not removed:
+            return ()
+        kept = tuple(slot for slot in current.slots if slot.text not in removed)
+        await self.save(SessionScratchpad(thread_id=current.thread_id, slots=kept))
+        return removed
 
 
 def _decode_scratchpad(thread_id: str, raw: dict[str, object]) -> SessionScratchpad:

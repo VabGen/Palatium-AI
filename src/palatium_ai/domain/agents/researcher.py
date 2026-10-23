@@ -19,6 +19,9 @@ ATTACHMENT_REFERENCE_UNRESOLVED = "attachment_reference_unresolved"
 # Machine codes. Formatter maps them; they are not user-facing prose.
 MCP_EMPTY_RESULT = "mcp_empty_result"
 MCP_TOOL_ERROR = "mcp_tool_error"
+# The MCP server could not be reached at all (transport down / circuit open). The
+# answer is a degradation notice, never a tool-error line (Level 5, 035).
+MCP_SERVER_UNAVAILABLE = "mcp_server_unavailable"
 # Adaptive grounding: required retrieval returned empty — ask user for source.
 GROUNDING_REQUIRED_EMPTY = "grounding_required_empty"
 

@@ -4,8 +4,13 @@
 
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 
+from palatium_ai.core.types.extract_queue import (
+    DEFAULT_MAX_QUEUE,
+    MIN_TENANT_SLOTS,
+    fair_share_queue_cap,
+)
 from palatium_ai.core.types.retrieval import DEFAULT_RRF_K, HybridFusion
 
 from .base import BaseConfig
@@ -93,25 +98,19 @@ class MemoryConfig(BaseConfig):
         validation_alias="MEMORY_CROSS_ENCODER_RERANK",
         description="Opt-in cross-encoder rerank after hybrid retrieval (needs CrossEncoderPort).",
     )
-    binary_quantize_rerank: bool = Field(
-        default=False,
-        validation_alias="MEMORY_BINARY_QUANTIZE_RERANK",
-        description="Opt-in bit(4096) Hamming prefilter before float cosine (060 ANN path).",
-    )
     bayesian_trust: bool = Field(
         default=False,
         validation_alias="MEMORY_BAYESIAN_TRUST",
         description="Opt-in Beta-Bernoulli trust updates on promote refresh/supersede.",
     )
     xmemory_decouple: bool = Field(
-        default=False,
+        default=True,
         validation_alias="MEMORY_XMEMORY_DECOUPLE",
-        description="Opt-in decouple-before-aggregate near-dup collapse in promote batch.",
-    )
-    hebbian_edge_bump: bool = Field(
-        default=False,
-        validation_alias="MEMORY_HEBBIAN_EDGE_BUMP",
-        description="Opt-in Hebbian weight bump on SUPERSEDES edges during promote.",
+        description=(
+            "Near-dup collapse in the promote batch. ON by M9 §5.5 gate: duplicate rate "
+            "0.25 → 0.0 with the distinct-fact set unchanged "
+            "(tests/eval/test_m9_flag_gates.py); set false to roll back."
+        ),
     )
     mem0_api_key: SecretStr | None = Field(default=None, validation_alias="MEM0_API_KEY")
     mem0_host: str = Field(default="https://api.mem0.ai", validation_alias="MEM0_HOST")
@@ -156,6 +155,44 @@ class MemoryConfig(BaseConfig):
         le=128,
         validation_alias="MEMORY_PROMOTE_BATCH_LIMIT",
     )
+    extract_max_queue: int = Field(
+        default=DEFAULT_MAX_QUEUE,
+        ge=MIN_TENANT_SLOTS,
+        le=100_000,
+        validation_alias="MEMORY_EXTRACT_MAX_QUEUE",
+        description="Global backlog ceiling for pending+running extract jobs (M3 E7).",
+    )
+    extract_max_queue_per_tenant: int | None = Field(
+        default=None,
+        ge=1,
+        le=100_000,
+        validation_alias="MEMORY_EXTRACT_MAX_QUEUE_PER_TENANT",
+        description="Per-owner ceiling; unset derives the fair share (max_queue // MIN_TENANT_SLOTS).",
+    )
+
+    @model_validator(mode="after")
+    def _per_tenant_cap_within_global(self) -> MemoryConfig:
+        per_tenant = self.extract_max_queue_per_tenant
+        if per_tenant is not None and per_tenant > self.extract_max_queue:
+            msg = (
+                "MEMORY_EXTRACT_MAX_QUEUE_PER_TENANT must not exceed MEMORY_EXTRACT_MAX_QUEUE: "
+                "a per-owner cap above the global ceiling is the global ceiling"
+            )
+            raise ValueError(msg)
+        return self
+
+    @property
+    def extract_queue_limits(self) -> tuple[int, int]:
+        """``(max_queue, max_queue_per_tenant)`` with the fair share derived when unset.
+
+        The domain capacity object is built by the composition root (``application/wiring``):
+        ``core`` must not import ``domain`` (rule 000).
+        """
+        per_tenant = self.extract_max_queue_per_tenant
+        return (
+            self.extract_max_queue,
+            fair_share_queue_cap(self.extract_max_queue) if per_tenant is None else per_tenant,
+        )
 
     @field_validator("mem0_api_key", "graphiti_neo4j_password", mode="before")
     @classmethod

@@ -67,6 +67,8 @@ def build_document_parser(settings: Settings) -> DocumentParserPort:
     tesseract_cmd = _resolve_tesseract_or_log(config)
     parsers, rejected = _collect_leaf_parsers(config)
     # Shared by every local OCR adapter: CPU-bound work must queue, not stampede (080).
+    # The slot is held per *page*, not per document, so one multi-page scan can use the
+    # whole configured budget instead of serializing behind a single slot.
     ocr_limiter = asyncio.Semaphore(config.ocr_max_concurrency)
 
     image_parser, vision_available = _build_image_ocr_parser(

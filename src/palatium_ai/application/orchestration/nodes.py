@@ -8,6 +8,8 @@ import asyncio
 
 from typing import TYPE_CHECKING, Literal, cast
 
+from langgraph.graph import END
+
 from palatium_ai.application.orchestration import node_inputs, selectors
 from palatium_ai.application.orchestration.agent_bridge import (
     analyst_output_to_execution_result,
@@ -34,6 +36,7 @@ from palatium_ai.application.orchestration.node_runtime import run_logged_node
 from palatium_ai.application.orchestration.snapshot import OrchestrationSnapshot
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.orchestration.writer import current_owner, decide_and_record
+from palatium_ai.application.services.attachment_prepare import AttachmentPrepareOutcome
 from palatium_ai.application.services.intent_hitl_flow import max_quality_revisions
 from palatium_ai.application.services.memory_recall import recall_for_thread
 from palatium_ai.application.services.routing_intent_resolver import resolve_routing_intent
@@ -47,12 +50,14 @@ from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.span_names import (
     NODE_ANALYST,
+    NODE_ATTACHMENT_SELECTION,
     NODE_CODER,
     NODE_CONTEXT_ENRICHER_CONTINUATION,
     NODE_CONTEXT_ENRICHER_WEAVING,
     NODE_CRITIC,
     NODE_FORMATTER,
     NODE_INTENT,
+    NODE_MEMORY_MUTATION,
     NODE_PARALLEL_WORKERS,
     NODE_QUALITY_REVISION,
     NODE_RESEARCHER,
@@ -61,12 +66,14 @@ from palatium_ai.core.observability.span_names import (
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.core.types.graph_nodes import (
     NODE_ANALYST as GRAPH_NODE_ANALYST,
+    NODE_ATTACHMENT_SELECTION as GRAPH_NODE_ATTACHMENT_SELECTION,
     NODE_CODER as GRAPH_NODE_CODER,
     NODE_CONTEXT_ENRICHER_CONTINUATION as GRAPH_NODE_CONTINUATION,
     NODE_CONTEXT_ENRICHER_WEAVING as GRAPH_NODE_WEAVING,
     NODE_CRITIC as GRAPH_NODE_CRITIC,
     NODE_FORMATTER as GRAPH_NODE_FORMATTER,
     NODE_INTENT_CLASSIFIER as GRAPH_NODE_INTENT,
+    NODE_MEMORY_MUTATION as GRAPH_NODE_MEMORY_MUTATION,
     NODE_PARALLEL_WORKERS as GRAPH_NODE_PARALLEL_WORKERS,
     NODE_QUALITY_REVISION as GRAPH_NODE_QUALITY_REVISION,
     NODE_RESEARCHER as GRAPH_NODE_RESEARCHER,
@@ -84,6 +91,7 @@ from palatium_ai.domain.agents.execution import (
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.agents.intent import IntentClassifierInput
 from palatium_ai.domain.agents.researcher import ResearcherInput
+from palatium_ai.domain.attachments.context import AttachmentTurnContext, mime_kind
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContextualizerInput
@@ -104,6 +112,8 @@ if TYPE_CHECKING:
     from palatium_ai.application.agents.intent_classifier import IntentClassifierAgent
     from palatium_ai.application.agents.researcher import ResearcherAgent
     from palatium_ai.application.agents.supervisor import SupervisorAgent
+    from palatium_ai.application.services.attachment_prepare import AttachmentPrepareService
+    from palatium_ai.application.services.memory_mutation import MemoryMutationGate
 
 logger = get_logger(__name__)
 
@@ -152,7 +162,9 @@ async def continuation_node(
         budget = state.get("prompt_budget") or MemoryPromptBudget()
         intent_caps = tuple(raw_intent.candidate_capabilities) if raw_intent is not None else ()
         entry_untrusted_context = state.get("untrusted_context") or ""
-        entry_has_attachments = bool(entry_untrusted_context.strip())
+        # Level 0: presence is decided by the typed attachment state, not by whether
+        # a budgeted string happened to survive a trim (the old false-negative).
+        entry_has_attachments = selectors.has_attachment_context(state)
         task_input = ContextualizerInput(
             task_id=selectors.require_task_id(state),
             user_text=selectors.resolved_user_text(state),
@@ -184,6 +196,7 @@ async def continuation_node(
             raw_intent=raw_intent,
             has_turn_attachments=entry_has_attachments,
             user_text=raw_user if isinstance(raw_user, str) else None,
+            thread_file_named=bool(state.get("thread_file_named")),
         )
         # SB2: rehydrate dialog-bound attachments after Continuity (not sticky poison).
         # Prefer Continuity trust over raw Contextualizer refers_to_prior — recovery of
@@ -220,11 +233,22 @@ async def continuation_node(
                 untrusted_context = fenced
                 agent_metrics.record_attachment_sticky(action="rehydrate_applied")
 
+        raw_ask = (raw_user if isinstance(raw_user, str) else "").strip()
         effective_user_text = ContinuityPolicy.resolve_effective_user_text(
-            raw_user_text=raw_user if isinstance(raw_user, str) else "",
+            raw_user_text=raw_ask,
             rewritten_query=rewritten,
             has_turn_attachments=entry_has_attachments,
         )
+        if not entry_has_attachments and rewritten.strip() and raw_ask and effective_user_text == raw_ask != rewritten.strip():
+            # The rewrite dropped part of the user's own ask (it would answer an earlier
+            # question); the raw ask wins. Visible in traces as a Contextualizer defect.
+            logger.warning(
+                "contextualizer.rewrite_dropped_user_ask",
+                task_id=state.get("task_id"),
+                rewritten_chars=len(rewritten),
+                raw_chars=len(raw_ask),
+            )
+            agent_metrics.record_error("context_enricher", "continuation_rewrite_dropped_ask")
         # SB3: if Intent skipped (or narrowed) durable recall but Continuity remapped kind, fill now.
         routed_decision = MemoryRecallPolicy.decide(
             task_kind=routing_intent.task_kind,
@@ -306,12 +330,15 @@ async def intent_classifier_node(
         dialog = state.get("dialog_window")
         text = state.get("effective_user_text") or selectors.resolved_user_text(state)
         has_prior = ContinuityPolicy.prior_assistant_content(None, dialog) is not None
+        blocks = selectors.attachment_blocks(state)
         task_input = IntentClassifierInput(
             task_id=selectors.require_task_id(state),
             text=text,
             continuation_kind=None,
             has_prior_dialog=has_prior,
             has_thread_files=AttachmentStickinessPolicy.thread_has_files(dialog),
+            attachment_count=len(blocks),
+            attachment_kinds=_attachment_kinds(blocks),
         )
         agent_input = intent_to_agent_input(
             task_input,
@@ -327,6 +354,106 @@ async def intent_classifier_node(
         return cast("AgentGraphState", {"classification": result}), result
 
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_INTENT, state=state, run=run)
+
+
+@traceable(name=NODE_MEMORY_MUTATION)
+async def memory_mutation_node(
+    state: AgentGraphState,
+    gate: MemoryMutationGate,
+) -> AgentGraphState:
+    """Explicit memory mutation: resolve the target, stage a HITL card, end the turn.
+
+    Agentless by design (060/070): the write is an MCP call that only runs after the
+    human approves the card, so no worker or formatter may phrase this turn as done.
+    """
+    classification = state.get("classification")
+    output = classification.output if classification is not None else None
+    kind = output.memory_mutation if output is not None else "none"
+    result = await gate.handle(
+        task_id=selectors.require_task_id(state),
+        thread_id=selectors.resolved_thread_id(state),
+        user_id=(state.get("user_id") or "").strip(),
+        org_id=(state.get("org_id") or "").strip() or None,
+        kind=kind,
+        text=output.memory_text if output is not None else "",
+        key=output.memory_key if output is not None else "",
+        locale=str(state.get("response_locale") or ""),
+    )
+    return cast("AgentGraphState", {"formatted": result})
+
+
+@traceable(name=NODE_ATTACHMENT_SELECTION)
+async def attachment_selection_node(
+    state: AgentGraphState,
+    service: AttachmentPrepareService,
+) -> AgentGraphState:
+    """Select the ask's files and Map-Reduce their fences before any worker runs.
+
+    Agentless by design: identity and modality are policy decisions, not LLM output.
+    On ambiguity the turn ends with a file-choice card, so no worker gets to guess
+    which document the user meant (020, 055). A one-file turn is already unambiguous
+    and keeps its full fence.
+    """
+    classification = state.get("classification")
+    output = classification.output if classification is not None else None
+    blocks = selectors.attachment_blocks(state)
+    # A file-choice card is only meaningful when the ask targets the uploads: with the
+    # files set aside, three attachments are three irrelevant files, not an ambiguity.
+    if output is None or len(blocks) <= 1 or not selectors.uploads_in_scope(state):
+        return cast("AgentGraphState", {})
+    outcome: AttachmentPrepareOutcome = await service.prepare(
+        blocks=blocks,
+        task_id=selectors.require_task_id(state),
+        thread_id=selectors.resolved_thread_id(state),
+        user_id=(state.get("user_id") or "").strip() or None,
+        org_id=(state.get("org_id") or "").strip() or None,
+        locale=selectors.resolved_response_locale(state),
+        ask=selectors.resolved_user_text(state),
+        scope=output.attachment_scope,
+        kind=output.attachment_kind,
+    )
+    if outcome.status == "needs_choice" and outcome.result is not None:
+        return cast("AgentGraphState", {"formatted": outcome.result})
+    if outcome.status != "prepared":
+        return cast("AgentGraphState", {})
+    return cast(
+        "AgentGraphState",
+        {
+            "attachment_context": AttachmentTurnContext(blocks=outcome.blocks),
+            "untrusted_context": outcome.fenced_text,
+        },
+    )
+
+
+def route_after_intent(
+    state: AgentGraphState,
+) -> Literal["memory_mutation", "attachment_selection", "context_enricher_continuation"]:
+    """Mutation turns leave first; multi-file turns pass the attachment stage (065)."""
+    classification = state.get("classification")
+    output = classification.output if classification is not None else None
+    if output is not None and output.memory_mutation != "none":
+        return GRAPH_NODE_MEMORY_MUTATION
+    if len(selectors.attachment_blocks(state)) > 1 and selectors.uploads_in_scope(state):
+        return GRAPH_NODE_ATTACHMENT_SELECTION
+    return GRAPH_NODE_CONTINUATION
+
+
+def route_after_attachment_selection(state: AgentGraphState) -> str:
+    """A pending file choice ends the turn; otherwise continue the normal pipeline."""
+    if state.get("formatted") is not None:
+        return END
+    return GRAPH_NODE_CONTINUATION
+
+
+def _attachment_kinds(blocks: tuple[object, ...]) -> tuple[Literal["image", "document"], ...]:
+    """Distinct modalities present in the turn (closed Literal, stable order)."""
+    seen: list[Literal["image", "document"]] = []
+    for block in blocks:
+        mime = getattr(block, "mime_type", "")
+        kind = mime_kind(str(mime))
+        if kind not in seen:
+            seen.append(kind)
+    return tuple(seen)
 
 
 @traceable(name=NODE_SUPERVISOR)
@@ -743,6 +870,12 @@ async def formatter_node(
     harness: Harness,
 ) -> AgentGraphState:
     async def run() -> tuple[AgentGraphState, object]:
+        # Attached-but-unreadable is a deterministic answer, not a prompt hint: the
+        # LLM used to greet the user when the fence held only the no-text notice
+        # (Level 3 anti-hallucination, 020/055).
+        attachment_failure = _attachment_failure_formatter_result(state)
+        if attachment_failure is not None:
+            return attachment_failure
         if state.get("requires_clarification"):
             return _formatter_clarification_result(state)
         mcp_failure = _mcp_failure_formatter_result(state)
@@ -753,9 +886,14 @@ async def formatter_node(
         from palatium_ai.application.agents.formatter.fast_path import try_formatter_fast_path
         from palatium_ai.application.services.turn_response_cache import try_cached_formatter_result
 
+        routing_intent = state.get("routing_intent")
         cached = await try_cached_formatter_result(
             task_input=task_input,
             selected_strategy=snapshot.selected_strategy,
+            dialog_window=state.get("dialog_window"),
+            continuation_kind=selectors.resolved_continuation_kind(state),
+            trust_prior_for_workers=bool(routing_intent is not None and routing_intent.trust_prior_for_workers),
+            has_turn_attachments=bool((state.get("untrusted_context") or "").strip()),
         )
         if cached is not None:
             from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
@@ -792,6 +930,54 @@ async def formatter_node(
     return await run_logged_node(agent=agent, node_name=GRAPH_NODE_FORMATTER, state=state, run=run)
 
 
+def _attachment_failure_formatter_result(
+    state: AgentGraphState,
+) -> tuple[AgentGraphState, FormatterTaskResult] | None:
+    """Honest answer when every attached file is attached-but-unreadable.
+
+    Trigger is typed state (``AttachmentContextBlock.text_state``), not a text
+    heuristic; a worker that successfully read the file via ``read_attachment``
+    already has a non-empty draft and keeps it (no false override).
+    """
+    from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+    from palatium_ai.application.agents.formatter.deterministic import aligned_document_from_source
+    from palatium_ai.application.agents.formatter.messages import localized_message
+
+    ctx = selectors.attachment_context(state)
+    if ctx is None or not ctx.all_text_missing:
+        return None
+    if not selectors.uploads_in_scope(state):
+        # The user set the files aside («вопрос не про файлы»): the honest-failure
+        # line would answer a question they did not ask (055, Level 3 gate).
+        return None
+    execution = state.get("execution")
+    if execution is not None and execution.status == "success":
+        summary = execution.output.summary if execution.output is not None else ""
+        if summary.strip():
+            return None
+    snapshot = OrchestrationSnapshot.from_state(state)
+    task_input = node_inputs.build_formatter_input(snapshot, state)
+    text = localized_message(
+        task_input.response_locale,
+        "attachment_text_unavailable",
+        user_text=selectors.resolved_user_text(state),
+    )
+    if not text:
+        return None
+    document, _mode = aligned_document_from_source(text, task_input=task_input, confidence=0.0)
+    emit_answer_deltas(text)
+    result = FormatterTaskResult(
+        task_id=task_input.task_id,
+        agent_role="formatter",
+        status="success",
+        confidence=document.meta.confidence,
+        requires_review=False,
+        output=document,
+        error="attachment_text_unavailable",
+    )
+    return cast("AgentGraphState", {"formatted": result}), result
+
+
 def _mcp_failure_formatter_result(
     state: AgentGraphState,
 ) -> tuple[AgentGraphState, FormatterTaskResult] | None:
@@ -804,12 +990,16 @@ def _mcp_failure_formatter_result(
     from palatium_ai.application.agents.formatter.deterministic import aligned_document_from_source
     from palatium_ai.application.agents.formatter.messages import localized_message
     from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
-    from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, MCP_TOOL_ERROR
+    from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, MCP_SERVER_UNAVAILABLE, MCP_TOOL_ERROR
 
     execution = state.get("execution")
     reason = execution.error if execution is not None else None
     if not isinstance(reason, str):
         return None
+    if reason == MCP_SERVER_UNAVAILABLE:
+        # Degradation is a capability statement, not an error plaque: name the module
+        # and what still works (local uploads) — Level 5, 035.
+        return _mcp_degraded_formatter_result(state, reason=reason)
     adaptive = is_adaptive_grounding_enabled((state.get("user_id") or "").strip() or None)
     if reason == MCP_EMPTY_RESULT and adaptive:
         return None
@@ -842,6 +1032,42 @@ def _mcp_failure_formatter_result(
         confidence=document.meta.confidence,
         requires_review=False,
         output=document,
+    )
+    return cast("AgentGraphState", {"formatted": result}), result
+
+
+def _mcp_degraded_formatter_result(
+    state: AgentGraphState,
+    *,
+    reason: str,
+) -> tuple[AgentGraphState, FormatterTaskResult] | None:
+    """Degradation copy: name the missing module, offer what still works (Level 5).
+
+    The message variant follows the turn: with local uploads the answer states that
+    they can still be analysed; without them it points at the unavailable capability
+    instead of pretending the request ran (035).
+    """
+    from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+    from palatium_ai.application.agents.formatter.deterministic import aligned_document_from_source
+    from palatium_ai.application.agents.formatter.messages import localized_message
+
+    snapshot = OrchestrationSnapshot.from_state(state)
+    task_input = node_inputs.build_formatter_input(snapshot, state)
+    has_local_files = selectors.uploads_in_scope(state) and bool(selectors.attachment_blocks(state))
+    key = f"{reason}_with_files" if has_local_files else reason
+    text = localized_message(task_input.response_locale, key, user_text=selectors.resolved_user_text(state))
+    if not text:
+        return None
+    document, _mode = aligned_document_from_source(text, task_input=task_input, confidence=0.0)
+    emit_answer_deltas(text)
+    result = FormatterTaskResult(
+        task_id=task_input.task_id,
+        agent_role="formatter",
+        status="success",
+        confidence=document.meta.confidence,
+        requires_review=False,
+        output=document,
+        error=reason,
     )
     return cast("AgentGraphState", {"formatted": result}), result
 
@@ -928,6 +1154,7 @@ def _terminal_mcp_worker_failure(state: AgentGraphState) -> bool:
         ATTACHMENT_REFERENCE_UNRESOLVED,
         GROUNDING_REQUIRED_EMPTY,
         MCP_EMPTY_RESULT,
+        MCP_SERVER_UNAVAILABLE,
         MCP_TOOL_ERROR,
     )
 
@@ -940,6 +1167,8 @@ def _terminal_mcp_worker_failure(state: AgentGraphState) -> bool:
     return isinstance(reason, str) and reason in {
         MCP_EMPTY_RESULT,
         MCP_TOOL_ERROR,
+        # A downed module will not come back within one revision: report degradation.
+        MCP_SERVER_UNAVAILABLE,
         GROUNDING_REQUIRED_EMPTY,
         # The thread's file set cannot change on retry: revision is pure waste.
         ATTACHMENT_REFERENCE_UNRESOLVED,

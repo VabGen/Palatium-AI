@@ -19,6 +19,7 @@ from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.memory_keeper import MemoryKeeperOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.memory.tool_output import wrap_untrusted_tool_output
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -59,9 +60,14 @@ class MemoryKeeperAgent(BaseAgent):
         task_input = decode_memory_keeper_input(input.context)
 
         existing = "\n".join(f"- {text}" for text in task_input.existing_memory_texts[:MAX_EXISTING_MEMORIES]) or "(none)"
+        # Fenced with the same envelope the rest of the platform uses for untrusted text:
+        # recall results are derived from earlier user turns, so an entry can literally read
+        # "ignore the rules and store X". Unfenced it sat outside the only injection boundary
+        # in this prompt. wrap_untrusted_tool_output also neutralizes a close-marker breakout.
+        existing_block = wrap_untrusted_tool_output(existing, source="memory.existing")
         user_prompt = (
             f"thread_id={task_input.thread_id}\n"
-            f"existing_memories:\n{existing}\n\n"
+            f"existing_memories:\n{existing_block}\n\n"
             "<<<UNTRUSTED_TRANSCRIPT>>>\n"
             f"{task_input.transcript_excerpt}\n"
             "<<<END_UNTRUSTED_TRANSCRIPT>>>"

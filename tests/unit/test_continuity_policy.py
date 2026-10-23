@@ -276,6 +276,33 @@ def test_false_format_with_social_demotes_to_new_topic() -> None:
     assert effective.trust_prior_for_workers is False
 
 
+def test_false_format_without_refers_to_prior_is_self_contained() -> None:
+    """A ``format`` label with ``refers_to_prior=false`` contradicts its own contract.
+
+    Answering it from ``prior_context`` replays the previous turn (the "how are you
+    called?" → old statement bug). Fail safe: the ask is self-contained.
+    """
+    ctx = ContextualizerOutput(
+        rewritten_query="Как меня зовут?",
+        continuation_kind="format",
+        confidence=0.8,
+        refers_to_prior=False,
+        prior_assistant_excerpt=None,
+        reasoning="inconsistent label",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.8,
+        reasoning="name lookup",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=_dialog_with_prior(), raw_intent=raw)
+    assert effective.continuation_kind == "new_topic"
+    assert effective.trust_prior_for_workers is False
+    assert effective.task_kind == "knowledge_request"
+
+
 def test_format_with_turn_attachments_does_not_bind_prior_file() -> None:
     """New upload + «сводка» must not rewrite the previous file via format-of-prior."""
     dialog = _dialog_with_prior()
@@ -1010,3 +1037,121 @@ def test_prior_context_clipped_to_worker_budget() -> None:
     effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
     assert effective.prior_context is not None
     assert len(effective.prior_context) == DEFAULT_PROMPT_BUDGET.worker_summary_max_chars
+
+def test_rewrite_that_replaces_the_ask_is_pinned_back_to_the_user_turn() -> None:
+    """Regression: a Contextualizer rewrite must not answer an earlier question.
+
+    Turn «покажи текст файла» was rewritten into the previous ask («Кто является
+    истцом в файле Кодекс корпоративной этики V2.0 ред 10.1?»), so every worker
+    answered the old question. A rewrite that shares nothing with the user's turn
+    is discarded.
+    """
+    effective = ContinuityPolicy.resolve_effective_user_text(
+        raw_user_text="покажи текст файла",
+        rewritten_query="Кто является истцом в файле Кодекс корпоративной этики V2.0 ред 10.1?",
+        has_turn_attachments=False,
+    )
+    assert effective == "покажи текст файла"
+    assert not ContinuityPolicy.rewrite_preserves_ask(
+        user_text="покажи текст файла",
+        rewritten="Кто является истцом в файле Кодекс корпоративной этики V2.0 ред 10.1?",
+    )
+
+
+def test_rewrite_enrichment_of_an_underspecified_ask_is_kept() -> None:
+    """Legit enrichment keeps a content word of the ask; inflection is tolerated."""
+    enriched = "Сводка причин роста цен на иван-чай"
+    assert ContinuityPolicy.rewrite_preserves_ask(
+        user_text="дай короткую сводку",
+        rewritten=enriched,
+    )
+    assert (
+        ContinuityPolicy.resolve_effective_user_text(
+            raw_user_text="дай короткую сводку",
+            rewritten_query=enriched,
+            has_turn_attachments=False,
+        )
+        == enriched
+    )
+
+
+def test_ask_without_content_words_allows_enrichment() -> None:
+    assert ContinuityPolicy.rewrite_preserves_ask(user_text="а он?", rewritten="кто такой заявитель?")
+
+
+def test_named_thread_file_forces_the_storage_axis() -> None:
+    """A file named in code needs ``platform.read_attachment``, not a formatter echo."""
+    ctx = ContextualizerOutput(
+        rewritten_query="покажи полный текст файла Кодекс корпоративной этики",
+        continuation_kind="format",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="previously formatted answer",
+        reasoning="show full text",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="response_formatting",
+        requires_mcp=False,
+        candidate_capabilities=("format",),
+        confidence=0.9,
+        reasoning="show text",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="покажи полный текст файла Кодекс корпоративной этики",
+        thread_file_named=True,
+    )
+    assert effective.file_reference == "thread_file"
+    assert effective.task_kind == "knowledge_request"
+    assert effective.requires_mcp is True
+
+
+def test_named_thread_file_does_not_override_a_new_upload() -> None:
+    """A fenced upload owns the turn; an old thread file must not be re-read."""
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.9,
+        reasoning="summarize upload",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        has_turn_attachments=True,
+        user_text="суммируй Кодекс корпоративной этики",
+        thread_file_named=True,
+    )
+    assert effective.file_reference == "none"
+
+def test_named_thread_file_clears_a_false_clarify() -> None:
+    """Naming the file fills the referent; a clarify label cannot withhold the read."""
+    ctx = ContextualizerOutput(
+        rewritten_query="покажи текст файла Кодекс корпоративной этики",
+        continuation_kind="clarify",
+        confidence=0.9,
+        refers_to_prior=False,
+        reasoning="which file?",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="clarification_needed",
+        requires_mcp=False,
+        requires_user_choice=False,
+        underspecification_kind="open_text",
+        candidate_capabilities=(),
+        confidence=0.9,
+        reasoning="ambiguous file",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="покажи текст файла Кодекс корпоративной этики",
+        thread_file_named=True,
+    )
+    assert effective.continuation_kind == "answer"
+    assert effective.file_reference == "thread_file"
+    assert effective.requires_mcp is True

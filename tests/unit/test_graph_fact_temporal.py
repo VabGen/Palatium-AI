@@ -64,6 +64,29 @@ async def test_in_memory_supersede_keeps_history() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_backdated_supersede_has_no_overlap_window() -> None:
+    """F2: the old fact must stop at the new fact's ``valid_at``, not at ``now``.
+
+    Otherwise ``as_of`` inside ``[new.valid_at, now)`` returns both texts, and the answer
+    contradicts itself — the dedup in recall compares text, so it cannot mask this.
+    """
+    port = InMemoryGraphWritePort()
+    t_first = datetime(2026, 1, 1, tzinfo=UTC)
+    t_flip = datetime(2026, 3, 1, tzinfo=UTC)
+    await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="k", text="v1", kind="fact", valid_at=t_first))
+    await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="k", text="v2", kind="fact", valid_at=t_flip))
+
+    before_flip = port.list_facts_as_of(user_id="u1", as_of=datetime(2026, 2, 15, tzinfo=UTC))
+    assert [row.text for row in before_flip] == ["v1"]
+
+    at_flip = port.list_facts_as_of(user_id="u1", as_of=t_flip)
+    assert [row.text for row in at_flip] == ["v2"]
+
+    now_rows = port.list_facts_as_of(user_id="u1", as_of=datetime.now(UTC))
+    assert [row.text for row in now_rows] == ["v2"]
+
+
+@pytest.mark.asyncio()
 async def test_expire_hides_fact_from_temporal_query() -> None:
     port = InMemoryGraphWritePort()
     await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="gone", text="forget me", kind="fact"))
@@ -153,6 +176,80 @@ async def test_promotion_skips_blocked_pii_supersede() -> None:
     active = graph.get_active_fact(user_id="alice", entry_key="pii-key")
     assert active is not None
     assert "0000" in active.text
+
+
+@pytest.mark.asyncio()
+async def test_blocked_pii_supersede_is_counted_once_per_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F3: a withheld PII flip is a *state*, so it is aggregated, not logged per row.
+
+    Before this, each candidate emitted its own warning on every batch — unbounded log
+    growth for a condition that stays true until a human decides, and no metric at all.
+    """
+    from palatium_ai.application.services import memory_promotion as promotion_module
+
+    calls: list[int] = []
+    monkeypatch.setattr(
+        promotion_module.agent_metrics,
+        "record_memory_promote_blocked_pii",
+        lambda *, count=1: calls.append(count),
+    )
+
+    memory = InMemoryMemoryPort()
+    graph = InMemoryGraphWritePort()
+    ns = user_namespace("bob")
+    for key, old_text, new_text in (
+        ("pii-phone", "old phone +1-555-0000", "new phone +1-555-0100"),
+        ("pii-iban", "old iban XX00", "new iban XX11"),
+    ):
+        await memory.put(
+            namespace=ns,
+            key=key,
+            value={
+                "text": new_text,
+                "kind": "fact",
+                "confidence": 0.95,
+                "importance": 0.9,
+                "contains_pii": True,
+            },
+        )
+        for _ in range(3):
+            await memory.bump_access(namespace=ns, key=key)
+        await graph.upsert_fact(GraphFactUpsert(user_id="bob", entry_key=key, text=old_text, kind="fact", contains_pii=True))
+
+    service = MemoryPromotionService(
+        memory=memory,
+        graph_write=graph,
+        thresholds=PromotionThresholds(min_access_frequency=3, min_importance=0.7),
+    )
+
+    assert await service.run_batch(user_id="bob", limit=8) == 0
+    assert calls == [2]  # one publish per batch, carrying both blocked keys
+    assert graph.get_active_fact(user_id="bob", entry_key="pii-phone").text.endswith("0000")
+
+
+@pytest.mark.asyncio()
+async def test_try_promote_reports_blocked_pii_distinctly_from_a_skip() -> None:
+    """The outcome must separate "waiting for a human" from "nothing to do" (F3)."""
+    memory = InMemoryMemoryPort()
+    graph = InMemoryGraphWritePort()
+    ns = user_namespace("carol")
+    await memory.put(
+        namespace=ns,
+        key="pii-key",
+        value={"text": "new secret", "kind": "fact", "confidence": 0.95, "importance": 0.9, "contains_pii": True},
+    )
+    for _ in range(3):
+        await memory.bump_access(namespace=ns, key="pii-key")
+    await graph.upsert_fact(
+        GraphFactUpsert(user_id="carol", entry_key="pii-key", text="old secret", kind="fact", contains_pii=True)
+    )
+    service = MemoryPromotionService(
+        memory=memory,
+        graph_write=graph,
+        thresholds=PromotionThresholds(min_access_frequency=3, min_importance=0.7),
+    )
+    candidates = await memory.list_promotion_candidates(user_id="carol", min_access_frequency=0, min_importance=0.7, limit=8)
+    assert [await service._try_promote(c) for c in candidates] == ["blocked_pii"]
 
 
 @pytest.mark.asyncio()

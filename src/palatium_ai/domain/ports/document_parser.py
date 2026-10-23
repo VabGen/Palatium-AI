@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from palatium_ai.domain.attachments.parse_routing import ExtractionSource
 from palatium_ai.domain.attachments.types import AttachmentRejectionReason
+from palatium_ai.domain.content.page_markers import PAGE_MARKER_TEMPLATE
 
 
 class DocumentParseError(ValueError):
@@ -59,7 +60,7 @@ class ParsedDocument(BaseModel):
     @property
     def text(self) -> str:
         """Pages joined with ``[[page N]]`` markers so citations stay traceable."""
-        return "\n\n".join(f"[[page {page.number}]]\n{page.text}" for page in self.pages)
+        return "\n\n".join(f"{PAGE_MARKER_TEMPLATE.format(number=page.number)}\n{page.text}" for page in self.pages)
 
     @property
     def flow_text(self) -> str:

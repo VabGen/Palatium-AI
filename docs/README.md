@@ -24,6 +24,9 @@
 | **[internal-vocabulary.md](internal-vocabulary.md)** | Служебные имена полей (`attachment_context`, `prior_context`, …) не попадают в ответ и HITL-карточку: две линии защиты, точки применения, как добавить термин (2026-10-16) |
 | **[../.cursor/plans/file-reread.md](../.cursor/plans/file-reread.md)** | План: ось `file_reference=thread_file` + детерминированный резолв файла из треда, rollout `ATTACHMENTS_FILE_REREAD_PCT` (2026-10-16) |
 | **[audit/latency-audit.md](audit/latency-audit.md)** | Аудит скорости ответа: карта `/intents/process`, узкие места, план P0–P2 (актуально на 2026-10-01) |
+| **[audit/m5-verification.md](audit/m5-verification.md)** | Верификация M5 против Graphiti: таблица гарантий bi-temporal, находки F1–F6 с классификацией (2026-10-20, live-аддендум 2026-10-21) |
+| **[audit/m3-verification.md](audit/m3-verification.md)** | Верификация M3 (`SKIP LOCKED`) против Mem0/Letta: гарантии очереди, находки E1–E7 с классификацией (2026-10-20) |
+| **[audit/e2e-bug-report.md](audit/e2e-bug-report.md)** | Живой E2E UI-аудит памяти (Playwright): сценарии, баги, приоритеты, план исправления (2026-10-21) |
 | **[architecture/streaming.md](architecture/streaming.md)** | SSE-контракт `/intents/process/stream`: события, TTFT, fast path (актуально на 2026-10-09) |
 | **[embedded-assistant.md](embedded-assistant.md)** | Embeddable-виджет `<palatium-assistant>`: контракт событий, темизация, доставка, §9 — интеграционный пакет и чек-лист приёмки для команды СЭД |
 | **[../deploy/observability/README.md](../deploy/observability/README.md)** | Observability-стек: Prometheus / Grafana / Loki / Alertmanager + SLO |

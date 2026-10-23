@@ -67,21 +67,21 @@ test.describe('адреса API и сокета', () => {
   test('REST и WS идут на один origin — тот, откуда загружен виджет', async ({ page }) => {
     const server = defaultApi();
     const socketUrls: string[] = [];
-    server.reply('intents.process', {
+    server.reply('intents.process.stream', {
       json: { task_id: 'task-1', output: answerDocument() },
     });
     await stubSessionSocket(page, url => socketUrls.push(url));
     await server.install(page);
     await openWidget(page);
 
-    await page.getByRole('textbox').fill('Составь письмо');
+    await page.locator('.composer-textarea').fill('Составь письмо');
     await page.getByRole('button', { name: 'Отправить сообщение' }).click();
     await expect(page.locator('.msg.assistant:not(.pending)')).toHaveCount(1);
 
     const widgetOrigin = await page.evaluate(() => window.location.origin);
-    const call = server.lastCall('intents.process');
+    const call = server.lastCall('intents.process.stream');
     const threadId = (call?.body as { thread_id?: string } | null)?.thread_id ?? '';
-    expect(call?.path).toBe('/intents/process');
+    expect(call?.path).toBe('/intents/process/stream');
     expect(threadId).not.toBe('');
 
     // Сокет открывается на тот же тред, что ушёл в запрос. Если адреса разъедутся,

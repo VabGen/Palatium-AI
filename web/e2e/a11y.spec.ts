@@ -93,7 +93,7 @@ test.describe('axe (WCAG A/AA)', () => {
 
   test('карточка HITL и панель памяти доступны с клавиатуры', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', {
+    server.reply('intents.process.stream', {
       json: {
         task_id: 'task-1',
         output: answerDocument(),
@@ -107,7 +107,7 @@ test.describe('axe (WCAG A/AA)', () => {
     await server.install(page);
     await openWidget(page);
 
-    await page.getByRole('textbox').fill('Отправь письмо');
+    await page.locator('.composer-textarea').fill('Отправь письмо');
     await page.getByRole('button', { name: 'Отправить сообщение' }).click();
     await page.getByRole('button', { name: 'Память' }).click();
     await expect(page.locator('.hitl-card')).toBeVisible();
@@ -146,7 +146,8 @@ test.describe('клавиатура и фокус внутри Shadow DOM', () =
     await page.locator('#btn-expand').focus();
     const visited = await tabInto(page, 7);
 
-    // Порядок = порядок в разметке: шапка → подсказки → блок ввода.
+    // Порядок = порядок в разметке: шапка → подсказки → блок ввода
+    // (панель памяти → project KB → скрепка → поле ввода).
     // `.send-btn` в списке нет: пустой ввод делает кнопку disabled, а такие
     // элементы в обход не попадают.
     expect(visited.map(item => `${item.tag}.${item.className.split(' ')[0]}`)).toEqual([
@@ -155,8 +156,8 @@ test.describe('клавиатура и фокус внутри Shadow DOM', () =
       'button.suggestion',
       'button.suggestion',
       'button.memory-toggle',
+      'input.attachment-project-input',
       'button.attach-btn',
-      'textarea.composer-textarea',
     ]);
 
     // Индикатор фокуса обязателен для каждого шага, а не только «в среднем»:
@@ -169,12 +170,14 @@ test.describe('клавиатура и фокус внутри Shadow DOM', () =
 
   test('заполненный ввод делает отправку достижимой с клавиатуры', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', { json: { task_id: 'task-1', output: answerDocument() } });
+    server.reply('intents.process.stream', {
+      json: { task_id: 'task-1', output: answerDocument() },
+    });
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
 
-    await page.getByRole('textbox').fill('Составь письмо');
+    await page.locator('.composer-textarea').fill('Составь письмо');
     await expect(page.getByRole('button', { name: 'Отправить сообщение' })).toBeEnabled();
 
     // Между textarea и send нет ничего фокусируемого — один Tab.
@@ -193,7 +196,7 @@ test.describe('reduced motion', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const server = defaultApi();
     // Задержка нужна, чтобы поймать состояние «в работе» и заглянуть в спиннер.
-    server.reply('intents.process', {
+    server.reply('intents.process.stream', {
       delayMs: 1_500,
       json: { task_id: 'task-1', output: answerDocument() },
     });
@@ -201,7 +204,7 @@ test.describe('reduced motion', () => {
     await server.install(page);
     await openWidget(page);
 
-    await page.getByRole('textbox').fill('Составь письмо');
+    await page.locator('.composer-textarea').fill('Составь письмо');
     await page.getByRole('button', { name: 'Отправить сообщение' }).click();
 
     const motion = await page.evaluate(() => {
@@ -225,5 +228,20 @@ test.describe('reduced motion', () => {
     // Спиннер — НЕ движение, а сигнал «запрос выполняется»: он обязан остаться,
     // иначе «работаю» становится неотличимо от «зависло».
     expect(motion.spinner.animation).not.toBe('none');
+
+    // Орб ожидания при выключенном движении — статичная картинка, поэтому
+    // подпись фазы перестаёт быть sr-only и показывается текстом: иначе
+    // «идёт работа» не прочитать ни глазами, ни по одному лишь цвету.
+    const phase = await page.locator('.msg.is-waiting [role="status"]').evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        position: style.position,
+        clipPath: style.clipPath,
+        width: element.getBoundingClientRect().width,
+      };
+    });
+    expect(phase.position).toBe('static');
+    expect(phase.clipPath).toBe('none');
+    expect(phase.width).toBeGreaterThan(40);
   });
 });

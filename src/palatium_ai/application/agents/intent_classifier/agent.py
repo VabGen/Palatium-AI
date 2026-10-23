@@ -30,7 +30,13 @@ class IntentClassifierAgent(BaseAgent):
         return self._config
 
     def get_required_context_keys(self) -> list[str]:
-        return ["continuation_kind", "has_prior_dialog", "has_thread_files"]
+        return [
+            "continuation_kind",
+            "has_prior_dialog",
+            "has_thread_files",
+            "attachment_count",
+            "attachment_kinds",
+        ]
 
     def get_available_tools(self) -> list[str]:
         return []
@@ -62,6 +68,10 @@ class IntentClassifierAgent(BaseAgent):
         continuation_kind = input.context.get("continuation_kind") or None
         has_prior_dialog = input.context.get("has_prior_dialog", "false").lower() == "true"
         has_thread_files = input.context.get("has_thread_files", "false").lower() == "true"
+        attachment_count = _int_from_context(input.context.get("attachment_count"))
+        attachment_kinds = tuple(
+            kind for kind in (input.context.get("attachment_kinds") or "").split(",") if kind
+        )
         messages = [
             ChatMessage(role="system", content=INTENT_CLASSIFIER_SYSTEM_PROMPT),
             ChatMessage(
@@ -72,6 +82,9 @@ class IntentClassifierAgent(BaseAgent):
                         "continuation_kind": continuation_kind,
                         "has_prior_dialog": has_prior_dialog,
                         "has_thread_files": has_thread_files,
+                        # Only the axes the model must label — never file content (020).
+                        "attachment_count": attachment_count,
+                        "attachment_kinds": list(attachment_kinds),
                     },
                     ensure_ascii=False,
                 ),
@@ -100,6 +113,15 @@ class IntentClassifierAgent(BaseAgent):
             confidence=parsed.confidence,
             output=parsed,
         )
+
+
+def _int_from_context(raw: object) -> int:
+    """Context values arrive as strings (AgentInput.context is ``dict[str, str]``)."""
+    if isinstance(raw, int):
+        return max(0, raw)
+    if isinstance(raw, str) and raw.strip().lstrip("+-").isdigit():
+        return max(0, int(raw.strip()))
+    return 0
 
 
 def _empty_intent_output() -> IntentClassifierOutput:

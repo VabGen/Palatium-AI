@@ -13,6 +13,7 @@ from palatium_ai.core.security.secret_scanner import scan_text
 from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.domain.mcp.models import MCPToolResult
 from palatium_ai.domain.memory.emotional import parse_optional_emotional_valence
+from palatium_ai.domain.memory.extract_queue import is_queued
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 from palatium_ai.domain.memory.pii import resolve_contains_pii
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
@@ -342,7 +343,7 @@ async def extract_transcript_memories(
     )
     org_id_raw = arguments.get("org_id", "")
     org_id = org_id_raw.strip() if isinstance(org_id_raw, str) and org_id_raw.strip() else None
-    queued = await consolidation.enqueue(
+    result = await consolidation.enqueue(
         thread_id=thread_id.strip(),
         task_id=task_id,
         user_id=user_id.strip(),
@@ -353,11 +354,11 @@ async def extract_transcript_memories(
         "axis": "extract",
         "thread_id": thread_id.strip(),
         "task_id": task_id,
-        "status": "queued" if queued else "queue_full",
+        "status": result,
     }
     return MCPToolResult(
         content=[{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
-        is_error=_is_error_status(payload["status"]),
+        is_error=not is_queued(result),
     )
 
 
@@ -366,7 +367,3 @@ def _error_result(message: str) -> MCPToolResult:
         content=[{"type": "text", "text": json.dumps({"error": message}, ensure_ascii=False)}],
         is_error=True,
     )
-
-
-def _is_error_status(status: str) -> bool:
-    return status == "queue_full"

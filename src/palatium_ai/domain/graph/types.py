@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +18,9 @@ class GraphQueryCommand(BaseModel):
     cypher: str = Field(min_length=1, max_length=8_000)
     params: dict[str, object] = Field(default_factory=dict)
     limit: int = Field(default=25, ge=1, le=100)
+    # Bi-temporal read moment (M5). ``None`` → now; the port binds ``$as_of`` itself,
+    # so ``:MemoryFact`` queries can never reach the driver without a time anchor.
+    as_of: datetime | None = None
 
 
 class GraphQueryRow(BaseModel):

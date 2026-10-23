@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Palatium Assistant — standalone</title>
+    <!-- Inline favicon: no /favicon.ico request, so the console stays clean on load (E2E-06). -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307090b'/%3E%3Cpath d='M16 6l2.6 6.9L25.5 16l-6.9 2.6L16 25.5l-2.6-6.9L6.5 16l6.9-3.1z' fill='%233dbea0'/%3E%3C/svg%3E"
+    />
     <style>
       html,
       body {
@@ -247,7 +252,10 @@
         });
 
         // Контекст, выставленный ДО загрузки виджета (проверка ветки window.__palatiumSedContext).
-        if (new URLSearchParams(location.search).has('preload')) {
+        // Хост, который уже знает тред (перезагрузка страницы), обязан вернуть его сразу:
+        // иначе виджет успевает создать новый тред, и диалог «теряется» (E2E-04).
+        var hasPreload = new URLSearchParams(location.search).has('preload');
+        if (hasPreload || hostThreadId) {
           hostEnabled = true;
           mintToken()
             .then(function (token) {
@@ -261,6 +269,6 @@
         }
       })();
     </script>
-    <script type="module" src="/src/widget.tsx"></script>
+    <script type="module" src="./src/widget.tsx"></script>
   </body>
 </html>

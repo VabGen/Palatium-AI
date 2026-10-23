@@ -19,6 +19,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "aiohttp (>=3.13.0,<4.0.0)",
     "alembic (>=1.19.1,<2.0.0)",
     "asyncpg (>=0.30.0,<0.40.0)",
     "cryptography (>=50.0.0,<51.0.0)",
@@ -184,7 +185,7 @@ strict = true
 warn_unreachable = true
 show_error_codes = true
 show_column_numbers = true
-exclude = ["tests/", "build/", "dist/", ".venv/", "mcp_servers/"]
+exclude = ["tests/", "build/", "dist/", ".venv/", "mcp_servers/", "artifacts/"]
 mypy_path = ["src", "scripts"]
 explicit_package_bases = true
 plugins = ["pydantic.mypy"]
@@ -194,6 +195,8 @@ module = [
     "asyncpg",
     "asyncpg.*",
     "consul",
+    "docx",
+    "docx.*",
     "fitz",
     "graphiti_core",
     "graphiti_core.*",
@@ -203,7 +206,10 @@ module = [
     "openpyxl.*",
     "pgvector",
     "pgvector.*",
+    "pypdf",
+    "pypdf.*",
     "pytesseract",
+    "pytest",
 ]
 ignore_missing_imports = true
 

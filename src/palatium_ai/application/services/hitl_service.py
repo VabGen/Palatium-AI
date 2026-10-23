@@ -201,8 +201,9 @@ class HitlService:
             task_id=task_id,
             title=document.title or "Review required",
             body=(
-                "Quality gate flagged this answer. Approve to keep it, or Reject & revise "
-                "to regenerate — do not reply with a numbered menu."
+                f"Quality gate flagged this answer (confidence {confidence:.2f}). "
+                "Approve to keep it, or Reject & revise to regenerate — do not reply "
+                "with a numbered menu."
             ),
             options=self._stamp_options(
                 default_review_options(),

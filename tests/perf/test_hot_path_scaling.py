@@ -44,6 +44,9 @@ _MIN_RATIO = _SCALE_FACTOR / _LINEAR_TOLERANCE
 # Small enough to stay instant, large enough that constant per-call overhead is noise:
 # dedupe at n=250 is 11 051 instructions of which ~40 are constant.
 _SMALL = 250
+# The hybrid merge carries a fixed ~12k-instruction term (rank the fused top-40 hits) that is
+# ~half of the total at 250 hits; from 2000 it is ~6%, so the per-hit slope is what is measured.
+_MERGE_BASE = 2000
 
 _Counted = Callable[[Callable[[], object]], int]
 
@@ -89,16 +92,27 @@ def instruction_counter() -> Iterator[_Counted]:
     _MONITORING.free_tool_id(tool_id)
 
 
-def _ratio(count_instructions: _Counted, build: Callable[[int], Callable[[], object]]) -> float:
-    """Instruction growth from ``_SMALL`` to ``_SMALL * _SCALE_FACTOR`` input."""
-    baseline = count_instructions(build(_SMALL))
+def _ratio(
+    count_instructions: _Counted,
+    build: Callable[[int], Callable[[], object]],
+    *,
+    base: int = _SMALL,
+) -> float:
+    """Instruction growth from ``base`` to ``base * _SCALE_FACTOR`` input."""
+    baseline = count_instructions(build(base))
     assert baseline > 0, "counter observed no instructions at all"
-    return count_instructions(build(_SMALL * _SCALE_FACTOR)) / baseline
+    return count_instructions(build(base * _SCALE_FACTOR)) / baseline
 
 
-def _assert_at_most_linear(count_instructions: _Counted, build: Callable[[int], Callable[[], object]], label: str) -> float:
+def _assert_at_most_linear(
+    count_instructions: _Counted,
+    build: Callable[[int], Callable[[], object]],
+    label: str,
+    *,
+    base: int = _SMALL,
+) -> float:
     """Fail when ``_SCALE_FACTOR``x input costs quadratic-order instructions."""
-    ratio = _ratio(count_instructions, build)
+    ratio = _ratio(count_instructions, build, base=base)
     assert ratio <= _MAX_RATIO, f"{label} looks super-linear: {ratio:.2f}x instructions for {_SCALE_FACTOR}x input"
     return ratio
 
@@ -165,7 +179,16 @@ def test_dialog_dedupe_scales_linearly(instruction_counter: _Counted) -> None:
 
 
 def test_hybrid_merge_scales_linearly(instruction_counter: _Counted) -> None:
-    """FTS+vector merge is a dict insert per hit — a nested scan over hits would be n²."""
+    """FTS+vector merge is a dict insert per hit — a nested scan over hits would be n².
+
+    Measured from ``_MERGE_BASE``, not ``_SMALL``: the merge is linear *plus* a fixed cost
+    for ranking the fused top-``2 × limit`` hits (≈12k instructions, independent of how many
+    hits went in). At 250 hits that constant is about half of the total, so a 4x input grew
+    the count only 2.55x — a correct function failing a sensitivity check that cannot tell a
+    flat term from a dead counter. Starting where the per-hit term dominates keeps the same
+    assertions (and the same 16x fail signal for an O(n²) implementation) without loosening
+    either bound.
+    """
 
     def build(size: int) -> Callable[[], object]:
         # Same entry keys on both sides: the merge is expected to collapse duplicates,
@@ -174,7 +197,7 @@ def test_hybrid_merge_scales_linearly(instruction_counter: _Counted) -> None:
         vector = [(f"entry-{index}", 0.7, {"text": f"doc {index}", "confidence": 0.8}) for index in range(size)]
         return lambda: merge_hybrid_scores(fts, vector, limit=20)
 
-    ratio = _assert_at_most_linear(instruction_counter, build, "merge_hybrid_scores")
+    ratio = _assert_at_most_linear(instruction_counter, build, "merge_hybrid_scores", base=_MERGE_BASE)
 
     assert ratio >= _MIN_RATIO, f"merge stopped doing per-hit work: {ratio:.2f}x"
 

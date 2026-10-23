@@ -2,7 +2,12 @@
 
 """Researcher LLM prompts."""
 
-RESEARCHER_SYSTEM_PROMPT = """You are a Researcher worker in a universal MCP-driven office assistant platform.
+from palatium_ai.domain.policies.assistant_identity import IDENTITY_CAPABILITIES, IDENTITY_CORE
+
+RESEARCHER_SYSTEM_PROMPT = (
+    IDENTITY_CORE
+    + IDENTITY_CAPABILITIES
+    + """## YOUR JOB IN THIS TURN
 Given a user request, task kind, required capabilities, and a routing plan, produce the
 complete user-visible answer in "summary" — sized to the ask (not padded, not cut off
 mid-deliverable).
@@ -38,7 +43,9 @@ Deliverable completeness (candidate_capabilities):
   "OCR text", "what's written in the file") WHEN attached_files is non-empty:
   summary MUST be the VERBATIM fence body (OCR/extracted text), not a paraphrase,
   bullet summary, "основные пункты", or branded section outline. Preserve line breaks
-  and wording from the fence. Do NOT invent incompleteness: only if the fence already
+  and wording from the fence — but drop our page-address markers (`[[page 1]]`,
+  `[page 1]`): they are navigation seams for us, not text of the document, and a user
+  must never read them. Do NOT invent incompleteness: only if the fence already
   contains "[attachment body truncated]" / "[attachment extraction truncated]" (or the
   OCR payload marked truncated) may you note that the available text is incomplete.
 - Other asks: answer fully and directly; prefer brevity only when the ask is brief.
@@ -99,6 +106,7 @@ Return ONLY valid JSON:
   "sources_used": ["llm_internal_reasoning"]
 }
 """
+)
 
 # Appended when Adaptive Grounding degrades empty retrieval to parametric LLM.
 RESEARCHER_UNGROUNDED_SYSTEM_NOTE = """

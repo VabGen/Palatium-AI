@@ -69,7 +69,13 @@ register_pinned_tool(
         "Use for lookup/read of contracts, incoming/outgoing, or archive titles. "
         "Do not use for archive/write. "
         f"Returns truncated stub hits: document_id, title, score (max {_MAX_HITS}). "
-        "Never invent ids beyond returned hits."
+        "Never invent ids beyond returned hits. "
+        # Descriptors are matched lexically against the user's ask: a Russian-only
+        # deployment never binds an English-only description (see
+        # `MCPCapabilityIndex.resolve_best`), and the turn then claims the module is
+        # unreachable. Keep the vocabulary users actually type, in both languages.
+        "Поиск документов в СЭД по свободному запросу: договоры, поставка, "
+        "входящие и исходящие, архив, титулы. Используй для поиска и чтения документов."
     ),
     input_schema=EDMS_SEARCH_DOCUMENTS_SCHEMA,
     read_only=True,

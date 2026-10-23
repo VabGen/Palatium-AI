@@ -26,6 +26,13 @@ from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.memory_keeper import MemoryKeeperInput
+from palatium_ai.domain.memory.extract_queue import (
+    DEFAULT_LEASE_SECONDS,
+    ExtractEnqueueResult,
+    ExtractJobRecord,
+    ExtractLeaseLostError,
+    is_queued,
+)
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 
 if TYPE_CHECKING:
@@ -38,6 +45,10 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _DEFAULT_POLL_SECONDS = 0.5
+# Heartbeat cadence: three renewals fit inside one lease, so a single missed beat is survivable.
+_LEASE_RENEW_DIVISOR = 3
+# Floor for tests / tiny leases: an expired lease still costs one interval, not a hot loop.
+_MIN_RENEW_INTERVAL_SECONDS = 0.05
 _MAX_BACKOFF_SECONDS = 60.0
 # Missing relation/column will not heal until a migration; stop instead of hot-looping.
 _SCHEMA_FAILURES_TO_STOP = 5
@@ -98,6 +109,7 @@ class MemoryExtractService:
         job_queue: ExtractJobQueuePort,
         dialog_turn_store: DialogTurnStore | None = None,
         poll_seconds: float = _DEFAULT_POLL_SECONDS,
+        lease_seconds: float = DEFAULT_LEASE_SECONDS,
     ) -> None:
         self._harness = harness
         self._memory_keeper = memory_keeper
@@ -106,6 +118,7 @@ class MemoryExtractService:
         self._job_queue = job_queue
         self._dialog_turn_store = dialog_turn_store
         self._poll_seconds: float = max(0.05, poll_seconds)
+        self._lease_seconds: float = max(0.1, lease_seconds)
         self._stop = asyncio.Event()
 
     async def enqueue(
@@ -115,22 +128,25 @@ class MemoryExtractService:
         task_id: str,
         user_id: str | None = None,
         org_id: str | None = None,
-    ) -> bool:
-        """Idempotent durable enqueue; False when queue is at capacity."""
-        accepted = await self._job_queue.enqueue(
+    ) -> ExtractEnqueueResult:
+        """Idempotent durable enqueue; a refusal carries which ceiling caused it."""
+        result = await self._job_queue.enqueue(
             thread_id=thread_id,
             task_id=task_id,
             user_id=user_id,
             org_id=org_id,
         )
-        if not accepted:
+        if not is_queued(result):
+            agent_metrics.record_memory_extract_enqueue_refused(reason=result)
             logger.warning(
-                "memory_extract.queue_full",
+                "memory_extract.enqueue_refused",
+                reason=result,
                 thread_id=thread_id,
                 task_id=task_id,
+                user_id=user_id,
             )
         await self._record_queue_metrics()
-        return accepted
+        return result
 
     async def run_worker(self) -> None:
         """Background loop: claim SKIP LOCKED jobs until stop()."""
@@ -149,26 +165,7 @@ class MemoryExtractService:
                     except TimeoutError:
                         continue
                     break
-                job = MemoryExtractJob(
-                    thread_id=record.thread_id,
-                    task_id=record.task_id,
-                    user_id=record.user_id,
-                    org_id=record.org_id,
-                    job_id=record.id,
-                )
-                try:
-                    await self._process_job(job)
-                    await self._job_queue.complete(record.id)
-                except Exception as exc:  # noqa: BLE001  # failed job is marked failed; the worker keeps draining (M3)
-                    logger.error(
-                        "memory_extract.failed",
-                        thread_id=job.thread_id,
-                        task_id=job.task_id,
-                        job_id=str(record.id),
-                        error_type=type(exc).__name__,
-                        error=str(exc),
-                    )
-                    await self._job_queue.fail(record.id, error=str(exc))
+                await self._run_claimed(record)
                 await self._record_queue_metrics()
             except asyncio.CancelledError:
                 raise
@@ -196,6 +193,68 @@ class MemoryExtractService:
     async def stop(self) -> None:
         """Signal worker to exit after the current claim cycle."""
         self._stop.set()
+
+    async def _run_claimed(self, record: ExtractJobRecord) -> None:
+        """Process one claimed job: complete on success, fail on error, abandon on lost lease."""
+        job = MemoryExtractJob(
+            thread_id=record.thread_id,
+            task_id=record.task_id,
+            user_id=record.user_id,
+            org_id=record.org_id,
+            job_id=record.id,
+        )
+        try:
+            await self._process_with_lease(job, record.id)
+            await self._job_queue.complete(record.id)
+        except ExtractLeaseLostError:
+            # Another worker owns the row now: complete()/fail() would corrupt its state.
+            logger.warning(
+                "memory_extract.lease_lost",
+                thread_id=job.thread_id,
+                task_id=job.task_id,
+                job_id=str(record.id),
+            )
+        except Exception as exc:  # noqa: BLE001  # failed job is marked failed; the worker keeps draining (M3)
+            logger.error(
+                "memory_extract.failed",
+                thread_id=job.thread_id,
+                task_id=job.task_id,
+                job_id=str(record.id),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            await self._job_queue.fail(record.id, error=str(exc))
+
+    async def _process_with_lease(self, job: MemoryExtractJob, job_id: UUID) -> None:
+        """Run the job while renewing its lease; abort if another worker took it (M3 E2).
+
+        The job may legitimately outlive a single lease (LLM + several MCP calls), so the
+        lease is renewed in the background instead of being sized for the worst case. When
+        the queue stops recognizing this worker as the owner (expired and reclaimed), the
+        job is cancelled: continuing would mean two workers writing the same facts.
+        """
+        processing = asyncio.create_task(self._process_job(job))
+        heartbeat = asyncio.create_task(self._renew_lease(job_id))
+        try:
+            done, _pending = await asyncio.wait({processing, heartbeat}, return_when=asyncio.FIRST_COMPLETED)
+            if processing in done:
+                processing.result()  # re-raises a job failure to the caller
+                return
+            heartbeat.result()  # re-raises an unexpected heartbeat failure
+            msg = f"lease for extract job {job_id} is no longer owned by this worker"
+            raise ExtractLeaseLostError(msg)
+        finally:
+            for task in (processing, heartbeat):
+                task.cancel()
+            await asyncio.gather(processing, heartbeat, return_exceptions=True)
+
+    async def _renew_lease(self, job_id: UUID) -> None:
+        """Keep the lease alive; return when it is lost so the caller aborts the job."""
+        interval = max(self._lease_seconds / _LEASE_RENEW_DIVISOR, _MIN_RENEW_INTERVAL_SECONDS)
+        while True:
+            await asyncio.sleep(interval)
+            if not await self._job_queue.renew(job_id):
+                return
 
     def _backoff_for_worker_error(
         self,
@@ -264,6 +323,11 @@ class MemoryExtractService:
         )
         if result.output is None or not result.output.facts:
             return
+        # E2b: renew right before the writes, not only in the heartbeat. A stalled loop can
+        # freeze both the LLM call and the heartbeat for longer than the lease, and the next
+        # free worker legitimately re-claims the row. Checking here *reserves* the write
+        # window (lease_seconds from now), so a job that lost ownership writes nothing.
+        await self._assert_write_ownership(job)
         stored = await self._memory_persistence.persist_facts(job=job, facts=result.output.facts)
         logger.info(
             "memory_extract.stored",
@@ -274,6 +338,21 @@ class MemoryExtractService:
             facts=len(result.output.facts),
             stored=stored,
         )
+
+    async def _assert_write_ownership(self, job: MemoryExtractJob) -> None:
+        """Refuse to write facts for a job this worker no longer owns (M3 E2b).
+
+        ``renew`` doubles as the ownership probe: it extends the lease (so the write window
+        is reserved for a full ``lease_seconds``) and returns ``False`` once the row was
+        reclaimed. A job without ``job_id`` predates the durable queue and has no lease —
+        the in-process caller is the only writer by construction.
+        """
+        if job.job_id is None:
+            return
+        if await self._job_queue.renew(job.job_id):
+            return
+        msg = f"extract job {job.job_id} no longer owns its lease; refusing to write facts"
+        raise ExtractLeaseLostError(msg)
 
     async def _load_excerpt(self, *, thread_id: str) -> str:
         if self._dialog_turn_store is None:

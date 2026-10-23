@@ -210,7 +210,10 @@ def _app(
         "get_principal",
         lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=roles),
     )
+    # Both seams: ``init``/``list`` take the read-only owner check, HITL minting takes
+    # the binding helper that also materialises the session row.
     monkeypatch.setattr(attachments, "load_session_for_principal", AsyncMock())
+    monkeypatch.setattr(attachments, "ensure_session_for_principal", AsyncMock())
     return TestClient(app)
 
 
@@ -538,20 +541,24 @@ def test_restore_request_returns_hitl_card(monkeypatch: pytest.MonkeyPatch) -> N
     ]
 
 
-def test_restore_request_touches_session_on_fresh_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression: restore mint without a prior chat left GET /hitl 404 Session not found."""
+def test_restore_request_binds_thread_before_minting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: restore mint without a prior chat left GET /hitl 404 Session not found.
+
+    The router must delegate to the binding helper (owner check + session row); the
+    row itself is asserted on the helper in ``test_session_ownership``.
+    """
     app = FastAPI()
     app.include_router(attachments.router, prefix="/attachments")
     service = _FakeAttachmentService()
-    session_service = AsyncMock()
-    resources = SimpleNamespace(session_service=session_service, attachment_service=service)
+    resources = SimpleNamespace(session_service=AsyncMock(), attachment_service=service)
     monkeypatch.setattr(attachments, "get_app_resources", lambda _app: resources)
     monkeypatch.setattr(
         attachments,
         "get_principal",
         lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=frozenset({"user"})),
     )
-    monkeypatch.setattr(attachments, "load_session_for_principal", AsyncMock())
+    bind = AsyncMock()
+    monkeypatch.setattr(attachments, "ensure_session_for_principal", bind)
 
     response = TestClient(app).post(
         f"/attachments/{_ATTACHMENT_ID}/restore-request",
@@ -559,10 +566,11 @@ def test_restore_request_touches_session_on_fresh_thread(monkeypatch: pytest.Mon
     )
 
     assert response.status_code == 200
-    session_service.touch_session.assert_awaited_once()
-    assert session_service.touch_session.await_args.kwargs["thread_id"] == "thread-fresh-restore"
-    assert session_service.touch_session.await_args.kwargs["user_id"] == "user-1"
-    assert session_service.touch_session.await_args.kwargs["context_patch"]["last_operation"] == "attachment_restore_requested"
+    bind.assert_awaited_once()
+    kwargs = bind.await_args.kwargs
+    assert kwargs["thread_id"] == "thread-fresh-restore"
+    assert kwargs["last_operation"] == "attachment_restore_requested"
+    assert kwargs["session_service"] is resources.session_service
 
 
 def test_restore_request_rejects_malware_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:

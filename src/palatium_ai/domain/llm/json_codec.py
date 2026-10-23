@@ -134,7 +134,7 @@ def _escape_raw_control_chars(candidate: str) -> str:
 def _heuristic_full_repair(candidate: str) -> str:
     """Last line of defence: heuristics from ``json_repair``.
 
-    Handles unescaped inner quotes ("МБОО "Доброе дело" ...") that cannot be
+    Handles unescaped inner quotes ('ООО "Пример" ...') that cannot be
     fixed deterministically. Local import keeps the deterministic path working
     without the optional dependency installed.
     """

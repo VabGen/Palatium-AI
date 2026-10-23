@@ -4,9 +4,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from palatium_ai.domain.agents.agent_config import AgentConfig
+from palatium_ai.domain.policies.types import FormatterStyleHint as FormatterStyleHint  # explicit re-export (010)
 
 FORMATTER_CONFIG = AgentConfig(
     name="formatter",
@@ -47,14 +46,5 @@ FORMATTER_BRAND_MAX_COMPLETION_TOKENS = 1_536
 # plain_text / content_generation / document_generation preserve the source's own
 # shape: compiling a joke or a drafted letter into icon sections changes its meaning.
 # social_reply: synthesize a short phatic reply — user_text is stimulus, not source prose.
-FormatterStyleHint = Literal[
-    "brand_sections_icons",
-    "restructure_sections_icons",
-    "choice_cards",
-    "clarify_open",
-    "revise_keep_structure",
-    "plain_text",
-    "content_generation",
-    "document_generation",
-    "social_reply",
-]
+# ``FormatterStyleHint`` lives in ``domain/policies/types.py`` (one source) and is
+# re-exported here for agent-package imports (010).

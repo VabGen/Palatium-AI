@@ -38,8 +38,8 @@ def main() -> None:
                 tones[block.tone] += 1
         if present:
             with_callout += 1
-        for block_type in {block.type for block in turn.document.blocks}:
-            per_turn_types[block_type] += 1
+        for seen_type in {block.type for block in turn.document.blocks}:
+            per_turn_types[seen_type] += 1
 
     print(f"paired turns: {len(turns)}")
     print(f"callout_presence_rate (>=1 callout per turn): {with_callout}/{total} = {with_callout / total:.1%}")
@@ -47,12 +47,12 @@ def main() -> None:
     print()
     print("block type distribution (all blocks):")
     block_total = sum(types.values()) or 1
-    for block_type, count in types.most_common():
-        print(f"- {block_type}: {count} ({count / block_total:.1%} of blocks)")
+    for block_type_name, count in types.most_common():
+        print(f"- {block_type_name}: {count} ({count / block_total:.1%} of blocks)")
     print()
     print("turns containing at least one block of type:")
-    for block_type, count in per_turn_types.most_common():
-        print(f"- {block_type}: {count} turns = {count / total:.1%}")
+    for block_type_name, count in per_turn_types.most_common():
+        print(f"- {block_type_name}: {count} turns = {count / total:.1%}")
 
 
 if __name__ == "__main__":

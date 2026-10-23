@@ -49,11 +49,13 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.attachments.context import AttachmentTurnContext
 from palatium_ai.domain.attachments.errors import AttachmentNotFoundError
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.memory.turns import attachment_ids_payload
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.response_cache import ResponseCacheKeyPolicy
 from palatium_ai.domain.policies.types import StreamingContract
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
@@ -147,6 +149,7 @@ class IntentService:
             mcp_tool_output_max_chars=mcp_tool_output_max_chars,
             turn_hop_budget_ms=turn_hop_budget_ms,
             graph_write=graph_write,
+            file_reference_resolver=file_reference_resolver,
         )
         self._hitl_flow = IntentHitlFlow(
             graph_runner=self._graph_runner,
@@ -162,17 +165,17 @@ class IntentService:
         )
         self._graph_runner.bind_attach_hitl_cards(self._hitl_flow.attach_hitl_cards)
 
-    async def _turn_untrusted_context(
+    async def _turn_attachment_context(
         self,
         attachment_ids: Sequence[UUID] | None,
         *,
         thread_id: str,
         user_id: str | None,
-    ) -> str:
-        """Resolve this turn's fenced attachment text (020).
+    ) -> AttachmentTurnContext:
+        """Resolve this turn's typed attachment blocks (Level 0, 020).
 
         Attachments are optional: with no service wired or no ids the turn runs
-        exactly as before. When ids are present the block is resolved through
+        exactly as before. When ids are present the blocks are resolved through
         ``AttachmentService``, which re-runs the injection policy and returns
         text already wrapped in the untrusted fence; ``AttachmentError``
         propagates to the API boundary so the caller sees a typed refusal
@@ -186,11 +189,25 @@ class IntentService:
                     reason="attachment_service_unavailable",
                     attachment_count=len(attachment_ids),
                 )
-            return ""
-        context = await self._attachment_service.build_turn_context(
+            return AttachmentTurnContext()
+        return await self._attachment_service.build_turn_context(
             attachment_ids=list(attachment_ids),
             user_id=user_id or "",
             thread_id=thread_id,
+        )
+
+    async def _turn_untrusted_context(
+        self,
+        attachment_ids: Sequence[UUID] | None,
+        *,
+        thread_id: str,
+        user_id: str | None,
+    ) -> str:
+        """Fenced projection of ``_turn_attachment_context`` (prompt slot)."""
+        context = await self._turn_attachment_context(
+            attachment_ids,
+            thread_id=thread_id,
+            user_id=user_id,
         )
         return context.fenced_text
 
@@ -306,6 +323,11 @@ class IntentService:
                 "org_id": org_id or "",
             },
         )
+        turn_attachments = await self._turn_attachment_context(
+            attachment_ids,
+            thread_id=thread_id,
+            user_id=user_id,
+        )
         final_state = await self._graph_runner.run_graph(
             text=text,
             thread_id=thread_id,
@@ -313,11 +335,8 @@ class IntentService:
             user_id=user_id,
             org_id=org_id,
             tenant_key=_tenant_budget_key(user_id=user_id, org_id=org_id, thread_id=thread_id),
-            untrusted_context=await self._turn_untrusted_context(
-                attachment_ids,
-                thread_id=thread_id,
-                user_id=user_id,
-            ),
+            untrusted_context=turn_attachments.fenced_text,
+            attachment_context=turn_attachments,
         )
         classification = final_state.get("classification")
         critic = final_state.get("critic")
@@ -485,7 +504,7 @@ class IntentService:
         )
         # Overlap attachment fence build with session/dialog I/O (Phase 2 latency).
         attachment_task = asyncio.create_task(
-            self._turn_untrusted_context(
+            self._turn_attachment_context(
                 resolved_attachments,
                 thread_id=thread_id,
                 user_id=user_id,
@@ -513,7 +532,8 @@ class IntentService:
                     task_id=resolved_task_id,
                     payload=payload,
                 )
-            untrusted_context = await attachment_task
+            turn_attachments = await attachment_task
+            untrusted_context = turn_attachments.fenced_text
         except BaseException:
             if not attachment_task.done():
                 attachment_task.cancel()
@@ -522,6 +542,7 @@ class IntentService:
         cache_ctx = TurnResponseCacheContext(
             cache=self._response_cache,
             tenant_key=tenant_key,
+            thread_key=thread_id,
             user_text=text,
         )
         attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
@@ -534,6 +555,7 @@ class IntentService:
                 org_id=org_id,
                 tenant_key=tenant_key,
                 untrusted_context=untrusted_context,
+                attachment_context=turn_attachments,
             )
         interrupted = _extract_interrupt(final_state)
         if interrupted is not None:
@@ -559,6 +581,7 @@ class IntentService:
             formatted=formatted,
             text=text,
             tenant_key=tenant_key,
+            thread_key=thread_id,
             started=started,
             skip_cache=bool(resolved_attachments),
         )
@@ -586,6 +609,7 @@ class IntentService:
         formatted: FormatterTaskResult,
         text: str,
         tenant_key: str,
+        thread_key: str,
         started: float,
         skip_cache: bool,
     ) -> None:
@@ -595,13 +619,19 @@ class IntentService:
         strategy = "unknown"
         locale = "und"
         source_content = ""
+        continuation_kind: str | None = None
+        trust_prior_for_workers = False
+        has_turn_attachments = False
         if final_state is not None:
             routing = final_state.get("routing_intent")
             if routing is not None:
                 task_kind = str(getattr(routing, "task_kind", "") or "unknown")
+                trust_prior_for_workers = bool(routing.trust_prior_for_workers)
             strategy = str(orch_selectors.selected_strategy(final_state))
             locale = str(final_state.get("response_locale") or "und")
             source_content = orch_selectors.resolved_worker_summary(final_state) or ""
+            continuation_kind = orch_selectors.resolved_continuation_kind(final_state)
+            has_turn_attachments = bool((final_state.get("untrusted_context") or "").strip())
         elif formatted.output is not None:
             locale = formatted.output.locale or "und"
         agent_metrics.record_turn_duration(
@@ -613,11 +643,16 @@ class IntentService:
             return
         await self._response_cache.put_if_cacheable(
             tenant_key=tenant_key,
+            thread_key=thread_key,
             user_text=text,
             locale=locale,
             strategy=strategy,
             result=formatted,
             source_content=source_content,
+            prior_fingerprint=ResponseCacheKeyPolicy.fingerprint_prior(final_state.get("dialog_window")),
+            continuation_kind=continuation_kind,
+            trust_prior_for_workers=trust_prior_for_workers,
+            has_turn_attachments=has_turn_attachments,
         )
 
     def _stream_contract(self, user_id: str | None) -> StreamingContract:
@@ -666,7 +701,7 @@ class IntentService:
         )
         # Overlap attachment fence build with session/dialog I/O (Phase 2 latency).
         attachment_task = asyncio.create_task(
-            self._turn_untrusted_context(
+            self._turn_attachment_context(
                 resolved_attachments,
                 thread_id=thread_id,
                 user_id=user_id,
@@ -694,7 +729,8 @@ class IntentService:
                     task_id=resolved_task_id,
                     payload=payload,
                 )
-            untrusted = await attachment_task
+            turn_attachments = await attachment_task
+            untrusted = turn_attachments.fenced_text
         except BaseException:
             if not attachment_task.done():
                 attachment_task.cancel()
@@ -703,6 +739,7 @@ class IntentService:
         cache_ctx = TurnResponseCacheContext(
             cache=self._response_cache,
             tenant_key=tenant_key,
+            thread_key=thread_id,
             user_text=text,
         )
         attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
@@ -719,6 +756,7 @@ class IntentService:
                 org_id=org_id,
                 tenant_key=tenant_key,
                 untrusted_context=untrusted,
+                attachment_context=turn_attachments,
             ):
                 if event.get("event") == "final_state":
                     final_state = cast("AgentGraphState", event["state"])
@@ -758,6 +796,7 @@ class IntentService:
             formatted=formatted,
             text=text,
             tenant_key=tenant_key,
+            thread_key=thread_id,
             started=started,
             skip_cache=bool(resolved_attachments),
         )

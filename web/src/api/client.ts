@@ -417,6 +417,9 @@ export async function processIntentStream(
   }
 
   beginTurnTraceId();
+  // Retry остаётся дефолтным (2): цикл повторов срабатывает ДО первого SSE-кадра —
+  // он видит только статус ответа и сеть. Поэтому 5xx/обрыв лечатся так же, как в
+  // JSON-пути, а уже начатый стрим повтору не подвержен: тело читается ниже.
   const res = await fetchWithAuth(
     '/intents/process/stream',
     {
@@ -429,8 +432,7 @@ export async function processIntentStream(
       signal,
     },
     userId,
-    orgId,
-    0
+    orgId
   );
   if (res.status === 404 || res.status === 405) {
     return processIntent(text, threadId, userId, orgId, attachmentIds);

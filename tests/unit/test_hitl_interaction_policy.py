@@ -248,6 +248,49 @@ def test_requires_user_choice_without_options_fails_closed() -> None:
     assert plan.reason == "formatter_output_invalid"
 
 
+def test_answered_read_only_turn_ignores_over_flagged_choice() -> None:
+    """E2E-07: an over-tagged choice on a delivered fact answer is not a card.
+
+    The turn answered a read-only ask (``knowledge_request`` + ``direct``), so a
+    write-style confirmation menu would stop a delivered answer. The flag is
+    recorded, not minted; quality review still fires on its own axis (020).
+    """
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        title="Порт QA-базы",
+        blocks=(ParagraphBlock(type="paragraph", text="QA-база слушает порт 5433."),),
+        actions=(),
+        meta=DocumentMeta(confidence=0.9, requires_review=False, source_refs=(), interaction="choice"),
+    )
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=True,
+        requires_user_choice=True,
+        task_kind="knowledge_request",
+        selected_strategy="direct",
+    )
+    assert plan.choice_actions == ()
+    assert plan.required_choice is False
+    assert plan.ignored_user_choice is True
+    assert plan.mint_quality_review is True
+
+
+def test_menu_shaped_choice_still_mints_on_answered_turn() -> None:
+    """Structural menus stay fail-closed: only the LLM *flag* is ignored (020)."""
+    doc = _menu_doc(items=["A", "B", "C"])
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=False,
+        requires_user_choice=True,
+        task_kind="knowledge_request",
+        selected_strategy="direct",
+    )
+    assert len(plan.choice_actions) == 3
+    assert plan.required_choice is True
+    assert plan.ignored_user_choice is True
+
+
 def test_plan_promotes_menu_reports_promoted_from_list() -> None:
     doc = _menu_doc(items=["A", "B", "C"])
     plan = HitlInteractionPolicy.plan(doc, requires_review=False)
@@ -278,3 +321,44 @@ def test_no_document_is_not_a_human_review_wait() -> None:
     assert plan.mint_quality_review is False
     assert plan.choice_actions == ()
     assert plan.reason == "no_document"
+
+
+def test_capability_answer_list_is_delivered_not_minted() -> None:
+    """«Что ты умеешь?» asks to be told: capability bullets are the answer body.
+
+    Live UI regression: the formatter's heading + capability list was promoted to
+    a required "choose one" card, so the answer the user asked for never appeared.
+    """
+    doc = _menu_doc(
+        items=[
+            "Работа с документами: отвечаю на вопросы по загруженным файлам",
+            "Анализ данных: считаю метрики и строю сводки по таблицам",
+            "Память: помню ваши предпочтения между диалогами",
+        ],
+        title="О Palatium AI",
+    )
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=False,
+        task_kind="capability_discovery",
+        selected_strategy="reason_only",
+    )
+    assert plan.menu_shaped is True
+    assert plan.reason == "informational_answer"
+    assert plan.choice_actions == ()
+    assert plan.required_choice is False
+    assert plan.force_structural is False
+    assert plan.promoted_from == "none"
+
+
+def test_social_turn_menu_shape_is_not_a_selector() -> None:
+    doc = _menu_doc(items=["Отлично, спасибо!", "Помочь с документами?"])
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=False,
+        task_kind="social_conversation",
+        selected_strategy="format_only",
+    )
+    assert plan.reason == "informational_answer"
+    assert plan.choice_actions == ()
+    assert plan.required_choice is False

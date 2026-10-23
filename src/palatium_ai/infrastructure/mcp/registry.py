@@ -28,6 +28,7 @@ from palatium_ai.domain.mcp.tool_policy import (
     assert_platform_pin_for_call,
     local_capability_tool_descriptors,
 )
+from palatium_ai.domain.ports.mcp import McpServerUnavailableError
 from palatium_ai.infrastructure.mcp.base import MCPJsonRpcClient, MCPJsonRpcError
 from palatium_ai.infrastructure.mcp.circuit import McpServerCircuit
 from palatium_ai.infrastructure.mcp.jwt_auth import resolve_settings_bearer
@@ -515,26 +516,21 @@ class MCPRegistry:
         server_url = self.get_server_url(server_name)
         try:
             result = await client.call_tool(tool_call)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, MCPJsonRpcError, McpServerUnavailableError) as exc:
             self._record_circuit_failure(server_name, time.time())
             logger.warning(
-                "MCP tools/call HTTP failure",
+                "MCP tools/call transport failure",
                 server=server_name,
                 url=server_url,
                 tool=tool_call.name,
                 error=str(exc),
             )
-            raise
-        except MCPJsonRpcError as exc:
-            self._record_circuit_failure(server_name, time.time())
-            logger.warning(
-                "MCP tools/call JSON-RPC failure",
-                server=server_name,
-                url=server_url,
-                tool=tool_call.name,
-                error=str(exc),
-            )
-            raise
+            if isinstance(exc, McpServerUnavailableError):
+                raise
+            # Transport failure = the module is down, not "the tool answered with an
+            # error": the caller must be able to say so instead of presenting a
+            # generic failure (Level 5 graceful degradation, 035).
+            raise McpServerUnavailableError(server_name, detail=str(exc)) from exc
         except Exception:
             self._record_circuit_failure(server_name, time.time())
             raise
@@ -559,10 +555,12 @@ class PlatformHandlerNotWiredError(RuntimeError):
         super().__init__(message)
 
 
-class MCPCircuitOpenError(RuntimeError):
+class MCPCircuitOpenError(McpServerUnavailableError):
     """Raised when tools/call is blocked by an open per-server circuit."""
 
     def __init__(self, server_name: str, *, retry_after_seconds: float) -> None:
-        self.server_name = server_name
-        self.retry_after_seconds = retry_after_seconds
-        super().__init__(f"MCP circuit open for '{server_name}' (retry after ~{retry_after_seconds:.0f}s)")
+        super().__init__(
+            server_name,
+            retry_after_seconds=retry_after_seconds,
+            detail=f"MCP circuit open for '{server_name}' (retry after ~{retry_after_seconds:.0f}s)",
+        )

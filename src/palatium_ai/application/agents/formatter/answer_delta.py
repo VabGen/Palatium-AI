@@ -91,6 +91,10 @@ def emit_document_block(*, index: int, block: ContentBlock) -> None:
     if bridge is None:
         return
     clean = InternalVocabularyPolicy.sanitize_block(block)
+    if clean is None:
+        # Only our own notation was in the block (page address / style keyword):
+        # there is nothing to paint, and the final document will not contain it.
+        return
     bridge.emit_nowait({"event": "block_delta", "index": index, "block": clean.model_dump(mode="json")})
     _mark_visible(bridge)
 

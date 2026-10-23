@@ -90,6 +90,7 @@ async def test_registry_call_tool_trips_circuit_on_http_error(monkeypatch: pytes
     import httpx
 
     from palatium_ai.domain.mcp.models import MCPToolDescriptor
+    from palatium_ai.domain.ports.mcp import McpServerUnavailableError
     from palatium_ai.infrastructure.mcp.base import MCPJsonRpcClient
     from palatium_ai.infrastructure.mcp.registry import MCPCircuitOpenError, MCPRegistry
 
@@ -120,7 +121,9 @@ async def test_registry_call_tool_trips_circuit_on_http_error(monkeypatch: pytes
 
     await reg.list_tools("edms")
     for _ in range(3):
-        with pytest.raises(httpx.HTTPError):
+        # Transport failure is a port-level "server unavailable" (Level 5, 035), not a
+        # leaked httpx error: callers map it to degradation copy.
+        with pytest.raises(McpServerUnavailableError):
             await reg.call_tool(
                 "edms",
                 MCPToolCall(name="search_documents", arguments={}),

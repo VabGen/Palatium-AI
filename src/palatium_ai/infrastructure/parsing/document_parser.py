@@ -169,6 +169,31 @@ class PdfParser:
             return ""
 
 
+def _distinct_row_cells(cells: Iterable[Any]) -> list[Any]:
+    """One entry per merged region of a table row.
+
+    ``_Row.cells`` repeats the *same* cell once for every grid column a merge
+    spans, so a merged header was emitted N times ("филиал СЭД филиал СЭД …"):
+    duplicated facts in the prompt and in the answer the user reads (055).
+    Dedupe by the cell's XML element, not by its text — two genuinely separate
+    cells are allowed to hold the same words.
+    """
+    seen: set[int] = set()
+    distinct: list[Any] = []
+    for cell in cells:
+        marker = id(cell._tc)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        distinct.append(cell)
+    return distinct
+
+
+def _table_row_text(row: Any) -> str:
+    """Tab-separated visible text of one row, merged cells counted once."""
+    return "\t".join(cell.text for cell in _distinct_row_cells(row.cells) if cell.text.strip())
+
+
 class DocxParser:
     """Parser for ``.docx`` backed by python-docx (paragraphs + table cells)."""
 
@@ -217,7 +242,7 @@ class DocxParser:
             raise DocumentParseError("docx is corrupt or not a docx package") from exc
 
         blocks = [paragraph.text for paragraph in document.paragraphs]
-        blocks.extend("\t".join(cell.text for cell in row.cells) for table in document.tables for row in table.rows)
+        blocks.extend(_table_row_text(row) for table in document.tables for row in table.rows)
         text = "\n".join(block for block in blocks if block.strip())
         truncated = len(text) > self._max_chars
         return ParsedDocument(

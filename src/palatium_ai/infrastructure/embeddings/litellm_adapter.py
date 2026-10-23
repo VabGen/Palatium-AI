@@ -16,6 +16,7 @@ from palatium_ai.core.types.embeddings import (
     canonical_model_for_dim,
 )
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
+from palatium_ai.infrastructure.llm.shared_transport import shared_client_session
 
 if TYPE_CHECKING:
     from palatium_ai.core.config.embeddings.base import EmbeddingProviderConfig
@@ -77,6 +78,9 @@ class LiteLLMEmbeddingAdapter:
             "input": texts,
             "api_key": self._api_key,
             "api_base": self._base_url,
+            # Same process-wide session as chat calls: embedding traffic is continuous
+            # (recall on every turn), so a session per request is the worst leak (080).
+            "shared_session": shared_client_session(),
         }
         expected_dim = self._config.get_dimension()
         # Do not send `dimensions`: corporate vLLM rejects Matryoshka

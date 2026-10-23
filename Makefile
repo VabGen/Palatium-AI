@@ -135,7 +135,7 @@ validate: ## Валидация docker-compose.yml
 supply-chain: ## Скан образа (Trivy) + SBOM CycloneDX (подпись — только в CI)
 	@python scripts/ci_supply_chain.py $(SUPPLY_CHAIN_ARGS)
 
-perf: ## Нагрузочные тесты сложности hot-path (маркер slow; вне PR-CI, 080)
+perf: ## Нагрузочные тесты (slow, вне PR-CI, 080): scaling hot-path + p95 памяти (нужен DATABASE_URL)
 	@uv run pytest tests/perf -q -m slow
 
 list-dbs: ## Список БД + расширений Postgres

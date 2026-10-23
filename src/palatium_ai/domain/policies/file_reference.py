@@ -30,8 +30,15 @@ FileReferenceStatus = Literal["resolved", "ambiguous", "no_candidates", "no_matc
 # be evidence that the user meant *that* file ("a.pdf", "1.docx").
 _MIN_NAME_MATCH_CHARS = 3
 _HINT_SCAN_CHARS = 20_000
+# A multi-word name fragment ("кодекс корпоративной этики") is evidence only when it
+# is a real title run: several substantive words, not a generic phrase.
+_MIN_NAME_RUN_WORDS = 2
+_MIN_NAME_RUN_WORD_CHARS = 3
+_MIN_NAME_RUN_CHARS = 10
 # A refusal never becomes a wall of names.
 _MAX_LISTED_NAMES = 5
+#: Resolution reasons that mean "the ask named this file" (not a default pick).
+_NAMED_REFERENCE_REASONS = frozenset({"name_in_turn_text", "explicit_filename"})
 #: Punctuation stripped from a word before it is read as a document name.
 _TOKEN_TRIM = ".,;:!?()[]{}«»\"'"  # noqa: S105 — punctuation set, not a credential (017)
 
@@ -73,9 +80,15 @@ class FileReferencePolicy:
 
         Precedence (structural, no phrase lists):
             1. explicit ``filename`` → exact normalized name match;
-            2. a file name occurring in ``hint_text`` (user ask + trusted prior);
+            2. a file name occurring in ``hint_text``;
             3. the only thread candidate;
             otherwise ``ambiguous`` (several referents) or ``no_match``.
+
+        ``hint_text`` MUST be user-authored (the current ask, or previous *user*
+        turns). Assistant prose is not evidence of a file reference: it names
+        words like «обращение» in normal sentences, which would resolve to an
+        unrelated thread file (``Обращение.docx``) and be read as if the user
+        had asked for it (055/020).
         """
         scoped = list(candidates)
         names = tuple(item.filename for item in scoped)
@@ -107,6 +120,16 @@ class FileReferencePolicy:
         if len(scoped) == 1:
             return _resolved(scoped[0], reason="single_thread_file")
         return FileReferenceResolution(status="ambiguous", candidates=names, reason="several_thread_files")
+
+    @staticmethod
+    def is_named_reference(resolution: FileReferenceResolution) -> bool:
+        """True when the user *named* this exact thread file (not a default pick).
+
+        ``single_thread_file`` is the policy's convenience fallback for a dialog with
+        one document; it is not evidence that an arbitrary ask is about that file, so
+        only explicit names may promote the turn to a storage re-read (055).
+        """
+        return resolution.status == "resolved" and resolution.reason in _NAMED_REFERENCE_REASONS
 
     @staticmethod
     def refusal_message(resolution: FileReferenceResolution) -> str:
@@ -144,20 +167,31 @@ class FileReferencePolicy:
         *,
         hint_text: str,
     ) -> list[FileRefCandidate]:
-        """Candidates whose name (or long-enough stem) occurs in ``hint_text``."""
+        """Candidates whose name (or name-shaped part of it) occurs in ``hint_text``.
+
+        Three structural gates, no word lists:
+        * occurrences must be delimiter-bounded — a name glued into a longer word
+          (``...обращением``) is not a document reference;
+        * a single-word stem counts only when it reads as a name (digit/symbol or
+          several words), so an ordinary word like «обращение» cannot select a file;
+        * a multi-word run of the name (``кодекс корпоративной этики`` for
+          ``Кодекс_корпоративной_этики_V2_0_ред_10(1).docx``) counts when every
+          word is substantive and the run is long enough to be a title, not a phrase.
+        """
         haystack = _normalize_text(hint_text[:_HINT_SCAN_CHARS])
         if not haystack:
             return []
+        haystack_words = _name_words(haystack)
         matched: list[FileRefCandidate] = []
         for item in candidates:
             name = _normalize_name(item.filename)
             if not name:
                 continue
-            if name in haystack:
+            if _occurs_as_bounded_token(haystack, name):
                 matched.append(item)
                 continue
             stem = _normalize_name(_strip_extension(item.filename))
-            if len(stem) >= _MIN_NAME_MATCH_CHARS and stem in haystack:
+            if _stem_is_named(haystack, stem) or _name_run_matches(haystack_words, stem):
                 matched.append(item)
         return matched
 
@@ -175,6 +209,80 @@ def _resolved(candidate: FileRefCandidate, *, reason: str) -> FileReferenceResol
 def _strip_extension(filename: str) -> str:
     head, separator, _tail = filename.rpartition(".")
     return head if separator and head else filename
+
+
+def _stem_is_named(haystack: str, stem: str) -> bool:
+    """True when a name-shaped stem of sufficient length occurs as a bounded token."""
+    return len(stem) >= _MIN_NAME_MATCH_CHARS and _is_name_shaped(stem) and _occurs_as_bounded_token(haystack, stem)
+
+
+def _name_run_matches(haystack_words: Sequence[str], stem: str) -> bool:
+    """True when a long-enough contiguous run of the file name occurs in the ask."""
+    name_words = _name_words(stem)
+    if len(name_words) < _MIN_NAME_RUN_WORDS:
+        return False
+    for size in range(len(name_words), _MIN_NAME_RUN_WORDS - 1, -1):
+        for start in range(len(name_words) - size + 1):
+            run = name_words[start : start + size]
+            if any(len(word) < _MIN_NAME_RUN_WORD_CHARS for word in run):
+                continue
+            if sum(len(word) for word in run) < _MIN_NAME_RUN_CHARS:
+                continue
+            if _contains_word_run(haystack_words, run):
+                return True
+    return False
+
+
+def _contains_word_run(haystack_words: Sequence[str], run: Sequence[str]) -> bool:
+    width = len(run)
+    if not width:
+        return False
+    return any(haystack_words[index : index + width] == run for index in range(len(haystack_words) - width + 1))
+
+
+def _name_words(text: str) -> list[str]:
+    """Split a name or an ask into case-folded words (any non-alphanumeric is a separator)."""
+    words: list[str] = []
+    current: list[str] = []
+    for ch in text.casefold():
+        if ch.isalnum():
+            current.append(ch)
+        elif current:
+            words.append("".join(current))
+            current = []
+    if current:
+        words.append("".join(current))
+    return words
+
+
+def _is_name_shaped(stem: str) -> bool:
+    """True when a stem reads as a document name, not as ordinary prose.
+
+    Structural shape test, not a word list: a name carries a digit/symbol
+    (``СФУТ 9.03-2025``, ``кодекс_корпоративной_этики_v2_0``) or spans several
+    words. A single plain word (``обращение``, ``договор``) is regular prose and
+    must not turn any sentence into a file reference (055).
+    """
+    if any(ch.isdigit() or not ch.isalpha() for ch in stem):
+        return True
+    return len(stem.split()) > 1
+
+
+def _occurs_as_bounded_token(haystack: str, needle: str) -> bool:
+    """True when ``needle`` occurs in ``haystack`` delimited by non-alphanumerics.
+
+    ``обращение`` must not match inside ``обращением``: substring hits inflate a
+    plain word into evidence of a document reference (055).
+    """
+    start = haystack.find(needle)
+    while start != -1:
+        end = start + len(needle)
+        left_bounded = start == 0 or not haystack[start - 1].isalnum()
+        right_bounded = end == len(haystack) or not haystack[end].isalnum()
+        if left_bounded and right_bounded:
+            return True
+        start = haystack.find(needle, start + 1)
+    return False
 
 
 def _names_foreign_document(candidates: Sequence[FileRefCandidate], *, hint_text: str) -> bool:

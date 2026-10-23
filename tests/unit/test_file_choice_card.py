@@ -16,7 +16,7 @@ from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.researcher import ATTACHMENT_REFERENCE_UNRESOLVED
 from palatium_ai.domain.content import ContentDocument, DocumentMeta, ParagraphBlock
 from palatium_ai.domain.hitl.cards import HITLCardView, HITLOption
-from palatium_ai.domain.hitl.file_choice import FileChoiceCardPolicy
+from palatium_ai.domain.hitl.file_choice import ALL_FILES_ACTION_ID, FileChoiceCardPolicy
 from palatium_ai.domain.policies.file_reference import FileReferenceResolution
 
 _ID_A = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
@@ -131,6 +131,18 @@ def test_policy_caps_options() -> None:
     assert len(FileChoiceCardPolicy.build_actions(names)) == 8
 
 
+def test_all_files_option_is_recognised_and_not_a_filename() -> None:
+    actions = FileChoiceCardPolicy.build_actions(_NAMES, include_all=True)
+
+    assert actions[-1].action_id == ALL_FILES_ACTION_ID
+    assert actions[-1].label == "Все файлы"
+    assert FileChoiceCardPolicy.is_file_choice(ALL_FILES_ACTION_ID) is True
+    assert FileChoiceCardPolicy.is_all_files(ALL_FILES_ACTION_ID) is True
+    assert FileChoiceCardPolicy.is_all_files("filesel_1") is False
+    # The whole-set option only exists when explicitly requested (multi-file turn).
+    assert [a.action_id for a in FileChoiceCardPolicy.build_actions((_NAMES[0],))] == ["filesel_1"]
+
+
 @pytest.mark.asyncio()
 async def test_ambiguous_reread_mints_file_card() -> None:
     card_service = _CardService()
@@ -239,6 +251,41 @@ async def test_other_failures_do_not_mint_file_card() -> None:
 
     assert formatted.hitl_cards == ()
     assert resolver.resolve_calls == 0
+
+
+@pytest.mark.asyncio()
+async def test_all_files_choice_keeps_turn_uploads_without_resolving_a_name() -> None:
+    process_turn = AsyncMock(return_value=object())
+    resolver = _Resolver(
+        FileReferenceResolution(status="ambiguous", reason="several_thread_files", candidates=_NAMES)
+    )
+    flow = _flow(resolver, _CardService(), process_turn)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    card = HITLCardView(
+        card_id="card-file",
+        thread_id="thread-1",
+        task_id="task-1",
+        purpose="user_choice",
+        title="Какой файл нужно разобрать?",
+        options=(
+            HITLOption(action_id="filesel_1", label=_NAMES[0], kind="custom", action_token="tok"),
+            HITLOption(action_id="filesel_2", label=_NAMES[1], kind="custom", action_token="tok"),
+            HITLOption(action_id=ALL_FILES_ACTION_ID, label="Все файлы", kind="custom", action_token="tok"),
+        ),
+        risk_score=0.1,
+        created_at=now,
+        expires_at=now,
+    )
+
+    await flow.process_hitl_choice(
+        thread_id="thread-1",
+        action_id=ALL_FILES_ACTION_ID,
+        card=card,
+        user_id="user-1",
+    )
+
+    assert resolver.explicit_calls == []
+    assert process_turn.await_args.kwargs["attachment_ids"] is None
 
 
 def _file_card() -> HITLCardView:

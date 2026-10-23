@@ -50,7 +50,7 @@ def build_context_weaver_input(
         file_reference=snapshot.file_reference,
         grounding=selectors.resolved_grounding(state),
         grounding_reason=selectors.resolved_grounding_reason(state),
-        has_attachment_context=bool((state.get("untrusted_context") or "").strip()),
+        has_attachment_context=selectors.uploads_in_scope(state) and bool((state.get("untrusted_context") or "").strip()),
         has_trusted_prior=bool(routing is not None and routing.trust_prior_for_workers),
     )
 

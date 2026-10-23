@@ -14,7 +14,6 @@ import json
 import re
 
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 from palatium_ai.application.services.memory_extract import MemoryExtractJob
 from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
@@ -33,6 +32,7 @@ logger = get_logger(__name__)
 _PLATFORM_SERVER = "platform"
 _SAVE_MEMORY_TOOL = "save_memory"
 _CANONICAL_MEMORY_TYPES: frozenset[str] = frozenset({"preference", "fact", "incident", "episode"})
+_WHITESPACE = re.compile(r"\s+")
 
 
 class MemoryFactPersistenceService:
@@ -181,5 +181,10 @@ def _memory_key(key_hint: str | None, text: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", key_hint.strip().lower()).strip("-")[:80]
         if slug:
             return f"add-{slug}"
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    return f"add-{digest}-{uuid4().hex[:8]}"
+    # Deterministic on purpose (M3 audit E3): the queue is at-least-once, so a reclaimed
+    # job re-persists the same fact. A random suffix would manufacture a new entry on every
+    # retry. Identity scope already comes from the namespace (thread/user/org), so the
+    # normalized text digest is enough — whitespace must not split one fact into two keys.
+    normalized = _WHITESPACE.sub(" ", text).strip()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return f"add-{digest}"

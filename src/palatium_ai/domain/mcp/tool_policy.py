@@ -218,7 +218,8 @@ _PLATFORM_TOOL_DESCRIPTIONS: dict[str, str] = {
     "extract_transcript_memories": ("Enqueue sleep-time extract (transcript → medium via MemoryKeeper; write; HITL)."),
     "graph_query": (
         "Read-only parameterized Cypher against the knowledge graph "
-        "(bi-temporal MemoryFact: bind $as_of / ACTIVE_FACT_AS_OF_PREDICATE)."
+        "(bi-temporal MemoryFact requires the full ACTIVE_FACT_AS_OF_PREDICATE per alias — "
+        "unfiltered or partially filtered reads are refused)."
     ),
     "skill_reference": (
         "Load procedural skill reference.md (or SKILL body) by name; "

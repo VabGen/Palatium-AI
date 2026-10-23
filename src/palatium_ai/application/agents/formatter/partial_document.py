@@ -55,7 +55,9 @@ _TITLE_KEY_RE = re.compile(r'"title"\s*:\s*"')
 _PROSE_KEYS = frozenset({"text", "title", "body"})
 #: Built once: the block union is frozen, and per-block adapter construction would
 #: rebuild the same validators on every streamed element.
-_BLOCK_ADAPTER: TypeAdapter[ContentBlock] = TypeAdapter(ContentBlock)
+#: ``ContentBlock`` is an ``Annotated`` discriminated union — a valid runtime type
+#: form that pyright's ``TypeForm`` (PEP 747) check does not model: TOOL_LIMITATION (017).
+_BLOCK_ADAPTER: TypeAdapter[ContentBlock] = TypeAdapter(ContentBlock)  # pyright: ignore[reportArgumentType]
 
 
 @dataclass(frozen=True, slots=True)

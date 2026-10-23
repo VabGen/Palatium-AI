@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from palatium_ai.domain.graph.write_port import GraphFactUpsert
@@ -13,15 +15,18 @@ from palatium_ai.infrastructure.graph.neo4j_graph_write_port import Neo4jGraphWr
 
 
 class _FakeWriteTransport:
-    """Records Cypher calls; FIND returns optional active row."""
+    """Records Cypher calls; FIND returns optional active row, MAX returns the version."""
 
-    def __init__(self, *, find_row: dict[str, object] | None = None) -> None:
+    def __init__(self, *, find_row: dict[str, object] | None = None, max_version: int = 0) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self._find_row = find_row
+        self._max_version = max_version
 
     async def run_write(self, *, cypher: str, params: dict[str, object]) -> list[dict[str, object]]:
         self.calls.append((cypher, dict(params)))
-        if "WHERE f.invalid_at IS NULL" in cypher and "expired_at" in cypher and "CREATE" not in cypher:
+        if "AS max_version" in cypher:
+            return [{"max_version": self._max_version}]
+        if "RETURN f.text AS text" in cypher and "MERGE" not in cypher:
             return [self._find_row] if self._find_row is not None else []
         if "RETURN count(f) AS n" in cypher:
             return [{"n": 1}]
@@ -49,12 +54,19 @@ async def test_upsert_fact_find_then_create_parameterized() -> None:
     )
     node_id = await port.upsert_fact(command)
     assert node_id == _stable_node_id("alice", "pref-duck", 1)
-    assert len(transport.calls) == 2
+    assert len(transport.calls) == 3
     find_cypher, find_params = transport.calls[0]
-    create_cypher, create_params = transport.calls[1]
+    max_cypher, max_params = transport.calls[1]
+    create_cypher, create_params = transport.calls[2]
     assert "MATCH (f:MemoryFact" in find_cypher
-    assert "CREATE (f:MemoryFact" in create_cypher
-    assert "MERGE" not in create_cypher
+    assert "AS max_version" in max_cypher
+    assert max_params == {"user_id": "alice", "entry_key": "pref-duck"}
+    # MERGE, not CREATE: a retried or concurrent write of the same version must converge
+    # on one node instead of adding a twin active fact (M5 audit F6).
+    assert "MERGE (f:MemoryFact {node_id: $node_id})" in create_cypher
+    assert "CREATE (f:MemoryFact" not in create_cypher
+    assert "ON CREATE SET" in create_cypher
+    assert "ON MATCH SET" in create_cypher
     assert "$user_id" in create_cypher
     assert "$text" in create_cypher
     assert "alice" not in create_cypher
@@ -109,6 +121,38 @@ async def test_upsert_fact_supersede_different_text() -> None:
     assert params["old_node_id"] == old_id
     assert params["text"] == "new truth"
     assert params["version"] == 2
+
+
+@pytest.mark.asyncio()
+async def test_supersede_cuts_valid_time_at_the_new_fact_not_at_now() -> None:
+    """F2: ``invalid_at`` is the new fact's ``valid_at``, not the wall clock.
+
+    With ``datetime()`` a backdated write leaves ``[new.valid_at, now)`` where both
+    versions are active, so ``as_of`` reads return contradictory texts.
+    """
+    old_id = _stable_node_id("u1", "k1", 1)
+    transport = _FakeWriteTransport(find_row={"text": "old truth", "node_id": old_id, "version": 1, "contains_pii": False})
+    port = Neo4jGraphWritePort(transport)
+    backdated = datetime(2026, 1, 15, 9, 30, tzinfo=UTC)
+
+    await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="k1", text="new truth", kind="fact", valid_at=backdated))
+
+    supersede_cypher, params = transport.calls[1]
+    assert "old.invalid_at = datetime($valid_at)" in supersede_cypher
+    assert params["valid_at"] == "2026-01-15T09:30:00Z"
+
+
+def test_find_active_treats_a_future_invalid_at_as_still_current() -> None:
+    """A scheduled supersede must not hide the current fact from the next write.
+
+    ``invalid_at IS NULL`` alone would drop a future-dated row from FIND, so the
+    following upsert would CREATE a second version instead of superseding — one key,
+    two live facts.
+    """
+    from palatium_ai.infrastructure.graph.neo4j_graph_write_port import _FIND_ACTIVE_CYPHER
+
+    assert "(f.invalid_at IS NULL OR f.invalid_at > datetime())" in _FIND_ACTIVE_CYPHER
+    assert "(f.expired_at IS NULL OR f.expired_at > datetime())" in _FIND_ACTIVE_CYPHER
 
 
 @pytest.mark.asyncio()
@@ -186,6 +230,69 @@ async def test_bump_hebbian_on_entry_ignores_blank_keys() -> None:
     port = Neo4jGraphWritePort(transport)
     assert await port.bump_hebbian_on_entry(user_id="  ", entry_key="k1") == 0.0
     assert transport.calls == []
+
+
+@pytest.mark.asyncio()
+async def test_list_active_facts_without_thread_has_no_thread_predicate() -> None:
+    """No thread → no thread predicate at all.
+
+    The previous ``$thread_id = '' OR ...`` disjunction forbade index use and scanned
+    every ``MemoryFact``; an absent predicate keeps the single ``user_id`` seek (080).
+    """
+    transport = _FakeWriteTransport()
+    port = Neo4jGraphWritePort(transport)
+
+    await port.list_active_facts(user_id="u1", limit=4)
+
+    cypher, params = transport.calls[0]
+    assert "thread_id" not in cypher
+    assert "thread_id" not in params
+    assert "$user_id" in cypher
+    assert "datetime($as_of)" in cypher
+
+
+@pytest.mark.asyncio()
+async def test_list_active_facts_with_thread_uses_indexed_equality() -> None:
+    """A bound thread is an equality on the composite index, not an OR chain."""
+    transport = _FakeWriteTransport()
+    port = Neo4jGraphWritePort(transport)
+
+    await port.list_active_facts(user_id="u1", limit=4, thread_id="t-1")
+
+    cypher, params = transport.calls[0]
+    assert "f.thread_id = $thread_id" in cypher
+    assert "f.thread_id IS NULL" not in cypher
+    assert "$thread_id = ''" not in cypher
+    assert params["thread_id"] == "t-1"
+    assert params["user_id"] == "u1"
+
+
+@pytest.mark.asyncio()
+async def test_create_after_expiry_starts_at_the_next_version() -> None:
+    """A forgotten key keeps its history; restarting at version 1 would revive it.
+
+    ``node_id`` is derived from the version, so reusing version 1 makes ``MERGE`` match
+    the *expired* node — the new fact would be written onto a node that stays invisible
+    to every ``as_of`` read.
+    """
+    transport = _FakeWriteTransport(max_version=3)
+    port = Neo4jGraphWritePort(transport)
+
+    node_id = await port.upsert_fact(GraphFactUpsert(user_id="u1", entry_key="k1", text="fresh statement", kind="fact"))
+
+    assert node_id == _stable_node_id("u1", "k1", 4)
+    assert transport.calls[-1][1]["version"] == 4
+
+
+def test_merge_keeps_the_lifecycle_of_an_existing_version() -> None:
+    """``ON MATCH`` may refresh content but must not rewrite valid/expired timestamps."""
+    from palatium_ai.infrastructure.graph.neo4j_graph_write_port import _CREATE_CYPHER, _SUPERSEDE_CYPHER
+
+    on_match = _CREATE_CYPHER.split("ON MATCH SET")[1]
+    for lifecycle in ("f.valid_at", "f.created_at", "f.expired_at", "f.invalid_at"):
+        assert lifecycle not in on_match
+    assert "MERGE (f)-[:SUPERSEDES]->(old)" in _SUPERSEDE_CYPHER
+    assert "CREATE (f)-[:SUPERSEDES]" not in _SUPERSEDE_CYPHER
 
 
 def test_build_graph_write_port_defaults_to_in_memory() -> None:

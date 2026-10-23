@@ -184,6 +184,47 @@ async def test_missing_resolver_fails_closed_without_a_tool_call() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_file_hint_never_contains_assistant_prose_or_memory_hints() -> None:
+    """Regression: the previous answer's «обращение» must not leak into file resolution.
+
+    Assistant text and extracted facts are not evidence of which file the user
+    meant — they made a bare word resolve an unrelated thread file (055).
+    """
+    task_id = str(uuid4())
+    llm = SequentialStaticLLMPort([_SYNTHESIS])
+    registry = _ReadRegistry()
+    harness = Harness(llm=llm)
+    resolver = _FakeResolver(_refused())
+    agent = ResearcherAgent(
+        harness,
+        RESEARCHER_CONFIG,
+        llm,
+        mcp_registry=registry,
+        file_reference_resolver=resolver,  # type: ignore[arg-type]  # duck-typed fake (017)
+    )
+
+    await harness.execute_with_guardrails(
+        agent,
+        researcher_to_agent_input(
+            ResearcherInput(
+                task_id=task_id,
+                context_packet=_packet(task_id),
+                prior_context="В ответ на Ваше обращение сообщаем следующее: документ принят.",
+                memory_hints=("Пользователь прикладывал Обращение.docx",),
+            ),
+            trace_id="file-reread",
+            thread_id="thread-reread",
+            user_id="actor-user",
+        ),
+    )
+
+    assert resolver.calls, "resolver must be consulted before the tool call"
+    hint = resolver.calls[0]["hint_text"]
+    assert hint == "а из БД взять этот файл и ещё раз прочитать"
+    assert "обращение" not in hint.casefold()
+
+
+@pytest.mark.asyncio()
 async def test_refusal_text_never_names_internal_context_fields() -> None:
     output, _, _ = await _run(_FakeResolver(_refused()))
 

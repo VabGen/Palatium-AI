@@ -37,7 +37,6 @@ from palatium_ai.domain.attachments.read import extraction_source_to_ocr_engine
 from palatium_ai.domain.attachments.sniff import sniff_media_type
 from palatium_ai.domain.attachments.types import AttachmentRejectionReason, AttachmentStatus
 from palatium_ai.domain.memory.pii import mask_pii_in_text
-from palatium_ai.domain.policies.types import UntrustedContentAction
 from palatium_ai.domain.policies.untrusted_content import (
     FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
     UntrustedContentPolicy,
@@ -267,7 +266,10 @@ class AttachmentPipeline:
         if prepared.action in _REFUSING_ACTIONS:
             return _injection_refusal(prepared, parsed=parsed, report=report, size_bytes=size_bytes)
         detected_for_row = effective_mime if effective_mime != attachment.mime_type else None
-        safe_text = _prompt_body(prepared.action, parsed, prepared)
+        # ``prepared.text`` is the scanned flow view: already redacted when masked and
+        # never page-addressed — ``parsed.text`` would hand our ``[[page N]]`` addresses
+        # to the model, which copies them into the answer verbatim (the seam leaked).
+        safe_text = prepared.text
         if pii.mode == "mask":
             safe_text = mask_pii_in_text(safe_text)
         return _content_outcome(
@@ -443,18 +445,6 @@ def _injection_refusal(
         stored_size_bytes=size_bytes,
         error=f"prompt injection signal ({prepared.worst_severity})",
     )
-
-
-def _prompt_body(action: UntrustedContentAction, parsed: ParsedDocument, prepared: UntrustedContentResult) -> str:
-    """Pick the stored prompt body.
-
-    ``mask`` must use the redacted flow text, because redaction spans are computed
-    on the marker-free view. ``allow`` keeps the page-addressed extraction so page
-    citations survive into the turn.
-    """
-    if action == "mask":
-        return prepared.text
-    return parsed.text
 
 
 def _content_outcome(

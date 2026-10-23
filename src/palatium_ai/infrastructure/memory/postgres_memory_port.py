@@ -8,10 +8,10 @@ import json
 import re
 import time
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Float, cast, delete, func, or_, select, update
+from sqlalchemy import Float, case, cast, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -19,7 +19,7 @@ from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.core.types.embeddings import assert_vector_dim
 from palatium_ai.core.types.retrieval import DEFAULT_RRF_K, HybridFusion
 from palatium_ai.domain.memory.pii import mask_memory_value
-from palatium_ai.domain.memory.promotion import PromotionCandidate
+from palatium_ai.domain.memory.promotion import DEFAULT_PROMOTE_CLAIM_SECONDS, PromotionCandidate
 from palatium_ai.domain.memory.scoring import merge_hybrid_memory_hits, rank_by_search_importance
 from palatium_ai.domain.memory.types import MemoryType
 from palatium_ai.domain.policies.retention import DEFAULT_RETENTION_WINDOWS, RetentionPolicy, RetentionWindows
@@ -80,6 +80,19 @@ def _active_memory_clause(*, now: datetime) -> Any:
     return or_(MemoryEntryORM.expires_at.is_(None), MemoryEntryORM.expires_at > now)
 
 
+def _claim_available_clause(*, now: datetime, lease_seconds: int = DEFAULT_PROMOTE_CLAIM_SECONDS) -> Any:
+    """Unclaimed, or claimed by a promoter whose lease ran out (crashed process)."""
+    return or_(
+        MemoryEntryORM.promote_claimed_at.is_(None),
+        MemoryEntryORM.promote_claimed_at <= now - timedelta(seconds=max(1, lease_seconds)),
+    )
+
+
+def _jsonb_text(value_expr: Any) -> Any:
+    """``value->>'text'``; typed so a NULL/missing key compares with ``IS DISTINCT FROM``."""
+    return func.jsonb_extract_path_text(value_expr, "text")
+
+
 class PostgresMemoryPort:
     """Implements MemoryPort against ``memory.entries`` with user_id scope + hybrid search."""
 
@@ -101,7 +114,32 @@ class PostgresMemoryPort:
         self._half_life_days = float(half_life_days)
 
     async def put(self, *, namespace: tuple[str, ...], key: str, value: dict[str, object]) -> None:
-        """Upsert a memory item under namespace/key."""
+        """Upsert a memory item under namespace/key.
+
+        Rewriting an existing row must not buy it more life than policy allows (060.8,
+        ``RetentionPolicy.memory_expires_at``: "PII clock = created_at only"). Two
+        invariants are enforced *in the conflict branch*, atomically:
+
+        * ``contains_pii`` is **sticky** (existing OR incoming). Clearing it through a
+          plain re-save would reclassify the row as medium and silently extend PII
+          retention — declassification has to be an explicit retention/anonymise action,
+          not a side effect of the next write.
+        * for a PII row (before or after the write) the expiry is ``LEAST(old, new)``:
+          a re-save never pushes an existing deadline out. Non-PII rows keep the sliding
+          behaviour — activity legitimately extends medium/episode windows.
+
+        Deliberate consequence: an expired-but-not-yet-swept PII row does not come back to
+        life through a re-save (search already hides it past ``expires_at``). A genuinely new
+        PII statement is a *new* row: extract derives the key from the text digest, so a
+        different text already gets a different key.
+
+        Promotion marker follows the *content*, not the write (M5 audit F5): replacing the
+        text (or kind) clears ``promoted_at``, so the next promote batch can carry the new
+        value to the graph. Without it the graph keeps the first statement forever —
+        ``list_promotion_candidates`` filters ``promoted_at IS NULL`` and never sees the row
+        again. Provenance-only churn (``source_task_id``, confidence) deliberately does not
+        reset the marker: a retried extract of the same sentence must not re-run promote.
+        """
         user_id = resolve_user_id(namespace, value)
         ns = encode_namespace(namespace)
         search_blob = _search_blob(value)
@@ -129,32 +167,55 @@ class PostgresMemoryPort:
 
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
-            stmt = (
-                insert(MemoryEntryORM)
-                .values(
-                    user_id=user_id,
-                    namespace=ns,
-                    entry_key=key,
-                    memory_type=memory_type,
-                    value=value,
-                    search_text=search_blob,
-                    importance=importance,
-                    contains_pii=contains_pii,
-                    embedding=embedding,
-                    expires_at=expires_at,
-                )
-                .on_conflict_do_update(
-                    constraint="uq_memory_entries_user_ns_key",
-                    set_={
-                        "value": value,
-                        "search_text": search_blob,
-                        "memory_type": memory_type,
-                        "importance": importance,
-                        "contains_pii": contains_pii,
-                        "embedding": embedding,
-                        "expires_at": expires_at,
-                    },
-                )
+            stmt = insert(MemoryEntryORM).values(
+                user_id=user_id,
+                namespace=ns,
+                entry_key=key,
+                memory_type=memory_type,
+                value=value,
+                search_text=search_blob,
+                importance=importance,
+                contains_pii=contains_pii,
+                embedding=embedding,
+                expires_at=expires_at,
+            )
+            excluded = stmt.excluded
+            # Unqualified columns in DO UPDATE SET are the *existing* row (Postgres
+            # semantics); ``least`` ignores NULL, so legacy rows without a deadline take
+            # the incoming one.
+            pii_after_write = or_(MemoryEntryORM.contains_pii, excluded.contains_pii)
+            # Content identity = the promoted payload (text + kind). Comparing the whole
+            # ``value`` would reset the marker on provenance fields that change between
+            # extract retries, turning every retry into a fresh graph write.
+            content_changed = or_(
+                _jsonb_text(excluded.value).is_distinct_from(_jsonb_text(MemoryEntryORM.value)),
+                excluded.memory_type.is_distinct_from(MemoryEntryORM.memory_type),
+            )
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_memory_entries_user_ns_key",
+                set_={
+                    "value": excluded.value,
+                    "search_text": excluded.search_text,
+                    "memory_type": excluded.memory_type,
+                    "importance": excluded.importance,
+                    "contains_pii": pii_after_write,
+                    "embedding": excluded.embedding,
+                    "expires_at": case(
+                        (pii_after_write, func.least(MemoryEntryORM.expires_at, excluded.expires_at)),
+                        else_=excluded.expires_at,
+                    ),
+                    # F5: new content is not promoted yet, even when the row was promoted
+                    # before; the claim is dropped too, or a stale claim would block the
+                    # re-promote for the rest of its lease.
+                    "promoted_at": case(
+                        (content_changed, None),
+                        else_=MemoryEntryORM.promoted_at,
+                    ),
+                    "promote_claimed_at": case(
+                        (content_changed, None),
+                        else_=MemoryEntryORM.promote_claimed_at,
+                    ),
+                },
             )
             await session.execute(stmt)
             await session.commit()
@@ -284,6 +345,7 @@ class PostgresMemoryPort:
         if not uid:
             return []
         safe_limit = max(1, min(limit, 128))
+        now = datetime.now(UTC)
         async with self._session_factory() as session:
             await set_rls_user_scope(session, uid)
             result = await session.execute(
@@ -291,9 +353,12 @@ class PostgresMemoryPort:
                 .where(
                     MemoryEntryORM.user_id == uid,
                     MemoryEntryORM.promoted_at.is_(None),
+                    # A row another promoter is working on is not a candidate *now*; an
+                    # expired lease is (its owner died) — same rule as claim_promotion.
+                    _claim_available_clause(now=now),
                     MemoryEntryORM.access_frequency >= min_access_frequency,
                     MemoryEntryORM.importance >= min_importance,
-                    _active_memory_clause(now=datetime.now(UTC)),
+                    _active_memory_clause(now=now),
                 )
                 .order_by(MemoryEntryORM.access_frequency.desc(), MemoryEntryORM.importance.desc())
                 .limit(safe_limit)
@@ -326,8 +391,57 @@ class PostgresMemoryPort:
             )
         return candidates
 
+    async def claim_promotion(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        key: str,
+        lease_seconds: int = DEFAULT_PROMOTE_CLAIM_SECONDS,
+    ) -> bool:
+        """Reserve the row for this promoter (compare-and-set in one UPDATE)."""
+        user_id = resolve_user_id(namespace)
+        ns = encode_namespace(namespace)
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, user_id)
+            stmt = (
+                update(MemoryEntryORM)
+                .where(
+                    MemoryEntryORM.user_id == user_id,
+                    MemoryEntryORM.namespace == ns,
+                    MemoryEntryORM.entry_key == key,
+                    MemoryEntryORM.promoted_at.is_(None),
+                    _claim_available_clause(now=now, lease_seconds=lease_seconds),
+                )
+                .values(promote_claimed_at=now)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return bool(getattr(result, "rowcount", 0))
+
+    async def release_promotion(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Drop this promoter's reservation after a non-promoting outcome."""
+        user_id = resolve_user_id(namespace)
+        ns = encode_namespace(namespace)
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, user_id)
+            stmt = (
+                update(MemoryEntryORM)
+                .where(
+                    MemoryEntryORM.user_id == user_id,
+                    MemoryEntryORM.namespace == ns,
+                    MemoryEntryORM.entry_key == key,
+                    MemoryEntryORM.promoted_at.is_(None),
+                    MemoryEntryORM.promote_claimed_at.is_not(None),
+                )
+                .values(promote_claimed_at=None)
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return bool(getattr(result, "rowcount", 0))
+
     async def mark_promoted(self, *, namespace: tuple[str, ...], key: str) -> bool:
-        """Stamp promoted_at; returns True when a row was updated."""
+        """Stamp promoted_at and drop the claim; True when a row was updated."""
         user_id = resolve_user_id(namespace)
         ns = encode_namespace(namespace)
         async with self._session_factory() as session:
@@ -340,7 +454,7 @@ class PostgresMemoryPort:
                     MemoryEntryORM.entry_key == key,
                     MemoryEntryORM.promoted_at.is_(None),
                 )
-                .values(promoted_at=datetime.now(UTC))
+                .values(promoted_at=datetime.now(UTC), promote_claimed_at=None)
             )
             result = await session.execute(stmt)
             await session.commit()

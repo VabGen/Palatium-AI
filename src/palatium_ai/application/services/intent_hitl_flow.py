@@ -17,6 +17,7 @@ from palatium_ai.application.services.intent_turn_helpers import (
     argument_preview,
     assistant_turn_content,
     assistant_turn_payload,
+    enqueue_turn_extract,
     extract_interrupt,
     response_preview,
     snapshot_awaits_resume,
@@ -153,6 +154,10 @@ class IntentHitlFlow:
         ordinary fail-closed path instead of reading a guessed file.
         """
         if not FileChoiceCardPolicy.is_file_choice(action_id):
+            return None
+        if FileChoiceCardPolicy.is_all_files(action_id):
+            # The whole-set option is not a single attachment id: ``None`` keeps the
+            # turn's own upload set on the ordinary entry path (never one guessed file).
             return None
         resolver = self._file_reference_resolver
         if resolver is None or not (user_id or "").strip():
@@ -439,8 +444,12 @@ class IntentHitlFlow:
                 "requires_review": str(formatted.requires_review),
             },
         )
-        if self._consolidation is not None and formatted.status == "success":
-            await self._consolidation.enqueue(
+        if formatted.status == "success":
+            # Resume after an approved card is substantive, but the resulting turn still
+            # goes through the same admission rule (060): "спасибо" stays free.
+            await enqueue_turn_extract(
+                self._consolidation,
+                final_state,
                 thread_id=thread_id,
                 task_id=task_id,
                 user_id=user_id,

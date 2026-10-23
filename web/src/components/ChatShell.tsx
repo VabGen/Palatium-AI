@@ -38,6 +38,7 @@ import type {
 } from '../types/contentDocument';
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
+import { pendingPhaseForNode } from '../lib/pendingOrb';
 import { StreamMarkdownPreview } from './StreamMarkdownPreview';
 import { connectSessionSocket, startSessionSocketPing } from '../lib/sessionSocket';
 import { formatNumber, getI18nLocale, t } from '../i18n';
@@ -61,6 +62,7 @@ import type { AttachmentDraft } from '../lib/attachments';
 import { BlockRenderer } from './BlockRenderer';
 import { HitlCards } from './HitlCards';
 import { MemoryActions } from './MemoryActions';
+import { ThinkingIndicator } from './ThinkingIndicator';
 
 /**
  * Порог, за которым счётчик символов начинает подсвечиваться предупреждающе.
@@ -226,6 +228,12 @@ export function ChatShell() {
   const [dragActive, setDragActive] = useState(false);
   /** Progressive SSE preview — always GFM via StreamMarkdownPreview (Path C). */
   const [streamPreview, setStreamPreview] = useState('');
+  /**
+   * Последний `hop` из SSE — id узла графа, который сейчас работает.
+   * Источник правды для анимации ожидания: `null` до первого события.
+   */
+  const [pendingNode, setPendingNode] = useState<string | null>(null);
+  const pendingPhase = pendingPhaseForNode(pendingNode);
   /** Typed structured preview (`structured_incremental`): title + closed blocks. */
   const [streamTitle, setStreamTitle] = useState<string | null>(null);
   const [streamBlocks, setStreamBlocks] = useState<Array<{ index: number; block: ContentBlock }>>(
@@ -676,6 +684,7 @@ export function ChatShell() {
     setInput('');
     setBusy(true);
     clearStreamPreview();
+    setPendingNode(null);
     clearStreamBubbleHeight();
     streamAbortRef.current?.abort();
     const abort = new AbortController();
@@ -717,6 +726,8 @@ export function ChatShell() {
           if (hasTypedPreview || hasTextDelta) return;
           scheduleStreamPreview(accumulated);
         },
+        // Единственный сигнал «что сейчас делает граф» — узел LangGraph.
+        onHop: node => setPendingNode(node),
       });
       const hydratedCards = await hydratePendingHitlCards(
         fieldsFromFormatterResult(result).hitlCards,
@@ -792,6 +803,7 @@ export function ChatShell() {
       );
       setBusy(true);
       clearStreamPreview();
+      setPendingNode(null);
       clearStreamBubbleHeight();
       streamingAssistantIdRef.current = messageId;
       streamAbortRef.current?.abort();
@@ -825,6 +837,8 @@ export function ChatShell() {
               if (hasTypedPreview || hasTextDelta) return;
               scheduleStreamPreview(accumulated);
             },
+            // Тот же контракт, что у первичной отправки: фаза ожидания — от узла.
+            onHop: node => setPendingNode(node),
           }
         );
         const hydratedCards = await hydratePendingHitlCards(
@@ -1057,132 +1071,142 @@ export function ChatShell() {
             Boolean(message._streaming) ||
             (Boolean(message._regenerating) && streamingAssistantIdRef.current === message.id);
           const showStreamPreview = isStreamingBubble && !message.document;
+          /**
+           * Ожидание без единого токена: в ленте не «облако с подписью», а
+           * только орб текущей фазы (паттерн Big Tech). Как только приходит
+           * заголовок/первый блок — это уже предпросмотр ответа, т.е. облако.
+           */
+          const isWaiting = showStreamPreview && !streamDocument && streamPreview.length === 0;
 
           return (
             <div
               key={message.id}
-              className={`msg assistant fade-in${showStreamPreview ? ' pending' : ''}`}
+              className={`msg assistant fade-in${showStreamPreview ? ' pending' : ''}${
+                isWaiting ? ' is-waiting' : ''
+              }`}
               style={
                 streamBubbleMinHeight && streamingAssistantIdRef.current === message.id
                   ? { minHeight: streamBubbleMinHeight }
                   : undefined
               }
             >
-              <div className="avatar">P</div>
-              <div
-                className="bubble"
-                ref={
-                  showStreamPreview || streamingAssistantIdRef.current === message.id
-                    ? streamBubbleRef
-                    : undefined
-                }
-              >
-                {showStreamPreview ? (
-                  streamDocument ? (
-                    <div className="stream-preview stream-preview--doc">
-                      <BlockRenderer document={streamDocument} />
-                    </div>
-                  ) : streamPreview ? (
-                    <StreamMarkdownPreview markdown={streamPreview} />
-                  ) : (
-                    <>
-                      <span className="typing-dots">
-                        <span>.</span>
-                        <span>.</span>
-                        <span>.</span>
-                      </span>
-                      <span>{t('msg.agentsWorking')}</span>
-                    </>
-                  )
-                ) : showHitl ? (
-                  <HitlCards
-                    cards={pendingHitl}
-                    userId={userId}
-                    orgId={orgId}
-                    onResolved={(card, resumed) => handleHitlResolved(message.id, card, resumed)}
-                  />
-                ) : message.document ? (
-                  <>
-                    <BlockRenderer document={message.document} />
-                    {sourceChips.length > 0 && (
-                      <ul className="source-ref-chips" aria-label={t('attach.sources')}>
-                        {sourceChips.map(ref => (
-                          <li key={ref} className="source-ref-chip">
-                            {ref}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {showDevGap && <p className="hitl-dev-gap">{t('msg.devGap')}</p>}
-                    {message.error && <p className="msg-error">{message.error}</p>}
-                    <div className="msg-actions">
-                      <button
-                        className={`action-btn ${message._feedbackLike ? 'active' : ''}`}
-                        onClick={() => handleFeedback(message.id, 'like')}
-                        disabled={message._feedbackSending || busy}
-                        aria-pressed={!!message._feedbackLike}
-                        aria-label={t('action.like')}
-                      >
-                        <ThumbsUp size={16} />
-                      </button>
-                      <button
-                        className={`action-btn ${message._feedbackDislike ? 'active' : ''}`}
-                        onClick={() => handleFeedback(message.id, 'dislike')}
-                        disabled={message._feedbackSending || busy}
-                        aria-pressed={!!message._feedbackDislike}
-                        aria-label={t('action.dislike')}
-                      >
-                        <ThumbsDown size={16} />
-                      </button>
-                      <button
-                        className="action-btn"
-                        onClick={() => copyMessageContent(message)}
-                        disabled={busy}
-                        aria-label={t('action.copy')}
-                      >
-                        <Copy size={16} />
-                      </button>
-                      <button
-                        className="action-btn"
-                        onClick={() => {
-                          if (!message.document) return;
-                          void downloadDocumentPdf(message.document, threadId, userId, orgId).catch(
-                            (err: unknown) => {
-                              toast.error(t('toast.pdfFailed'));
-                              console.error(err);
-                            }
-                          );
-                        }}
-                        disabled={busy}
-                        aria-label={t('action.exportPdf')}
-                      >
-                        <Download size={16} />
-                      </button>
-                      <button
-                        className="action-btn"
-                        onClick={() => regenerateResponse(message.id)}
-                        disabled={busy || message._regenerating}
-                        aria-label={t('action.regenerate')}
-                      >
-                        {message._regenerating ? (
-                          <LoaderCircle className="spin" size={16} />
-                        ) : (
-                          <RotateCw size={16} />
+              {isWaiting ? (
+                <ThinkingIndicator phase={pendingPhase} />
+              ) : (
+                <>
+                  <div className="avatar">P</div>
+                  <div
+                    className="bubble"
+                    ref={
+                      showStreamPreview || streamingAssistantIdRef.current === message.id
+                        ? streamBubbleRef
+                        : undefined
+                    }
+                  >
+                    {showStreamPreview ? (
+                      streamDocument ? (
+                        <div className="stream-preview stream-preview--doc">
+                          <BlockRenderer document={streamDocument} />
+                        </div>
+                      ) : (
+                        <StreamMarkdownPreview markdown={streamPreview} />
+                      )
+                    ) : showHitl ? (
+                      <HitlCards
+                        cards={pendingHitl}
+                        userId={userId}
+                        orgId={orgId}
+                        onResolved={(card, resumed) =>
+                          handleHitlResolved(message.id, card, resumed)
+                        }
+                      />
+                    ) : message.document ? (
+                      <>
+                        <BlockRenderer document={message.document} />
+                        {sourceChips.length > 0 && (
+                          <ul className="source-ref-chips" aria-label={t('attach.sources')}>
+                            {sourceChips.map(ref => (
+                              <li key={ref} className="source-ref-chip">
+                                {ref}
+                              </li>
+                            ))}
+                          </ul>
                         )}
-                      </button>
-                      {devMode && message.document && (
-                        <span className="dev-meta">
-                          Confidence: {message.document.meta.confidence} | Requires review:{' '}
-                          {String(message._requiresReview)}
-                        </span>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <p className="msg-error">{message.error ?? t('msg.emptyResponse')}</p>
-                )}
-                {showHitl && message.document && <BlockRenderer document={message.document} />}
-              </div>
+                        {showDevGap && <p className="hitl-dev-gap">{t('msg.devGap')}</p>}
+                        {message.error && <p className="msg-error">{message.error}</p>}
+                        <div className="msg-actions">
+                          <button
+                            className={`action-btn ${message._feedbackLike ? 'active' : ''}`}
+                            onClick={() => handleFeedback(message.id, 'like')}
+                            disabled={message._feedbackSending || busy}
+                            aria-pressed={!!message._feedbackLike}
+                            aria-label={t('action.like')}
+                          >
+                            <ThumbsUp size={16} />
+                          </button>
+                          <button
+                            className={`action-btn ${message._feedbackDislike ? 'active' : ''}`}
+                            onClick={() => handleFeedback(message.id, 'dislike')}
+                            disabled={message._feedbackSending || busy}
+                            aria-pressed={!!message._feedbackDislike}
+                            aria-label={t('action.dislike')}
+                          >
+                            <ThumbsDown size={16} />
+                          </button>
+                          <button
+                            className="action-btn"
+                            onClick={() => copyMessageContent(message)}
+                            disabled={busy}
+                            aria-label={t('action.copy')}
+                          >
+                            <Copy size={16} />
+                          </button>
+                          <button
+                            className="action-btn"
+                            onClick={() => {
+                              if (!message.document) return;
+                              void downloadDocumentPdf(
+                                message.document,
+                                threadId,
+                                userId,
+                                orgId
+                              ).catch((err: unknown) => {
+                                toast.error(t('toast.pdfFailed'));
+                                console.error(err);
+                              });
+                            }}
+                            disabled={busy}
+                            aria-label={t('action.exportPdf')}
+                          >
+                            <Download size={16} />
+                          </button>
+                          <button
+                            className="action-btn"
+                            onClick={() => regenerateResponse(message.id)}
+                            disabled={busy || message._regenerating}
+                            aria-label={t('action.regenerate')}
+                          >
+                            {message._regenerating ? (
+                              <LoaderCircle className="spin" size={16} />
+                            ) : (
+                              <RotateCw size={16} />
+                            )}
+                          </button>
+                          {devMode && message.document && (
+                            <span className="dev-meta">
+                              Confidence: {message.document.meta.confidence} | Requires review:{' '}
+                              {String(message._requiresReview)}
+                            </span>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="msg-error">{message.error ?? t('msg.emptyResponse')}</p>
+                    )}
+                    {showHitl && message.document && <BlockRenderer document={message.document} />}
+                  </div>
+                </>
+              )}
             </div>
           );
         })}
@@ -1214,6 +1238,7 @@ export function ChatShell() {
           <span className="attachment-project-label">{t('attach.projectId')}</span>
           <input
             type="text"
+            className="attachment-project-input"
             value={projectId}
             maxLength={64}
             disabled={busy || uploading}

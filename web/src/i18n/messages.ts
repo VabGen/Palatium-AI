@@ -36,7 +36,20 @@ export const ru = {
   'empty.suggestion.1': 'Составь план встречи на завтра',
 
   // --- Сообщения ---
-  'msg.agentsWorking': 'Агенты работают',
+  // Индикатор работы: подпись НЕ видна (орб без облака и текста), но состояние
+  // обязано быть озвучено (084) и показано при `prefers-reduced-motion`, где
+  // движение — единственный сигнал и потому отключается.
+  'msg.pending.thinking': 'Думаю…',
+  'msg.pending.context': 'Собираю контекст…',
+  'msg.pending.planning': 'Планирую шаги…',
+  'msg.pending.files': 'Подбираю файлы…',
+  'msg.pending.memory': 'Связываю с памятью…',
+  'msg.pending.searching': 'Ищу в источниках…',
+  'msg.pending.workers': 'Запускаю агентов…',
+  'msg.pending.solving': 'Решаю задачу…',
+  'msg.pending.checking': 'Проверяю ответ…',
+  'msg.pending.revision': 'Дорабатываю ответ…',
+  'msg.pending.composing': 'Пишу ответ…',
   'msg.emptyResponse': 'Пустой ответ',
   'msg.formatterOutputInvalid':
     'Не удалось оформить ответ. Попробуйте переформулировать запрос или повторить.',
@@ -209,7 +222,17 @@ export const en: Record<MessageKey, string> = {
   'empty.suggestion.0': "What is on today's agenda",
   'empty.suggestion.1': "Draft an agenda for tomorrow's meeting",
 
-  'msg.agentsWorking': 'Agents working',
+  'msg.pending.thinking': 'Thinking…',
+  'msg.pending.context': 'Gathering context…',
+  'msg.pending.planning': 'Planning steps…',
+  'msg.pending.files': 'Picking files…',
+  'msg.pending.memory': 'Tying in memory…',
+  'msg.pending.searching': 'Searching sources…',
+  'msg.pending.workers': 'Starting agents…',
+  'msg.pending.solving': 'Working it out…',
+  'msg.pending.checking': 'Checking the answer…',
+  'msg.pending.revision': 'Revising the answer…',
+  'msg.pending.composing': 'Writing the answer…',
   'msg.emptyResponse': 'Empty response',
   'msg.formatterOutputInvalid':
     'Could not format the answer. Try rephrasing the request or try again.',
