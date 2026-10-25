@@ -34,6 +34,7 @@ from palatium_ai.domain.policies.untrusted_content import (
     budget_untrusted_text,
     count_fence_blocks,
 )
+from palatium_ai.domain.policies.verbosity import VerbosityPolicy
 
 
 def parse_formatter_document(raw_content: str) -> ContentDocument:
@@ -95,6 +96,9 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
                     "confidence": confidence,
                     "interaction": interaction,
                     "source_refs": merged_refs,
+                    # Server-owned axis (W7): the model cannot declare its own length
+                    # budget, so the pipeline value always wins over a model guess.
+                    "verbosity_budget": VerbosityPolicy.for_transformation(task_input.transformation),
                 }
             ),
         }
@@ -155,6 +159,9 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
         "task_kind": task_kind,
         "response_shape": task_input.context_packet.response_shape,
         "response_locale": locale,
+        # Same policy call as ``align_formatter_meta``: the instruction the model gets and
+        # the value stamped into meta cannot drift apart (W7, 055).
+        "verbosity_budget": VerbosityPolicy.for_transformation(task_input.transformation),
         "format_hints": {
             "requires_review": task_input.requires_review,
             "requires_user_choice": task_input.requires_user_choice,

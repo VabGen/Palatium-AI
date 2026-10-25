@@ -67,3 +67,5 @@ ADR — не бюрократия, а страховка от повторног
 | [0003](0003-postgres-checkpointer-session-ttl.md) | Short-term: Postgres checkpointer + retention TTL | accepted |
 | [0004](0004-hybrid-memory-not-neo4j-only.md) | Hybrid memory SoT; reject Neo4j-only Cortex | accepted |
 | [0005](0005-content-document-response-shapes.md) | Единый `ContentDocument` + `response_shape`; reject per-scenario schemas | accepted |
+| [0006](0006-canvas-server-authoritative-documents.md) | Canvas = server-authoritative `ContentDocument`; reject Yjs CRDT | accepted |
+| [0007](0007-vision-image-parts.md) | Vision как `ImagePart` сообщения, не base64 в тексте; OCR остаётся | accepted |

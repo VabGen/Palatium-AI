@@ -1,0 +1,45 @@
+{
+  "version": "2026.10.1",
+  "agents": {
+    "context_enricher": {
+      "prompts": [
+        "application/agents/context_enricher/*/prompts.py"
+      ]
+    },
+    "critic": {
+      "prompts": [
+        "application/agents/critic/prompts.py"
+      ]
+    },
+    "formatter": {
+      "prompts": [
+        "application/agents/formatter/prompts.py"
+      ]
+    },
+    "intent_classifier": {
+      "prompts": [
+        "application/agents/intent_classifier/prompts.py"
+      ]
+    },
+    "memory_keeper": {
+      "prompts": [
+        "application/agents/memory_keeper/prompts.py"
+      ]
+    },
+    "researcher": {
+      "prompts": [
+        "application/agents/researcher/prompts.py"
+      ]
+    },
+    "supervisor": {
+      "prompts": [
+        "application/agents/supervisor/prompts.py"
+      ]
+    },
+    "text_ingestor": {
+      "prompts": [
+        "application/agents/text_ingestor/prompts.py"
+      ]
+    }
+  }
+}

@@ -13,14 +13,23 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { ru } from '../src/i18n/messages';
 import {
   answerDocument,
   defaultApi,
+  formatterResult,
   openWidget,
   stepUpChallenge,
   stubSessionSocket,
   toolCard,
 } from './fixtures';
+
+/** SSE-тело кадрами: нужен ровно тот порядок, в котором их шлёт сервер. */
+function sse(frames: Array<{ event: string; data: unknown }>): string {
+  return frames
+    .map(frame => `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`)
+    .join('');
+}
 
 /** Снимок сфокусированного элемента внутри Shadow DOM виджета. */
 type FocusSnapshot = {
@@ -138,6 +147,12 @@ test.describe('клавиатура и фокус внутри Shadow DOM', () =
     await server.install(page);
     await openWidget(page);
 
+    // `palatium:ready` — это апгрейд элемента, а не конец загрузки: пустое
+    // состояние с подсказками появляется только после гидратации истории
+    // (`sessions/turns`). Без ожидания обход стартует раньше вставки этих
+    // кнопок и проскакивает их — тест падал на порядке, а не на доступности.
+    await expect(page.locator('.suggestion')).toHaveCount(2);
+
     // Стартовая точка задаётся явно. Браузер запоминает «место, где остановился
     // Tab» на момент загрузки, а виджет к тому времени ещё дорисовывается, —
     // без якоря обход начинается не с первого контроля. Якорь на последнем
@@ -188,6 +203,69 @@ test.describe('клавиатура и фокус внутри Shadow DOM', () =
       if (active) next.push(active);
     }
     expect(next[0]?.className).toContain('send-btn');
+  });
+});
+
+test.describe('канал озвучивания стрима (W2)', () => {
+  /**
+   * Гейт на разметку и на главный инвариант: лента НЕ объявляет себя сама, а
+   * прогресс идёт отдельным живым регионом. Поведение VoiceOver/NVDA этим не
+   * проверяется — для него в `web/e2e/` лежит ручной чек-лист.
+   */
+  test('лента — log без автообъявлений, финал приходит отдельным регионом', async ({ page }) => {
+    const server = defaultApi();
+    server.reply('intents.process.stream', {
+      text: sse([
+        { event: 'document_title', data: { title: 'Итоги' } },
+        {
+          event: 'block_delta',
+          data: { index: 0, block: { type: 'paragraph', text: 'Первый закрытый блок.' } },
+        },
+        {
+          event: 'block_delta',
+          data: {
+            index: 1,
+            block: { type: 'table', columns: ['Поле', 'Значение'], rows: [['a', '1']] },
+          },
+        },
+        {
+          event: 'result',
+          data: { result: formatterResult({ output: { ...answerDocument(), title: 'Итоги' } }) },
+        },
+        { event: 'done', data: {} },
+      ]),
+      contentType: 'text/event-stream',
+    });
+    await stubSessionSocket(page);
+    await server.install(page);
+    await openWidget(page);
+
+    // Лента — log ровно с выключенными объявлениями: иначе каждый block_delta
+    // превращался бы в лавину перечитываний всего ответа.
+    const log = page.locator('.transcript');
+    await expect(log).toHaveAttribute('role', 'log');
+    await expect(log).toHaveAttribute('aria-live', 'off');
+    await expect(log).toHaveAttribute('aria-label', ru['a11y.transcript']);
+
+    await page.locator('.composer-textarea').fill('Составь ответ');
+    await page.getByRole('button', { name: 'Отправить сообщение' }).click();
+    await expect(page.locator('.msg.assistant .doc')).toBeVisible();
+
+    // Канал смонтирован с первого рендера и не переключает aria-live: два слота.
+    const channel = page.locator('.live-announcer');
+    await expect(channel).toHaveCount(2);
+    for (const region of await channel.all()) {
+      await expect(region).toHaveAttribute('aria-live', 'polite');
+      await expect(region).toHaveAttribute('aria-atomic', 'true');
+    }
+
+    // Финальный сигнал — одно объявление, а не перечисление всего ответа.
+    await expect(channel.filter({ hasText: ru['a11y.ready'] })).toHaveCount(1);
+    const spoken = (await channel.allTextContents()).join(' ').trim();
+    await expect(spoken).not.toContain('Первый закрытый блок.');
+
+    // Разметка канала не должна ломать axe: регион скрыт, но валиден.
+    await scan(page);
   });
 });
 

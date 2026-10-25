@@ -4,24 +4,28 @@
 
 from __future__ import annotations
 
+import base64
 import math
 
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 import structlog
 
 from litellm import acompletion
 
 from palatium_ai.core.logging.redact import redact_text
-from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
+from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError, VisionUnsupportedError
 from palatium_ai.domain.llm.models import (
     ChatMessage,
+    ImagePart,
     LLMCompletion,
     LLMResponseFormat,
     LLMStreamDelta,
     LLMUsage,
 )
 from palatium_ai.domain.llm.structured_output import response_model_for_schema, strict_json_schema
+from palatium_ai.infrastructure.llm.citation_mapping import citations_from_response
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
 from palatium_ai.infrastructure.llm.shared_transport import shared_client_session
 
@@ -31,6 +35,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from palatium_ai.core.config.llm.base import LLMProviderConfig
+    from palatium_ai.domain.ports.vision import VisionImageSourcePort
 
 logger = structlog.get_logger(__name__)
 
@@ -83,10 +88,21 @@ def _raise_if_unsupported(exc: Exception, *, response_format: LLMResponseFormat 
         raise StructuredOutputUnsupportedError(redact_text(str(exc))) from exc
 
 
-def _to_litellm_messages(messages: list[ChatMessage]) -> list[dict[str, object]]:
-    """Map domain messages; attach Anthropic-style cache_control on system prefixes."""
+def _to_litellm_messages(
+    messages: list[ChatMessage],
+    *,
+    image_urls: dict[UUID, str] | None = None,
+) -> list[dict[str, object]]:
+    """Map domain messages; attach Anthropic-style cache_control on system prefixes.
+
+    ``image_urls`` carries already-resolved data URLs for the turn's image parts. A
+    part without a resolved URL is a hard error, never a silently text-only message:
+    the model would answer "the picture is empty" and sound certain about it (ADR 0007).
+    """
+    resolved = image_urls or {}
     out: list[dict[str, object]] = []
     for message in messages:
+        images = [_image_url_part(part, resolved) for part in message.image_parts]
         if message.cache_control is not None and message.role == "system":
             out.append(
                 {
@@ -100,9 +116,32 @@ def _to_litellm_messages(messages: list[ChatMessage]) -> list[dict[str, object]]
                     ],
                 }
             )
+        elif images:
+            out.append(
+                {
+                    "role": message.role,
+                    "content": [{"type": "text", "text": message.content}, *images],
+                }
+            )
         else:
             out.append({"role": message.role, "content": message.content})
     return out
+
+
+def _image_url_part(part: ImagePart, resolved: dict[UUID, str]) -> dict[str, object]:
+    """One OpenAI-compatible image part from a resolved data URL."""
+    url = resolved.get(part.attachment_id)
+    if not url:
+        raise VisionUnsupportedError(
+            f"no vision image source resolved attachment {part.attachment_id}",
+        )
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
+def _data_url(data: bytes, *, mime_type: str) -> str:
+    """Inline data URL: no second upload round-trip and no attacker-controlled URL."""
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def _parse_usage(usage_obj: object | None) -> LLMUsage:
@@ -199,6 +238,7 @@ def _parse_completion(response: object) -> LLMCompletion:
         usage=usage,
         finish_reason=finish_reason,
         cost_usd=_parse_response_cost(response),
+        citations=citations_from_response(response),
     )
 
 
@@ -241,13 +281,52 @@ def _parse_stream_delta(chunk: object) -> LLMStreamDelta:
 class LiteLLMAdapter:
     """Реализация LLMPort через LiteLLM для любого LLMProviderConfig."""
 
-    def __init__(self, config: LLMProviderConfig) -> None:
+    def __init__(
+        self,
+        config: LLMProviderConfig,
+        *,
+        vision_model: str | None = None,
+        image_source: VisionImageSourcePort | None = None,
+    ) -> None:
         self._config = config
         self._api_key = config.get_api_key()
         self._base_url = config.get_base_url()
         self._default_model = config.get_default_model()
         self._provider = config.provider_name
         self._timeout_seconds = config.get_timeout_seconds()
+        # ADR 0007: the vision alias is provider-level config, not an agent tier — an
+        # image call must not inherit ``tier-small`` from the calling agent.
+        self._vision_model = (vision_model or "").strip() or None
+        self._image_source = image_source
+
+    async def _vision_image_urls(self, messages: list[ChatMessage]) -> dict[UUID, str] | None:
+        """Resolve image parts into data URLs; ``None`` when the call carries no images.
+
+        Every refusal is typed and happens before the provider call: an unconfigured
+        alias, a missing source, or a blob that fails storage checks (020, ADR 0007).
+        """
+        parts = [part for message in messages for part in message.image_parts]
+        if not parts:
+            return None
+        if self._vision_model is None:
+            raise VisionUnsupportedError("LLM_VISION_MODEL is not configured")
+        if self._image_source is None:
+            raise VisionUnsupportedError("vision image source is not wired")
+
+        urls: dict[UUID, str] = {}
+        total_bytes = 0
+        for part in parts:
+            data = await self._image_source.read(part.attachment_id, expected_mime=part.mime)
+            urls[part.attachment_id] = _data_url(data, mime_type=part.mime)
+            total_bytes += len(data)
+        # Counts and sizes only: the payload itself must never reach a log (020).
+        logger.debug(
+            "LLM vision request",
+            provider=self._provider,
+            images=len(parts),
+            image_bytes=total_bytes,
+        )
+        return urls
 
     def _build_params(
         self,
@@ -299,16 +378,17 @@ class LiteLLMAdapter:
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
     ) -> LLMCompletion:
-        """Выполняет синхронную генерацию текста."""
+        """Выполняет синхронную генерацию текста (или vision-вызов при image_parts)."""
+        image_urls = await self._vision_image_urls(messages)
         params = self._build_params(
-            model=model,
+            model=self._vision_model if image_urls else model,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
             response_model=response_model,
             timeout_seconds=timeout_seconds,
         )
-        params["messages"] = _to_litellm_messages(messages)
+        params["messages"] = _to_litellm_messages(messages, image_urls=image_urls)
         logger.debug(
             "LLM request",
             provider=self._provider,
@@ -343,13 +423,14 @@ class LiteLLMAdapter:
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
-        """Возвращает поток частичных ответов."""
+        """Возвращает поток частичных ответов (vision-вызов при image_parts)."""
         from time import perf_counter
 
         from palatium_ai.core.observability.metrics import agent_metrics
 
+        image_urls = await self._vision_image_urls(messages)
         params = self._build_params(
-            model=model,
+            model=self._vision_model if image_urls else model,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
@@ -358,7 +439,7 @@ class LiteLLMAdapter:
         )
         # OpenAI-compatible: last chunk carries usage (and LiteLLM may attach cost).
         params["stream_options"] = {"include_usage": True}
-        params["messages"] = _to_litellm_messages(messages)
+        params["messages"] = _to_litellm_messages(messages, image_urls=image_urls)
         started = perf_counter()
         first_token = True
         # stream=True as Literal selects CustomStreamWrapper; cast keeps async-for typed

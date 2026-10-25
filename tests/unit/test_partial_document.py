@@ -51,13 +51,30 @@ def _prose(frames: list[PartialFrame]) -> list[str]:
     return [frame.text for frame in frames if frame.text]
 
 
+def _render(frames: list[PartialFrame]) -> str:
+    """What the append-only prose preview shows after all frames (client accumulator)."""
+    out = ""
+    for frame in frames:
+        if not frame.text:
+            continue
+        if out and not frame.continues_prose:
+            out += "\n\n"
+        out += frame.text
+    return out
+
+
 @pytest.mark.parametrize("chunk_size", (1, 3, 7, 40, len(RAW)))
 def test_frames_are_stable_across_chunk_boundaries(chunk_size: int) -> None:
-    """A token boundary may fall anywhere — mid-string, mid-escape, mid-object."""
-    frames = _feed_all(chunk_size)
-    joined = "\n\n".join(_prose(frames))
+    """A token boundary may fall anywhere — mid-string, mid-escape, mid-object.
 
-    assert frames == _feed_all(2), "preview must not depend on provider chunking"
+    The *frame list* legitimately depends on chunking (an open paragraph streams per
+    delta), so the invariant is the rendered preview: the user must read exactly the
+    same text no matter how the provider split the JSON.
+    """
+    frames = _feed_all(chunk_size)
+    joined = _render(frames)
+
+    assert joined == _render(_feed_all(2)), "preview must not depend on provider chunking"
     assert joined.startswith("Сравнение файлов")
     assert "Отличия" in joined
     assert "В первой версии нет раздела 3." in joined
@@ -85,7 +102,7 @@ def test_typed_blocks_match_the_final_document() -> None:
 
 
 def test_nothing_is_emitted_twice() -> None:
-    joined = "\n\n".join(_prose(_feed_all(5)))
+    joined = _render(_feed_all(5))
     assert joined.count("Проверьте дату.") == 1
     assert joined.count("Отличия") == 1
 

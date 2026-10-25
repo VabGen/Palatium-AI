@@ -69,9 +69,7 @@ class IntentClassifierAgent(BaseAgent):
         has_prior_dialog = input.context.get("has_prior_dialog", "false").lower() == "true"
         has_thread_files = input.context.get("has_thread_files", "false").lower() == "true"
         attachment_count = _int_from_context(input.context.get("attachment_count"))
-        attachment_kinds = tuple(
-            kind for kind in (input.context.get("attachment_kinds") or "").split(",") if kind
-        )
+        attachment_kinds = tuple(kind for kind in (input.context.get("attachment_kinds") or "").split(",") if kind)
         messages = [
             ChatMessage(role="system", content=INTENT_CLASSIFIER_SYSTEM_PROMPT),
             ChatMessage(

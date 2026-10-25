@@ -9,13 +9,13 @@ import json
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from palatium_ai.application.services.pii_gate import classify_for_write
 from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.core.security.secret_scanner import scan_text
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
-from palatium_ai.domain.memory.pii import resolve_contains_pii
 from palatium_ai.domain.memory.save_payload import MemorySavePayload
 from palatium_ai.domain.memory.types import MEMORY_EXPLICIT_WRITE_KEY
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
@@ -85,7 +85,7 @@ class MemorySaveService:
             msg = "text is required"
             raise ValueError(msg)
         scan_text(text_value, field="memory_save_text")
-        pii_flag = resolve_contains_pii(text=text_value, client_flag=contains_pii)
+        pii_flag = classify_for_write(text=text_value, client_flag=contains_pii)
 
         binding = MemoryNamespacePolicy.bind_scope(
             namespace_kind=kind,

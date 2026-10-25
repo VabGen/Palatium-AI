@@ -57,6 +57,9 @@ class AttachmentContextBlock(BaseModel):
     #: ``missing`` means the upload is usable but no text was extracted (OCR failed or
     #: still pending): the fenced body is the read-on-demand notice, not content.
     text_state: AttachmentTextState = "extracted"
+    #: PII classification of the row. It travels with the block so the vision gate can
+    #: decide (and audit) without re-reading the row, while the fence body stays text-only.
+    contains_pii: bool = False
 
     @property
     def is_image(self) -> bool:

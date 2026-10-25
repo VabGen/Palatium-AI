@@ -1058,6 +1058,37 @@ docker logs palatium-ai-api-1 --since 2m | Select-String "AuthenticationError|ag
 OCR vision timeout (P2.16): `ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS` default **30**;
 чат (`/intents/process`) не ждёт OCR — только attachment ids со статусом ready.
 
+### 5.3. Vision-маршрут чата (ADR 0007)
+
+Два разных алиаса, не путать:
+
+| Переменная | Что делает | Обязательна |
+|---|---|---|
+| `LLM_VISION_MODEL` | vision-модель для `image_parts` **в chat-вызове** (ответ по картинке) | нет; пусто → маршрут выключен |
+| `ATTACHMENTS_IMAGE_OCR_MODEL` | vision-модель для **OCR-пайплайна** вложений (текст из картинки) | при `ATTACHMENTS_IMAGE_OCR_BACKEND=gateway` |
+
+```powershell
+# В env (dev/prod): алиас подтверждён владельцем
+LLM_VISION_MODEL="vision-tier"
+LLM_VISION_MAX_IMAGE_BYTES=10485760   # потолок на одно изображение (после blob stat)
+LLM_VISION_MAX_IMAGES=4               # изображений на один chat-вызов
+```
+
+Семантика:
+
+- пустой `LLM_VISION_MODEL` → image-вызов **отклоняется** (`VisionUnsupportedError`),
+  картинка остаётся OCR-текстом; тихого «ответа без картинки» нет;
+- vision-вызов **не** уходит в `LLM_FALLBACK_PROVIDERS`: алиас принадлежит gateway,
+  фоллбэк на текстовую модель исказил бы ответ (решение владельца 2026-10-25);
+- PII-изображения блокируются безусловно (`pii_blocked`), пока владелец не разрешит
+  PII-класс на gateway;
+- отказы видны в `palatium_vision_image_total{outcome,reason}` — «модель не увидела
+  картинку» диагностируется по `reason`, а не по догадке;
+- в логах только количество и суммарные байты: data URL/base64 в логи не попадают.
+
+Проверка при старте API: строка `Vision route enabled model=vision-tier` (или
+`Vision route disabled (LLM_VISION_MODEL is empty)` — маршрут выключен).
+
 ---
 
 ## 6. Проверка БД
@@ -1460,7 +1491,7 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `ATTACHMENTS_MAX_PARSED_CHARS` / `_PAGES` | `2000000` / `500` | границы парсинга |
 | `ATTACHMENTS_SWEEP_BATCH_SIZE` | `200` | строк за один retention-проход |
 | `ATTACHMENTS_IMAGE_OCR_BACKEND` | `auto` | `disabled` \| `auto` \| `gateway` \| `tesseract`; `disabled` не подключает парсер картинок (§16.3) |
-| `ATTACHMENTS_IMAGE_OCR_MODEL` | — | алиас vision-модели **в gateway** (напр. `tier-vision`); обязателен при `gateway`, опционален при `auto` |
+| `ATTACHMENTS_IMAGE_OCR_MODEL` | — | алиас vision-модели **в gateway** (напр. `vision-tier`); обязателен при `gateway`, опционален при `auto`. Это OCR-путь вложений, не chat-vision (`LLM_VISION_MODEL`, §5.3) |
 | `ATTACHMENTS_IMAGE_OCR_MAX_BYTES` | `8388608` (8 MiB) | предел **исходных** байт, уходящих в модель (лимит приёма — 50 MiB) |
 | `ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS` | `30` | таймаут вызова vision-модели (P2.16) |
 | `ATTACHMENTS_OCR_MIN_CHARS` | `12` | quality gate: эскалация на Vision, если OCR дал меньше символов |
@@ -1650,6 +1681,9 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
    (`prepare_fenced_attachment`: полный scan → mask+admit при любом severity;
    только truncated scan → quarantine; текст в ход всегда в `<<<UNTRUSTED_TOOL_OUTPUT>>>`) →
    persist derived text → fencing на чтение в ход.
+   В persisted-текст пишется и `text_masked` (W3b-2): тело отличается от извлечённого
+   (injection-редакция или PII-маска). Флаг фиксируется при записи, а не вычисляется при
+   чтении из текущей политики — блоб мог быть записан при другой (060).
    Статус строки на время пайплайна — `scanning` (UI может показывать фазу до ответа).
    Audit: `attachment_completed`.
 5. Файл либо участвует в ходе диалога (§16.5), либо его индексация запрашивается через HITL.
@@ -1687,6 +1721,7 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 | `GET /api/attachments?thread_id=…` | 200 | вложения треда (перед чтением — ленивый retention) |
 | `GET /api/attachments/{id}` | 200 | одно вложение |
 | `GET /api/attachments/{id}/download` | 200 | presigned GET оригинала (audit `attachment_download_issued`) |
+| `POST /api/attachments/{id}/citation-locate` | 200 | окно текста вокруг цитаты (W3b-2); `Cache-Control: no-store`; 409 — нет извлечённого текста |
 | `POST /api/attachments/{id}/index` | 200 | одноразовая HITL-карточка; **ничего не пишет** |
 | `POST /api/attachments/{id}/restore-request` | 200 | HITL на восстановление из карантина (`injection_detected`); approve → masked `ready` |
 | `GET /api/attachments/compliance-export?thread_id=…` | 200 | JSON-сводка вложений треда (роль manager) |
@@ -1764,12 +1799,15 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 | `attachment_download_issued` | выдан presigned GET оригинала |
 | `attachment_restore_requested` | создана HITL-карточка восстановления |
 | `attachment_restore_approved` | карантин снят, текст замаскирован, `ready` |
+| `attachment_citation_located` | открыто место цитаты (W3b-2): `outcome`, длины цитаты и текста — **без** содержимого |
 
 Метрики: `palatium_agent_errors_total{agent_type="attachments", error_type=…}`, где
 `error_type` ∈ `intake_<reason>` · `pipeline_<reason>` · `retention_sweep_failed` ·
 `retention_sweep_read_path_failed`; плюс
 `palatium_attachment_parse_total{extraction_source, media_kind}` на успешный parse
 (`extraction_source` ∈ `text_layer|vision|ocr|none`, `media_kind` ∈ `image|pdf|text|office|other`).
+Подсветка цитат: `palatium_citation_highlight_total{outcome}` — знаменатель включает отказы
+(`ambiguous_quote` / `quote_not_found` / `no_text`), иначе доля «растёт» отказом от трудных цитат.
 
 ```powershell
 # Распределение статусов и причин отказов

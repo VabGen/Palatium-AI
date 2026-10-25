@@ -28,6 +28,7 @@ from palatium_ai.domain.agents.critic import CriticOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.models import ChatMessage
 from palatium_ai.domain.policies import CriticPolicy
+from palatium_ai.domain.policies.constitution import Constitution, ConstitutionViolation, PrincipleId
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
@@ -63,6 +64,15 @@ class CriticAgent(BaseAgent):
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")
         task_input = decode_critic_input({**input.context, "_task_id": str(input.task_id)})
+        # Deterministic constitution pass runs before any judge decision: a skipped
+        # judge (budget/policy) must not become a skipped safety check (020).
+        deterministic = Constitution.check(
+            draft=task_input.worker_summary,
+            sources=(
+                task_input.context_packet.user_text,
+                task_input.context_packet.untrusted_context or "",
+            ),
+        )
 
         hop = get_hop_collector()
         if hop is not None:
@@ -78,12 +88,7 @@ class CriticAgent(BaseAgent):
                     requires_review=False,
                     summary=f"HopBudgetPolicy soft-degrade ({budget_gate.reason}).",
                 )
-                return AgentOutput(
-                    task_id=input.task_id,
-                    status="success",
-                    confidence=confidence_from_scores(output),
-                    output=output,
-                )
+                return self._finalize(input=input, output=output, deterministic=deterministic)
 
         caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
         gate = CriticPolicy.decide(
@@ -108,12 +113,7 @@ class CriticAgent(BaseAgent):
                 requires_review=False,
                 summary=f"CriticPolicy passthrough ({gate.reason}).",
             )
-            return AgentOutput(
-                task_id=input.task_id,
-                status="success",
-                confidence=confidence_from_scores(output),
-                output=output,
-            )
+            return self._finalize(input=input, output=output, deterministic=deterministic)
 
         messages = [
             ChatMessage(role="system", content=CRITIC_SYSTEM_PROMPT),
@@ -162,20 +162,39 @@ class CriticAgent(BaseAgent):
                 error_message="LLM stage failed in critic agent",
             )
 
+        if deterministic or output.violations:
+            logger.info(
+                "critic.constitution_checked",
+                task_id=str(input.task_id),
+                judged=list(output.violations),
+                deterministic=[violation.principle for violation in deterministic],
+            )
+        return self._finalize(input=input, output=output, deterministic=deterministic)
+
+    def _finalize(
+        self,
+        *,
+        input: AgentInput,
+        output: CriticOutput,
+        deterministic: tuple[ConstitutionViolation, ...],
+    ) -> AgentOutput:
+        """Merge judged and deterministic article ids, then apply the review gate."""
+        merged = _merge_constitution(output, deterministic)
         requires_review = (
-            output.requires_review
-            or output.accuracy_score < ACCURACY_REVIEW_THRESHOLD
-            or output.safety_score < SAFETY_REVIEW_THRESHOLD
+            merged.requires_review
+            or merged.accuracy_score < ACCURACY_REVIEW_THRESHOLD
+            or merged.safety_score < SAFETY_REVIEW_THRESHOLD
+            or bool(merged.violations)
         )
+        _record_violations(merged.violations, deterministic)
         status: Literal["success", "failure", "partial"] = "partial" if requires_review else "success"
         if requires_review:
             agent_metrics.record_human_escalation("critic_requires_review")
-
         return AgentOutput(
             task_id=input.task_id,
             status=status,
-            confidence=confidence_from_scores(output),
-            output=output,
+            confidence=confidence_from_scores(merged),
+            output=merged,
         )
 
 
@@ -186,3 +205,33 @@ def _empty_critic_output() -> CriticOutput:
         requires_review=True,
         summary="failure",
     )
+
+
+def _merge_constitution(
+    output: CriticOutput,
+    deterministic: tuple[ConstitutionViolation, ...],
+) -> CriticOutput:
+    """Union of judged and deterministic article ids, order-stable, no duplicates."""
+    if not deterministic:
+        return output
+    merged = tuple(dict.fromkeys((*output.violations, *(item.principle for item in deterministic))))
+    return output.model_copy(update={"violations": merged})
+
+
+def _record_violations(
+    violations: tuple[PrincipleId, ...],
+    deterministic: tuple[ConstitutionViolation, ...],
+) -> None:
+    """Count each violated article by origin; ``detail`` (detector ids) stays in logs."""
+    deterministic_ids = {item.principle: item for item in deterministic}
+    for principle in violations:
+        found = deterministic_ids.get(principle)
+        source = "deterministic" if found is not None else "judge"
+        agent_metrics.record_constitution_violation(principle=principle, source=source)
+        if found is not None:
+            logger.warning(
+                "critic.constitution_violation",
+                principle=found.principle,
+                severity=found.severity,
+                detail=found.detail,
+            )

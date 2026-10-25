@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     from .response_cache import ResponseCacheKeyParts, ResponseCacheKeyPolicy
     from .retention import RetentionDecision, RetentionPolicy, RetentionWindows
     from .retrieval import LAST_RESORT_PLATFORM_TOOLS, RetrievalBindingDecision, RetrievalPolicy
+    from .revision import RevisionPolicy
     from .scratchpad import SessionScratchpadPolicy
     from .shape import ShapeRecipe, ShapeRecipePolicy, ShapeVerdict
     from .transform import TransformPolicy, TransformRouteDecision
@@ -73,8 +74,11 @@ if TYPE_CHECKING:
         budget_untrusted_text,
         count_fence_blocks,
     )
+    from .verbosity import BUDGET_DEFAULT, VerbosityPolicy
+    from .vision import VisionBlockReason, VisionDecision, VisionPolicy, normalise_image_mime
 
 __all__ = [
+    "BUDGET_DEFAULT",
     "CLARIFY_MIN_CONFIDENCE",
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
     "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS",
@@ -135,6 +139,7 @@ __all__ = [
     "RetentionWindows",
     "RetrievalBindingDecision",
     "RetrievalPolicy",
+    "RevisionPolicy",
     "RouteStrategy",
     "SessionScratchpadPolicy",
     "ShapeRecipe",
@@ -149,8 +154,13 @@ __all__ = [
     "UntrustedContentPolicy",
     "UntrustedContentResult",
     "UntrustedContentThresholds",
+    "VerbosityPolicy",
+    "VisionBlockReason",
+    "VisionDecision",
+    "VisionPolicy",
     "budget_untrusted_text",
     "count_fence_blocks",
+    "normalise_image_mime",
 ]
 
 _LAZY: dict[str, tuple[str, str]] = {
@@ -203,6 +213,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "LAST_RESORT_PLATFORM_TOOLS": (".retrieval", "LAST_RESORT_PLATFORM_TOOLS"),
     "RetrievalBindingDecision": (".retrieval", "RetrievalBindingDecision"),
     "RetrievalPolicy": (".retrieval", "RetrievalPolicy"),
+    "RevisionPolicy": (".revision", "RevisionPolicy"),
     "SessionScratchpadPolicy": (".scratchpad", "SessionScratchpadPolicy"),
     "ShapeRecipe": (".shape", "ShapeRecipe"),
     "ShapeRecipePolicy": (".shape", "ShapeRecipePolicy"),
@@ -220,6 +231,12 @@ _LAZY: dict[str, tuple[str, str]] = {
     "UntrustedContentThresholds": (".untrusted_content", "UntrustedContentThresholds"),
     "budget_untrusted_text": (".untrusted_content", "budget_untrusted_text"),
     "count_fence_blocks": (".untrusted_content", "count_fence_blocks"),
+    "BUDGET_DEFAULT": (".verbosity", "BUDGET_DEFAULT"),
+    "VerbosityPolicy": (".verbosity", "VerbosityPolicy"),
+    "VisionBlockReason": (".vision", "VisionBlockReason"),
+    "VisionDecision": (".vision", "VisionDecision"),
+    "VisionPolicy": (".vision", "VisionPolicy"),
+    "normalise_image_mime": (".vision", "normalise_image_mime"),
 }
 
 

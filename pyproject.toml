@@ -24,13 +24,14 @@ dependencies = [
     "asyncpg (>=0.30.0,<0.40.0)",
     "cryptography (>=50.0.0,<51.0.0)",
     "fastapi (>=0.140.0,<0.150.0)",
-    "fastmcp (==4.0.0)",
+    # Exact pin: MCP surface is a contract (070). 4.1.3 carries the GHSA-7xgj-8392-5q4r /
+    # GHSA-vqqp-x5qm-5qp4 fixes; 4.0.x is no longer acceptable for pip-audit.
+    "fastmcp (==4.1.3)",
     "fpdf2 (>=2.8.8,<3.0.0)",
     "httpx (>=0.28.0,<0.29.0)",
     "json-repair (>=0.63.4,<0.64.0)",
     "jsonschema (>=4.25.0,<5.0.0)",
     "langchain-core (>=1.6.4,<2.0.0)",
-    "langfuse (>=3.0.0,<4.0.0)",
     "langgraph (>=1.2.10,<2.0.0)",
     "langgraph-checkpoint-postgres (>=2.0.0,<4.0.0)",
     "litellm (>=1.97.0,<2.0.0)",
@@ -63,7 +64,7 @@ graphiti = ["graphiti-core (>=0.11.0,<1.0.0)"]
 attachments = [
     "argon2-cffi (>=25.1.0,<26.0.0)",
     "lxml (>=6.1.3,<7.0.0)",
-    "pillow (>=12.3.0,<13.0.0)",
+    "pillow (>=13.0.0,<14.0.0)",
     "pycryptodome (>=3.23.0,<4.0.0)",
     "pymupdf (>=1.24.0,<2.0.0)",
     "pypdf (>=6.0.0,<7.0.0)",
@@ -209,6 +210,8 @@ module = [
     "pypdf",
     "pypdf.*",
     "pytesseract",
+    "deepeval",
+    "deepeval.*",
     "pytest",
 ]
 ignore_missing_imports = true

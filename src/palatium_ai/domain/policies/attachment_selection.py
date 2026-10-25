@@ -133,10 +133,7 @@ def _named(
 ) -> list[AttachmentContextBlock]:
     """Blocks whose filename is named in the user's ask (deterministic matcher)."""
     by_id = {block.attachment_id: block for block in blocks}
-    candidates = [
-        FileRefCandidate(attachment_id=block.attachment_id, filename=block.filename)
-        for block in blocks
-    ]
+    candidates = [FileRefCandidate(attachment_id=block.attachment_id, filename=block.filename) for block in blocks]
     matched = FileReferencePolicy.match_names(candidates, hint_text=ask)
     return [by_id[item.attachment_id] for item in matched if item.attachment_id in by_id]
 

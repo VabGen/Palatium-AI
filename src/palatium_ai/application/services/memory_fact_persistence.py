@@ -16,11 +16,11 @@ import re
 from typing import TYPE_CHECKING
 
 from palatium_ai.application.services.memory_extract import MemoryExtractJob
+from palatium_ai.application.services.pii_gate import classify_for_write
 from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text
 from palatium_ai.domain.agents.memory_keeper import MemoryFactCandidate
-from palatium_ai.domain.memory.pii import resolve_contains_pii
 from palatium_ai.domain.memory.types import MemoryType
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
@@ -99,7 +99,7 @@ class MemoryFactPersistenceService:
             return False
 
         memory_type = _canonical_memory_type(fact.kind)
-        pii_flag = resolve_contains_pii(text=text_value, client_flag=False)
+        pii_flag = classify_for_write(text=text_value)
         value = {
             "text": text_value,
             "kind": fact.kind,

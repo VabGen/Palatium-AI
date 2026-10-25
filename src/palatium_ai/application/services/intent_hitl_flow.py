@@ -14,6 +14,7 @@ from palatium_ai.application.orchestration.run_config import build_graph_run_con
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.hitl_service import HitlInvalidActionError
 from palatium_ai.application.services.intent_turn_helpers import (
+    FinalizedTurn,
     argument_preview,
     assistant_turn_content,
     assistant_turn_payload,
@@ -22,6 +23,7 @@ from palatium_ai.application.services.intent_turn_helpers import (
     response_preview,
     snapshot_awaits_resume,
     tenant_budget_key,
+    turn_revision,
     write_audit,
 )
 from palatium_ai.core.config.settings import get_settings
@@ -59,7 +61,7 @@ def max_quality_revisions() -> int:
 # Back-compat alias for tests that treat the limit as a module constant.
 _MAX_QUALITY_REVISIONS = 2  # default; prefer max_quality_revisions() at call sites
 
-ProcessTurn = Callable[..., Awaitable[FormatterTaskResult]]
+ProcessTurn = Callable[..., Awaitable[FinalizedTurn]]
 
 
 class IntentHitlFlow:
@@ -99,7 +101,7 @@ class IntentHitlFlow:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult:
+    ) -> FinalizedTurn:
         """Resume after user_choice: action_id-bound text, never raw option.label as intent."""
         from palatium_ai.domain.hitl.choice_resume import ChoiceResumePolicy
 
@@ -232,7 +234,7 @@ class IntentHitlFlow:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult:
+    ) -> FinalizedTurn:
         """Re-run graph with critic/human reject feedback (no new user turn)."""
         await self._session_service.assert_thread_access(
             thread_id=thread_id,
@@ -245,14 +247,16 @@ class IntentHitlFlow:
         context = dict(session.context) if session is not None and isinstance(session.context, dict) else {}
         text = await self._graph_runner.resolve_revision_user_text(thread_id=thread_id, context=context)
         if not text:
-            return FormatterTaskResult(
-                task_id=task_id,
-                agent_role="formatter",
-                status="failure",
-                confidence=0.0,
-                requires_review=False,
-                output=None,
-                error="Cannot revise: no stored user text for this thread",
+            return FinalizedTurn(
+                result=FormatterTaskResult(
+                    task_id=task_id,
+                    agent_role="formatter",
+                    status="failure",
+                    confidence=0.0,
+                    requires_review=False,
+                    output=None,
+                    error="Cannot revise: no stored user text for this thread",
+                )
             )
 
         try:
@@ -261,14 +265,16 @@ class IntentHitlFlow:
             revision_count = 0
         if revision_count >= max_quality_revisions():
             limit = max_quality_revisions()
-            return FormatterTaskResult(
-                task_id=task_id,
-                agent_role="formatter",
-                status="failure",
-                confidence=0.0,
-                requires_review=False,
-                output=None,
-                error=f"Quality revision limit reached ({limit})",
+            return FinalizedTurn(
+                result=FormatterTaskResult(
+                    task_id=task_id,
+                    agent_role="formatter",
+                    status="failure",
+                    confidence=0.0,
+                    requires_review=False,
+                    output=None,
+                    error=f"Quality revision limit reached ({limit})",
+                )
             )
 
         critic_summary = str(context.get("last_critic_summary") or "").strip()
@@ -300,12 +306,14 @@ class IntentHitlFlow:
         )
         interrupted = extract_interrupt(final_state)
         if interrupted is not None:
-            return await self.finalize_tool_interrupt(
-                interrupt_payload=interrupted,
-                thread_id=thread_id,
-                task_id=revision_task_id,
-                user_id=user_id,
-                org_id=org_id,
+            return FinalizedTurn(
+                result=await self.finalize_tool_interrupt(
+                    interrupt_payload=interrupted,
+                    thread_id=thread_id,
+                    task_id=revision_task_id,
+                    user_id=user_id,
+                    org_id=org_id,
+                )
             )
         return await self._graph_runner.finalize_formatted_state(
             final_state,
@@ -326,7 +334,7 @@ class IntentHitlFlow:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         """Resume a graph paused on mcp_tool_approval after HITL resolve.
 
         Returns ``None`` when the checkpoint has no pending interrupt (e.g. a
@@ -383,24 +391,28 @@ class IntentHitlFlow:
 
         interrupted = extract_interrupt(final_state)
         if interrupted is not None:
-            return await self.finalize_tool_interrupt(
-                interrupt_payload=interrupted,
-                thread_id=thread_id,
-                task_id=task_id,
-                user_id=user_id,
-                org_id=org_id,
+            return FinalizedTurn(
+                result=await self.finalize_tool_interrupt(
+                    interrupt_payload=interrupted,
+                    thread_id=thread_id,
+                    task_id=task_id,
+                    user_id=user_id,
+                    org_id=org_id,
+                )
             )
 
         formatted = final_state.get("formatted")
         if not isinstance(formatted, FormatterTaskResult):
-            return FormatterTaskResult(
-                task_id=task_id,
-                agent_role="formatter",
-                status="failure",
-                confidence=0.0,
-                requires_review=True,
-                output=None,
-                error="Graph resume did not produce formatted result",
+            return FinalizedTurn(
+                result=FormatterTaskResult(
+                    task_id=task_id,
+                    agent_role="formatter",
+                    status="failure",
+                    confidence=0.0,
+                    requires_review=True,
+                    output=None,
+                    error="Graph resume did not produce formatted result",
+                )
             )
 
         formatted = await self.attach_hitl_cards(
@@ -410,13 +422,17 @@ class IntentHitlFlow:
             user_id=user_id,
             org_id=org_id,
         )
+        # W7b: a resumed turn that re-answers a rejected document is a revision; a plain
+        # choice resume is a new document (RevisionPolicy). One computation feeds both the
+        # persisted payload and the caller, so live and hydrated turns never disagree.
+        revision = turn_revision(formatted, final_state)
         if self._dialog_turn_store is not None:
             await self._dialog_turn_store.append_turn(
                 thread_id=thread_id,
                 role="assistant",
                 content=assistant_turn_content(formatted),
                 task_id=task_id,
-                payload=assistant_turn_payload(formatted),
+                payload=assistant_turn_payload(formatted, revision=revision),
             )
         await self._graph_runner.refresh_scratchpad(thread_id=thread_id)
         pinned_locale = formatted.output.locale if formatted.output is not None else "und"
@@ -455,7 +471,7 @@ class IntentHitlFlow:
                 user_id=user_id,
                 org_id=org_id,
             )
-        return formatted
+        return FinalizedTurn(result=formatted, revision=revision)
 
     async def system_deny_tool_interrupt(
         self,

@@ -5,16 +5,24 @@ import { formatHitlError } from '../lib/hitl';
 import { formatDateTime, formatNumber, t } from '../i18n';
 import { TokenIcon } from '../icons/TokenIcon';
 import type {
+  DocumentRevision,
   FormatterTaskResult,
   HITLCardView,
   HitlStepUpChallenge,
 } from '../types/contentDocument';
 
+/** Result of resolving one card: who was resolved, and the turn it produced (if any). */
+export type HitlResolvedEvent = {
+  card: HITLCardView;
+  resumed?: FormatterTaskResult | null;
+  revision?: DocumentRevision | null;
+};
+
 type HitlCardsProps = {
   cards: HITLCardView[];
   userId?: string | null;
   orgId?: string | null;
-  onResolved: (card: HITLCardView, resumed?: FormatterTaskResult | null) => void;
+  onResolved: (event: HitlResolvedEvent) => void;
 };
 
 type PendingStepUp = {
@@ -74,7 +82,7 @@ function HitlCard({
   card: HITLCardView;
   userId?: string | null;
   orgId?: string | null;
-  onResolved: (card: HITLCardView, resumed?: FormatterTaskResult | null) => void;
+  onResolved: (event: HitlResolvedEvent) => void;
 }) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +130,7 @@ function HitlCard({
     setLocal(result.resolve.card);
     setStepUpPending(null);
     setStepUpAssertion('');
-    onResolved(result.resolve.card, result.resumed);
+    onResolved({ card: result.resolve.card, resumed: result.resumed, revision: result.revision });
   }
 
   async function choose(actionId: string, actionToken: string) {

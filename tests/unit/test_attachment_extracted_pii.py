@@ -104,6 +104,24 @@ async def test_pipeline_masks_pii_in_safe_text() -> None:
     assert outcome.content.contains_pii is True
     assert "bob@example.com" not in outcome.content.safe_text
     assert "[EMAIL]" in outcome.content.safe_text
+    # The blob records that its body is an edited view (W3b-2) — deriving this from
+    # the current policy at read time would misdescribe blobs written under another one.
+    assert outcome.content.text_masked is True
+
+
+@pytest.mark.asyncio()
+async def test_pipeline_records_unedited_text_as_full() -> None:
+    pipeline = AttachmentPipeline(
+        blob_store=_Blob(b"plain body"),
+        malware_scanner=_Scanner(),
+        document_parser=_Parser("plain body"),
+        pii_policy="mask",
+    )
+    outcome = await pipeline.run(_attachment(), limits=AttachmentLimits())
+    assert outcome.content is not None
+    # ``mode`` is "mask" for every upload under that policy; the flag must track the
+    # text, so a document with no PII stays "full".
+    assert outcome.content.text_masked is False
 
 
 @pytest.mark.asyncio()

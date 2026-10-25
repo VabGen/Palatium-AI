@@ -63,10 +63,7 @@ class _CardService:
             task_id=kwargs["task_id"],
             purpose="user_choice",
             title=kwargs["title"],
-            options=tuple(
-                HITLOption(action_id=a.action_id, label=a.label, kind=a.kind, action_token="tok")
-                for a in actions
-            ),
+            options=tuple(HITLOption(action_id=a.action_id, label=a.label, kind=a.kind, action_token="tok") for a in actions),
             risk_score=0.1,
             created_at=now,
             expires_at=now,

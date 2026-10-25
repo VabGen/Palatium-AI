@@ -193,6 +193,7 @@ def test_name_shaped_stem_still_resolves() -> None:
     assert resolution.attachment_id == target.attachment_id
     assert resolution.reason == "name_in_turn_text"
 
+
 def test_multi_word_title_resolves_the_named_thread_file() -> None:
     """Regression: «Кодекс_корпоративной_этики_V2_0_ред_10(1).docx» must be re-read.
 
@@ -218,6 +219,7 @@ def test_short_generic_phrase_does_not_select_a_file_by_title_run() -> None:
     resolution = FileReferencePolicy.resolve([report, other], hint_text="что по рынку")
     assert resolution.status == "ambiguous"
     assert resolution.attachment_id is None
+
 
 def test_only_a_named_reference_promotes_the_turn_to_a_storage_read() -> None:
     """``single_thread_file`` is a convenience pick, not evidence the ask is about it."""

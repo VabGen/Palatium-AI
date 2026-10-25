@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
+from palatium_ai.application.services.intent_turn_helpers import FinalizedTurn
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
-from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock
+from palatium_ai.domain.content import ContentDocument, DocumentMeta, DocumentRevision, HeadingBlock
 from palatium_ai.domain.hitl.cards import HITLCardView, HITLOption, HITLResolveRequest, HITLResolveResult
 
 
@@ -61,6 +62,46 @@ def _formatter_result() -> FormatterTaskResult:
         requires_review=False,
         output=doc,
     )
+
+
+def _revision() -> DocumentRevision:
+    return DocumentRevision(
+        revision_of="b" * 32,
+        changed_blocks=("fedcba9876543210",),
+        changed_block_indices=(0,),
+        removed_blocks=("0123456789abcdef",),
+        unchanged_blocks=0,
+    )
+
+
+@pytest.mark.asyncio()
+async def test_choice_resume_returns_the_diff_with_the_document() -> None:
+    """A choice resume is an ordinary turn: its diff must survive the envelope.
+
+    The client replaces the document from ``resumed``; without ``revision`` beside it the
+    marks would appear only on the next hydrate.
+    """
+    card = _card(purpose="user_choice")
+    hitl = AsyncMock()
+    hitl.resolve.return_value = _resolve_result(card, replayed=False)
+    hitl.get_card.return_value = card
+    turn = FinalizedTurn(result=_formatter_result(), revision=_revision())
+    intent = AsyncMock()
+    intent.process_hitl_choice = AsyncMock(return_value=turn)
+    facade = HitlRespondFacade(hitl_service=hitl, intent_service=intent)
+
+    outcome = await facade.respond(
+        "card-1",
+        HITLResolveRequest(action_id="topic", action_token="t" * 32, idempotency_key="idem-choice-rev"),
+        actor_subject="user-1",
+        actor_org_id="org-1",
+        is_admin=False,
+    )
+
+    assert outcome.resumed is turn.result
+    assert outcome.revision is turn.revision
+    assert outcome.revision is not None
+    assert outcome.revision.changed_block_indices == (0,)
 
 
 @pytest.mark.asyncio()
@@ -327,7 +368,7 @@ async def test_respond_resumes_mcp_tool_approval() -> None:
     hitl.get_card.return_value = card
     resumed = _formatter_result()
     intent = AsyncMock()
-    intent.resume_after_tool_approval = AsyncMock(return_value=resumed)
+    intent.resume_after_tool_approval = AsyncMock(return_value=FinalizedTurn(result=resumed))
     facade = HitlRespondFacade(hitl_service=hitl, intent_service=intent)
 
     body = HITLResolveRequest(action_id="approve", action_token="t" * 32, idempotency_key="idem-5678")
@@ -340,6 +381,7 @@ async def test_respond_resumes_mcp_tool_approval() -> None:
     )
 
     assert outcome.resumed is resumed
+    assert outcome.revision is None
     intent.resume_after_tool_approval.assert_awaited_once_with(
         thread_id="th-1",
         task_id="task-1",

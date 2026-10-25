@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import inspect
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import wraps
 from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
 
@@ -46,6 +46,27 @@ def add_gen_ai_attributes(
             "gen_ai.response.finish_reasons": list(reasons),
         }
     )
+
+
+def add_span_event(
+    name: str,
+    attributes: Mapping[str, str | int | float | bool] | None = None,
+) -> None:
+    """Attach an event to the current span when tracing is recording (040).
+
+    Events are the right shape for "this happened once, on this call" facts (a
+    PII image was forwarded, a fallback fired): they stay off the metric vocabulary
+    and need no new counter name. A no-op without an active recording span, so the
+    caller never has to guard the whole code path.
+    """
+    try:
+        from opentelemetry import trace
+    except ImportError:  # pragma: no cover - otel is optional in minimal installs
+        return
+    span = trace.get_current_span()
+    if span is None or not span.is_recording():  # pragma: no cover - depends on exporter
+        return
+    span.add_event(name, attributes=dict(attributes or {}))
 
 
 def traceable(*, name: str | None = None) -> Callable[[Callable[P, R]], Callable[P, R]]:

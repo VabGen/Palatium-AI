@@ -13,10 +13,12 @@ from typing import TYPE_CHECKING, Any, cast
 from palatium_ai.application.orchestration.run_config import build_graph_run_config
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.intent_turn_helpers import (
+    FinalizedTurn,
     assistant_turn_content,
     assistant_turn_payload,
     enqueue_turn_extract,
     response_preview,
+    turn_revision,
     write_audit,
 )
 from palatium_ai.application.services.memory_recall import recall_for_thread
@@ -31,6 +33,7 @@ from palatium_ai.core.observability.turn_tokens import turn_token_usage
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
 from palatium_ai.domain.attachments.context import AttachmentTurnContext
+from palatium_ai.domain.llm.models import ImagePart
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.file_reference import FileReferencePolicy
@@ -47,6 +50,7 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
     from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.application.services.vision_images import VisionImageService
     from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.domain.memory.scratchpad import SessionScratchpad
@@ -106,6 +110,7 @@ class IntentGraphRunner:
         turn_hop_budget_ms: int = 15_000,
         graph_write: GraphWritePort | None = None,
         file_reference_resolver: AttachmentReferenceResolver | None = None,
+        vision_images: VisionImageService | None = None,
     ) -> None:
         self._graph = graph
         self._session_service = session_service
@@ -124,6 +129,7 @@ class IntentGraphRunner:
         self._turn_hop_budget_ms = turn_hop_budget_ms
         self._graph_write = graph_write
         self._file_reference_resolver = file_reference_resolver
+        self._vision_images = vision_images
         self._attach_hitl_cards: AttachHitlCards | None = None
 
     def bind_attach_hitl_cards(self, attach: AttachHitlCards) -> None:
@@ -400,10 +406,13 @@ class IntentGraphRunner:
         """Parallel pre-graph I/O + scratchpad-only recall (durable deferred to continuation)."""
         resolved_trace_id = (trace_id or trace_id_var.get() or task_id).strip()
 
-        dialog_window, pad, session = await asyncio.gather(
+        dialog_window, pad, session, image_parts = await asyncio.gather(
             self.load_dialog_window(thread_id=thread_id),
             self._load_scratchpad(thread_id=thread_id),
             self._session_service.get_session(thread_id=thread_id),
+            # Admission overlaps the dialog/session I/O instead of adding a hop: the
+            # decision is one per turn, and workers then read it from state (ADR 0007).
+            self._admitted_image_parts(attachment_context),
         )
 
         if exclude_trailing_user and dialog_window.turns and dialog_window.turns[-1].role == "user":
@@ -474,6 +483,7 @@ class IntentGraphRunner:
             "response_locale": response_locale,
             "untrusted_context": untrusted_context,
             "attachment_context": attachment_context or AttachmentTurnContext(),
+            "image_parts": image_parts,
             "thread_file_named": await self._names_thread_file(
                 text=text,
                 thread_id=thread_id,
@@ -492,6 +502,27 @@ class IntentGraphRunner:
         if self._scratchpad is None:
             return None
         return await self._scratchpad.load(thread_id=thread_id)
+
+    async def _admitted_image_parts(self, attachment_context: AttachmentTurnContext | None) -> tuple[ImagePart, ...]:
+        """Images this turn may send to the vision gateway (ADR 0007), decided once.
+
+        Without a wired service the vision route is off (fail-closed). A store failure
+        degrades to "no images" with a warning instead of failing the turn: the fenced
+        text is still a valid answer path, and silently dropping the picture is exactly
+        what the denial vocabulary exists to make visible (040).
+        """
+        if self._vision_images is None or attachment_context is None or not attachment_context.blocks:
+            return ()
+        try:
+            outcome = await self._vision_images.parts_for_blocks(attachment_context.blocks)
+        except Exception as exc:  # noqa: BLE001  # degradation: store hiccup must not kill a text turn (035)
+            logger.warning(
+                "vision.turn_images_unavailable",
+                error=str(exc),
+                block_count=len(attachment_context.blocks),
+            )
+            return ()
+        return outcome.parts
 
     async def _names_thread_file(
         self,
@@ -605,7 +636,7 @@ class IntentGraphRunner:
         user_id: str | None,
         org_id: str | None,
         operation: str,
-    ) -> FormatterTaskResult:
+    ) -> FinalizedTurn:
         """Attach HITL, persist assistant turn, update session after a graph run."""
         if self._attach_hitl_cards is None:
             msg = "IntentGraphRunner.bind_attach_hitl_cards must be called before finalize"
@@ -672,13 +703,17 @@ class IntentGraphRunner:
                 turn_id=task_id,
                 **turn_reasoning_fields(final_state, formatted, selected_strategy=selected_strategy),
             )
+            # W7b: diff is computed here, where the previous answer is already in hand
+            # (dialog window), not in the Formatter — the agent must not grow a store
+            # dependency (000). One computation feeds the payload and the caller.
+            revision = turn_revision(formatted, final_state)
             if self._dialog_turn_store is not None:
                 await self._dialog_turn_store.append_turn(
                     thread_id=thread_id,
                     role="assistant",
                     content=assistant_turn_content(formatted),
                     task_id=task_id,
-                    payload=assistant_turn_payload(formatted),
+                    payload=assistant_turn_payload(formatted, revision=revision),
                 )
             await self.refresh_scratchpad(thread_id=thread_id)
             pinned_locale = (
@@ -722,7 +757,7 @@ class IntentGraphRunner:
                     user_id=user_id,
                     org_id=org_id,
                 )
-            return formatted
+            return FinalizedTurn(result=formatted, revision=revision)
 
         failure_result = FormatterTaskResult(
             task_id=task_id,
@@ -745,4 +780,4 @@ class IntentGraphRunner:
             },
             status="needs_review",
         )
-        return failure_result
+        return FinalizedTurn(result=failure_result)

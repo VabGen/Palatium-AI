@@ -34,7 +34,11 @@ export function ThinkingIndicator({ phase }: { phase: PendingPhase }) {
          русскую фазу даёт соседний `role="status"`.
       */}
       <ThinkingOrb state={phase.state} size={64} theme={theme} aria-hidden="true" />
-      <span className="sr-only" role="status">
+      {/*
+        `aria-live` задан явно: лента сообщений — `aria-live="off"`, а смена
+        фазы обязана звучать. Явное значение на элементе сильнее наследуемого.
+      */}
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {t(phase.label)}
       </span>
     </span>

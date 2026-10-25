@@ -37,6 +37,9 @@ class _LayoutShiftSpy:
     def record_sse_ttft(self, *_args: object, **_kwargs: object) -> None:
         return None
 
+    def record_sse_first_block(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
     def record_node_execution(self, *_args: object, **_kwargs: object) -> None:
         return None
 

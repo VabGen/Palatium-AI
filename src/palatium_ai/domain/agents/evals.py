@@ -4,12 +4,48 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
 # CI baseline comparison tolerance (075); not workflow magic number.
 EVAL_BASELINE_TOLERANCE = 0.05
+
+#: Judge axes, declared once (010). Four independent measurements instead of one
+#: opaque score: a single number cannot tell "right but incomplete" from "complete but
+#: ungrounded", which are different fixes (prompt, retrieval, model).
+JudgeDimension = Literal["correctness", "completeness", "groundedness", "tone"]
+
+JUDGE_DIMENSIONS: tuple[JudgeDimension, ...] = ("correctness", "completeness", "groundedness", "tone")
+
+
+class DimensionScore(BaseModel, frozen=True):
+    """One judge verdict on one axis."""
+
+    dimension: JudgeDimension
+    score: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(default="", max_length=2000)
+
+
+class DecomposedVerdict(BaseModel, frozen=True):
+    """Combined verdict of the four independent judge calls (040, W4).
+
+    ``requires_review`` is not "the score is low" — it is "the measurement cannot be
+    trusted to pass": a dimension is missing (a judge call failed) or a 040 floor is
+    violated. A low ``overall`` with every floor met is a quality signal, not a gate.
+    """
+
+    scores: tuple[DimensionScore, ...] = ()
+    overall: float = Field(ge=0.0, le=1.0)
+    passed: bool
+    requires_review: bool
+    #: Axes the judge never scored — never silently treated as fine.
+    missing: tuple[JudgeDimension, ...] = ()
+    #: Axes below their 040 floor (correctness < 0.6, groundedness < 0.8).
+    below_floor: tuple[JudgeDimension, ...] = ()
+    #: Spread between the best and worst axis exceeded the divergence limit: a signal
+    #: about the prompt/model, NOT an automatic review (W4).
+    divergence: bool = False
 
 
 class GradeResult(BaseModel, frozen=True):

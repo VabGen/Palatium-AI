@@ -12,6 +12,7 @@ from palatium_ai.domain.agents.execution import ExecutionStrategy
 from palatium_ai.domain.agents.intent import IntentTaskResult, TaskKind
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult, WorkerRoute
 from palatium_ai.domain.attachments.context import AttachmentContextBlock, AttachmentTurnContext
+from palatium_ai.domain.llm.models import ImagePart
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
@@ -144,6 +145,15 @@ def attachment_blocks(state: AgentGraphState) -> tuple[AttachmentContextBlock, .
     """Blocks that made it into this turn; empty when nothing was attached."""
     ctx = attachment_context(state)
     return ctx.blocks if ctx is not None else ()
+
+
+def turn_image_parts(state: AgentGraphState) -> tuple[ImagePart, ...]:
+    """Images admitted for this turn; empty when none (or a legacy checkpoint).
+
+    A single read for every worker node: the admission decision is made once at graph
+    entry, so the researcher and the analyst can never see a different set (ADR 0007).
+    """
+    return tuple(state.get("image_parts") or ())
 
 
 def has_attachment_context(state: AgentGraphState) -> bool:

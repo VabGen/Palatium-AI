@@ -10,3 +10,14 @@
 #
 # Example (do not uncomment without triage):
 # GHSA-0000-0000-0000  # transitive: <pkg> via <parent>; no fix upstream; PAL-1234; review 2026-12-01
+
+# ── filelock 3.32.7 (fix: 4.2.1) — approved by owner 2026-10-25 ──────────────────
+# Blocked upstream: litellm (latest 1.106.3) declares `filelock<4.0`, so 4.x cannot be
+# installed without overriding a tested range of the LLM gateway (025/055). Both fixed
+# classes need a hostile *local* account able to create files beside the lock database
+# (Windows `C:\Windows\Temp`, `C:\Users\Public`, shared POSIX dirs); the platform never
+# instantiates `ReadWriteLock`/`AsyncReadWriteLock`/`SoftFileLock` and filelock is not
+# imported on any request path. Unblock condition: litellm relaxes to `filelock>=4`.
+CVE-2026-112907  # filelock: Windows soft-lock oplock DoS; unused API; blocked by litellm pin; owner-approved 2026-10-25; review 2026-12-01
+CVE-2026-112913  # filelock: Windows SQLite -wal/-shm side-file hijack; ReadWriteLock unused; blocked by litellm pin; owner-approved 2026-10-25; review 2026-12-01
+CVE-2026-112940  # filelock: POSIX /proc/self/fd SQLite symlink reopen; ReadWriteLock unused; blocked by litellm pin; owner-approved 2026-10-25; review 2026-12-01

@@ -8,7 +8,9 @@ from typing import Annotated, Literal, get_args
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
+from palatium_ai.domain.content.citations.models import CitationRef
 from palatium_ai.domain.content.code_text import normalize_code_entities
 
 IconToken = Literal[
@@ -58,6 +60,11 @@ DocumentKind = Literal[
 ]
 # Register of the prose — how ceremonial the user-facing text should read.
 FormalityLevel = Literal["casual", "neutral", "formal", "official"]
+# How much text the answer is allowed to spend. Server-derived, never a model claim:
+# the formatter fills the field after validation (``AlignFormatterMeta``), so a document
+# cannot declare itself "minimal" and then write five sections. Defaults keep every
+# persisted/legacy document valid without a ``schema_version`` bump.
+VerbosityBudget = Literal["minimal", "standard", "detailed"]
 # Opaque widget id for UI registry — not a product allow-list.
 _WIDGET_KIND_PATTERN = r"^[a-z][a-z0-9_]{0,62}$"
 
@@ -288,6 +295,17 @@ class DocumentMeta(BaseModel):
     # Semantic hints — defaults keep every existing (legacy) document valid (Phase 1).
     kind: DocumentKind = "analysis"
     formality: FormalityLevel = "neutral"
+    # Length axis of the turn (W7). ``SkipJsonSchema`` for the same reason as
+    # ``citations``: this value is the server's decision from the transformation axis,
+    # not a field the model may pick — under a strict provider schema a listed field
+    # becomes *required*, and the model would have to invent a budget it does not own.
+    verbosity_budget: Annotated[VerbosityBudget, SkipJsonSchema()] = "standard"
+    # Provider citation anchors (W3b). ``SkipJsonSchema`` is load-bearing: the whole
+    # ``ContentDocument`` becomes the provider's strict output schema, and a field
+    # listed there is *required* — the model would have to invent offsets it does not
+    # have. Anchors come from provider annotations, so the agent attaches them after
+    # validation; the field is part of the wire contract to the client, not to the LLM.
+    citations: Annotated[tuple[CitationRef, ...], SkipJsonSchema()] = ()
 
 
 class ContentDocument(BaseModel):

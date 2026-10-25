@@ -58,6 +58,13 @@ alwaysApply: false
 | `palatium_attachment_parse_total` | `extraction_source`, `media_kind` |
 | `palatium_llm_ttft_seconds` | — (first LLM stream token) |
 | `palatium_sse_ttft_seconds` | — (first user-visible `answer_delta`) |
+| `palatium_sse_first_block_seconds` | — (first typed `block_delta`; отдельно от TTFT, W1) |
+| `palatium_sse_layout_shift_total` | `contract` (любой рост — алерт) |
+| `palatium_formatter_schema_total` | `path` (`schema_first`/`legacy_markdown`), `outcome` (`valid`/`invalid`/`empty_blocks`/`unsupported`/`fallback`) |
+| `palatium_content_lint_findings_total` | `rule`, `severity` (семантические дефекты валидного документа) |
+| `palatium_citation_resolution_total` | `anchor` (`char_location`/`page_location`/`content_block_location`/`url_only`), `outcome` (`resolved`/`out_of_range`/`unanchored`; знаменатель — все эмитированные) |
+| `palatium_judge_score` | `dimension` (`correctness`/`completeness`/`groundedness`/`tone`) — гистограмма (W4) |
+| `palatium_judge_failed_total` | `dimension` — вызов судьи без оценки; ось считается неизмеренной, а не «нормальной» |
 | `palatium_answer_writer_total` | `owner`, `reason` (single-writer axis) |
 
 ## Audit log — hash-chained
@@ -88,6 +95,16 @@ alwaysApply: false
 - Критерий «нужен ли Judge вообще» — политика `CriticPolicy`
   (см. 055): low-risk стратегии (`ack_only`, `format_only`) проходят без судьи.
   Все остальные ветки — Judge обязателен, «забыли подключить» — ошибка ревью.
+- **Декомпозиция (W4):** судья меряет четыре оси раздельно —
+  `correctness`, `completeness`, `groundedness`, `tone` (закрытый
+  `JudgeDimension`, один вызов на ось, своя рубрика). Гейт — только две:
+  `correctness ≥ 0.6` (= accuracy 6/10) и `groundedness ≥ 0.8` (= safety 8/10),
+  политика — `domain/policies/judge.py`. `completeness`/`tone` измеряются, но не
+  блокируют: порог для них был бы выдуманным.
+- **Неизмеренная ось ≠ pass.** Ось без оценки (сбой вызова) → `requires_review`;
+  расхождение осей > 0.3 — сигнал о промпте/модели, не автопрогон в ревью.
+- **PII:** ответ с `contains_pii` нельзя отправлять внешнему судье (020/060) —
+  только внутренняя модель, иначе `requires_review` без оценки.
 
 ## Правило «никогда потом»
 

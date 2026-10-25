@@ -53,6 +53,7 @@ from palatium_ai.application.services.response_cache_service import ResponseCach
 from palatium_ai.application.services.retention import retention_windows_from_settings
 from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
 from palatium_ai.application.services.session_service import SessionService
+from palatium_ai.application.services.vision_images import VisionImageService
 from palatium_ai.core.logging import logger
 from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.attachments.policies import AttachmentLimits
@@ -95,6 +96,7 @@ if TYPE_CHECKING:
     from palatium_ai.domain.ports.document_parser import DocumentParserPort
     from palatium_ai.domain.ports.mcp import McpToolCallRecorderPort
     from palatium_ai.domain.ports.scanner import MalwareScannerPort
+    from palatium_ai.domain.ports.vision import VisionImageSourcePort
     from palatium_ai.infrastructure.mcp.registry import MCPRegistry
 
 
@@ -306,6 +308,8 @@ def build_intent_service(
     graph_write: GraphWritePort | None = None,
     attachment_service: AttachmentService | None = None,
     file_reference_resolver: AttachmentReferenceResolver | None = None,
+    vision_image_source: VisionImageSourcePort | None = None,
+    vision_images: VisionImageService | None = None,
 ) -> tuple[
     IntentService,
     MemoryExtractService | None,
@@ -320,7 +324,7 @@ def build_intent_service(
     chat-turn memory-mutation gate needs the same instances: a second set would own
     a second pending-card store and the approved card could not find its payload.
     """
-    llm_factory = LLMClientFactory(settings)
+    llm_factory = LLMClientFactory(settings, vision_image_source=vision_image_source)
     _assert_mcp_timeout_budget(settings)
 
     resolved_dialog_store = dialog_turn_store
@@ -559,6 +563,7 @@ def build_intent_service(
         response_cache=response_cache,
         graph_write=graph_write,
         file_reference_resolver=file_reference_resolver,
+        vision_images=vision_images,
         formatter_mode=settings.formatter.formatter_mode,
         formatter_rollout_pct=settings.formatter.formatter_rollout_pct,
     )

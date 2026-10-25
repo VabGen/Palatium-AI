@@ -29,6 +29,7 @@ from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutp
 from palatium_ai.domain.agents.supervisor import SupervisorInput, SupervisorOutput, SupervisorTaskResult
 from palatium_ai.domain.agents.text_ingestor import TextIngestorInput, TextIngestorOutput, TextIngestorTaskResult
 from palatium_ai.domain.content import ContentDocument
+from palatium_ai.domain.llm.models import ImagePart
 from palatium_ai.domain.memory.contextualizer import ContextualizerInput, ContextualizerOutput, ContextualizerTaskResult
 
 if TYPE_CHECKING:
@@ -414,12 +415,18 @@ def researcher_to_agent_input(
     thread_id: str,
     user_id: str = "",
     org_id: str = "",
+    image_parts: tuple[ImagePart, ...] = (),
 ) -> AgentInput:
-    """Build AgentInput for Researcher from graph node payload."""
+    """Build AgentInput for Researcher from graph node payload.
+
+    ``image_parts`` come from the turn's admission decision (ADR 0007), never from the
+    node: a worker is not allowed to decide that an upload may reach the model.
+    """
     return AgentInput(
         task_id=task_id_to_uuid(task_input.task_id),
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
+        image_parts=image_parts,
         context={
             "context_packet_json": task_input.context_packet.model_dump_json(),
             "prior_context": task_input.prior_context or "",
@@ -582,12 +589,14 @@ def analyst_to_agent_input(
     *,
     trace_id: str,
     thread_id: str,
+    image_parts: tuple[ImagePart, ...] = (),
 ) -> AgentInput:
-    """Build AgentInput for Analyst from graph node payload."""
+    """Build AgentInput for Analyst from graph node payload (same admission as Researcher)."""
     return AgentInput(
         task_id=task_id_to_uuid(task_input.task_id),
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
+        image_parts=image_parts,
         context={
             "context_packet_json": task_input.context_packet.model_dump_json(),
             "revision_feedback": task_input.revision_feedback or "",

@@ -216,6 +216,91 @@ async def test_legacy_mode_never_requests_json_schema(
     assert all(call["response_format"] == "text" for call in harness.calls)
 
 
+@pytest.mark.asyncio()
+async def test_schema_metric_counts_a_valid_document_under_schema_first() -> None:
+    harness = _StubHarness([LLMCompletion(content=_document_json(), model="test")])
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first")  # type: ignore[arg-type]
+    before = _schema_count("schema_first", "valid")
+
+    await agent.run(_agent_input())
+
+    assert _schema_count("schema_first", "valid") == before + 1
+
+
+@pytest.mark.asyncio()
+async def test_schema_metric_separates_invalid_json_from_a_content_defect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``invalid`` is a prompt/model signal; ``empty_blocks`` is a content defect."""
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
+        lambda _raw, _task: _fixed_document(),
+    )
+    empty = ContentDocument(locale="en-US", blocks=(), meta=DocumentMeta(confidence=0.95))
+    harness = _StubHarness(
+        [
+            LLMCompletion(content="{not-a-document", model="test"),
+            LLMCompletion(content="Done. No errors.", model="test"),
+            LLMCompletion(content=empty.model_dump_json(), model="test"),
+            LLMCompletion(content="Done. No errors.", model="test"),
+        ]
+    )
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first")  # type: ignore[arg-type]
+    invalid_before = _schema_count("schema_first", "invalid")
+    empty_before = _schema_count("schema_first", "empty_blocks")
+
+    await agent.run(_agent_input())
+    await agent.run(_agent_input())
+
+    assert _schema_count("schema_first", "invalid") == invalid_before + 1
+    assert _schema_count("schema_first", "empty_blocks") == empty_before + 1
+
+
+@pytest.mark.asyncio()
+async def test_schema_metric_marks_provider_refusal_as_having_no_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
+        lambda _raw, _task: _fixed_document(),
+    )
+    harness = _StubHarness(
+        [
+            StructuredOutputUnsupportedError("no json_schema"),
+            LLMCompletion(content="Done. No errors.", model="test"),
+        ]
+    )
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first")  # type: ignore[arg-type]
+    before = _schema_count("schema_first", "unsupported")
+
+    await agent.run(_agent_input())
+
+    assert _schema_count("schema_first", "unsupported") == before + 1
+
+
+@pytest.mark.asyncio()
+async def test_schema_metric_records_the_legacy_contract_separately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
+        lambda _raw, _task: _fixed_document(),
+    )
+    harness = _StubHarness([LLMCompletion(content="Done. No errors.", model="test")])
+    agent = FormatterAgent(harness, FORMATTER_CONFIG)  # type: ignore[arg-type]
+    before = _schema_count("legacy_markdown", "valid")
+
+    await agent.run(_agent_input())
+
+    assert _schema_count("legacy_markdown", "valid") == before + 1
+
+
+def _schema_count(path: str, outcome: str) -> int:
+    from palatium_ai.core.observability.metrics import agent_metrics
+
+    return agent_metrics.formatter_schema_count(path, outcome)
+
+
 def test_document_meta_kind_and_formality_defaults_are_non_breaking() -> None:
     meta = DocumentMeta(confidence=0.8)
     assert meta.kind == "analysis"
@@ -356,3 +441,67 @@ async def test_schema_first_paints_nothing_when_the_provider_refuses_streaming(
 
     assert isinstance(output.output, ContentDocument)
     assert [call["response_format"] for call in harness.calls] == ["json_schema", "text"]
+
+
+@pytest.mark.asyncio()
+async def test_provider_citations_are_counted_and_never_rewrite_the_answer() -> None:
+    """W3a: a citation is resolved against the text it annotates, or counted as dropped.
+
+    The answer itself is untouched — the citation anchor is telemetry until W3b can
+    show a source viewer, and a wrong anchor must not become a confident chip.
+    """
+    from palatium_ai.core.observability.metrics import agent_metrics
+    from palatium_ai.domain.content.citations import CitationRef
+
+    raw = _document_json(kind="report")
+    resolved = CitationRef(source_ref="policy.pdf", answer_range=(0, 5), anchor="url_only")
+    past_the_end = CitationRef(source_ref="policy.pdf", answer_range=(0, len(raw) + 10), anchor="url_only")
+    harness = _StubHarness(
+        [LLMCompletion(content=raw, model="test", citations=(resolved, resolved, past_the_end))],
+    )
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+    before_resolved = agent_metrics.citation_resolution_count("url_only", "resolved")
+    before_range = agent_metrics.citation_resolution_count("url_only", "out_of_range")
+
+    output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    assert output.output.blocks == ContentDocument.model_validate_json(raw).blocks
+    # Duplicates still count as emitted (denominator honesty), resolution does not.
+    assert agent_metrics.citation_resolution_count("url_only", "resolved") == before_resolved + 2
+    assert agent_metrics.citation_resolution_count("url_only", "out_of_range") == before_range + 1
+    # W3b: the resolved anchor reaches the client, the dropped one never does.
+    assert output.output.meta.citations == (resolved,)
+
+
+def test_citation_anchors_are_not_part_of_the_provider_schema() -> None:
+    """W3b: the model must never be *asked* for anchors it cannot know.
+
+    ``ContentDocument`` is the provider's strict output schema, where every property
+    is required. Listing ``citations`` there would make the model invent offsets;
+    ``SkipJsonSchema`` keeps the field on the wire (server → client) only.
+    """
+    from palatium_ai.domain.content import ContentDocument
+    from palatium_ai.domain.llm.structured_output import strict_json_schema
+
+    meta_schema = strict_json_schema(ContentDocument)["$defs"]["DocumentMeta"]
+
+    assert "citations" not in meta_schema["properties"]
+    assert "citations" not in meta_schema["required"]
+
+
+def test_citation_anchors_are_serialised_for_the_client() -> None:
+    """The other half of the same contract: absent from the LLM schema, present in JSON."""
+    from palatium_ai.domain.content import ContentDocument
+    from palatium_ai.domain.content.citations import CitationRef
+
+    citation = CitationRef(source_ref="policy.pdf", quote="Оплата в течение 5 дней", page=2, anchor="page_location")
+    document = ContentDocument.model_validate_json(_document_json())
+    with_citation = document.model_copy(update={"meta": document.meta.model_copy(update={"citations": (citation,)})})
+
+    payload = with_citation.model_dump(mode="json")
+
+    assert payload["meta"]["citations"][0]["source_ref"] == "policy.pdf"
+    assert payload["meta"]["citations"][0]["page"] == 2
+    # An older/legacy payload without the field stays valid.
+    assert document.meta.citations == ()

@@ -18,10 +18,14 @@
 | **[adr/0003-postgres-checkpointer-session-ttl.md](adr/0003-postgres-checkpointer-session-ttl.md)** | ADR: short-term = Postgres checkpointer + retention TTL |
 | **[adr/0004-hybrid-memory-not-neo4j-only.md](adr/0004-hybrid-memory-not-neo4j-only.md)** | ADR: Postgres medium + bi-temporal Neo4j; reject Neo4j-only Cortex |
 | **[adr/0005-content-document-response-shapes.md](adr/0005-content-document-response-shapes.md)** | ADR: единый `ContentDocument` + ось `response_shape`; reject per-scenario схем |
+| **[adr/0006-canvas-server-authoritative-documents.md](adr/0006-canvas-server-authoritative-documents.md)** | ADR: Canvas = server-authoritative `ContentDocument`; reject Yjs CRDT |
+| **[adr/0007-vision-image-parts.md](adr/0007-vision-image-parts.md)** | ADR: vision как `ImagePart` сообщения; OCR остаётся; алиас `vision-tier`, без fallback |
+| **[../.cursor/plans/canvas-vision-phase-7.md](../.cursor/plans/canvas-vision-phase-7.md)** | План Phase 7: Canvas закрыт решением, vision заблокирован открытыми вопросами (2026-10-25) |
 | **[../.cursor/plans/response-shapes.md](../.cursor/plans/response-shapes.md)** | План: ось формы ответа, `ShapeRecipePolicy`, волны 1–4 (актуально на 2026-10-19) |
 | **[grounding-mvp-deferrals.md](grounding-mvp-deferrals.md)** | Adaptive Grounding MVP: осознанные deferrals + критерий возврата + staging A/B gate (2026-10-14) |
-| **[formatter-schema-first.md](formatter-schema-first.md)** | Formatter: schema_first-контракт, two-key canary `FORMATTER_ROLLOUT_PCT`, метрики A/B и откат (2026-10-16) |
+| **[formatter-schema-first.md](formatter-schema-first.md)** | Formatter: schema_first-контракт, two-key canary `FORMATTER_ROLLOUT_PCT`, метрики A/B, откат, backtest правил lint, few-shot по форме, бюджет длины и серверный diff ревизии (2026-10-16, W5–W7 — 2026-10-24) |
 | **[internal-vocabulary.md](internal-vocabulary.md)** | Служебные имена полей (`attachment_context`, `prior_context`, …) не попадают в ответ и HITL-карточку: две линии защиты, точки применения, как добавить термин (2026-10-16) |
+| **[source-citation-highlight.md](source-citation-highlight.md)** | W3b-2: подсветка места в тексте источника — `CitationRef.source_id`, координатное пространство `safe_text`, quote-first локатор, `POST …/citation-locate`, UI `SourcePanel` (реализовано 2026-10-24) |
 | **[../.cursor/plans/file-reread.md](../.cursor/plans/file-reread.md)** | План: ось `file_reference=thread_file` + детерминированный резолв файла из треда, rollout `ATTACHMENTS_FILE_REREAD_PCT` (2026-10-16) |
 | **[audit/latency-audit.md](audit/latency-audit.md)** | Аудит скорости ответа: карта `/intents/process`, узкие места, план P0–P2 (актуально на 2026-10-01) |
 | **[audit/m5-verification.md](audit/m5-verification.md)** | Верификация M5 против Graphiti: таблица гарантий bi-temporal, находки F1–F6 с классификацией (2026-10-20, live-аддендум 2026-10-21) |

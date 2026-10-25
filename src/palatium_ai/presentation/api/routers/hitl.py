@@ -20,6 +20,7 @@ from palatium_ai.application.services.hitl_respond_facade import (
 )
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
+from palatium_ai.domain.content import DocumentRevision
 from palatium_ai.domain.hitl.cards import HITLCardView, HITLResolveRequest, HITLResolveResult
 from palatium_ai.domain.hitl.step_up import HitlStepUpChallenge
 from palatium_ai.presentation.resources import get_app_resources
@@ -37,6 +38,7 @@ class HitlRespondResponse(BaseModel):
 
     resolve: HITLResolveResult
     resumed: FormatterTaskResult | None = None
+    revision: DocumentRevision | None = None
 
 
 class EscalatedHitlQueue(BaseModel):
@@ -88,7 +90,7 @@ def _map_hitl_error(exc: Exception) -> HTTPException:
 
 
 def _to_response(outcome: HitlRespondOutcome) -> HitlRespondResponse:
-    return HitlRespondResponse(resolve=outcome.resolve, resumed=outcome.resumed)
+    return HitlRespondResponse(resolve=outcome.resolve, resumed=outcome.resumed, revision=outcome.revision)
 
 
 @router.get("/queue/escalated", response_model=EscalatedHitlQueue)

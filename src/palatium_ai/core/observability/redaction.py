@@ -6,7 +6,8 @@ Contract:
   - Pure function, idempotent, no I/O.
   - Applied at every observability boundary: logger, metrics helpers, OTel.
   - Never applied to user-facing responses (user's own data).
-  - Patterns include BY-specific detectors (УНП, IBAN BY).
+  - PII patterns come from ``domain/pii`` (one registry); this module only adds the
+    log-only classes (tokens, JWT, filesystem paths) and the truncation policy.
 """
 
 from __future__ import annotations
@@ -16,15 +17,12 @@ import re
 
 from typing import Final
 
+from palatium_ai.core.security.pii import scrub_pii
+
 DEFAULT_MAX_LEN: Final = 256
 
+#: Log-only classes. Tokens/paths are not PII, and secrets stay in the scanner (020).
 _PATTERNS: Final[list[tuple[re.Pattern[str], str]]] = [
-    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "<email>"),
-    # BY-specific before generic phone (9 digits would otherwise match phone).
-    (re.compile(r"\b\d{9}\b"), "<unp>"),  # BY УНП
-    (re.compile(r"\bBY\d{2}[A-Z0-9]{4,28}\b"), "<iban_by>"),  # BY IBAN
-    (re.compile(r"(?<!\w)\+?\d[\d\s\-()]{7,}\d(?!\w)"), "<phone>"),
-    (re.compile(r"\b(?:\d[ -]*?){13,16}\b"), "<cc>"),
     (
         re.compile(r"\b(sk|pk|ghp|gho|AKIA|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b"),
         "<token>",
@@ -41,7 +39,7 @@ def redact(text: str | None, *, max_len: int = DEFAULT_MAX_LEN) -> str | None:
     """Truncate then mask PII/token-shaped substrings. Idempotent on already-masked text."""
     if not text:
         return text
-    out = text[:max_len]
+    out = scrub_pii(text[:max_len], profile="observability", style="angle")
     for pat, repl in _PATTERNS:
         out = pat.sub(repl, out)
     return out

@@ -12,8 +12,9 @@ model. That keeps the adapter on the same trust boundary as the rest of the pipe
   "admitted with no text" (fail closed).
 
 The call goes through LiteLLM directly — like the embedding adapter — because the
-multimodal payload does not fit the agent-facing ``ChatMessage`` (whose ``content``
-is a plain string) and no agent is involved in parsing.
+parser runs *before* any agent exists and has no ``Harness`` to call. (Chat images do
+fit the message contract since ADR 0007; this path is deliberately separate because
+its output is extracted text that must still pass the injection gates.)
 """
 
 from __future__ import annotations

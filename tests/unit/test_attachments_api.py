@@ -22,7 +22,9 @@ from fastapi.testclient import TestClient
 from palatium_ai.application.services.attachment_service import AttachmentSweepResult, AttachmentUploadTicket
 from palatium_ai.core.config.security import SecurityConfig
 from palatium_ai.domain.agents.intent import IntentClassifierOutput, IntentTaskResult
+from palatium_ai.domain.attachments.citation_lookup import AttachmentCitationLookup
 from palatium_ai.domain.attachments.errors import (
+    AttachmentContentMissingError,
     AttachmentIntakeRejectedError,
     AttachmentModeMismatchError,
     AttachmentNotFoundError,
@@ -93,6 +95,7 @@ class _FakeAttachmentService:
         self.connector_list_calls: list[dict[str, object]] = []
         self.connector_import_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
+        self.locate_calls: list[dict[str, object]] = []
         self.sweep_calls: list[str] = []
         self.sweep_result = AttachmentSweepResult()
         #: Mirrors the service property the router reads to cap the request body.
@@ -191,6 +194,22 @@ class _FakeAttachmentService:
     async def delete(self, **kwargs: object) -> None:
         self.delete_calls.append(kwargs)
         self._raise_if_needed()
+
+    async def locate_citation(self, **kwargs: object) -> AttachmentCitationLookup:
+        self.locate_calls.append(kwargs)
+        self._raise_if_needed()
+        return AttachmentCitationLookup(
+            attachment_id=_ATTACHMENT_ID,
+            filename="contract.pdf",
+            outcome="quote_match",
+            start=1188,
+            end=1225,
+            window_start=900,
+            window_end=1600,
+            text="…the delivery terms are…",
+            total_chars=24110,
+            text_state="full",
+        )
 
 
 def _app(
@@ -857,3 +876,77 @@ def test_dialog_turn_with_attachment_ids_but_no_thread_is_422(monkeypatch: pytes
 
     assert response.status_code == 422
     assert "thread_id" in response.json()["detail"]
+
+
+def test_citation_locate_forwards_the_authenticated_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A citation is not a capability to read someone else's file (020, 060)."""
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        f"/attachments/{_ATTACHMENT_ID}/citation-locate",
+        json={"quote": "delivery terms", "source_range": [1200, 1237]},
+    )
+
+    assert response.status_code == 200
+    assert service.locate_calls == [
+        {
+            "attachment_id": _ATTACHMENT_ID,
+            "user_id": "user-1",
+            "quote": "delivery terms",
+            "declared_range": (1200, 1237),
+            "anchor": "char_location",
+        },
+    ]
+    body = response.json()
+    assert body["outcome"] == "quote_match"
+    assert (body["start"], body["end"]) == (1188, 1225)
+    # The window is absolute, so the client never recomputes offsets by itself.
+    assert (body["window_start"], body["window_end"], body["total_chars"]) == (900, 1600, 24110)
+
+
+def test_citation_locate_is_not_cacheable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fragment is confidential document text; a shared cache must not keep it."""
+    client, _ = _client(monkeypatch)
+
+    response = client.post(f"/attachments/{_ATTACHMENT_ID}/citation-locate", json={"quote": "delivery terms"})
+
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_citation_locate_hides_whether_a_foreign_attachment_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _ = _client(monkeypatch, error=AttachmentNotFoundError(_ATTACHMENT_ID))
+
+    response = client.post(f"/attachments/{_ATTACHMENT_ID}/citation-locate", json={"quote": "x"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "attachment not found"
+
+
+def test_citation_locate_without_extracted_text_is_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _ = _client(monkeypatch, error=AttachmentContentMissingError(_ATTACHMENT_ID))
+
+    response = client.post(f"/attachments/{_ATTACHMENT_ID}/citation-locate", json={"quote": "x"})
+
+    assert response.status_code == 409
+
+
+def test_citation_locate_with_empty_quote_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a quote nothing can be verified, so the request never reaches the service."""
+    client, service = _client(monkeypatch)
+
+    response = client.post(f"/attachments/{_ATTACHMENT_ID}/citation-locate", json={"quote": ""})
+
+    assert response.status_code == 422
+    assert service.locate_calls == []
+
+
+def test_citation_locate_with_backwards_range_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        f"/attachments/{_ATTACHMENT_ID}/citation-locate",
+        json={"quote": "x", "source_range": [1200, 1200]},
+    )
+
+    assert response.status_code == 422
+    assert service.locate_calls == []

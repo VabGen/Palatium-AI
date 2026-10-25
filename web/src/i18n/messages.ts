@@ -55,6 +55,32 @@ export const ru = {
     'Не удалось оформить ответ. Попробуйте переформулировать запрос или повторить.',
   'msg.devGap': 'DEV: документ похож на эксклюзивное меню, но HITL-карточки не созданы.',
 
+  // --- Канал озвучивания стрима (084, W2) ---
+  // Отдельный `aria-live` канал: лента сообщений объявлений не даёт, поэтому
+  // текст сюда приходит по одному закрытому блоку за раз.
+  'a11y.transcript': 'Диалог',
+  'a11y.docTitle': 'Ответ: {title}',
+  'a11y.heading': 'Заголовок: {text}',
+  'a11y.list': 'Список, пунктов: {count}. {items}',
+  'a11y.listMore': 'и ещё {count}',
+  'a11y.steps': 'Шаги, {count}: {items}',
+  'a11y.kv': 'Поля: {items}',
+  'a11y.table': 'Таблица: столбцов {cols}, строк {rows}. {columns}',
+  'a11y.code': 'Блок кода, язык {language}, строк: {lines}',
+  'a11y.codeNoLanguage': 'Блок кода, строк: {lines}',
+  'a11y.formula': 'Формула: {latex}',
+  'a11y.callout': '{tone}: {text}',
+  'a11y.chart': 'Диаграмма, рядов: {series}',
+  'a11y.widget': 'Виджет: {title}. Открывается отдельной кнопкой.',
+  'a11y.widgetUntitled': 'Виджет. Открывается отдельной кнопкой.',
+  'a11y.tone.info': 'Справка',
+  'a11y.tone.success': 'Успех',
+  'a11y.tone.warning': 'Предупреждение',
+  'a11y.tone.danger': 'Ошибка',
+  'a11y.ready': 'Ответ готов.',
+  'a11y.readyReview': 'Ответ готов. Требуется ваша проверка.',
+  'a11y.error': 'Ошибка: {message}',
+
   // --- Действия над ответом ---
   'action.like': 'Ответ полезен',
   'action.dislike': 'Ответ не полезен',
@@ -131,6 +157,37 @@ export const ru = {
   'attach.connectorUnavailable': 'недоступен',
   'attach.sources': 'Источники',
   'attach.refused': 'файл отклонён',
+
+  // --- Цитаты провайдера (`components/CitationSources.tsx`, W3b) ---
+  'cite.panel': 'Цитаты из источника',
+  'cite.page': 'Стр. {page}',
+  'cite.chars': 'Символы {start}–{end}',
+  // Провайдер не сообщил позицию вообще — честнее сказать это, чем подставить 0.
+  'cite.positionUnavailable': 'Точное место в источнике недоступно',
+  'cite.openExternal': 'Открыть источник',
+  'cite.close': 'Свернуть цитаты',
+  // --- Подсветка места в источнике (W3b-2, `components/SourcePanel.tsx`) ---
+  'cite.showInSource': 'Показать в источнике',
+  'cite.sourcePanel': 'Место в источнике',
+  'cite.sourceClose': 'Закрыть место в источнике',
+  'cite.sourceLoading': 'Ищем место в тексте…',
+  // Текст прошёл редактирование при приёме файла (PII/injection) — это надо сказать.
+  'cite.sourceMasked': 'Текст источника показан с редактированием',
+  'cite.sourceAmbiguous':
+    'Цитата встречается в источнике несколько раз — подсветить одну невозможно',
+  'cite.sourceNotFound': 'Цитата не найдена в тексте источника',
+  'cite.sourceNoText': 'Текст источника недоступен',
+  'cite.sourceError': 'Не удалось открыть место в источнике',
+  'cite.sourceRetry': 'Повторить',
+  'cite.sourceTruncated': 'Показан фрагмент источника',
+
+  // --- Доработка ответа (W7b, `components/RevisionNote.tsx`) ---
+  // Счётчики — факты из diff'а, а не оценка качества: удалённый блок нельзя показать
+  // (его нет в текущем документе), поэтому только число.
+  'revision.title': 'Ответ доработан',
+  'revision.changedCount': 'изменено блоков: {count}',
+  'revision.removedCount': 'удалено: {count}',
+  'revision.changedBlock': 'Изменённый блок',
 
   // --- HITL-карточки (`components/HitlCards.tsx`, `lib/hitl.ts`) ---
   'hitl.kicker.choice': 'Выберите один вариант',
@@ -238,6 +295,29 @@ export const en: Record<MessageKey, string> = {
     'Could not format the answer. Try rephrasing the request or try again.',
   'msg.devGap': 'DEV: document looks like an exclusive menu but no HITL cards were minted.',
 
+  'a11y.transcript': 'Conversation',
+  'a11y.docTitle': 'Answer: {title}',
+  'a11y.heading': 'Heading: {text}',
+  'a11y.list': 'List, {count} items. {items}',
+  'a11y.listMore': 'and {count} more',
+  'a11y.steps': 'Steps, {count}: {items}',
+  'a11y.kv': 'Fields: {items}',
+  'a11y.table': 'Table: {cols} columns, {rows} rows. {columns}',
+  'a11y.code': 'Code block, {language}, {lines} lines',
+  'a11y.codeNoLanguage': 'Code block, {lines} lines',
+  'a11y.formula': 'Formula: {latex}',
+  'a11y.callout': '{tone}: {text}',
+  'a11y.chart': 'Chart, {series} series',
+  'a11y.widget': 'Widget: {title}. Opens with a separate button.',
+  'a11y.widgetUntitled': 'Widget. Opens with a separate button.',
+  'a11y.tone.info': 'Note',
+  'a11y.tone.success': 'Success',
+  'a11y.tone.warning': 'Warning',
+  'a11y.tone.danger': 'Error',
+  'a11y.ready': 'Answer ready.',
+  'a11y.readyReview': 'Answer ready. Your review is required.',
+  'a11y.error': 'Error: {message}',
+
   'action.like': 'Like this response',
   'action.dislike': 'Dislike this response',
   'action.copy': 'Copy response text',
@@ -307,6 +387,30 @@ export const en: Record<MessageKey, string> = {
   'attach.connectorUnavailable': 'unavailable',
   'attach.sources': 'Sources',
   'attach.refused': 'file was refused',
+
+  'cite.panel': 'Citations from the source',
+  'cite.page': 'Page {page}',
+  'cite.chars': 'Characters {start}–{end}',
+  'cite.positionUnavailable': 'The exact location in the source is unavailable',
+  'cite.openExternal': 'Open source',
+  'cite.close': 'Collapse citations',
+  'cite.showInSource': 'Show in source',
+  'cite.sourcePanel': 'Location in the source',
+  'cite.sourceClose': 'Close the source location',
+  'cite.sourceLoading': 'Locating the passage…',
+  'cite.sourceMasked': 'The source text is shown with redactions',
+  'cite.sourceAmbiguous':
+    'The quote occurs more than once in the source, so one place cannot be highlighted',
+  'cite.sourceNotFound': 'The quote was not found in the source text',
+  'cite.sourceNoText': 'The source text is unavailable',
+  'cite.sourceError': 'Could not open the source location',
+  'cite.sourceRetry': 'Try again',
+  'cite.sourceTruncated': 'Showing a fragment of the source',
+
+  'revision.title': 'Revised answer',
+  'revision.changedCount': 'blocks changed: {count}',
+  'revision.removedCount': 'removed: {count}',
+  'revision.changedBlock': 'Changed block',
 
   'hitl.kicker.choice': 'Choose one',
   'hitl.kicker.tool': 'Tool approval',

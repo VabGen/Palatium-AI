@@ -2,6 +2,7 @@
 
 """Attachment contracts: aggregate, axis types, policies and derived content (000, 020)."""
 
+from .citation_lookup import AttachmentCitationLookup, CitationTextState
 from .content import (
     AttachmentContent,
     AttachmentContentMetadata,
@@ -78,6 +79,7 @@ __all__ = [
     "Attachment",
     "AttachmentAnalyzePayload",
     "AttachmentChunkedUploadError",
+    "AttachmentCitationLookup",
     "AttachmentConnectorUnavailableError",
     "AttachmentContent",
     "AttachmentContentMetadata",
@@ -107,6 +109,7 @@ __all__ = [
     "AttachmentTooLargeError",
     "AttachmentTurnContext",
     "AttachmentUploadTooLargeError",
+    "CitationTextState",
     "ExtractStatus",
     "ExtractionSource",
     "IntakeDecision",

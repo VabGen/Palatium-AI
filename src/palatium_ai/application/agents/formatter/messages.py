@@ -33,12 +33,10 @@ _MESSAGES: dict[tuple[str, str], str] = {
     # Attached but unreadable (OCR/extraction produced nothing). The turn must say
     # exactly that — a canned greeting here reads as if the file had been analyzed.
     ("ru", "attachment_text_unavailable"): (
-        "Не удалось извлечь текст из приложенного файла. "
-        "Попробуйте загрузить другой формат или проверьте качество скана."
+        "Не удалось извлечь текст из приложенного файла. Попробуйте загрузить другой формат или проверьте качество скана."
     ),
     ("en", "attachment_text_unavailable"): (
-        "Could not extract text from the attached file. "
-        "Try another format, or check the scan quality."
+        "Could not extract text from the attached file. Try another format, or check the scan quality."
     ),
 }
 

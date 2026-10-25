@@ -49,6 +49,31 @@ export function answerDocument(text = 'Готово: черновик письм
   };
 }
 
+/**
+ * Документ с провайдерскими якорями (W3b).
+ *
+ * Две цитаты одного источника: так проверяется и группировка в один чип, и то,
+ * что позиция берётся из `page`/`source_range`, а не угадывается по тексту.
+ */
+export function citedDocument(): ContentDocument {
+  const document = answerDocument('Оплата по договору — пять рабочих дней.');
+  document.meta.citations = [
+    {
+      source_ref: 'Договор.pdf',
+      quote: 'Оплата в течение 5 рабочих дней.',
+      page: 2,
+      anchor: 'page_location',
+    },
+    {
+      source_ref: 'Договор.pdf',
+      quote: 'Срок подписания — 3 дня.',
+      source_range: [120, 152],
+      anchor: 'char_location',
+    },
+  ];
+  return document;
+}
+
 export function formatterResult(overrides: Partial<FormatterTaskResult> = {}): FormatterTaskResult {
   return {
     task_id: 'task-e2e',

@@ -12,7 +12,7 @@ import structlog
 
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.resilience import CircuitOpenError, ConsecutiveFailureCircuit
-from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
+from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError, VisionUnsupportedError
 
 from .litellm_adapter import LiteLLMAdapter
 
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         LLMStreamDelta,
     )
     from palatium_ai.domain.ports.llm import LLMPort
+    from palatium_ai.domain.ports.vision import VisionImageSourcePort
 
 logger = structlog.get_logger(__name__)
 
@@ -44,6 +45,11 @@ _FALLBACK_OPEN_SECONDS = 30.0
 _LLM_CIRCUIT_PREFIX = "llm:"
 
 
+def _has_images(messages: list[ChatMessage]) -> bool:
+    """True when the call must go to a vision alias (ADR 0007)."""
+    return any(message.image_parts for message in messages)
+
+
 class LLMClientFactory:
     """Создаёт LLMPort для указанного провайдера.
 
@@ -52,9 +58,17 @@ class LLMClientFactory:
     failing fast for one agent is skipped fast for every other agent too.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        vision_image_source: VisionImageSourcePort | None = None,
+    ) -> None:
         self._settings = settings
         self._circuits: dict[str, ConsecutiveFailureCircuit] = {}
+        # Optional on purpose: without attachment ports there is nowhere to read image
+        # bytes from, so an image call is refused at the adapter (fail-closed).
+        self._vision_image_source = vision_image_source
 
     def _circuit_for(self, provider: str) -> ConsecutiveFailureCircuit:
         """Shared breaker for one provider (thresholds from ObservabilityConfig)."""
@@ -75,7 +89,19 @@ class LLMClientFactory:
             raise ValueError(f"Unknown provider: {resolved}")
 
         config: LLMProviderConfig = getattr(self._settings.llm, resolved)
-        return LiteLLMAdapter(config)
+        return LiteLLMAdapter(
+            config,
+            vision_model=self._vision_model(),
+            image_source=self._vision_image_source,
+        )
+
+    def _vision_model(self) -> str | None:
+        """Vision alias from settings; tolerant of settings stubs in unit tests."""
+        llm = getattr(self._settings, "llm", None)
+        alias = getattr(llm, "vision_model", None)
+        if not isinstance(alias, str):
+            return None
+        return alias.strip() or None
 
     @staticmethod
     def _provider_has_credentials(settings_llm: object, provider_name: str) -> bool:
@@ -254,12 +280,18 @@ class _FallbackChainLLMAdapter:
         exc: Exception,
         errors: list[str],
         unsupported: list[StructuredOutputUnsupportedError],
+        unsupported_vision: list[VisionUnsupportedError],
     ) -> None:
-        """Record an outage. A json_schema refusal is a capability gap, not a dead provider."""
+        """Record an outage. Capability gaps are not outages and must not open the breaker."""
         if isinstance(exc, StructuredOutputUnsupportedError):
             unsupported.append(exc)
             errors.append(f"{provider}: structured output unsupported")
             logger.warning("llm.structured_output_unsupported", provider=provider)
+            return
+        if isinstance(exc, VisionUnsupportedError):
+            unsupported_vision.append(exc)
+            errors.append(f"{provider}: image messages unsupported")
+            logger.warning("llm.vision_unsupported", provider=provider)
             return
         self._record(provider, failed=True)
         errors.append(f"{provider}: {exc}")
@@ -269,13 +301,19 @@ class _FallbackChainLLMAdapter:
         errors: list[str],
         open_circuits: list[tuple[str, float]],
         unsupported: list[StructuredOutputUnsupportedError] | None = None,
+        unsupported_vision: list[VisionUnsupportedError] | None = None,
     ) -> None:
         """Fail fast when every provider is breaker-open; otherwise report real errors."""
         pending = unsupported or []
+        pending_vision = unsupported_vision or []
         if pending and len(pending) == len(errors) and not open_circuits:
             raise StructuredOutputUnsupportedError(
                 "provider chain rejected json_schema structured output",
             ) from pending[-1]
+        if pending_vision and len(pending_vision) == len(errors) and not open_circuits:
+            raise VisionUnsupportedError(
+                "no provider in the chain accepts image messages",
+            ) from pending_vision[-1]
         if open_circuits and len(open_circuits) == len(self._adapters):
             provider, retry_after = min(open_circuits, key=lambda item: item[1])
             raise CircuitOpenError(
@@ -295,9 +333,23 @@ class _FallbackChainLLMAdapter:
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
     ) -> LLMCompletion:
+        if _has_images(messages) and len(self._adapters) > 1:
+            # Owner decision (2026-10-25): a vision alias is provider-scoped, so there is
+            # no meaningful fallback. Failing over to a text-only model would silently
+            # answer about a picture it never saw (ADR 0007).
+            return await self._generate_primary(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                response_model=response_model,
+                timeout_seconds=timeout_seconds,
+            )
         errors: list[str] = []
         open_circuits: list[tuple[str, float]] = []
         unsupported: list[StructuredOutputUnsupportedError] = []
+        unsupported_vision: list[VisionUnsupportedError] = []
         for index, (provider, port) in enumerate(self._adapters):
             if not self._acquire(provider, errors, open_circuits):
                 continue
@@ -315,7 +367,7 @@ class _FallbackChainLLMAdapter:
                     timeout_seconds=timeout_seconds,
                 )
             except Exception as exc:  # noqa: BLE001  # provider failure moves to the next in the chain (020)
-                self._capture_provider_failure(provider, exc, errors, unsupported)
+                self._capture_provider_failure(provider, exc, errors, unsupported, unsupported_vision)
                 logger.warning(
                     "llm.fallback.try_next",
                     provider=provider,
@@ -333,8 +385,41 @@ class _FallbackChainLLMAdapter:
                     chain_size=len(self._adapters),
                 )
             return completion
-        self._raise_exhausted(errors, open_circuits, unsupported)
+        self._raise_exhausted(errors, open_circuits, unsupported, unsupported_vision)
         raise AssertionError("unreachable: _raise_exhausted always raises")  # pragma: no cover
+
+    async def _generate_primary(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        response_format: LLMResponseFormat | None,
+        response_model: type[BaseModel] | None,
+        timeout_seconds: float | None,
+    ) -> LLMCompletion:
+        """Image call: only the primary provider, no failover, typed failures intact."""
+        provider, port = self._adapters[0]
+        errors: list[str] = []
+        open_circuits: list[tuple[str, float]] = []
+        if not self._acquire(provider, errors, open_circuits):
+            self._raise_exhausted(errors, open_circuits)
+        try:
+            completion = await port.generate(
+                messages,
+                model=model or self._primary_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                response_model=response_model,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as exc:  # vision failure is reported, not retried elsewhere (020)
+            self._record(provider, failed=not isinstance(exc, VisionUnsupportedError))
+            raise
+        self._record(provider, failed=False)
+        return completion
 
     async def generate_stream(
         self,
@@ -347,9 +432,23 @@ class _FallbackChainLLMAdapter:
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
+        if _has_images(messages) and len(self._adapters) > 1:
+            # Same rule as ``generate``: a stream with images never fails over (ADR 0007).
+            async for delta in self._stream_primary(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                response_model=response_model,
+                timeout_seconds=timeout_seconds,
+            ):
+                yield delta
+            return
         errors: list[str] = []
         open_circuits: list[tuple[str, float]] = []
         unsupported: list[StructuredOutputUnsupportedError] = []
+        unsupported_vision: list[VisionUnsupportedError] = []
         for index, (provider, port) in enumerate(self._adapters):
             if not self._acquire(provider, errors, open_circuits):
                 continue
@@ -369,7 +468,7 @@ class _FallbackChainLLMAdapter:
                 async for delta in stream:
                     yield delta
             except Exception as exc:  # noqa: BLE001  # stream provider failure moves to the next in the chain (020)
-                self._capture_provider_failure(provider, exc, errors, unsupported)
+                self._capture_provider_failure(provider, exc, errors, unsupported, unsupported_vision)
                 logger.warning(
                     "llm.fallback.stream_try_next",
                     provider=provider,
@@ -387,7 +486,41 @@ class _FallbackChainLLMAdapter:
                     chain_size=len(self._adapters),
                 )
             return
-        self._raise_exhausted(errors, open_circuits, unsupported)
+        self._raise_exhausted(errors, open_circuits, unsupported, unsupported_vision)
+
+    async def _stream_primary(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        response_format: LLMResponseFormat | None,
+        response_model: type[BaseModel] | None,
+        timeout_seconds: float | None,
+    ) -> AsyncIterator[LLMStreamDelta]:
+        """Image stream: primary only, no failover (ADR 0007)."""
+        provider, port = self._adapters[0]
+        errors: list[str] = []
+        open_circuits: list[tuple[str, float]] = []
+        if not self._acquire(provider, errors, open_circuits):
+            self._raise_exhausted(errors, open_circuits)
+        try:
+            stream = port.generate_stream(
+                messages,
+                model=model or self._primary_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                response_model=response_model,
+                timeout_seconds=timeout_seconds,
+            )
+            async for delta in stream:
+                yield delta
+        except Exception as exc:  # vision failure is reported, not retried elsewhere (020)
+            self._record(provider, failed=not isinstance(exc, VisionUnsupportedError))
+            raise
+        self._record(provider, failed=False)
 
 
 def create_llm_client(settings: Settings, provider_name: str | None = None) -> LLMPort:

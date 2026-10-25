@@ -24,6 +24,7 @@ import {
   answerDocument,
   attachmentTicket,
   choiceCard,
+  citedDocument,
   dialogTurn,
   formatterResult,
   quarantinedAttachment,
@@ -113,6 +114,30 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       { kind: 'count', selector: '.msg', count: 2 },
       { kind: 'text', selector: '.msg.user .bubble', contains: 'Какие планы на сегодня' },
       { kind: 'visible', selector: '.msg.assistant .block-paragraph' },
+      { kind: 'noEnglish' },
+    ],
+  },
+  {
+    id: 'citations',
+    title: 'Источники ответа',
+    proves:
+      'Якоря провайдера видны: один чип на источник раскрывает дословные цитаты, а неизвестная позиция честно называется неизвестной.',
+    api: [
+      {
+        key: 'intents.process.stream',
+        replies: [{ json: formatterResult({ output: citedDocument() }) }],
+      },
+    ],
+    drive: async page => {
+      await ask(page, 'Что сказано про оплату?');
+      await page.getByRole('button', { name: 'Договор.pdf' }).click();
+    },
+    checks: [
+      { kind: 'count', selector: '.source-ref-button', count: 1 },
+      { kind: 'attr', selector: '.source-ref-button', name: 'aria-expanded', value: 'true' },
+      { kind: 'visible', selector: '.citation-panel' },
+      { kind: 'text', selector: '.citation-quote', contains: 'Оплата в течение 5 рабочих дней.' },
+      { kind: 'text', selector: '.citation-meta', contains: 'Стр. 2' },
       { kind: 'noEnglish' },
     ],
   },

@@ -43,7 +43,7 @@ def emit_answer_deltas(prose: str, *, replace: bool | None = None) -> None:
     _queue_frames(bridge, text, replace=do_replace)
 
 
-def emit_structured_answer_delta(prose: str, *, separator: str = "") -> None:
+def emit_structured_answer_delta(prose: str, *, separator: str = "", keep_whitespace: bool = False) -> None:
     """Append one prose fragment of a streamed ``ContentDocument`` (structured contract).
 
     Fragments are document blocks that have just closed, so each one is new content:
@@ -51,9 +51,17 @@ def emit_structured_answer_delta(prose: str, *, separator: str = "") -> None:
     legitimately repeat a paragraph), while the no-replace invariant does — the
     final ``result`` document is a superset of what the user already reads, so it
     never has to repaint the preview (Vercel ``streamObject`` semantics).
+
+    ``keep_whitespace`` is for a fragment that continues the same paragraph
+    (``PartialFrame.continues_prose``): stripping it would delete the space at the
+    delta boundary and glue two words together in the client's accumulator.
     """
-    text = InternalVocabularyPolicy.sanitize_text(prose).strip()
-    if not text:
+    text = InternalVocabularyPolicy.sanitize_text(prose)
+    if not keep_whitespace:
+        text = text.strip()
+    # A whitespace-only continuation frame is meaningful (it is the space between two
+    # words split across deltas); only a non-continuation frame may be empty.
+    if not text or (not keep_whitespace and not text.strip()):
         return
     bridge = get_turn_sse_bridge()
     if bridge is None:
@@ -96,6 +104,9 @@ def emit_document_block(*, index: int, block: ContentBlock) -> None:
         # there is nothing to paint, and the final document will not contain it.
         return
     bridge.emit_nowait({"event": "block_delta", "index": index, "block": clean.model_dump(mode="json")})
+    if not bridge.sse_first_block_recorded:
+        bridge.sse_first_block_recorded = True
+        agent_metrics.record_sse_first_block(time.perf_counter() - bridge.started_at)
     _mark_visible(bridge)
 
 

@@ -52,7 +52,13 @@ class AnalystAgent(BaseAgent):
                 self._config,
                 [
                     ChatMessage(role="system", content=ANALYST_SYSTEM_PROMPT),
-                    ChatMessage(role="user", content=json.dumps(user_payload, ensure_ascii=False)),
+                    ChatMessage(
+                        role="user",
+                        content=json.dumps(user_payload, ensure_ascii=False),
+                        # Images ride on the user turn; admission already happened at
+                        # graph entry, so the worker only forwards what was approved.
+                        image_parts=input.image_parts,
+                    ),
                 ],
                 response_format="json_object",
             )

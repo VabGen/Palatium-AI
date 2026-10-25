@@ -149,11 +149,40 @@ export type ActionSpec = {
   risk_score: number;
 };
 
+export type CitationAnchor =
+  'char_location' | 'page_location' | 'content_block_location' | 'url_only';
+
+/**
+ * Provider citation anchor (mirror of `domain/content/citations/models.py`, W3b).
+ *
+ * Two coordinate spaces, never one: `answer_range` is an offset inside the text the
+ * provider annotated (the raw answer), `source_range`/`page` point into the source.
+ * `missing` (undefined) means "the provider did not say" — not zero.
+ */
+export type CitationRef = {
+  source_ref: string;
+  /**
+   * Attachment id bound by the server when the label names exactly one upload.
+   * Absent when the label is ambiguous or the source is an external URL — the UI then
+   * offers no "show in source" action instead of opening a same-named file.
+   */
+  source_id?: string | null;
+  quote?: string | null;
+  page?: number | null;
+  source_range?: [number, number] | null;
+  answer_range?: [number, number] | null;
+  anchor: CitationAnchor;
+};
+
 export type DocumentMeta = {
   confidence: number;
   requires_review: boolean;
   source_refs: string[];
   interaction?: 'none' | 'choice' | 'confirm';
+  /** Length axis stamped by the server (W7); absent on legacy/persisted payloads. */
+  verbosity_budget?: 'minimal' | 'standard' | 'detailed';
+  /** Resolved provider anchors; absent on legacy/persisted payloads (W3b). */
+  citations?: CitationRef[];
 };
 
 export type ContentDocument = {
@@ -163,6 +192,26 @@ export type ContentDocument = {
   blocks: ContentBlock[];
   actions: ActionSpec[];
   meta: DocumentMeta;
+};
+
+/**
+ * Block-level delta against the previous answer (W7b, mirror of
+ * `domain/content/revision.py`).
+ *
+ * `changed_block_indices` are positions inside **this** document, in the same order as
+ * `changed_blocks`. The server sends them precisely so the client never re-implements
+ * the Python content hash: a re-derived hash that drifts (number formatting, a new field)
+ * would fail silently by simply not highlighting anything.
+ *
+ * `changed_block_indices` is absent on turns persisted before the UI wave; the note then
+ * states the counts without marking blocks, instead of guessing positions.
+ */
+export type DocumentRevision = {
+  revision_of: string;
+  changed_blocks: string[];
+  changed_block_indices?: number[];
+  removed_blocks: string[];
+  unchanged_blocks: number;
 };
 
 export type FormatterTaskResult = {
@@ -241,4 +290,5 @@ export type HITLResolveResult = {
 export type HitlRespondResponse = {
   resolve: HITLResolveResult;
   resumed?: FormatterTaskResult | null;
+  revision?: DocumentRevision | null;
 };

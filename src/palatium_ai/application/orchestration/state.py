@@ -13,6 +13,7 @@ from palatium_ai.domain.agents.intent import IntentTaskResult
 from palatium_ai.domain.agents.researcher import ResearcherTaskResult
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult
 from palatium_ai.domain.attachments.context import AttachmentTurnContext
+from palatium_ai.domain.llm.models import ImagePart
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContextualizerTaskResult
 from palatium_ai.domain.memory.recall import MemoryRecallBundle
@@ -61,6 +62,11 @@ class AgentGraphState(TypedDict, total=False):
     # is the projection handed to prompts; this is the SoT for selection, modality
     # filtering and the "attached but unreadable" guard.
     attachment_context: AttachmentTurnContext
+    # Images admitted for this turn at graph entry (`VisionImageService`, ADR 0007).
+    # References, not bytes — the blob store owns the payload, and the checkpoint only
+    # carries UUIDs + a closed mime (065: state stays serialisable, nothing to leak).
+    # Admitted once so every worker sees the same set and no node pays a blob round trip.
+    image_parts: tuple[ImagePart, ...]
     # BCP-47 pin for user-facing replies (ReplyLocalePolicy); sticky across turns via session.
     response_locale: str
     #: The ask deterministically names a file this dialog holds (pre-graph resolution of

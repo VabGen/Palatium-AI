@@ -26,6 +26,8 @@ class TurnSseBridge:
     started_at: float = field(default_factory=time.perf_counter)
     has_emitted_answer: bool = False
     sse_ttft_recorded: bool = False
+    # First typed ``block_delta`` of the turn (structured preview start, not prose).
+    sse_first_block_recorded: bool = False
     # Tail of every user-visible answer_delta frame already queued: the single
     # source of truth for "what the user can currently read" (065). Bounded so a
     # long turn cannot grow it without limit (080).

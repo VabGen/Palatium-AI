@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 
 from collections import defaultdict
-from re import Match
 
 # ``attachment:<uuid>:<filename>`` (preferred) or legacy ``attachment:<filename>``.
 _SOURCE_RE = re.compile(
@@ -48,28 +47,13 @@ def citation_refs_from_untrusted_context(untrusted_context: str) -> tuple[str, .
     via a short id suffix when the fence carries ``attachment:<uuid>:<filename>``.
     Empty when the turn has no attachment fence.
     """
-    text = (untrusted_context or "").strip()
-    if not text:
+    labelled = _labelled_fences(untrusted_context)
+    if not labelled:
         return ()
-
-    fences: list[tuple[str, str]] = []
-    for match in _SOURCE_RE.finditer(text):
-        parsed = _fence_filename_and_id(match)
-        if parsed is not None:
-            fences.append(parsed)
-    if not fences:
-        return ()
-
-    ids_by_name: dict[str, set[str]] = defaultdict(set)
-    for filename, id8 in fences:
-        if id8:
-            ids_by_name[filename].add(id8)
 
     refs: list[str] = []
     seen: set[str] = set()
-    for filename, id8 in fences:
-        needs_id = len(ids_by_name[filename]) > 1
-        label = f"{filename}#{id8}" if needs_id and id8 else filename
+    for label, _ in labelled:
         if label in seen:
             continue
         seen.add(label)
@@ -79,12 +63,49 @@ def citation_refs_from_untrusted_context(untrusted_context: str) -> tuple[str, .
     return tuple(refs)
 
 
-def _fence_filename_and_id(match: Match[str]) -> tuple[str, str] | None:
-    filename = (match.group("source") or "").strip()
-    if not filename:
-        return None
-    file_id = (match.group("id") or "").strip()
-    return filename, file_id[:8].lower() if file_id else ""
+def attachment_ids_by_label(untrusted_context: str) -> dict[str, str]:
+    """Map a citation label to the attachment id it names, when it names exactly one.
+
+    The label is built by the same rule that produces the chips, so the chip the user
+    clicked and the file that opens cannot disagree. A label that still collects more
+    than one id stays out: picking one of two same-named uploads is a guess, and the
+    UI then hides "show in source" instead of opening the wrong document (020, 055).
+    """
+    ids_by_label: dict[str, set[str]] = defaultdict(set)
+    for label, attachment_id in _labelled_fences(untrusted_context):
+        if attachment_id:
+            ids_by_label[label].add(attachment_id)
+    return {label: next(iter(ids)) for label, ids in ids_by_label.items() if len(ids) == 1}
+
+
+def _labelled_fences(untrusted_context: str) -> list[tuple[str, str]]:
+    """``(label, full attachment id)`` per fence, first-seen order."""
+    entries = _fence_entries(untrusted_context)
+    ids_by_name: dict[str, set[str]] = defaultdict(set)
+    for filename, attachment_id in entries:
+        if attachment_id:
+            ids_by_name[filename].add(attachment_id)
+
+    labelled: list[tuple[str, str]] = []
+    for filename, attachment_id in entries:
+        id8 = attachment_id[:8]
+        needs_id = len(ids_by_name[filename]) > 1
+        labelled.append((f"{filename}#{id8}" if needs_id and id8 else filename, attachment_id))
+    return labelled
+
+
+def _fence_entries(untrusted_context: str) -> list[tuple[str, str]]:
+    """``(filename, full attachment id)`` per fence; the id is empty for legacy fences."""
+    text = (untrusted_context or "").strip()
+    if not text:
+        return []
+    entries: list[tuple[str, str]] = []
+    for match in _SOURCE_RE.finditer(text):
+        filename = (match.group("source") or "").strip()
+        if not filename:
+            continue
+        entries.append((filename, (match.group("id") or "").strip().lower()))
+    return entries
 
 
 def sanitize_source_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
@@ -156,4 +177,4 @@ def _parse_ref_parts(label: str) -> tuple[str, str] | None:
     return filename, id8
 
 
-__all__ = ["citation_refs_from_untrusted_context", "sanitize_source_refs"]
+__all__ = ["attachment_ids_by_label", "citation_refs_from_untrusted_context", "sanitize_source_refs"]

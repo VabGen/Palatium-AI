@@ -25,11 +25,13 @@ from .content_document import (
     ParagraphBlock,
     StepsBlock,
     TableBlock,
+    VerbosityBudget,
     WidgetBlock,
     parse_content_document,
     validate_content_block,
 )
 from .markdown_blocks import count_ordered_markers, prose_to_blocks
+from .revision import DocumentRevision, block_content_hash, document_content_hash, document_revision
 
 __all__ = [
     "ICON_NAMES",
@@ -46,6 +48,7 @@ __all__ = [
     "DocumentInteraction",
     "DocumentKind",
     "DocumentMeta",
+    "DocumentRevision",
     "FormalityLevel",
     "FormulaBlock",
     "HeadingBlock",
@@ -56,8 +59,12 @@ __all__ = [
     "ParagraphBlock",
     "StepsBlock",
     "TableBlock",
+    "VerbosityBudget",
     "WidgetBlock",
+    "block_content_hash",
     "count_ordered_markers",
+    "document_content_hash",
+    "document_revision",
     "parse_content_document",
     "prose_to_blocks",
     "validate_content_block",

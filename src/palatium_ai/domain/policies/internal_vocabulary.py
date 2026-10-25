@@ -78,6 +78,7 @@ INTERNAL_TERM_REPLACEMENTS: Mapping[str, str] = {
     "requires_user_choice": "нужен выбор",
     "requires_review": "нужна проверка",
     "revision_feedback": "замечания к ответу",
+    "verbosity_budget": "объём ответа",
     "dialog_history": "история диалога",
     "format_hints": "настройки формата",
     "candidate_capabilities": "возможности",

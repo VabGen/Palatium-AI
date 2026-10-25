@@ -25,6 +25,7 @@ from palatium_ai.application.services.memory_save_service import MemorySaveServi
 from palatium_ai.application.services.retention import retention_windows_from_settings
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.application.services.session_timeline_service import SessionTimelineService
+from palatium_ai.application.services.vision_images import VisionImageService
 from palatium_ai.application.wiring import (
     AttachmentPorts,
     build_attachment_ports,
@@ -65,6 +66,7 @@ from palatium_ai.infrastructure.memory.embedding_rerank import EmbeddingRerankMe
 from palatium_ai.infrastructure.memory.graphiti_adapter import GraphitiMemoryPort, GraphitiSdkTransport
 from palatium_ai.infrastructure.memory.mem0_adapter import Mem0HttpTransport, Mem0MemoryPort
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
+from palatium_ai.infrastructure.vision.blob_image_source import BlobVisionImageSource
 from palatium_ai.infrastructure.web.factory import build_web_search_port
 
 # 050: narrow the previously generic ``except Exception`` — embedding wiring is optional,
@@ -129,6 +131,7 @@ class AppResources:
     web_search_port: WebSearchPort | None = None
     attachment_ports: AttachmentPorts | None = None
     attachment_service: AttachmentService | None = None
+    vision_images: VisionImageService | None = None
     feedback_service: FeedbackService | None = None
 
     # Legacy aliases (prefer memory_extract*).
@@ -375,6 +378,8 @@ async def startup(settings: Settings) -> AppResources:
     attachment_service: AttachmentService | None = None
     attachment_read_service = None
     file_reference_resolver: AttachmentReferenceResolver | None = None
+    vision_image_source: BlobVisionImageSource | None = None
+    vision_images: VisionImageService | None = None
     if attachment_ports is not None:
         attachment_service = build_attachment_service(
             settings,
@@ -388,6 +393,24 @@ async def startup(settings: Settings) -> AppResources:
         # Same repository the read path uses: the registry of what this thread holds
         # is single-sourced, not a second store (050).
         file_reference_resolver = AttachmentReferenceResolver(repository=attachment_ports.repository)
+        # ADR 0007: image parts are references; the blob store owns the bytes, so the
+        # LLM adapter gets a source, not a copy of an upload. Built only when a vision
+        # alias is configured — otherwise an image call stays a typed refusal.
+        vision_image_source = BlobVisionImageSource(
+            attachment_ports.blob_store,
+            max_image_bytes=settings.llm.vision_max_image_bytes,
+        )
+        vision_images = VisionImageService(
+            attachment_ports.blob_store,
+            vision_model=settings.llm.resolved_vision_model,
+            max_image_bytes=settings.llm.vision_max_image_bytes,
+            max_images=settings.llm.vision_max_images,
+            allow_pii_images=settings.llm.allow_pii_images,
+        )
+        if settings.llm.vision_configured:
+            logger.info("Vision route enabled", model=settings.llm.vision_model)
+        else:
+            logger.info("Vision route disabled (LLM_VISION_MODEL is empty)")
     (
         intent_service,
         memory_extract,
@@ -410,6 +433,8 @@ async def startup(settings: Settings) -> AppResources:
         graph_write=graph_ports.write,
         attachment_service=attachment_service,
         file_reference_resolver=file_reference_resolver,
+        vision_image_source=vision_image_source,
+        vision_images=vision_images,
     )
     if attachment_service is not None and document_ingest_service is not None:
         attachment_service.bind_document_ingest(document_ingest_service)
@@ -512,6 +537,7 @@ async def startup(settings: Settings) -> AppResources:
         web_search_port=web_search_port,
         attachment_ports=attachment_ports,
         attachment_service=attachment_service,
+        vision_images=vision_images,
         feedback_service=feedback_service,
     )
 

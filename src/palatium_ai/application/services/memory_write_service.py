@@ -13,11 +13,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
+from palatium_ai.application.services.pii_gate import classify_for_write
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.audit import get_audit_logger
 from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
-from palatium_ai.domain.memory.pii import resolve_contains_pii
 from palatium_ai.domain.memory.types import MemoryType
 
 if TYPE_CHECKING:
@@ -67,7 +67,7 @@ class MemoryWriteService:
 
         namespace = _resolve_namespace(namespace_kind, scope_id.strip())
         memory_type = _canonical_type(kind)
-        pii_flag = resolve_contains_pii(text=text_value, client_flag=False)
+        pii_flag = classify_for_write(text=text_value)
         value: dict[str, object] = {
             "text": text_value[:2000],
             "kind": kind.strip().lower() or "fact",

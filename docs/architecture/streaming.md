@@ -23,7 +23,7 @@ data: {json.dumps(payload)}
 | `block_delta` | Formatter (`schema_first`) | `{index, block}` | **typed preview**: закрытый блок → `BlockRenderer` (append-only, без `replace`) |
 | `answer_delta` | workers / fast-path / dual от Formatter / закрытый блок streamed-документа | `{delta, replace?}` | fallback preview; TTFT metric |
 | `text_delta` | `FormatterMarkdownEmitter` | `{content}` | **primary** stream preview (GFM; keeps `<icon name="…"/>` for FE `TokenIcon`, no emoji) |
-| `result` | `IntentService.process_stream` | `{task_id, thread_id, result: FormatterTaskResult}` | финальный `ContentDocument` |
+| `result` | `IntentService.process_stream` | `{task_id, thread_id, result: FormatterTaskResult}` + `revision?` (только для доработанного ответа, W7b) | финальный `ContentDocument`; `revision` → `onRevision` |
 | `done` | роутер `intents.py` | `{}` | не используется |
 | `error` | `process_stream` или роутер | `{message, …}` либо `{detail, status_code}` | исключение на клиенте |
 
@@ -56,12 +56,24 @@ Rollback — `ANSWER_WRITER_ROLLOUT_PCT=0` (при `MODE=worker`).
    `textAccumulated`, если `text_delta` уже шёл. Далее dual без `replace`.
 4. `result` — `FormatterTaskResult`; `ContentDocument` собран
    `markdown_to_content_document` из финального markdown (JSON ContentDocument —
-   fallback совместимости).
+   fallback совместимости). Кадр же несёт необязательный `revision` (W7b): diff
+   против предыдущего ответа, тот же, что пишется в payload хода. Отдельного кадра
+   нет намеренно: diff — не дельта документа, а факт о ходе, и решение «это
+   ревизия?» принимает один вход `turn_revision` (`intent_turn_helpers.py`), не
+   Formatter.
 5. `done` — поток закрыт. При обрыве клиента `done` не шлётся.
 
 HITL: кликабельные карточки только из серверного `result` / minted cards.
 XML-теги `<hitl-action>` / `<hitl-choice>` в стриме — не интерактивны на клиенте
 (парсятся на сервере после стрима).
+
+Резолв карточки возвращает тот же diff рядом с `resumed`: `POST /api/hitl/{id}/respond`
+→ `{resolve, resumed?, revision?}` (`HitlRespondResponse`). Без него клиент менял
+документ по `resumed`, но разметку получал только после перезагрузки; `revision`
+считается тем же `turn_revision` на границе persist и адресует блоки **нового**
+документа. Два HITL-пути исполняются офф-графом: одобрение off-graph мутации
+(`doc-ingest-`, `mem-save-`, …) — это новое одно-блочное сообщение, diff'а нет
+(`revision: null`).
 
 ## Контракт стриминга на turn
 
@@ -108,6 +120,34 @@ restructure / choice / явной `response_shape`.
 требования «plain prose» (тело worker = ответ; LLM не переписывает уже
 показанный SSE draft).
 
+## Скорость отклика на клиенте (W1)
+
+Две разные величины, и путать их нельзя: сервер меряет `submit → первый
+block_delta` (`palatium_sse_first_block_seconds`), клиент — `submit → первый
+видимый кадр` (TTFVF). Заглушка turn'а (орб фазы) рисуется синхронно, поэтому
+первое число отвечает на «когда появился контент», а второе — на «когда
+пользователь увидел, что запрос принят».
+
+TTFVF пишется в таймлайн как `palatium:ttfvf` (`web/src/lib/firstVisual.ts`,
+бюджет `300 мс`) и проверяется E2E (`web/e2e/ttfvf.spec.ts`). Конец замера —
+второй `requestAnimationFrame`, а не первый: первый срабатывает до paint кадра
+и занижал бы метрику ровно на время отрисовки. В сеть метрика не уходит —
+RUM-эндпоинта у виджета нет (данные остаются у хоста).
+
+## Доступность превью (W2)
+Визуальная лента объявляет себя `role="log"` с `aria-live="off"` — сообщения
+читаются навигацией, но не зачитываются автоматически. Прогресс идёт отдельным
+каналом (`web/src/components/LiveAnnouncer.tsx`, правила — `web/src/lib/streamA11y.ts`):
+
+- одно объявление на **закрытый** блок; список/шаги — одним объявлением на блок;
+  таблица/код/формула — формой («столбцов N, строк M»), без содержимого;
+- незакрытая проза и открытый fence не объявляются вовсе;
+- `document_title` — один раз до первого блока; `result` — одно «ответ готов»
+  (плюс «требуется проверка»), без перечитывания ответа;
+- слот объявления не дописывается, а заменяется (`aria-atomic`), иначе каждый
+  блок перечитывал бы весь ответ; несколько кадров одного сетевого чанка
+  склеиваются в одно объявление, чтобы React не оставил только последний.
+
 ## Новым агентам
 
 - Стриминг определяется контрактом turn'а (`StreamingContract`), не флагом узла.
@@ -120,4 +160,7 @@ restructure / choice / явной `response_shape`.
 - Заголовок streamed-документа — `emit_document_title` (один кадр до первого блока).
 - Prose streamed-документа — `emit_structured_answer_delta` (append-only, без
   `replace`, без dedup: повтор абзаца в документе легитимен; fallback, не primary).
+  Фрагмент, продолжающий тот же абзац (`continues_prose`), идёт без `\n\n` и без
+  `strip()` — иначе на границе дельты склеятся слова. Что вообще можно стримить
+  частично, решает `domain/policies/stream_display.py` (W1), не вызывающий код.
 - Formatter markdown tokens — только через `FormatterMarkdownEmitter` (`text_delta` + dual).

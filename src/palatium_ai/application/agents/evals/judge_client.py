@@ -38,6 +38,22 @@ def resolve_judge_model() -> str | None:
     return model or None
 
 
+def resolve_internal_judge_provider() -> str | None:
+    """In-perimeter judge for PII outputs, or None when the deployment has none.
+
+    None is a real answer, not a missing config: 020 forbids sending PII to an external
+    judge, so "no internal judge" must produce ``requires_review`` rather than a quiet
+    downgrade to the external one.
+    """
+    provider = os.environ.get("PALATIUM_EVAL_INTERNAL_JUDGE_PROVIDER", "").strip().lower()
+    if not provider:
+        return None
+    if provider not in _SUPPORTED:
+        msg = f"unsupported internal judge provider: {provider}"
+        raise ValueError(msg)
+    return provider
+
+
 def assert_provider_independence(*, judge_provider: str, generator_provider: str | None) -> None:
     if not generator_provider:
         return
@@ -46,6 +62,6 @@ def assert_provider_independence(*, judge_provider: str, generator_provider: str
         raise ValueError(msg)
 
 
-def create_eval_judge_llm(factory: EvalJudgeClientFactory) -> LLMPort:
-    """Build the judge client for ``PALATIUM_EVAL_JUDGE_PROVIDER`` via injected factory."""
-    return factory(resolve_judge_provider())
+def create_eval_judge_llm(factory: EvalJudgeClientFactory, *, provider: str | None = None) -> LLMPort:
+    """Build the judge client for ``provider`` (default: ``PALATIUM_EVAL_JUDGE_PROVIDER``)."""
+    return factory(provider or resolve_judge_provider())

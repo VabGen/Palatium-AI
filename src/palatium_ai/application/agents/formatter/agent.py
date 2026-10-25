@@ -53,13 +53,18 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
+from palatium_ai.domain.attachments.citations import attachment_ids_by_label
 from palatium_ai.domain.content import ContentDocument
+from palatium_ai.domain.content.citations import CitationRef, normalize_citations
+from palatium_ai.domain.content.lint import ContentLint
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.policies.shape import ShapeRecipePolicy
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from palatium_ai.application.agents.formatter.partial_document import PartialFrame
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.agents.formatter import FormatterInput
@@ -88,7 +93,12 @@ def _paint_partial_frames(frames: list[PartialFrame], *, painted_prose: bool) ->
         elif frame.block is not None:
             emit_document_block(index=frame.index, block=frame.block)
         if frame.text:
-            emit_structured_answer_delta(frame.text, separator="\n\n" if painted_prose else "")
+            if frame.continues_prose:
+                # Same paragraph, next delta: no break, no whitespace trimming —
+                # a stripped boundary would glue words together on screen.
+                emit_structured_answer_delta(frame.text, separator="", keep_whitespace=True)
+            else:
+                emit_structured_answer_delta(frame.text, separator="\n\n" if painted_prose else "")
             painted_prose = True
     return painted_prose
 
@@ -156,7 +166,67 @@ class FormatterAgent(BaseAgent):
                 duration_seconds=perf_counter() - started,
             )
         self._record_shape_verdict(task_input, output)
+        self._record_content_lint(task_input, output)
         return output
+
+    def _record_content_lint(self, task_input: FormatterInput, output: AgentOutput) -> None:
+        """Measure deterministic defects that are schema-valid but wrong for the user.
+
+        Findings never change the answer: content repair stays in the formatter
+        pipeline, so the lint cannot become a second author of the document (050).
+        Prose is not logged — only rule ids, severity counts and the task id (020).
+        """
+        document = output.output
+        if not isinstance(document, ContentDocument):
+            return
+        report = ContentLint.run(document)
+        if not report.findings:
+            return
+        for finding in report.findings:
+            agent_metrics.record_content_lint_finding(rule=finding.rule_id, severity=finding.severity)
+        logger.warning(
+            "formatter.content_lint.findings",
+            task_id=str(task_input.task_id),
+            error_count=report.error_count,
+            warning_count=len(report.findings) - report.error_count,
+            rules=sorted({finding.rule_id for finding in report.findings}),
+        )
+
+    def _resolve_citations(
+        self,
+        completion: LLMCompletion,
+        *,
+        task_id: UUID,
+        untrusted_context: str = "",
+    ) -> tuple[CitationRef, ...]:
+        """Resolve provider citations against the text they annotate (W3a) and keep them (W3b).
+
+        The answer text is never changed here. ``answer_range`` is validated in its own
+        coordinate space — the raw provider output — because an offset that is meaningful
+        in the answer text is meaningless in a reformatted document. Resolved anchors are
+        attached to ``meta.citations`` by the caller, so the UI can show what the model
+        actually cited instead of a filename chip inferred from the prose.
+
+        ``source_id`` is bound here from the turn's fence headers (W3b-2): the label the
+        model cites is a display name, and only the fence knows which upload produced it.
+        An ambiguous label stays unbound — the UI then offers no "show in source" action
+        rather than opening a same-named file that may belong to someone else (020).
+        """
+        if not completion.citations:
+            return ()
+        report = normalize_citations(completion.citations, answer_text=completion.content)
+        for anchor, outcome in report.outcomes:
+            agent_metrics.record_citation_resolution(anchor=anchor, outcome=outcome)
+        if report.out_of_range or report.unanchored:
+            logger.warning(
+                "formatter.citations.dropped",
+                task_id=str(task_id),
+                emitted=report.emitted,
+                resolved=len(report.resolved),
+                out_of_range=report.out_of_range,
+                unanchored=report.unanchored,
+            )
+        return _bind_source_ids(report.resolved, untrusted_context)
 
     def _record_shape_verdict(self, task_input: FormatterInput, output: AgentOutput) -> None:
         """Measure whether an explicitly requested form matched the document.
@@ -227,10 +297,15 @@ class FormatterAgent(BaseAgent):
                 on_delta=_on_delta,
             )
             _paint_partial_frames(scanner.pending(), painted_prose=painted_prose)
+            citations = self._resolve_citations(
+                completion,
+                task_id=input.task_id,
+                untrusted_context=task_input.context_packet.untrusted_context,
+            )
             document = ContentDocument.model_validate_json(completion.content)
         except StructuredOutputUnsupportedError:
             logger.warning("formatter.schema_first.unsupported", task_id=str(input.task_id))
-            agent_metrics.record_node_execution(self._config.role, "schema_first:unsupported")
+            agent_metrics.record_formatter_schema(path="schema_first", outcome="unsupported")
             return await self._run_legacy(input, task_input)
         except ValidationError as exc:
             logger.warning(
@@ -238,7 +313,7 @@ class FormatterAgent(BaseAgent):
                 task_id=str(input.task_id),
                 error=str(exc)[:300],
             )
-            agent_metrics.record_node_execution(self._config.role, "schema_first:invalid_json")
+            agent_metrics.record_formatter_schema(path="schema_first", outcome="invalid")
             return await self._run_legacy(input, task_input)
         except Exception:
             # Provider/timeout failure: same graceful deterministic fallback as legacy.
@@ -257,11 +332,15 @@ class FormatterAgent(BaseAgent):
             # `required`), so the model can silently drop a non-empty answer. Reopen the
             # legacy path, which renders the worker draft instead of an empty document.
             logger.warning("formatter.schema_first.empty_blocks", task_id=str(input.task_id))
-            agent_metrics.record_node_execution(self._config.role, "schema_first:empty_blocks")
+            agent_metrics.record_formatter_schema(path="schema_first", outcome="empty_blocks")
             return await self._run_legacy(input, task_input)
 
         document = align_formatter_meta(document, task_input)
-        agent_metrics.record_node_execution(self._config.role, "schema_first:success")
+        if citations:
+            # Attached after validation, never emitted by the model: blocks are already
+            # painted, and meta does not change layout (W1 invariant).
+            document = document.model_copy(update={"meta": document.meta.model_copy(update={"citations": citations})})
+        agent_metrics.record_formatter_schema(path="schema_first", outcome="valid")
         logger.info(
             "formatter.llm_path",
             formatter_mode="schema_first",
@@ -326,6 +405,7 @@ class FormatterAgent(BaseAgent):
                 error=str(parse_exc)[:300],
             )
             agent_metrics.record_node_execution(self._config.role, "emit:fallback_after_parse_errors")
+            agent_metrics.record_formatter_schema(path="legacy_markdown", outcome="fallback")
             return failure_or_fallback(
                 input=input,
                 task_input=task_input,
@@ -345,6 +425,7 @@ class FormatterAgent(BaseAgent):
             )
 
         agent_metrics.record_node_execution(self._config.role, "emit:llm")
+        agent_metrics.record_formatter_schema(path="legacy_markdown", outcome="valid")
         logger.info(
             "formatter.llm_path",
             formatter_mode="llm_markdown",
@@ -370,3 +451,19 @@ class FormatterAgent(BaseAgent):
             ReplyLocalePolicy.document_prose(output.output),
             output.output.locale,
         )
+
+
+def _bind_source_ids(citations: tuple[CitationRef, ...], untrusted_context: str) -> tuple[CitationRef, ...]:
+    """Attach ``source_id`` where the fence headers name exactly one upload.
+
+    The mapping is built by the same rule that builds the visible chips, so a chip
+    always opens the file it names; a label that stays ambiguous is left unbound.
+    """
+    by_label = attachment_ids_by_label(untrusted_context)
+    if not by_label:
+        return citations
+    bound: list[CitationRef] = []
+    for citation in citations:
+        attachment_id = by_label.get(citation.source_ref)
+        bound.append(citation if attachment_id is None else citation.model_copy(update={"source_id": attachment_id}))
+    return tuple(bound)

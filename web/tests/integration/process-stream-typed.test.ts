@@ -102,4 +102,53 @@ describe('processIntentStream typed frames', () => {
     // The final result still resolves: a preview defect is not a turn failure.
     expect(result.task_id).toBe('task-1');
   });
+
+  it('hands the revision of a revised answer to the caller with the final frame', async () => {
+    // W7b: diff — факт payload'а хода, а не второе поле результата агента. Клиент
+    // получает его вместе с документом, чтобы живой оборот не ждал перезагрузки.
+    const revision = {
+      revision_of: 'prev-hash',
+      changed_blocks: ['b1'],
+      changed_block_indices: [1],
+      removed_blocks: [],
+      unchanged_blocks: 1,
+    };
+    const body = sse([
+      { event: 'result', data: { task_id: 'task-1', thread_id: 'th-1', result: RESULT, revision } },
+      { event: 'done', data: {} },
+    ]);
+    server.use(
+      http.post(
+        PROCESS_URL,
+        () => new HttpResponse(body, { headers: { 'Content-Type': 'text/event-stream' } })
+      )
+    );
+
+    const seen: unknown[] = [];
+    await processIntentStream('сделай короче', 'th-1', null, null, [], {
+      onRevision: value => seen.push(value),
+    });
+
+    expect(seen).toEqual([revision]);
+  });
+
+  it('reports no revision when the turn is a new answer', async () => {
+    const body = sse([
+      { event: 'result', data: { task_id: 'task-1', thread_id: 'th-1', result: RESULT } },
+      { event: 'done', data: {} },
+    ]);
+    server.use(
+      http.post(
+        PROCESS_URL,
+        () => new HttpResponse(body, { headers: { 'Content-Type': 'text/event-stream' } })
+      )
+    );
+
+    const seen: unknown[] = [];
+    await processIntentStream('сравни', 'th-1', null, null, [], {
+      onRevision: value => seen.push(value),
+    });
+
+    expect(seen).toEqual([]);
+  });
 });

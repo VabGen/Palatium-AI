@@ -145,8 +145,10 @@ class AttachmentConfig(BaseConfig):
         default="auto",
         validation_alias="ATTACHMENTS_IMAGE_OCR_BACKEND",
     )
-    #: Gateway model alias for the vision model (e.g. ``tier-vision``). Must exist in
-    #: the gateway's ``model_list``; this is a routing name, not an upstream API id.
+    #: Gateway model alias for the vision model used by the OCR pipeline
+    #: (e.g. ``vision-tier``). Must exist in the gateway's ``model_list``; this is a
+    #: routing name, not an upstream API id. Chat images use ``LLM_VISION_MODEL``
+    #: (ADR 0007) — different path, different budget.
     #: Required for ``gateway``; optional for ``auto`` (Vision escalate when present).
     image_ocr_model: str | None = Field(default=None, validation_alias="ATTACHMENTS_IMAGE_OCR_MODEL")
     #: Upper bound on the original image bytes sent to the model. The intake cap is far

@@ -56,7 +56,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tini \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir \
-        "fastmcp==4.0.0" \
+        "fastmcp==4.1.3" \
         "fastapi==0.141.1" \
         "uvicorn[standard]==0.53.0" \
         "pyjwt==2.15.0" \

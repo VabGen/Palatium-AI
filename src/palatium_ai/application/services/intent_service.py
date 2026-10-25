@@ -20,6 +20,7 @@ from palatium_ai.application.services.intent_hitl_flow import (
 )
 from palatium_ai.application.services.intent_turn_helpers import (
     PENDING_ATTACHMENT_IDS_KEY,
+    FinalizedTurn,
     assistant_turn_content as _assistant_turn_content,
     assistant_turn_payload as _assistant_turn_payload,
     derive_session_title as _derive_session_title,
@@ -27,6 +28,7 @@ from palatium_ai.application.services.intent_turn_helpers import (
     parse_pending_attachment_ids,
     serialize_pending_attachment_ids,
     snapshot_awaits_resume as _snapshot_awaits_resume,
+    stream_result_frame,
     tenant_budget_key as _tenant_budget_key,
     write_audit as _write_audit,
 )
@@ -51,6 +53,7 @@ from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
 from palatium_ai.domain.attachments.context import AttachmentTurnContext
 from palatium_ai.domain.attachments.errors import AttachmentNotFoundError
+from palatium_ai.domain.content import DocumentRevision
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.memory.turns import attachment_ids_payload
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
@@ -71,6 +74,7 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
     from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.application.services.vision_images import VisionImageService
     from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
 
@@ -113,6 +117,7 @@ class IntentService:
         response_cache: ResponseCacheService | None = None,
         graph_write: GraphWritePort | None = None,
         file_reference_resolver: AttachmentReferenceResolver | None = None,
+        vision_images: VisionImageService | None = None,
         formatter_mode: FormatterMode = "legacy",
         formatter_rollout_pct: int = 0,
     ) -> None:
@@ -150,6 +155,7 @@ class IntentService:
             turn_hop_budget_ms=turn_hop_budget_ms,
             graph_write=graph_write,
             file_reference_resolver=file_reference_resolver,
+            vision_images=vision_images,
         )
         self._hitl_flow = IntentHitlFlow(
             graph_runner=self._graph_runner,
@@ -157,7 +163,7 @@ class IntentService:
             hitl_service=hitl_service,
             kill_switch=self._kill_switch,
             cost_budget=self._cost_budget,
-            process_turn=self.process,
+            process_turn=self.finalize_turn,
             dialog_turn_store=dialog_turn_store,
             consolidation=consolidation,
             option_synthesizer=option_synthesizer,
@@ -479,6 +485,34 @@ class IntentService:
         attachment_ids: Sequence[UUID] | None = None,
     ) -> FormatterTaskResult:
         """Возвращает финальный отформатированный ответ платформы."""
+        turn = await self.finalize_turn(
+            text,
+            thread_id,
+            task_id,
+            user_id=user_id,
+            org_id=org_id,
+            is_admin=is_admin,
+            attachment_ids=attachment_ids,
+        )
+        return turn.result
+
+    async def finalize_turn(
+        self,
+        text: str,
+        thread_id: str,
+        task_id: str | None = None,
+        user_id: str | None = None,
+        org_id: str | None = None,
+        *,
+        is_admin: bool = False,
+        attachment_ids: Sequence[UUID] | None = None,
+    ) -> FinalizedTurn:
+        """Run one turn and hand back the agent result with the diff it produced.
+
+        The JSON endpoint only needs ``result`` (``process``), while a HITL resume must
+        also ship ``revision``: both sides of the API then describe the same turn instead
+        of one of them re-deriving "is this a revision?".
+        """
         started = perf_counter()
         resolved_task_id = task_id or str(uuid4())
         logger.info(
@@ -558,6 +592,7 @@ class IntentService:
                 attachment_context=turn_attachments,
             )
         interrupted = _extract_interrupt(final_state)
+        revision: DocumentRevision | None = None
         if interrupted is not None:
             formatted = await self._hitl_flow.finalize_tool_interrupt(
                 interrupt_payload=interrupted,
@@ -567,7 +602,9 @@ class IntentService:
                 org_id=org_id,
             )
         else:
-            formatted = await self._graph_runner.finalize_formatted_state(
+            # A tool interrupt is not a revised document; otherwise the diff comes from
+            # the same single computation that persists the turn.
+            finalized = await self._graph_runner.finalize_formatted_state(
                 final_state,
                 text=text,
                 thread_id=thread_id,
@@ -576,6 +613,8 @@ class IntentService:
                 org_id=org_id,
                 operation="process",
             )
+            formatted = finalized.result
+            revision = finalized.revision
         await self._after_process_metrics_and_cache(
             final_state=final_state if interrupted is None else None,
             formatted=formatted,
@@ -585,7 +624,7 @@ class IntentService:
             started=started,
             skip_cache=bool(resolved_attachments),
         )
-        return formatted
+        return FinalizedTurn(result=formatted, revision=revision)
 
     async def _resolve_response_locale(self, *, thread_id: str, user_text: str) -> str:
         session = await self._session_service.get_session(thread_id=thread_id)
@@ -773,6 +812,7 @@ class IntentService:
             return
 
         interrupted = _extract_interrupt(final_state)
+        revision: DocumentRevision | None = None
         if interrupted is not None:
             formatted = await self._hitl_flow.finalize_tool_interrupt(
                 interrupt_payload=interrupted,
@@ -782,7 +822,9 @@ class IntentService:
                 org_id=org_id,
             )
         else:
-            formatted = await self._graph_runner.finalize_formatted_state(
+            # W7b: the same diff that lands in the persisted turn, so a live revision is
+            # visible without a reload. A tool interrupt is not a revised document.
+            finalized = await self._graph_runner.finalize_formatted_state(
                 final_state,
                 text=text,
                 thread_id=thread_id,
@@ -791,6 +833,8 @@ class IntentService:
                 org_id=org_id,
                 operation="process_stream",
             )
+            formatted = finalized.result
+            revision = finalized.revision
         await self._after_process_metrics_and_cache(
             final_state=final_state if interrupted is None else None,
             formatted=formatted,
@@ -800,12 +844,13 @@ class IntentService:
             started=started,
             skip_cache=bool(resolved_attachments),
         )
-        yield {
-            "event": "result",
-            "task_id": resolved_task_id,
-            "thread_id": thread_id,
-            "result": formatted.model_dump(mode="json"),
-        }
+        frame = stream_result_frame(
+            formatted,
+            task_id=resolved_task_id,
+            thread_id=thread_id,
+            revision=revision,
+        )
+        yield frame
 
     @traceable(name="intent_service.process_hitl_choice")
     async def process_hitl_choice(
@@ -817,7 +862,7 @@ class IntentService:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult:
+    ) -> FinalizedTurn:
         """Resume after user_choice: action_id-bound text, never raw option.label as intent."""
         return await self._hitl_flow.process_hitl_choice(
             thread_id=thread_id,
@@ -854,7 +899,7 @@ class IntentService:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult:
+    ) -> FinalizedTurn:
         """Re-run graph with critic/human reject feedback (no new user turn)."""
         return await self._hitl_flow.revise_after_quality_reject(
             thread_id=thread_id,
@@ -873,7 +918,7 @@ class IntentService:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         """Resume a graph paused on mcp_tool_approval after HITL resolve."""
         return await self._hitl_flow.resume_after_tool_approval(
             thread_id=thread_id,

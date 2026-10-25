@@ -2,11 +2,13 @@ import type {
   ContentBlock,
   ContentDocument,
   DialogTurnResponse,
+  DocumentRevision,
   FormatterTaskResult,
   HITLCardView,
   HitlRespondResponse,
   HitlStepUpChallenge,
 } from '../types/contentDocument';
+import { isDocumentRevision } from '../lib/revision';
 import {
   getAuthToken,
   getRuntimeMode,
@@ -370,6 +372,8 @@ export type ProcessStreamHandlers = {
   onTextDelta?: ProcessStreamDeltaHandler;
   /** Worker / fast-path prose; dual-emit during Formatter stream (fallback until clients migrate). */
   onAnswerDelta?: ProcessStreamDeltaHandler;
+  /** Block diff of a revised answer, carried by the final `result` frame (W7b). */
+  onRevision?: (revision: DocumentRevision) => void;
   /** Abort in-flight SSE (unmount / new turn). */
   signal?: AbortSignal;
 };
@@ -510,6 +514,11 @@ export async function processIntentStream(
       return;
     }
     if (eventName === 'result' && payload.result && typeof payload.result === 'object') {
+      // W7b: the live diff rides on the same frame as the final document; it is the
+      // payload fact the persisted turn carries, not a second contract.
+      if (isDocumentRevision(payload.revision)) {
+        handlers.onRevision?.(payload.revision);
+      }
       result = payload.result as FormatterTaskResult;
       return;
     }
@@ -872,6 +881,49 @@ export async function deleteAttachment(
     orgId
   );
   if (!res.ok && res.status !== 404) throw await apiFailure(res);
+}
+
+/** Where a cited quote sits inside the attachment text (W3b-2). */
+export type CitationLocateOutcome =
+  'declared_range' | 'quote_match' | 'ambiguous_quote' | 'quote_not_found' | 'no_text';
+
+export type CitationLocateRequest = {
+  /** Verbatim provider quote; sent in the body so it never reaches access logs. */
+  quote: string;
+  /** Provider hint only — the server verifies it against the quote before trusting it. */
+  source_range?: [number, number] | null;
+  anchor?: 'char_location' | 'page_location' | 'content_block_location' | 'url_only';
+};
+
+export type CitationLocateResponse = {
+  attachment_id: string;
+  filename: string;
+  outcome: CitationLocateOutcome;
+  /** Absolute offsets in the source, or null when nothing could be located. */
+  start: number | null;
+  end: number | null;
+  window_start: number;
+  window_end: number;
+  text: string;
+  total_chars: number;
+  text_state: 'full' | 'masked';
+};
+
+export async function locateCitation(
+  attachmentId: string,
+  body: CitationLocateRequest,
+  userId?: string | null,
+  orgId?: string | null,
+  signal?: AbortSignal
+): Promise<CitationLocateResponse> {
+  const res = await fetchWithAuth(
+    `/attachments/${encodeURIComponent(attachmentId)}/citation-locate`,
+    { method: 'POST', body: JSON.stringify(body), signal },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
 }
 
 // ────────────────────────────────────────────────────────────────────────────

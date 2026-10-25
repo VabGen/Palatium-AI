@@ -68,9 +68,7 @@ class HitlInteractionPolicy:
     #: capability or small-talk enumeration is content, not an exclusive menu:
     #: promoting it to a required card swallowed the answer the user asked for
     #: (live UI: «Что ты умеешь?» became "choose one of 5 capabilities").
-    _INFORMATIONAL_TASK_KINDS: frozenset[str] = frozenset(
-        {"capability_discovery", "social_conversation"}
-    )
+    _INFORMATIONAL_TASK_KINDS: frozenset[str] = frozenset({"capability_discovery", "social_conversation"})
 
     @classmethod
     def plan(

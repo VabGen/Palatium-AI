@@ -33,12 +33,18 @@ import type { AttachmentConnectorSource } from '../api/client';
 import type {
   ContentBlock,
   ContentDocument,
+  DocumentRevision,
   FormatterTaskResult,
   HITLCardView,
 } from '../types/contentDocument';
+import { isDocumentRevision } from '../lib/revision';
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
+import { markFirstVisualStart, measureFirstVisual } from '../lib/firstVisual';
 import { pendingPhaseForNode } from '../lib/pendingOrb';
+import { useStreamAnnouncer } from '../lib/useStreamAnnouncer';
+import { CitationSources } from './CitationSources';
+import { LiveAnnouncer } from './LiveAnnouncer';
 import { StreamMarkdownPreview } from './StreamMarkdownPreview';
 import { connectSessionSocket, startSessionSocketPing } from '../lib/sessionSocket';
 import { formatNumber, getI18nLocale, t } from '../i18n';
@@ -60,8 +66,9 @@ import {
 } from '../lib/attachments';
 import type { AttachmentDraft } from '../lib/attachments';
 import { BlockRenderer } from './BlockRenderer';
-import { HitlCards } from './HitlCards';
+import { HitlCards, type HitlResolvedEvent } from './HitlCards';
 import { MemoryActions } from './MemoryActions';
+import { RevisionNote } from './RevisionNote';
 import { ThinkingIndicator } from './ThinkingIndicator';
 
 /**
@@ -73,6 +80,12 @@ type AssistantChatMessage = {
   id: string;
   role: 'assistant';
   document: ContentDocument | null;
+  /**
+   * Diff против предыдущего ответа (W7b). Индексы внутри `revision` адресуют блоки
+   * `document`, поэтому при любой замене документа ревизия сбрасывается — иначе
+   * подсветка указала бы на чужой блок.
+   */
+  revision?: DocumentRevision | null;
   hitlCards?: HITLCardView[];
   _requiresReview?: boolean;
   _pendingReview?: boolean;
@@ -135,21 +148,32 @@ function textAsDocument(text: string): ContentDocument {
 function parseAssistantPayload(
   payload: unknown,
   fallbackText: string
-): { document: ContentDocument; requiresReview: boolean; hitlCards: HITLCardView[] } {
+): {
+  document: ContentDocument;
+  requiresReview: boolean;
+  hitlCards: HITLCardView[];
+  revision: DocumentRevision | null;
+} {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>;
     const requiresReview = Boolean(record.requires_review) || false;
     const rawCards = Array.isArray(record.hitl_cards)
       ? record.hitl_cards.filter(isHitlCardView)
       : [];
+    const revision = isDocumentRevision(record.revision) ? record.revision : null;
     if (isContentDocument(record.document)) {
-      return { document: record.document, requiresReview, hitlCards: rawCards };
+      return { document: record.document, requiresReview, hitlCards: rawCards, revision };
     }
     if (isContentDocument(payload)) {
-      return { document: payload, requiresReview, hitlCards: rawCards };
+      return { document: payload, requiresReview, hitlCards: rawCards, revision };
     }
   }
-  return { document: textAsDocument(fallbackText), requiresReview: false, hitlCards: [] };
+  return {
+    document: textAsDocument(fallbackText),
+    requiresReview: false,
+    hitlCards: [],
+    revision: null,
+  };
 }
 
 function getDocumentPlainText(doc: ContentDocument): string {
@@ -234,6 +258,11 @@ export function ChatShell() {
    */
   const [pendingNode, setPendingNode] = useState<string | null>(null);
   const pendingPhase = pendingPhaseForNode(pendingNode);
+  /**
+   * Канал озвучивания (084, W2). Лента — `role="log"` с `aria-live="off"`, поэтому
+   * прогресс объявляется отдельно: ровно один раз на закрытый блок.
+   */
+  const [a11yAnnouncement, a11y] = useStreamAnnouncer();
   /** Typed structured preview (`structured_incremental`): title + closed blocks. */
   const [streamTitle, setStreamTitle] = useState<string | null>(null);
   const [streamBlocks, setStreamBlocks] = useState<Array<{ index: number; block: ContentBlock }>>(
@@ -570,7 +599,7 @@ export function ChatShell() {
             });
             continue;
           }
-          const { document, requiresReview, hitlCards } = parseAssistantPayload(
+          const { document, requiresReview, hitlCards, revision } = parseAssistantPayload(
             turn.payload,
             turn.content
           );
@@ -581,6 +610,7 @@ export function ChatShell() {
             id: turn.id ?? crypto.randomUUID(),
             role: 'assistant',
             document,
+            revision,
             hitlCards: hydratedCards,
             _requiresReview: requiresReview,
             _pendingReview: false,
@@ -606,38 +636,39 @@ export function ChatShell() {
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, busy]);
 
-  const handleHitlResolved = useCallback(
-    (messageId: string, card: HITLCardView, resumed?: FormatterTaskResult | null) => {
-      setMessages(prev =>
-        prev.map(msg => {
-          if (msg.id !== messageId || msg.role !== 'assistant') return msg;
-          const hitlCards = (msg.hitlCards ?? [])
-            .map(existing => (existing.card_id === card.card_id ? card : existing))
-            .filter(existing => existing.status === 'pending');
-          if (resumed?.output) {
-            return {
-              ...msg,
-              document: resumed.output,
-              hitlCards,
-              _pendingReview: false,
-              _requiresReview: resumed.requires_review,
-              status: resumed.status,
-              error: resumed.error ?? undefined,
-            };
-          }
+  const handleHitlResolved = useCallback((messageId: string, event: HitlResolvedEvent) => {
+    const { card, resumed, revision } = event;
+    setMessages(prev =>
+      prev.map(msg => {
+        if (msg.id !== messageId || msg.role !== 'assistant') return msg;
+        const hitlCards = (msg.hitlCards ?? [])
+          .map(existing => (existing.card_id === card.card_id ? card : existing))
+          .filter(existing => existing.status === 'pending');
+        if (resumed?.output) {
           return {
             ...msg,
+            document: resumed.output,
+            // The resume envelope carries the diff for the answer that replaced this
+            // one; without it (a plain choice resume) no marks apply.
+            revision: revision ?? null,
             hitlCards,
-            _pendingReview: hitlCards.length > 0 ? false : msg._pendingReview,
+            _pendingReview: false,
+            _requiresReview: resumed.requires_review,
+            status: resumed.status,
+            error: resumed.error ?? undefined,
           };
-        })
-      );
-      if (resumed?.output) {
-        toast.success(t('toast.resuming'));
-      }
-    },
-    []
-  );
+        }
+        return {
+          ...msg,
+          hitlCards,
+          _pendingReview: hitlCards.length > 0 ? false : msg._pendingReview,
+        };
+      })
+    );
+    if (resumed?.output) {
+      toast.success(t('toast.resuming'));
+    }
+  }, []);
 
   const handleMemoryCardCreated = useCallback(
     (card: HITLCardView, label: string) => {
@@ -681,9 +712,15 @@ export function ChatShell() {
       return;
     }
 
+    // TTFVF: старт — синхронно, до первого `await`. Иначе в метрику попадёт
+    // ожидание токена/сети, и «первый видимый кадр» перестанет быть клиентским
+    // показателем (серверное время меряет `palatium_sse_first_block_seconds`).
+    const turnStartedAt = markFirstVisualStart();
+
     setInput('');
     setBusy(true);
     clearStreamPreview();
+    a11y.reset();
     setPendingNode(null);
     clearStreamBubbleHeight();
     streamAbortRef.current?.abort();
@@ -703,28 +740,40 @@ export function ChatShell() {
         _streaming: true,
       },
     ]);
+    // Замер ставится после commit'а состояния: кадр, который ждёт `measureFirstVisual`,
+    // — первый кадр с орбом и сообщением пользователя, а не предыдущий.
+    void measureFirstVisual(turnStartedAt);
 
     try {
       let hasTextDelta = false;
       let hasTypedPreview = false;
+      let liveRevision: DocumentRevision | null = null;
       const result = await processIntentStream(text, threadId, userId, orgId, attachmentIds, {
         signal: abort.signal,
         onDocumentTitle: title => {
           hasTypedPreview = true;
           setStreamTitle(title);
+          a11y.announceTitle(title);
         },
         onBlockDelta: (index, block) => {
           hasTypedPreview = true;
           appendStreamBlock(index, block);
+          a11y.announceBlock(index, block);
         },
         onTextDelta: (_delta, accumulated) => {
           hasTextDelta = true;
           if (hasTypedPreview) return;
           scheduleStreamPreview(accumulated);
+          a11y.announceMarkdown(accumulated);
         },
         onAnswerDelta: (_delta, accumulated) => {
           if (hasTypedPreview || hasTextDelta) return;
           scheduleStreamPreview(accumulated);
+          a11y.announceMarkdown(accumulated);
+        },
+        // Diff приходит последним кадром: до него документ ещё не финальный.
+        onRevision: revision => {
+          liveRevision = revision;
         },
         // Единственный сигнал «что сейчас делает граф» — узел LangGraph.
         onHop: node => setPendingNode(node),
@@ -735,15 +784,18 @@ export function ChatShell() {
         orgId
       );
       lockStreamBubbleHeight();
-      const assistant = buildAssistantMessage(
-        { ...result, hitl_cards: hydratedCards },
-        assistantId
-      );
+      const assistant: AssistantChatMessage = {
+        ...buildAssistantMessage({ ...result, hitl_cards: hydratedCards }, assistantId),
+        revision: liveRevision,
+      };
       // Document first, then drop preview in the same turn so UI never flashes empty.
       setMessages(prev =>
         prev.map(msg => (msg.id === assistantId && msg.role === 'assistant' ? assistant : msg))
       );
       clearStreamPreview();
+      // Один агрегированный финал вместо лавины: «ответ готов» (+ предупреждение
+      // о проверке, если оно есть), заголовок — только если кадром не пришёл.
+      a11y.announceReady(result);
       streamingAssistantIdRef.current = null;
       // Industry chat pattern (ChatGPT/Claude/Gemini): composer is staging only.
       // After a successful send the file lives on the user message; ready chips
@@ -775,6 +827,9 @@ export function ChatShell() {
         )
       );
       clearStreamPreview();
+      // Ошибка — тоже часть ответа: без объявления пользователь скринридера
+      // остаётся с предыдущим «ответ готов» и не знает, что стрим упал.
+      a11y.announceFailure(message);
       // Keep ready chips on failure so the user can retry without re-upload.
     } finally {
       if (streamAbortRef.current === abort) {
@@ -796,6 +851,9 @@ export function ChatShell() {
         .find(m => m.role === 'user');
       if (!userMsg || userMsg.role !== 'user') return;
 
+      // Тот же замер, что у отправки: regenerate — тоже новый turn для пользователя.
+      const turnStartedAt = markFirstVisualStart();
+
       setMessages(prev =>
         prev.map(msg =>
           msg.id === messageId && msg.role === 'assistant' ? { ...msg, _regenerating: true } : msg
@@ -803,12 +861,14 @@ export function ChatShell() {
       );
       setBusy(true);
       clearStreamPreview();
+      a11y.reset();
       setPendingNode(null);
       clearStreamBubbleHeight();
       streamingAssistantIdRef.current = messageId;
       streamAbortRef.current?.abort();
       const abort = new AbortController();
       streamAbortRef.current = abort;
+      void measureFirstVisual(turnStartedAt);
       try {
         let hasTextDelta = false;
         let hasTypedPreview = false;
@@ -823,19 +883,23 @@ export function ChatShell() {
             onDocumentTitle: title => {
               hasTypedPreview = true;
               setStreamTitle(title);
+              a11y.announceTitle(title);
             },
             onBlockDelta: (index, block) => {
               hasTypedPreview = true;
               appendStreamBlock(index, block);
+              a11y.announceBlock(index, block);
             },
             onTextDelta: (_delta, accumulated) => {
               hasTextDelta = true;
               if (hasTypedPreview) return;
               scheduleStreamPreview(accumulated);
+              a11y.announceMarkdown(accumulated);
             },
             onAnswerDelta: (_delta, accumulated) => {
               if (hasTypedPreview || hasTextDelta) return;
               scheduleStreamPreview(accumulated);
+              a11y.announceMarkdown(accumulated);
             },
             // Тот же контракт, что у первичной отправки: фаза ожидания — от узла.
             onHop: node => setPendingNode(node),
@@ -855,6 +919,7 @@ export function ChatShell() {
           prev.map(msg => (msg.id === messageId && msg.role === 'assistant' ? assistant : msg))
         );
         clearStreamPreview();
+        a11y.announceReady(result);
         streamingAssistantIdRef.current = null;
         requestAnimationFrame(() => clearStreamBubbleHeight());
         toast.success(t('toast.regenerated'));
@@ -882,6 +947,7 @@ export function ChatShell() {
           )
         );
         clearStreamPreview();
+        a11y.announceFailure(err instanceof Error ? err.message : t('toast.regenerateFailed'));
         toast.error(t('toast.regenerateFailed'));
       } finally {
         if (streamAbortRef.current === abort) {
@@ -901,6 +967,7 @@ export function ChatShell() {
       scheduleStreamPreview,
       lockStreamBubbleHeight,
       clearStreamBubbleHeight,
+      a11y,
     ]
   );
 
@@ -963,7 +1030,8 @@ export function ChatShell() {
     setMessages([]);
     setAttachments([]);
     setHydrated(false);
-  }, []);
+    a11y.reset();
+  }, [a11y]);
 
   // ── Counter class (для CSS) ──────────────────────────────────────────────
   const counterClass = overLimit
@@ -1008,7 +1076,20 @@ export function ChatShell() {
         </div>
       </header>
 
-      <main className="transcript" part="transcript">
+      {/*
+        Лента — `role="log"`, а не `main`: у страницы-хоста лендмарк уже есть, и
+        дублировать его из Shadow DOM незачем. `<div>`, а не `<main>`, потому что
+        переопределять роль этого элемента спецификацией не разрешено.
+        `aria-live="off"` обязателен: иначе polite-регион озвучивает каждый
+        `block_delta`, а прогресс идёт отдельным каналом (см. `LiveAnnouncer`).
+      */}
+      <div
+        className="transcript"
+        part="transcript"
+        role="log"
+        aria-live="off"
+        aria-label={t('a11y.transcript')}
+      >
         {hydrated && messages.length === 0 && (
           <div className="empty">
             {userName && (
@@ -1066,6 +1147,9 @@ export function ChatShell() {
           const sourceChips = message.document
             ? displaySourceRefs(message.document.meta.source_refs)
             : [];
+          // Провайдерские якоря точнее чипов из `source_refs`: если они есть, показываем
+          // их (с цитатами), иначе — прежний список имён файлов.
+          const citationAnchors = message.document?.meta.citations ?? [];
 
           const isStreamingBubble =
             Boolean(message._streaming) ||
@@ -1116,14 +1200,19 @@ export function ChatShell() {
                         cards={pendingHitl}
                         userId={userId}
                         orgId={orgId}
-                        onResolved={(card, resumed) =>
-                          handleHitlResolved(message.id, card, resumed)
-                        }
+                        onResolved={event => handleHitlResolved(message.id, event)}
                       />
                     ) : message.document ? (
                       <>
-                        <BlockRenderer document={message.document} />
-                        {sourceChips.length > 0 && (
+                        <RevisionNote revision={message.revision} />
+                        <BlockRenderer document={message.document} revision={message.revision} />
+                        {citationAnchors.length > 0 ? (
+                          <CitationSources
+                            citations={citationAnchors}
+                            userId={userId}
+                            orgId={orgId}
+                          />
+                        ) : sourceChips.length > 0 ? (
                           <ul className="source-ref-chips" aria-label={t('attach.sources')}>
                             {sourceChips.map(ref => (
                               <li key={ref} className="source-ref-chip">
@@ -1131,7 +1220,7 @@ export function ChatShell() {
                               </li>
                             ))}
                           </ul>
-                        )}
+                        ) : null}
                         {showDevGap && <p className="hitl-dev-gap">{t('msg.devGap')}</p>}
                         {message.error && <p className="msg-error">{message.error}</p>}
                         <div className="msg-actions">
@@ -1211,7 +1300,11 @@ export function ChatShell() {
           );
         })}
         <div ref={messageEndRef} />
-      </main>
+      </div>
+
+      {/* Канал озвучивания живёт ВНЕ ленты: `aria-live="off"` на ленте гасит
+          объявления от изменений документа, но не должен гасить прогресс. */}
+      <LiveAnnouncer announcement={a11yAnnouncement} />
 
       <div
         className={`composer-stack${dragActive ? ' is-dragover' : ''}`}

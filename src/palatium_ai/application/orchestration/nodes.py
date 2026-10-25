@@ -645,6 +645,7 @@ async def researcher_node(
             thread_id=snapshot.thread_id,
             user_id=(state.get("user_id") or "").strip(),
             org_id=(state.get("org_id") or "").strip(),
+            image_parts=selectors.turn_image_parts(state),
         )
         agent_output = await harness.execute_with_guardrails(agent, agent_input)
         result = researcher_output_to_task_result(
@@ -706,6 +707,7 @@ async def analyst_node(
             task_input,
             trace_id=_trace_id(state),
             thread_id=snapshot.thread_id,
+            image_parts=selectors.turn_image_parts(state),
         )
         agent_output = await harness.execute_with_guardrails(agent, agent_input)
         result = analyst_output_to_execution_result(
@@ -771,6 +773,7 @@ async def parallel_workers_node(
                 thread_id=snapshot.thread_id,
                 user_id=(state.get("user_id") or "").strip(),
                 org_id=(state.get("org_id") or "").strip(),
+                image_parts=selectors.turn_image_parts(state),
             )
             agent_output = await harness.execute_with_guardrails(researcher, agent_input)
             return researcher_output_to_task_result(
@@ -784,6 +787,7 @@ async def parallel_workers_node(
                 analyst_input,
                 trace_id=_trace_id(state),
                 thread_id=snapshot.thread_id,
+                image_parts=selectors.turn_image_parts(state),
             )
             agent_output = await harness.execute_with_guardrails(analyst, agent_input)
             return analyst_output_to_execution_result(

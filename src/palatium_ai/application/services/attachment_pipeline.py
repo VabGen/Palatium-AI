@@ -219,6 +219,8 @@ class AttachmentPipeline:
     ) -> AttachmentPipelineOutcome:
         """Run PII / secret / injection gates on already-parsed text."""
         pii = apply_attachment_pii_policy(parsed.flow_text, mode=self._pii_policy)
+        if pii.kinds:
+            agent_metrics.record_pii_detected(kinds=pii.kinds, profile="strict")
         if pii.refuse:
             logger.warning(
                 "attachment refused: pii policy reject",
@@ -270,8 +272,12 @@ class AttachmentPipeline:
         # never page-addressed — ``parsed.text`` would hand our ``[[page N]]`` addresses
         # to the model, which copies them into the answer verbatim (the seam leaked).
         safe_text = prepared.text
+        text_masked = prepared.action == "mask"
         if pii.mode == "mask":
             safe_text = mask_pii_in_text(safe_text)
+            # ``mode`` is "mask" whenever the policy says so, including text with no
+            # PII; the flag must describe the blob, not the configuration.
+            text_masked = text_masked or pii.contains_pii
         return _content_outcome(
             parsed=parsed,
             report=report,
@@ -280,6 +286,7 @@ class AttachmentPipeline:
             size_bytes=size_bytes,
             detected_mime_type=detected_for_row,
             contains_pii=pii.contains_pii,
+            text_masked=text_masked,
         )
 
     async def _read_stored(
@@ -456,6 +463,7 @@ def _content_outcome(
     size_bytes: int,
     detected_mime_type: str | None = None,
     contains_pii: bool = False,
+    text_masked: bool = False,
 ) -> AttachmentPipelineOutcome:
     """Build the usable outcome with the scan summary attached for audit."""
     summary = AttachmentScanSummary(
@@ -471,6 +479,7 @@ def _content_outcome(
         page_count=parsed.page_count,
         truncated=parsed.truncated,
         contains_pii=contains_pii,
+        text_masked=text_masked,
         metadata=AttachmentContentMetadata(
             ocr_engine=extraction_source_to_ocr_engine(parsed.extraction_source),
             extraction_source=parsed.extraction_source,

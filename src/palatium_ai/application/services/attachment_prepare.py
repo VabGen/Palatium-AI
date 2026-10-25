@@ -267,10 +267,7 @@ _COPY_RU = _Copy(
 _COPY_EN = _Copy(
     locale="en",
     title="Which file should I use?",
-    body=(
-        "{count} files are attached to this message. Pick one or “All files” — "
-        "I will not guess which document you mean."
-    ),
+    body=("{count} files are attached to this message. Pick one or “All files” — I will not guess which document you mean."),
 )
 
 
@@ -326,10 +323,7 @@ def _clip_body(body: str, *, max_chars: int) -> str:
 
 
 def _missing_text_summary(block: AttachmentContextBlock) -> str:
-    return (
-        f"Файл «{block.filename}» приложен, но текст из него не извлечён. "
-        "Содержимое недоступно; не выдумывай его."
-    )
+    return f"Файл «{block.filename}» приложен, но текст из него не извлечён. Содержимое недоступно; не выдумывай его."
 
 
 __all__ = [

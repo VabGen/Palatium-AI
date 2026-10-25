@@ -1,13 +1,16 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { TokenIcon } from '../icons/TokenIcon';
 import { InlineMarkdown } from './InlineMarkdown';
 import { WidgetEmbed } from './WidgetEmbed';
+import { t } from '../i18n';
+import { changedBlockIndices } from '../lib/revision';
 import type {
   CalloutBlock,
   ChartBlock,
   CodeBlock,
   ContentBlock,
   ContentDocument,
+  DocumentRevision,
   FormulaBlock,
   HeadingBlock,
   KeyValueBlock,
@@ -20,9 +23,15 @@ import type {
 
 type BlockRendererProps = {
   document: ContentDocument;
+  /**
+   * Diff против предыдущего ответа (W7b). Индексы изменённых блоков приходят с
+   * сервера — см. `DocumentRevision.changed_block_indices`.
+   */
+  revision?: DocumentRevision | null;
 };
 
-export const BlockRenderer = memo(({ document }: BlockRendererProps) => {
+export const BlockRenderer = memo(({ document, revision }: BlockRendererProps) => {
+  const changed = useMemo(() => changedBlockIndices(revision), [revision]);
   return (
     <article className="doc" lang={document.locale}>
       {document.title && (
@@ -31,9 +40,19 @@ export const BlockRenderer = memo(({ document }: BlockRendererProps) => {
         </header>
       )}
       <div className="doc-blocks">
-        {document.blocks.map((block, index) => (
-          <BlockView key={`${block.type}-${index}`} block={block} />
-        ))}
+        {document.blocks.map((block, index) => {
+          const key = `${block.type}-${index}`;
+          if (!changed.has(index)) {
+            return <BlockView key={key} block={block} />;
+          }
+          return (
+            <div key={key} className="doc-block-changed" data-revision="changed">
+              {/* Разметка слева — визуальная; факт «блок изменён» нужен и на слух. */}
+              <span className="sr-only">{t('revision.changedBlock')}</span>
+              <BlockView block={block} />
+            </div>
+          );
+        })}
       </div>
     </article>
   );

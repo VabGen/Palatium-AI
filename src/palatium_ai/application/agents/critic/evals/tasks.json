@@ -14,7 +14,9 @@
       "worker_summary": "Prior answer body",
       "user_input_chars": 0
     },
-    "expect": { "status": "success", "requires_review": false, "llm_invoked": false }
+    "expect": { "status": "success", "requires_review": false, "llm_invoked": false },
+    "deepeval": { "metric": "answer_relevancy", "threshold": 0.7 },
+    "expected_output": "Ответ пользователю оформлен таблицей по предыдущему ответу."
   },
   {
     "id": "answer_continuity_gate",

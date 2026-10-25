@@ -14,10 +14,11 @@ from palatium_ai.application.services.hitl_service import (
     HitlCardNotFoundError,
     HitlInvalidActionError,
 )
+from palatium_ai.application.services.intent_turn_helpers import FinalizedTurn
 from palatium_ai.application.services.kill_switch import KillSwitchEngagedError
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
-from palatium_ai.domain.content import ContentDocument, DocumentMeta, ParagraphBlock
+from palatium_ai.domain.content import ContentDocument, DocumentMeta, DocumentRevision, ParagraphBlock
 from palatium_ai.domain.hitl.cards import HITLCardView, HITLResolveRequest, HITLResolveResult
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 
@@ -89,12 +90,19 @@ def _formatter_from_off_graph_payload(
 
 
 class HitlRespondOutcome(BaseModel):
-    """Resolve result plus optional resumed formatter output."""
+    """Resolve result plus optional resumed formatter output and its diff.
+
+    ``revision`` rides beside ``resumed`` for the same reason it rides beside the SSE
+    ``result`` frame: the diff is a turn fact, not part of the agent contract (030). A
+    client that swaps the document on resume can therefore paint the marks immediately
+    instead of waiting for a hydrate.
+    """
 
     model_config = {"frozen": True}
 
     resolve: HITLResolveResult
     resumed: FormatterTaskResult | None = None
+    revision: DocumentRevision | None = None
 
 
 class HitlRespondFacade:
@@ -149,7 +157,9 @@ class HitlRespondFacade:
             is_admin=is_admin,
             acting_manager=acting_manager,
         )
-        return HitlRespondOutcome(resolve=resolve, resumed=resumed)
+        if resumed is None:
+            return HitlRespondOutcome(resolve=resolve)
+        return HitlRespondOutcome(resolve=resolve, resumed=resumed.result, revision=resumed.revision)
 
     async def _resume_after_resolve(
         self,
@@ -161,7 +171,7 @@ class HitlRespondFacade:
         actor_org_id: str | None,
         is_admin: bool,
         acting_manager: bool,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         if resolve.replayed:
             return None
         resume_user_id, resume_org_id = self._resume_identity(
@@ -246,7 +256,7 @@ class HitlRespondFacade:
         resume_user_id: str,
         resume_org_id: str,
         is_admin: bool,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         if card.purpose == "mcp_tool_approval":
             if _is_off_graph_tool_task(card.task_id):
                 payload = await self._resolve_pending_mutation(
@@ -255,10 +265,12 @@ class HitlRespondFacade:
                     task_id=card.task_id,
                 )
                 if body.action_id == "approve":
-                    return _formatter_from_off_graph_payload(
+                    # Off-graph mutation summary is a new one-block answer, never a diff.
+                    formatted = _formatter_from_off_graph_payload(
                         task_id=card.task_id,
                         payload=payload,
                     )
+                    return FinalizedTurn(result=formatted) if formatted is not None else None
                 return None
             return await self._intent.resume_after_tool_approval(
                 thread_id=card.thread_id,
@@ -298,7 +310,7 @@ class HitlRespondFacade:
         resume_user_id: str,
         resume_org_id: str,
         is_admin: bool,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         if body.action_id == "reject":
             return await self._intent.revise_after_quality_reject(
                 thread_id=card.thread_id,

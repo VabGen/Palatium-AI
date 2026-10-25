@@ -37,6 +37,7 @@ from palatium_ai.domain.attachments import (
     Attachment,
     AttachmentAnalyzePayload,
     AttachmentChunkedUploadError,
+    AttachmentCitationLookup,
     AttachmentContent,
     AttachmentContentMissingError,
     AttachmentContextBlock,
@@ -59,6 +60,7 @@ from palatium_ai.domain.attachments import (
     extraction_source_to_extract_status,
 )
 from palatium_ai.domain.attachments.fence_source import attachment_fence_source
+from palatium_ai.domain.content.citations import CitationAnchor, CitationLocator, citation_window
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
 from palatium_ai.domain.memory.tool_output import wrap_untrusted_tool_output
 from palatium_ai.domain.policies.types import UntrustedContentAction
@@ -584,6 +586,57 @@ class AttachmentService:
     async def get(self, *, attachment_id: UUID, user_id: str) -> Attachment:
         """Fetch one attachment or raise the typed not-found error."""
         return await self._require(attachment_id, user_id=user_id)
+
+    @traceable(name="attachment.locate_citation")
+    async def locate_citation(
+        self,
+        *,
+        attachment_id: UUID,
+        user_id: str,
+        quote: str,
+        declared_range: tuple[int, int] | None,
+        anchor: CitationAnchor,
+    ) -> AttachmentCitationLookup:
+        """Return the bounded source slice around a cited quote (W3b-2).
+
+        The owner check is the same one every other read uses (explicit ``user_id``
+        filter on top of RLS, 060) — a citation is not a capability to read someone
+        else's document. What the caller gets is a window around the located span,
+        never the whole body (020).
+        """
+        attachment = await self._require(attachment_id, user_id=user_id)
+        content = await self._read_content(attachment)
+        location = CitationLocator.locate(
+            text=content.safe_text,
+            quote=quote,
+            declared_range=declared_range,
+            anchor=anchor,
+        )
+        focus = (location.start, location.end) if location.start is not None and location.end is not None else None
+        window = citation_window(content.safe_text, focus=focus)
+        agent_metrics.record_citation_highlight(outcome=location.outcome)
+        await self._audit(
+            event="attachment_citation_located",
+            thread_id=attachment.thread_id or "",
+            payload={
+                "attachment_id": str(attachment_id),
+                "outcome": location.outcome,
+                "quote_chars": str(len(quote)),
+                "total_chars": str(len(content.safe_text)),
+            },
+        )
+        return AttachmentCitationLookup(
+            attachment_id=attachment.id,
+            filename=attachment.filename,
+            outcome=location.outcome,
+            start=location.start,
+            end=location.end,
+            window_start=window.start,
+            window_end=window.end,
+            text=window.text,
+            total_chars=len(content.safe_text),
+            text_state="masked" if content.text_masked else "full",
+        )
 
     async def list_for_thread(self, *, thread_id: str, user_id: str) -> list[Attachment]:
         """List live attachments bound to a thread, newest first.
@@ -1238,6 +1291,7 @@ class AttachmentService:
             page_count=attachment.page_count or 0,
             mime_type=attachment.mime_type,
             text_state="extracted",
+            contains_pii=attachment.contains_pii,
         )
 
     def _missing_text_block(self, attachment: Attachment, *, source: str) -> AttachmentContextBlock:
@@ -1261,6 +1315,7 @@ class AttachmentService:
             page_count=attachment.page_count or 0,
             mime_type=attachment.mime_type,
             text_state="missing",
+            contains_pii=attachment.contains_pii,
         )
 
     async def _reviewed_body(self, attachment: Attachment) -> _ReviewedBody:

@@ -14,15 +14,25 @@ from pydantic import SecretStr
 
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
+from palatium_ai.application.services.intent_turn_helpers import FinalizedTurn
 from palatium_ai.core.config.security import SecurityConfig
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
-from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock
+from palatium_ai.domain.content import ContentDocument, DocumentMeta, DocumentRevision, HeadingBlock
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 from palatium_ai.presentation.api.routers import hitl as hitl_router
 from palatium_ai.presentation.middleware.auth import AuthMiddleware
 from palatium_ai.presentation.security.jwt import JwtTokenService
 
 HITL_HMAC = "unit-test-hitl-hmac-key-32bytes!!"
+
+#: The diff the resume must carry back, so the client paints marks without a hydrate.
+_REVISION = DocumentRevision(
+    revision_of="a" * 32,
+    changed_blocks=("0123456789abcdef",),
+    changed_block_indices=(0,),
+    removed_blocks=(),
+    unchanged_blocks=0,
+)
 
 
 def _doc(*, title: str = "Revised answer") -> ContentDocument:
@@ -58,13 +68,16 @@ def hitl_api_client(
     tokens = JwtTokenService(security)
     hitl_service = HitlService(InMemoryHitlCardStore(), signing_secret=HITL_HMAC)
     revise = AsyncMock(
-        return_value=FormatterTaskResult(
-            task_id="task-1",
-            agent_role="formatter",
-            status="success",
-            confidence=0.9,
-            requires_review=False,
-            output=_doc(),
+        return_value=FinalizedTurn(
+            result=FormatterTaskResult(
+                task_id="task-1",
+                agent_role="formatter",
+                status="success",
+                confidence=0.9,
+                requires_review=False,
+                output=_doc(),
+            ),
+            revision=_REVISION,
         )
     )
     acknowledge = AsyncMock()
@@ -117,6 +130,10 @@ async def test_quality_reject_respond_returns_resumed(
     assert payload["resolve"]["card"]["resolved_action_id"] == "reject"
     assert payload["resumed"] is not None
     assert payload["resumed"]["output"]["title"] == "Revised answer"
+    # The resume must hand the client the diff with the replacement document: indices
+    # address the *new* blocks, so marks survive the swap without a reload.
+    assert payload["revision"]["changed_block_indices"] == [0]
+    assert payload["revision"]["revision_of"] == "a" * 32
     revise.assert_awaited_once()
     acknowledge.assert_not_awaited()
 
@@ -145,6 +162,7 @@ async def test_quality_approve_respond_acks_without_resumed(
     assert response.status_code == 200
     payload: dict[str, Any] = response.json()
     assert payload["resolve"]["card"]["resolved_action_id"] == "approve"
+    assert payload["revision"] is None
     assert payload["resumed"] is None
     revise.assert_not_awaited()
     acknowledge.assert_awaited_once()

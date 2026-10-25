@@ -44,15 +44,30 @@ from dataclasses import dataclass
 from pydantic import TypeAdapter, ValidationError
 
 from palatium_ai.core.logging import get_logger
-from palatium_ai.domain.content import ContentBlock, validate_content_block
+from palatium_ai.domain.content import ContentBlock, ParagraphBlock, validate_content_block
+from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
+from palatium_ai.domain.policies.stream_display import StreamDisplayPolicy
 
 logger = get_logger(__name__)
 
 _BLOCKS_KEY_RE = re.compile(r'"blocks"\s*:\s*\[')
 _TITLE_KEY_RE = re.compile(r'"title"\s*:\s*"')
+_TEXT_KEY_RE = re.compile(r'"text"\s*:\s*"')
+_BLOCK_TYPE_RE = re.compile(r'"type"\s*:\s*"([a-z_]+)"')
 #: Document keys that carry user-readable prose. ``title``/``body`` cover callouts,
 #: ``text`` covers paragraphs, headings, list items, table cells and steps.
 _PROSE_KEYS = frozenset({"text", "title", "body"})
+_STRING_ESCAPES = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+}
+_HEX4_RE = re.compile(r"[0-9a-fA-F]{4}")
 #: Built once: the block union is frozen, and per-block adapter construction would
 #: rebuild the same validators on every streamed element.
 #: ``ContentBlock`` is an ``Annotated`` discriminated union — a valid runtime type
@@ -73,17 +88,25 @@ class PartialFrame:
     text: str = ""
     block: ContentBlock | None = None
     index: int = -1
+    #: ``text`` continues the previous frame without a paragraph break. Only an open
+    #: ``paragraph`` streamed in several deltas (and its closing remainder) sets it:
+    #: inserting "\n\n" mid-sentence would break the sentence the user is reading.
+    continues_prose: bool = False
 
 
 class PartialDocumentScanner:
     """Accumulates streamed document JSON and yields newly closed frames."""
 
-    __slots__ = ("_buffer", "_emitted_blocks", "_title_emitted")
+    __slots__ = ("_buffer", "_emitted_blocks", "_prose_emitted", "_prose_index", "_title_emitted")
 
     def __init__(self) -> None:
         self._buffer = ""
         self._emitted_blocks = 0
         self._title_emitted = False
+        # Index of the open block whose prose is streaming, and how many of its
+        # decoded characters the client already has (append-only bookkeeping).
+        self._prose_index = -1
+        self._prose_emitted = 0
 
     def feed(self, chunk: str) -> list[PartialFrame]:
         """Add a streamed chunk; return frames that became available."""
@@ -103,17 +126,58 @@ class PartialDocumentScanner:
             if title:
                 out.append(PartialFrame(text=title))
                 self._title_emitted = True
-        blocks = _closed_block_objects(self._buffer)
+        blocks, closed_end = _closed_objects(self._buffer)
         for raw in blocks[self._emitted_blocks :]:
             index = self._emitted_blocks
             self._emitted_blocks += 1
-            frame = _frame_from_block(raw, index)
+            already = self._prose_emitted if index == self._prose_index else 0
+            frame = _frame_from_block(raw, index, already_emitted=already)
+            if index == self._prose_index:
+                self._prose_index = -1
+                self._prose_emitted = 0
             if frame is not None:
                 out.append(frame)
+        out.extend(self._open_prose_frames(closed_end))
         return out
 
+    def _open_prose_frames(self, closed_end: int) -> list[PartialFrame]:
+        """Prose of the element that is still open, when its type allows it.
 
-def _frame_from_block(raw: str, index: int) -> PartialFrame | None:
+        The type must already be known to be a ``paragraph`` — a delta painted before
+        ``"type"`` arrives could turn out to be a heading or a table cell, and the
+        strategy matrix would be violated after the fact. Nothing is emitted unless
+        the block type is known and streams by policy (W1).
+        """
+        open_at = _open_object_start(self._buffer, closed_end)
+        if open_at < 0:
+            self._prose_index = -1
+            self._prose_emitted = 0
+            return []
+        region = self._buffer[open_at:]
+        type_match = _BLOCK_TYPE_RE.search(region)
+        if type_match is None or not StreamDisplayPolicy.partial_prose_allowed(type_match.group(1)):
+            return []
+        text_at = _TEXT_KEY_RE.search(region, type_match.end())
+        if text_at is None:
+            return []
+        decoded = _decode_json_string_prefix(region, text_at.end() - 1)
+        index = self._emitted_blocks
+        if index != self._prose_index:
+            # A new element opened: its prose starts a new paragraph.
+            self._prose_index = index
+            self._prose_emitted = 0
+        pending = decoded[self._prose_emitted :]
+        # Never split an internal marker across frames (020): hold the tail back and
+        # let the next delta — or the closing frame — deliver it sanitised.
+        cut = InternalVocabularyPolicy.safe_cut(pending)
+        if cut <= 0:
+            return []
+        started = self._prose_emitted > 0
+        self._prose_emitted += cut
+        return [PartialFrame(text=pending[:cut], index=index, continues_prose=started)]
+
+
+def _frame_from_block(raw: str, index: int, *, already_emitted: int = 0) -> PartialFrame | None:
     """Parse one closed element; typed block when valid, prose either way."""
     try:
         node = json.loads(raw)
@@ -126,7 +190,12 @@ def _frame_from_block(raw: str, index: int) -> PartialFrame | None:
     block = _typed_block(node, index)
     if not text and block is None:
         return None
-    return PartialFrame(text=text, block=block, index=index)
+    if isinstance(block, ParagraphBlock):
+        # The streamed prefix is a prefix of the validated ``text`` — trusting the
+        # contract here (not the raw decode) keeps prefix + remainder == block.text
+        # even when an escape was held back (Vercel ``streamObject`` superset rule).
+        text = block.text[already_emitted:]
+    return PartialFrame(text=text, block=block, index=index, continues_prose=already_emitted > 0)
 
 
 def _typed_block(node: object, index: int) -> ContentBlock | None:
@@ -178,11 +247,16 @@ def _blocks_start(buffer: str) -> int:
     return match.end() if match is not None else -1
 
 
-def _closed_block_objects(buffer: str) -> list[str]:
-    """Raw JSON of every balanced element of the top-level ``blocks`` array."""
+def _closed_objects(buffer: str) -> tuple[list[str], int]:
+    """Raw JSON of every balanced element of ``blocks[]``, plus the scan position.
+
+    The returned offset is where scanning stopped — right after the last closed
+    element, or at the ``]`` that closed the array. The open element (if any) starts
+    there, which is what partial-prose streaming needs.
+    """
     start = _blocks_start(buffer)
     if start < 0:
-        return []
+        return [], -1
     objects: list[str] = []
     index = start
     while index < len(buffer):
@@ -197,7 +271,77 @@ def _closed_block_objects(buffer: str) -> list[str]:
             break  # element still streaming
         objects.append(buffer[index : end + 1])
         index = end + 1
-    return objects
+    return objects, index
+
+
+def _open_object_start(buffer: str, scan_from: int) -> int:
+    """Index of the ``{`` of the element that is still open, -1 when there is none."""
+    if scan_from < 0:
+        return -1
+    index = scan_from
+    while index < len(buffer) and buffer[index] in " \t\r\n,":
+        index += 1
+    return index if index < len(buffer) and buffer[index] == "{" else -1
+
+
+def _decode_json_string_prefix(buffer: str, quote_at: int) -> str:
+    """Decode as much of the JSON string literal at ``quote_at`` as is complete.
+
+    Stops before anything that could still change meaning: an escape split across
+    chunks (``u00`` → ``u00e9``), a lone high surrogate that cannot be UTF-8
+    encoded, or an escape JSON does not define. Whatever is held back is delivered by
+    the closing frame from the validated block, so the painted prefix is always a
+    prefix of the final text (no layout shift, no wrong character).
+    """
+    out: list[str] = []
+    index = quote_at + 1
+    length = len(buffer)
+    while index < length:
+        char = buffer[index]
+        if char == '"':
+            break
+        if char != "\\":
+            out.append(char)
+            index += 1
+            continue
+        if index + 1 >= length:
+            break
+        marker = buffer[index + 1]
+        if marker == "u":
+            decoded = _decode_unicode_escape(buffer, index, length)
+            if decoded is None:
+                break
+            text, consumed = decoded
+            out.append(text)
+            index += consumed
+            continue
+        replacement = _STRING_ESCAPES.get(marker)
+        if replacement is None:
+            break  # malformed escape: let the closed block be authoritative
+        out.append(replacement)
+        index += 2
+    return "".join(out)
+
+
+def _decode_unicode_escape(buffer: str, index: int, length: int) -> tuple[str, int] | None:
+    """Decode ``uXXXX`` (with its surrogate pair) at ``index``; None while incomplete."""
+    if index + 6 > length:
+        return None
+    digits = buffer[index + 2 : index + 6]
+    if _HEX4_RE.fullmatch(digits) is None:
+        return None
+    code = int(digits, 16)
+    if not 0xD800 <= code <= 0xDBFF:
+        return chr(code), 6
+    if index + 12 > length:
+        return None
+    low_digits = buffer[index + 8 : index + 12]
+    if buffer[index + 6 : index + 8] != "\\u" or _HEX4_RE.fullmatch(low_digits) is None:
+        return None
+    low = int(low_digits, 16)
+    if not 0xDC00 <= low <= 0xDFFF:
+        return None
+    return chr(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)), 12
 
 
 def _balanced_object_end(buffer: str, start: int) -> int:

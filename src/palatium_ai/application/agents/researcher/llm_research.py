@@ -25,7 +25,7 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentOutput
 from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutput
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.llm.models import ChatMessage, ImagePart
 
 if TYPE_CHECKING:
     from palatium_ai.application.tools.executor import ToolExecutor
@@ -49,6 +49,7 @@ async def run_llm_research(
     task_id: UUID,
     agent_role: str,
     grounding_degraded: bool = False,
+    image_parts: tuple[ImagePart, ...] = (),
 ) -> AgentOutput:
     skill_references = await hydrate_skill_references(
         catalog_text=skill_catalog,
@@ -84,6 +85,9 @@ async def run_llm_research(
                 },
                 ensure_ascii=False,
             ),
+            # Images ride on the user turn (the ask), never on system/assistant turns;
+            # the admission decision was made once at graph entry (ADR 0007).
+            image_parts=image_parts,
         ),
     ]
 

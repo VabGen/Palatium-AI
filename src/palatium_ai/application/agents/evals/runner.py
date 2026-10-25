@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from palatium_ai.application.agents.evals.cassette import run_cassette_task
+from palatium_ai.application.agents.evals.decomposed_judge import DecomposedJudgeGrader
 from palatium_ai.application.agents.evals.judge_client import EvalJudgeClientFactory
 from palatium_ai.application.agents.evals.llm_judge import LlmJudgeGrader, llm_judge
 from palatium_ai.application.agents.evals.report import AgentEvalReport, EvalSuiteReport, TaskEvalReport
@@ -25,7 +26,9 @@ _BASELINE_PATH = Path(__file__).resolve().parent / "baseline.json"
 _NIGHTLY_BASELINE_PATH = Path(__file__).resolve().parent / "nightly_baseline.json"
 _NIGHTLY_TASKS_PATH = Path(__file__).resolve().parent / "nightly_tasks.json"
 
-_AGENT_PACKAGES: tuple[str, ...] = (
+#: Agents with a deterministic eval package. Single source for the full sweep,
+#: the prompt gate and the asset tests (010 — no third copy of the list).
+AGENT_PACKAGES: tuple[str, ...] = (
     "intent_classifier",
     "context_enricher",
     "supervisor",
@@ -56,6 +59,20 @@ def _load_tasks(agent: str) -> list[dict[str, Any]]:
         msg = f"tasks.json for {agent} must be a non-empty list"
         raise ValueError(msg)
     return [item for item in raw if isinstance(item, dict)]
+
+
+def load_agent_tasks(agent: str) -> list[dict[str, Any]]:
+    """Public accessor for one agent's eval cases (used by alternate graders)."""
+    return _load_tasks(agent)
+
+
+async def resolve_task_output(
+    agent: str,
+    raw_task: dict[str, Any],
+    runtime_output: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Public wrapper: runtime → cassette → fixture resolution for one case."""
+    return await _resolve_task_output(agent, raw_task, runtime_output or {})
 
 
 def load_baseline() -> tuple[dict[str, float], dict[str, float]]:
@@ -143,7 +160,7 @@ async def run_agent_evals(agent: str, *, output: dict[str, Any] | None = None) -
 
 async def run_all_agent_evals() -> dict[str, AgentEvalReport]:
     reports: dict[str, AgentEvalReport] = {}
-    for agent in _AGENT_PACKAGES:
+    for agent in AGENT_PACKAGES:
         reports[agent] = await run_agent_evals(agent)
     return reports
 
@@ -165,6 +182,7 @@ def load_nightly_tasks() -> list[dict[str, Any]]:
 async def run_nightly_evals(*, llm_factory: EvalJudgeClientFactory | None = None) -> AgentEvalReport:
     tasks = load_nightly_tasks()
     grader = llm_judge if llm_factory is None else LlmJudgeGrader(llm_factory=llm_factory)
+    decomposed = DecomposedJudgeGrader(llm_factory=llm_factory)
     task_reports: list[TaskEvalReport] = []
     for raw_task in tasks:
         task_id = str(raw_task.get("id") or raw_task.get("task_id") or "nightly-task")
@@ -182,7 +200,11 @@ async def run_nightly_evals(*, llm_factory: EvalJudgeClientFactory | None = None
             continue
         agent_output, mode = await _resolve_task_output(agent.strip(), raw_task, {})
         merged = {**raw_task, "id": task_id}
-        grade = await grader.grade(merged, agent_output)
+        # Per-task judge mode: the decomposed judge reports four axes, which older
+        # baselines cannot express, so opting in is explicit per task (075).
+        decomposed_task = str(raw_task.get("judge_mode") or "").strip() == "decomposed"
+        task_grader: Grader = decomposed if decomposed_task else grader
+        grade = await task_grader.grade(merged, agent_output)
         threshold = float(raw_task.get("pass_threshold", 0.7))
         passed_task = grade.passed and grade.score >= threshold
         final = grade if passed_task else grade.model_copy(update={"passed": False})
@@ -192,7 +214,7 @@ async def run_nightly_evals(*, llm_factory: EvalJudgeClientFactory | None = None
                 score=final.score,
                 passed=final.passed,
                 details=final.details,
-                mode=f"llm_judge:{mode}",
+                mode=f"{'decomposed_judge' if decomposed_task else 'llm_judge'}:{mode}",
             )
         )
     total = len(task_reports)

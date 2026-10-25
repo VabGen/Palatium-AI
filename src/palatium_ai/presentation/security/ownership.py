@@ -86,7 +86,10 @@ async def ensure_session_for_principal(
     follow-up read then 404s *after* a successful mutation. One helper owns that
     contract so the ordering cannot drift per router (055).
     """
-    session = await load_session_for_principal(
+    # Ownership gate only: the row is not read for data, the call raises before the
+    # mutation below. Binding it to a variable invited "return the checked row" — but a
+    # fresh client-minted thread has no row yet, so the touched one is the answer (055).
+    await load_session_for_principal(
         request=request,
         principal=principal,
         session_service=session_service,

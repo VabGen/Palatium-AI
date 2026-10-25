@@ -165,6 +165,38 @@ RESPONSE_SHAPE_DEFAULT: ResponseShape = "auto"
 StreamingContract = Literal["structured_incremental", "buffered", "legacy_markdown"]
 STREAMING_CONTRACT_DEFAULT: StreamingContract = "legacy_markdown"
 
+# --- Per-block display strategy while the document streams (W1) ---
+
+# Which block types may show partial content while their JSON element is still open.
+# Closed set (010); owned by ``domain/policies/stream_display.py``.
+#   text_delta — the element's prose may be painted as it arrives. Safe only where a
+#                prefix is a readable answer in progress (a paragraph).
+#   skeleton   — reserved space, no partial content: a half-list or half-table makes
+#                the user start reading wrong data.
+#   on_close   — nothing at all until the element is complete: partial code or math is
+#                misinformation, and a heading is too short to stream usefully.
+StreamDisplay = Literal["text_delta", "skeleton", "on_close"]
+
+# --- Generation contract and schema verdict (W0b) ---
+
+# Which contract actually produced the document, after the rollout decision — so a
+# metric can compare cohorts without reading agent internals (040).
+FormatterGenerationPath = Literal["schema_first", "legacy_markdown"]
+
+# Verdict of the generation attempt. Closed set (010). Which path emits which value:
+#   valid        — the model output validated against ``ContentDocument`` (both paths).
+#   invalid      — provider JSON failed the schema (``schema_first``: no repair loop).
+#   empty_blocks — schema-valid document without blocks for a non-empty answer: the
+#                  model dropped content the provider does not mark as required.
+#   unsupported  — the provider refused ``stream`` + ``json_schema``, so no verdict
+#                  exists and this attempt must not enter the validity ratio.
+#   fallback     — ``legacy_markdown`` could not parse the Markdown after repairs and
+#                  the turn is rendered deterministically instead.
+# Provider/timeout failures are deliberately absent: ``palatium_agent_errors_total``
+# already owns them, and counting a transport failure as a schema failure would put
+# a non-schema event in the denominator (050).
+FormatterSchemaOutcome = Literal["valid", "invalid", "empty_blocks", "unsupported", "fallback"]
+
 # --- Answer writer (single-writer contract, P1a) ---
 
 # Which component owns the user-visible deliverable for one turn. Exactly one writer:
@@ -231,6 +263,8 @@ __all__ = [
     "ContinuationKind",
     "ExecutionStrategy",
     "FileReferenceKind",
+    "FormatterGenerationPath",
+    "FormatterSchemaOutcome",
     "FormatterStyleHint",
     "GroundingMode",
     "MemoryMutationKind",
@@ -238,6 +272,7 @@ __all__ = [
     "PresentationOwner",
     "ResponseShape",
     "RouteStrategy",
+    "StreamDisplay",
     "StreamingContract",
     "TaskKind",
     "TransformationKind",

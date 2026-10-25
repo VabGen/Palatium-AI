@@ -256,9 +256,7 @@ async def test_other_failures_do_not_mint_file_card() -> None:
 @pytest.mark.asyncio()
 async def test_all_files_choice_keeps_turn_uploads_without_resolving_a_name() -> None:
     process_turn = AsyncMock(return_value=object())
-    resolver = _Resolver(
-        FileReferenceResolution(status="ambiguous", reason="several_thread_files", candidates=_NAMES)
-    )
+    resolver = _Resolver(FileReferenceResolution(status="ambiguous", reason="several_thread_files", candidates=_NAMES))
     flow = _flow(resolver, _CardService(), process_turn)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     card = HITLCardView(

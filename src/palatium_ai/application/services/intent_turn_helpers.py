@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -14,6 +15,8 @@ from palatium_ai.core.observability.audit import get_audit_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.content import ContentDocument, DocumentRevision, document_content_hash, document_revision
+from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.extract_admission import ExtractAdmissionPolicy
 
 if TYPE_CHECKING:
@@ -21,6 +24,10 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.memory_extract import MemoryExtractService
 
 logger = get_logger(__name__)
+
+#: Payload schema tag for persisted assistant turns. History readers must keep treating
+#: unknown tags as "no structured document" instead of guessing a shape.
+ASSISTANT_TURN_SCHEMA = "assistant_turn_v1"
 
 PENDING_ATTACHMENT_IDS_KEY = "pending_attachment_ids"
 
@@ -141,17 +148,133 @@ def assistant_turn_content(result: FormatterTaskResult) -> str:
     return result.output.plain_text(4000)
 
 
-def assistant_turn_payload(result: FormatterTaskResult) -> dict[str, object] | None:
+def _previous_assistant_document(window: DialogTurnWindow | None) -> ContentDocument | None:
+    """Last persisted answer of the thread, if it is readable as a document.
+
+    A malformed or legacy turn is skipped, not raised: an unreadable old answer is a
+    missing diff base, never a failed turn (035).
+    """
+    from pydantic import ValidationError
+
+    if window is None:
+        return None
+    for turn in reversed(window.turns):
+        if turn.role != "assistant" or not isinstance(turn.payload, dict):
+            continue
+        if turn.payload.get("schema") != ASSISTANT_TURN_SCHEMA:
+            continue
+        raw = turn.payload.get("document")
+        if raw is None:
+            continue
+        try:
+            return ContentDocument.model_validate(raw)
+        except ValidationError:
+            continue
+    return None
+
+
+def assistant_revision(
+    result: FormatterTaskResult,
+    window: DialogTurnWindow | None,
+    *,
+    revision_requested: bool,
+) -> DocumentRevision | None:
+    """Server-side diff against the previous answer — ids are hashes, never model output.
+
+    ``revision_requested`` comes from ``RevisionPolicy`` (re-answer after rejection, or a
+    transform of the prior answer). Identical output is not a revision: a re-render must
+    not claim a diff of nothing.
+    """
+    if not revision_requested or result.output is None:
+        return None
+    previous = _previous_assistant_document(window)
+    if previous is None:
+        return None
+    if document_content_hash(previous) == document_content_hash(result.output):
+        return None
+    return document_revision(previous, result.output)
+
+
+def turn_revision(
+    result: FormatterTaskResult,
+    final_state: AgentGraphState,
+) -> DocumentRevision | None:
+    """Diff of this turn against the previous answer — the only entry point for callers.
+
+    The *decision* (``RevisionPolicy``) and the *computation* (``document_revision``)
+    each live in one place; callers must not re-assemble the axes themselves, otherwise
+    the persisted payload and the live response could disagree about what a revision is.
+    """
+    from palatium_ai.application.orchestration import selectors as orch_selectors
+    from palatium_ai.domain.policies.revision import RevisionPolicy
+
+    return assistant_revision(
+        result,
+        final_state.get("dialog_window"),
+        revision_requested=RevisionPolicy.continues_prior_document(
+            revision_feedback=orch_selectors.resolved_revision_feedback(final_state),
+            transformation=orch_selectors.resolved_transformation(final_state),
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizedTurn:
+    """One persisted assistant turn: the agent result and the server-computed diff.
+
+    ``revision`` cannot live on ``FormatterTaskResult`` (030: the agent returns its own
+    output, not store facts), yet every caller of a finalize step needs both — the SSE
+    frame, the HITL resume envelope, the persisted payload. Returning the pair keeps a
+    single computation and stops call sites from re-deriving "is this a revision?".
+    """
+
+    result: FormatterTaskResult
+    revision: DocumentRevision | None = None
+
+
+def assistant_turn_payload(
+    result: FormatterTaskResult,
+    *,
+    revision: DocumentRevision | None = None,
+) -> dict[str, object] | None:
     """Persist document + HITL card ids/meta for hydrate — never capability tokens."""
     from palatium_ai.domain.hitl.choice_resume import hitl_card_public_dump
 
     if result.output is None and not result.hitl_cards:
         return None
-    return {
-        "schema": "assistant_turn_v1",
+    payload: dict[str, object] = {
+        "schema": ASSISTANT_TURN_SCHEMA,
         "document": result.output.model_dump(mode="json") if result.output is not None else None,
         "hitl_cards": [hitl_card_public_dump(card) for card in result.hitl_cards],
     }
+    if revision is not None:
+        payload["revision"] = revision.model_dump(mode="json")
+    return payload
+
+
+def stream_result_frame(
+    result: FormatterTaskResult,
+    *,
+    task_id: str,
+    thread_id: str,
+    revision: DocumentRevision | None = None,
+) -> dict[str, object]:
+    """Final SSE frame of a turn: the agent result plus the server-computed diff.
+
+    ``revision`` rides here, not inside ``FormatterTaskResult``: the diff is produced at
+    the persist boundary, not by the Formatter, and must not become part of the agent
+    contract (030). Key is absent when the answer is not a revision, matching the
+    persisted turn payload — one shape for live and hydrated turns.
+    """
+    frame: dict[str, object] = {
+        "event": "result",
+        "task_id": task_id,
+        "thread_id": thread_id,
+        "result": result.model_dump(mode="json"),
+    }
+    if revision is not None:
+        frame["revision"] = revision.model_dump(mode="json")
+    return frame
 
 
 def snapshot_awaits_resume(snapshot: object) -> bool:
