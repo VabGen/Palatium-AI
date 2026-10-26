@@ -65,7 +65,7 @@ graphiti = ["graphiti-core (>=0.11.0,<1.0.0)"]
 attachments = [
     "argon2-cffi (>=25.1.0,<26.0.0)",
     "lxml (>=6.1.3,<7.0.0)",
-    "pillow (>=12.3.0,<13.0.0)",
+    "pillow (>=12.3.0,<14.0.0)",
     "pycryptodome (>=3.23.0,<4.0.0)",
     "pymupdf (>=1.24.0,<2.0.0)",
     "pypdf (>=6.0.0,<7.0.0)",
