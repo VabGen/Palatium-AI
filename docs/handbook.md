@@ -590,12 +590,12 @@ Ops checklist before staging/prod: [`ops-readiness.md`](ops-readiness.md).
 | Contextualizer | rewrite/continuation до Intent + `MemoryPromptBudget` | — |
 | Checkpointer | Postgres `AsyncPostgresSaver` in staging/prod (or `LANGGRAPH_CHECKPOINT_POSTGRES=true`); `MemorySaver` in development; dual TTL `MEMORY_SESSION_TTL_SECONDS` + `RETENTION_CHECKPOINT_DAYS`; bake-off `scripts/bakeoff_checkpointer_workers.py` | — |
 | MemoryPort | Postgres `memory.entries` + FTS + pgvector; `MEMORY_HYBRID_FUSION`/`MEMORY_RRF_K` + search-time importance; opt-in `MEMORY_EMBEDDING_RERANK` | — |
-| Extract / promote | Durable `memory.extract_jobs` (SKIP LOCKED); promote = `python -m palatium_ai.jobs.memory_promote --user-id …` (not from extract) | — |
+| Extract / promote | Durable `memory.extract_jobs` (SKIP LOCKED); promote = `uv run python -m palatium_ai.jobs.memory_promote --user-id …` (not from extract) | — |
 | Procedural skills (L5) | JIT `skill_catalog` + MCP `skill_reference`; roots `SKILLS_ROOTS` (`skills/procedural`); `.agent/MEMORY.md` = Cursor DX only | — |
 | Budgeted recall | ≤4 hits / 800 chars, min confidence 0.7, thread+user+org ns | — |
 | DialogTurn payload | ContentDocument JSON for rich UI hydrate | — |
 | Sleep-time | MemoryKeeper queue (`frontier` / `gpt-oss:120b-cloud`), ADD-only | — |
-| Consolidation | `python -m palatium_ai.jobs.memory_consolidate` — promote + `memory_*` retention plan (dry-run); compose profile `memory-jobs` | destructive execute — global retention job |
+| Consolidation | `uv run python -m palatium_ai.jobs.memory_consolidate` — promote + `memory_*` retention plan (dry-run); compose profile `memory-jobs` | destructive execute — global retention job |
 | Chat UI transcript | localStorage thread/user/org + `GET .../turns` | — |
 | Eval gates | offline + live LongMemEval-lite (ACL/anaphora/format/keeper) | corpus growth as needed |
 | Graphiti | opt-in `MEMORY_BACKEND=graphiti` → `GraphitiMemoryPort` (Neo4j, `graphiti-core`) | — |

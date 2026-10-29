@@ -54,6 +54,9 @@ _DEFAULT_API_URL = "http://127.0.0.1:8000"
 #: creates its own bucket at startup, but Langfuse does not, so a failed bootstrap
 #: leaves ``langfuse`` missing and v3 ingestion stays *silently* empty (020).
 _SILO_INIT_SERVICE = "silo-init"
+#: The promote/retention loop. Part of the default launch, but on its own profile, so its
+#: absence is invisible from API behaviour and has to be probed explicitly (060).
+_MEMORY_JOBS_SERVICE = "memory-consolidate"
 
 # Compose files a full-stack `up` must name explicitly. `docker-compose.override.yml`
 # carries the dev profile split (api behind docker-api, MCP behind docker-mcp), and
@@ -189,6 +192,9 @@ def _checks(
         checks.append(lambda: check_clamav(clamav_host, clamav_port))
     if not skip_api:
         checks.append(lambda: check_api(api_url))
+    # Always: the promote loop is part of the default stack, and `--skip-s3` (rebuild-app)
+    # recreates the worker too, so its verdict is never stale.
+    checks.append(lambda: check_memory_jobs(env_file))
     return checks
 
 
@@ -365,6 +371,48 @@ def check_silo_bootstrap(env_file: Path) -> Probe:
     )
 
 
+def check_memory_jobs(env_file: Path) -> Probe:
+    """Verify the out-of-band consolidation loop is part of the launch.
+
+    ``memory-consolidate`` is the only path medium → long-term graph (060), and it is
+    out-of-band: nothing in the API needs it, so a stack without it reports healthy while
+    L3 stays empty and ``recall_for_thread`` never sees a promoted fact. The absence is
+    therefore invisible from behaviour and has to be stated — the same class of silent
+    degradation as an empty Langfuse bucket above.
+    """
+    name = _MEMORY_JOBS_SERVICE
+    queried, record = _compose_service_state(env_file, name)
+    if not queried:
+        return Probe(name=name, ok=True, detail="not checked: docker compose unavailable")
+    if record is None:
+        return Probe(
+            name=name,
+            ok=False,
+            detail=f"{name} not created (profile `memory-jobs` was not part of this launch)",
+            hint=(
+                "promote never runs without it, so long-term memory stays empty: launch with "
+                "`make up` (the profile is part of the default stack), or add the worker with "
+                "`docker compose --profile memory-jobs up -d memory-consolidate`"
+            ),
+        )
+    state = str(record.get("State", "")).strip().lower()
+    status = str(record.get("Status", "")).strip() or state
+    container = str(record.get("Name") or record.get("Names") or name)
+    if state == "running":
+        return Probe(name=name, ok=True, detail=f"{container} -> running (promote loop)")
+    # Restarting/created is "not yet" for `--wait`, an exited worker is a real failure.
+    return Probe(
+        name=name,
+        ok=False,
+        detail=f"{container} -> {status}",
+        hint=(
+            "the promote/retention loop is not running: read "
+            "`docker compose --profile memory-jobs logs memory-consolidate`; "
+            "GRAPHITI_NEO4J_PASSWORD and GRAPH_QUERY_BACKEND=neo4j are required"
+        ),
+    )
+
+
 def check_clamav(host: str, port: int, *, timeout: float = 5.0) -> Probe:
     """Send the documented ``zPING`` command and require ``PONG`` back.
 
@@ -483,8 +531,14 @@ def full_launch(image: str) -> FullLaunch:
     ``attachments-s3`` profile and its overlay together — the API can never be pointed at
     a store that was not started. Both entry points (Makefile, menu) expand this same
     rule so they cannot drift (010), which is why it lives here and not in a shell.
+
+    ``memory-jobs`` is part of the default launch, not an extra profile: promote is the
+    *only* path from medium to the long-term graph (060), so a stack without the loop
+    keeps answering from ``memory.entries`` while L3 stays silently empty — the tier
+    looks implemented and dead at the same time. The loop is out-of-band (interval-based,
+    dry-run retention), so it does not sit on the request hot path.
     """
-    profiles = ["docker-mcp", "docker-api", "attachments"]
+    profiles = ["docker-mcp", "docker-api", "attachments", "memory-jobs"]
     compose_files = [_BASE_COMPOSE_FILE, _PROFILE_COMPOSE_FILE, _AV_COMPOSE_FILE]
     probe = preflight_image(image)
     if probe.ok:

@@ -32,10 +32,10 @@ Accepted risks live in ``security/trivy-ignore.txt`` (``--ignorefile``), one ID 
 an optional ``exp:<YYYY-MM-DD>`` suffix — an entry whose review date has passed stops being
 honoured, so acceptance cannot silently become permanent.
 
-Local use::
+Local use (stdlib-only, so ``--no-project`` keeps it out of the project venv)::
 
-    python scripts/ci_supply_chain.py              # build + scan + SBOM
-    python scripts/ci_supply_chain.py --no-build   # reuse palatium-ai:ci-scan already built
+    uv run --no-project python scripts/ci_supply_chain.py              # build + scan + SBOM
+    uv run --no-project python scripts/ci_supply_chain.py --no-build   # reuse palatium-ai:ci-scan already built
 
 ``--sign`` is intentionally unusable outside GitHub Actions: keyless signing needs the
 runner's OIDC identity, and an unauthenticated signature would be meaningless.

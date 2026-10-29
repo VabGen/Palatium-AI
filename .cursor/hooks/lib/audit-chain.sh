@@ -27,6 +27,27 @@ require_jq() {
   return 0
 }
 
+# py_json_field <key> — печатает значение поля из hook-JSON, поданного на stdin.
+# Нужен только как замена jq для разбора входа (сама audit-chain без jq не работает).
+# Интерпретатор: uv первым — проект объявляет его единственным менеджером зависимостей
+# (025), а голого `python` на Windows нет; python3/python оставлены аварийным путём,
+# чтобы хук не терял данные на машине без uv.
+# Возвращает 1, если интерпретатора нет вообще.
+py_json_field() {
+  local key="$1" py=""
+  if command -v uv >/dev/null 2>&1; then
+    py="uv run --no-project python"
+  elif command -v python3 >/dev/null 2>&1; then
+    py="python3"
+  elif command -v python >/dev/null 2>&1; then
+    py="python"
+  else
+    return 1
+  fi
+  # shellcheck disable=SC2086 # $py намеренно разбивается на слова: это команда, заданная выше.
+  $py -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1]) or "")' "$key"
+}
+
 # audit_append_event <event_type> <extra_json_object>
 # extra_json_object — валидный JSON-объект (может быть "{}"), сливается в запись.
 # audit_append_event <event_type> [key1 value1 [key2 value2 ...]]

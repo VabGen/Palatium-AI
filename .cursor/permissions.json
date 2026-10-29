@@ -33,10 +33,9 @@
     "pytest*",
     "python -m pytest*",
     "python -m compileall*",
-    "poetry run*",
-    "poetry env*",
-    "poetry show*",
-    "poetry check*",
+    "uv run*",
+    "uv sync*",
+    "uv lock*",
     "python -c*",
     "python -m*",
     "rg*",
@@ -84,7 +83,7 @@
   "autoRun": {
     "allow_instructions": [
       "Read-only git-команды (status/diff/log/show/branch/blame) безопасны — запускать без вопроса.",
-      "Локальные quality gates: ruff, mypy, pytest, compileall, poetry run — безопасны.",
+      "Локальные quality gates: ruff, mypy, pytest, compileall, uv run — безопасны.",
       "Чтение и поиск по репозиторию (rg, grep, cat, Get-Content, Select-String, Test-Path) — безопасны.",
       "Просмотр состояния инфраструктуры (docker compose ps/logs, docker ps/images) — безопасен."
     ],

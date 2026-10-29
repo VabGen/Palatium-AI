@@ -138,7 +138,7 @@ def _heuristic_full_repair(candidate: str) -> str:
     fixed deterministically. Local import keeps the deterministic path working
     without the optional dependency installed.
     """
-    import json_repair  # pip install json-repair
+    import json_repair  # uv add json-repair
 
     repaired = json_repair.repair_json(candidate, return_objects=False)
     return str(repaired)

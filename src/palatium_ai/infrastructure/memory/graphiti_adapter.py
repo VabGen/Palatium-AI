@@ -77,7 +77,7 @@ class GraphitiSdkTransport:
             from graphiti_core import Graphiti  # pyright: ignore[reportMissingImports]
         except ImportError as exc:
             raise ImportError(
-                "MEMORY_BACKEND=graphiti requires graphiti-core (poetry add graphiti-core) and a reachable Neo4j"
+                "MEMORY_BACKEND=graphiti requires graphiti-core (uv add graphiti-core) and a reachable Neo4j"
             ) from exc
         if not uri.strip() or not password:
             raise ValueError("GRAPHITI_NEO4J_URI and GRAPHITI_NEO4J_PASSWORD are required")

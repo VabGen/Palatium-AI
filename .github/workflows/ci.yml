@@ -159,9 +159,13 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Docker есть на runner'е, пакетных зависимостей скрипту не нужно — python3 хватает.
+      # uv, а не интерпретатор runner'а: скрипту пакетных зависимостей не нужно, но версия
+      # Python и способ её получения обязаны быть теми же, что у остальных job'ов (025).
+      - name: Install uv
+        run: pipx install uv
+
       - name: Image scan, SBOM, signature
-        run: python3 scripts/ci_supply_chain.py --sign
+        run: uv run --no-project python scripts/ci_supply_chain.py --sign
 
       # `ignore` у артефактов осознанно: гейтом является `cosign verify-blob` внутри шага
       # выше, а не факт загрузки. На упавшей сборке отсутствие SBOM не должно маскировать

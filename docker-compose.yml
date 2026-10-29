@@ -18,6 +18,8 @@
 #     ATTACHMENTS_BLOB_BACKEND=minio, and application/wiring.py probes the bucket at boot
 #     (`ensure_bucket`), so an API started without the store crash-loops instead of
 #     degrading. Observability is excluded because it does not fit the default Docker VM.
+#     The `memory-jobs` profile belongs to this launch too: the consolidation loop is the
+#     only path medium → Neo4j, and a stack without it keeps L3 silently empty (060).
 #
 #   Everything, including tracing:
 #     make up-full   (menu: STACK -> "Start full stack")
@@ -29,7 +31,9 @@
 #     --profile observability    Langfuse v3 + ClickHouse (LANGCHAIN_TRACING_V2=true)
 #     --profile mcp-gateway      MCP gateway proxies
 #     --profile docker-mcp / docker-api   MCP servers + API inside Docker
-#     --profile memory-jobs      memory consolidate loop (promote + retention plan; SB4)
+#
+#   `memory-jobs` (memory-consolidate: promote + retention plan) is part of the default
+#   launch above — see the note under `make up`, not an optional profile you enable by hand.
 #
 #   Rebuild only the app tier (infra keeps running):
 #     make rebuild-app   (menu: STACK -> "Rebuild api + MCP")
@@ -52,8 +56,11 @@
 #
 # After changing a model mapping:
 #   docker compose --env-file env/.env up -d --force-recreate litellm
+# Before rebuilding the API image, compile its served chat UI:
+#   npm --prefix web run build
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# docker compose --env-file env/.env --profile docker-mcp --profile docker-api --profile attachments --profile attachments-s3 -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.attachments-av.yml -f docker-compose.attachments-s3.yml up -d --build
+# What `make up` runs (the probe drops `attachments-s3` + its overlay when the store image
+# is unreachable and points the API at the filesystem store instead):
 # docker compose --env-file env/.env --profile docker-mcp --profile docker-api --profile attachments --profile attachments-s3 --profile memory-jobs -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.attachments-av.yml -f docker-compose.attachments-s3.yml up -d --build
 # =============================================================================
 
@@ -121,6 +128,23 @@ x-langfuse-env: &langfuse-env
   LANGFUSE_INIT_USER_EMAIL: "admin@palatium.local"
   LANGFUSE_INIT_USER_NAME: "admin"
   LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-palatium-langfuse-admin}
+
+# App-tier image shared by every service that runs `palatium_ai` (api + the out-of-band
+# memory worker). One anchor, not two copies: a second literal `build:` block drifts, and
+# without a build context `docker compose build memory-consolidate` answers "No services to
+# build" — so a profile-only launch depended on an image somebody else had built (and could
+# run a stale one after a rebuild).
+x-app-image: &app-image
+  image: palatium-ai:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: runtime
+    args:
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      WITH_GRAPHITI: ${WITH_GRAPHITI:-0}
+      WITH_ATTACHMENTS: ${WITH_ATTACHMENTS:-0}
 
 services:
   # ============================================================
@@ -838,16 +862,7 @@ services:
   # Main API
   # ============================================================
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-      args:
-        APP_VERSION: ${APP_VERSION:-0.1.0}
-        UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
-        WITH_GRAPHITI: ${WITH_GRAPHITI:-0}
-        WITH_ATTACHMENTS: ${WITH_ATTACHMENTS:-0}
-    image: palatium-ai:local
+    <<: *app-image
     restart: unless-stopped
     # UVICORN_WORKERS (default 2) each load the full app (graph, embedder client,
     # pydantic models); ~800 MiB at rest total, and a big attachment turn spikes it.
@@ -986,7 +1001,13 @@ services:
   # Requires GRAPH_QUERY_BACKEND=neo4j.
   memory-consolidate:
     profiles: [ "memory-jobs" ]
-    image: palatium-ai:local
+    # Same build as the API (one anchor): the worker has no server of its own, but it must
+    # still be buildable and must never lag the api image after a rebuild.
+    <<: *app-image
+    # This worker is a sleep/consolidation loop, not an HTTP server; don't inherit
+    # the API image's /health probe on port 8000.
+    healthcheck:
+      disable: true
     depends_on:
       postgres:
         condition: service_healthy

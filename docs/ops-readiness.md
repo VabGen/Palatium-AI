@@ -93,7 +93,7 @@ uv run python scripts/run_agent_evals_nightly.py
 - [ ] Scrape `GET /metrics` from Prometheus (isolated stack: `deploy/observability/`, см. `deploy/observability/README.md`)
 - [ ] Verify kill switch: `POST /api/admin/kill-switch/engage` (admin JWT) → classify/process 503
 - [ ] Audit chain writable (`AUDIT_LOG_FILE`); corrupt tail fails closed (`AuditChainIntegrityError`)
-- [ ] Daily audit verify: `python scripts/verify_audit_chain.py` (workflow `audit-chain-daily.yml`)
+- [ ] Daily audit verify: `uv run python scripts/verify_audit_chain.py` (workflow `audit-chain-daily.yml`)
 - [ ] Session context stores user-text **preview** only; full text in `dialog_turns`
 - [ ] **Host-профиль**: после `.\scripts\dev-up.ps1 -WithGateway` команда
       `.\scripts\dev-status.ps1` показывает `8090/8091` healthy
@@ -166,7 +166,7 @@ uv run python scripts/run_agent_evals_nightly.py
 | `POST /api/memory/extract` | — | HITL `mem-extract-*`; **503** если sleep-time worker выключен |
 | `GRAPH_QUERY_BACKEND` | `in_memory` | **staging/prod: `neo4j`** (GET `/ready` warns otherwise; SB4) |
 | `MEMORY_BACKEND` | `postgres` | staging/prod force `postgres` (GET `/ready`) |
-| `memory-consolidate` compose | profile `memory-jobs` | promote every promotable owner (`--all-users` via SECURITY DEFINER RPC; `MEMORY_PROMOTE_ALL_USERS=true`) + retention plan; `MEMORY_PROMOTE_USER_IDS` only pins extra explicit scopes (SB4) |
+| `memory-consolidate` compose | profile `memory-jobs` — part of the default stack (`make up`) | promote every promotable owner (`--all-users` via SECURITY DEFINER RPC; `MEMORY_PROMOTE_ALL_USERS=true`) + retention plan; `MEMORY_PROMOTE_USER_IDS` only pins extra explicit scopes (SB4) |
 | Memory Select SLA | scratchpad+L2 same-session; L3 next turn+; L4 after promote (≥`MEMORY_PROMOTE_MIN_ACCESS_FREQUENCY`) | Super Brain |
 | `WEB_FALLBACK_BACKEND` | `stub` | `http` + `WEB_FALLBACK_PROVIDER` (`ddg`/`brave`) |
 | `WEB_FALLBACK_RETRY_*` / `WEB_FALLBACK_CIRCUIT_*` | 3 / 30s | fail-closed empty hits + note |

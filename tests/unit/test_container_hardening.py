@@ -130,6 +130,12 @@ def _postgres_setting(key: str) -> str:
     return found[0].removeprefix(prefix)
 
 
+def test_memory_consolidation_job_disables_inherited_api_healthcheck() -> None:
+    """The background loop has no HTTP listener, so the API image probe is invalid."""
+    healthcheck = _service("memory-consolidate").get("healthcheck", {})
+    assert healthcheck.get("disable") is True
+
+
 def _memory_bytes(value: object) -> int:
     """Compose memory syntax: a plain byte count or ``512m`` / ``1g`` style."""
     if isinstance(value, int):

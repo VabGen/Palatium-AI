@@ -11,14 +11,14 @@ Python is already the one interpreter every entry point in this repo depends on
 (``scripts/menu.ps1`` and the Makefile both shell out to it), so both helpers live here
 and the Makefile carries no POSIX dependency at all.
 
-Usage:
-  python scripts/make_helpers.py help
-  python scripts/make_helpers.py init-env [--env-file env/.env]
-  python scripts/make_helpers.py env-get LITELLM_MASTER_KEY [--env-file env/.env]
-  python scripts/make_helpers.py require-key LITELLM_MASTER_KEY
-  python scripts/make_helpers.py verify
-  python scripts/make_helpers.py models [--env-file env/.env]
-  python scripts/make_helpers.py chat --model tier-mid [--prompt "Say OK"]
+Usage (stdlib-only, so `--no-project` keeps it out of the project venv):
+  uv run --no-project python scripts/make_helpers.py help
+  uv run --no-project python scripts/make_helpers.py init-env [--env-file env/.env]
+  uv run --no-project python scripts/make_helpers.py env-get LITELLM_MASTER_KEY [--env-file env/.env]
+  uv run --no-project python scripts/make_helpers.py require-key LITELLM_MASTER_KEY
+  uv run --no-project python scripts/make_helpers.py verify
+  uv run --no-project python scripts/make_helpers.py models [--env-file env/.env]
+  uv run --no-project python scripts/make_helpers.py chat --model tier-mid [--prompt "Say OK"]
 """
 
 from __future__ import annotations

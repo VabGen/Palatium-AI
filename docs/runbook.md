@@ -75,7 +75,7 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api dow
 |---|---|---|
 | **Host** | `docker compose up -d postgres redis neo4j litellm` + `dev-up.ps1` | Ежедневная разработка (hot-reload) |
 | **Docker** | `docker compose --profile docker-mcp --profile docker-api up -d` | CI, демо, prod-like (без вложений) |
-| **Docker + вложения** | `make up` (меню: STACK → *Start stack*) | Дефолтный запуск: AV/S3-путь вложений «из коробки» (§16.8). Обязателен при `ATTACHMENTS_BLOB_BACKEND=minio` — без store API падает на boot |
+| **Docker + вложения** | `make up` (меню: STACK → *Start stack*) | Дефолтный запуск: AV/S3-путь вложений «из коробки» (§16.8) + promote-петля `memory-jobs` (иначе L3 не наполняется). Обязателен при `ATTACHMENTS_BLOB_BACKEND=minio` — без store API падает на boot |
 | **Docker + вложения + observability** | `make up-full` (меню: STACK → *Start full stack*) | Трассировка Langfuse v3; требует VM ≥ ~9.1 GiB (§16.10) |
 | **Gateway** | `.\scripts\dev-up.ps1 -WithGateway` | Тест политик MCP |
 
@@ -167,20 +167,15 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 LICENSE копируется, импорт проверяется, `graphiti` проверяется при `WITH_GRAPHITI=1`,
 `|| true` не висит в конце install-цепочки).
 
-#### 3.1.2. `mcp_servers` в `[tool.poetry].packages`
+#### 3.1.2. `mcp_servers` в пакетах сборки
 
-**Причина:** `pyproject.toml` когда-то содержал `{ include = "mcp_servers" }`, но корневой
+**Причина:** старая конфигурация пакетов включала `mcp_servers`, но корневой
 `Dockerfile` не копирует `mcp_servers/` → `uv sync --frozen` падает целиком →
 `palatium_ai` не устанавливается.
 
-**Статус: ✅ исправлено.** `mcp_servers` исключён из пакетов (`[tool.poetry]`):
-
-```toml
-packages = [
-    { include = "palatium_ai", from = "src" },
-#    { include = "mcp_servers" },
-]
-```
+**Статус: ✅ исправлено.** Пакетом объявлен только `palatium_ai` (layout `src/`,
+backend `uv_build` — `[build-system]` в `pyproject.toml`); `mcp_servers` собирается
+своим `Dockerfile` и подключается через `PYTHONPATH=/app`.
 
 #### Диагностика (решает обе причины одним способом)
 
@@ -1350,7 +1345,7 @@ Select-String -Path docker-compose.yml -Pattern "MCP_MODULE"
 
 Что собирает: версии Docker/Compose, контейнеры (с профилями и без), сети,
 volumes, образы, занятость портов, логи `api` / `mcp-edms` / `mcp-analytics` /
-`litellm`, секции `[tool.poetry]` и `dockerfile:`, host-процессы из
+`litellm`, секции `[project]` и `dockerfile:`, host-процессы из
 `scripts/.dev/processes.json`.
 
 Перед записью вывод прогоняется через redaction: `Bearer …`, `sk-*`,
@@ -1390,8 +1385,8 @@ $(docker compose --env-file env/.env @profiles logs mcp-analytics --tail 50 2>&1
 === litellm logs ===
 $(docker compose --env-file env/.env logs litellm --tail 30 2>&1)
 
-=== pyproject.toml [tool.poetry] ===
-$((Select-String -Path pyproject.toml -Pattern "\[tool.poetry\]" -Context 0,10).Context.PostContext -join "`n")
+=== pyproject.toml [project] ===
+$((Select-String -Path pyproject.toml -Pattern "^\[project\]" -Context 0,30).Context.PostContext -join "`n")
 
 === docker-compose.yml MCP sections ===
 $((Select-String -Path docker-compose.yml -Pattern "dockerfile:" -Context 2,2 | Out-String))
@@ -2025,8 +2020,8 @@ loopback: своей авторизации, кроме root-кредов, у н
 компоненты по отдельности и печатает, что именно лежит:
 
 ```powershell
-python scripts/attachments_probe.py            # API /health, clamd zPING, S3 /minio/health/live, silo-init
-python scripts/attachments_probe.py --preflight-image   # только проверка образа
+uv run --no-project python scripts/attachments_probe.py            # API /health, clamd zPING, S3 /minio/health/live, silo-init
+uv run --no-project python scripts/attachments_probe.py --preflight-image   # только проверка образа
 ```
 
 Проверка clamd — не TCP-connect, а `zPING` с ожиданием `PONG`: clamd принимает соединение
@@ -2128,7 +2123,9 @@ uv run python -m palatium_ai.jobs.retention --class checkpointer --class attachm
 # uv run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
 ```
 
-Sleep consolidation (promote + `memory_*` retention plan; compose profile `memory-jobs`):
+Sleep consolidation (promote + `memory_*` retention plan). The compose loop is part of
+the default stack (`make up` / menu "Start stack", profile `memory-jobs`); run it by hand
+only to scope a single pass:
 
 ```powershell
 # Promotable-owner discovery (FORCE RLS: a plain SELECT DISTINCT user_id sees one tenant).
@@ -2137,6 +2134,7 @@ uv run python -m palatium_ai.jobs.memory_promote --all-users
 uv run python -m palatium_ai.jobs.memory_consolidate --user-id <uuid> --user-id <uuid>
 # Whole stand (compose loop): owners are discovered each pass.
 # docker compose --profile memory-jobs up -d memory-consolidate
+# Logs of the loop (`down` leaves it alone): docker compose --profile memory-jobs logs -f memory-consolidate
 # Apply retention in the same pass (staging only, after reviewing the dry-run):
 # uv run python -m palatium_ai.jobs.memory_consolidate --all-users --execute
 ```

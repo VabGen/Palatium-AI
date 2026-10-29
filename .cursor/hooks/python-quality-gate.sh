@@ -4,13 +4,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/audit-chain.sh
+source "$SCRIPT_DIR/lib/audit-chain.sh"
+
 INPUT="$(cat)"
 
 if command -v jq >/dev/null 2>&1; then
   FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.file_path // ""' 2>/dev/null || true)"
 else
-  echo "⚠️  python-quality-gate: jq не найден — извлекаю file_path через python3." >&2
-  FILE_PATH="$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('file_path') or '')" 2>/dev/null || true)"
+  echo "⚠️  python-quality-gate: jq не найден — извлекаю file_path через python (uv)." >&2
+  FILE_PATH="$(printf '%s' "$INPUT" | py_json_field file_path 2>/dev/null || true)"
 fi
 
 if [[ "$FILE_PATH" != *.py ]]; then

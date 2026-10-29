@@ -2,7 +2,7 @@
 """Enforce the hexagonal import contract from rule 000 (Wave 3.1).
 
 A stdlib-only ``ast`` checker instead of ``import-linter``: adding a dependency is
-currently impossible because ``poetry lock`` cannot resolve the existing
+expensive here because the resolver has to reconcile the existing
 ``openai`` / ``litellm`` constraint conflict, and the layer rule is small enough
 that a 100-line, testable checker is the lower-risk option (050: no dead config,
 055: fix the contract, not a one-off).
@@ -15,7 +15,7 @@ Edges (importer → forbidden imported layer):
   presentation  → infrastructure
 
 ``core`` may be imported by everyone (rule 000). ``domain`` may import ``core``.
-Run ``python scripts/check_import_layers.py`` (exit 1 on violations).
+Run ``uv run --no-project python scripts/check_import_layers.py`` (exit 1 on violations).
 """
 
 from __future__ import annotations

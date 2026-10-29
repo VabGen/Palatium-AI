@@ -47,6 +47,27 @@ textarea {
   overflow: hidden;
 }
 
+/*
+ * The hosted /ui app renders the same App as the embeddable widget, but it does
+ * not have widget.css's shadow-host selectors. Keep collapse behavior working
+ * for the direct app too; widget.css retains the equivalent scoped rules.
+ */
+.widget-root {
+  height: 100%;
+}
+
+.widget-root.is-collapsed {
+  height: auto;
+}
+
+.widget-root.is-collapsed .shell {
+  display: none;
+}
+
+.widget-root.is-collapsed .launcher {
+  display: inline-flex;
+}
+
 .shell-header {
   display: flex;
   align-items: center;

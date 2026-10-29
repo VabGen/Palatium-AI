@@ -25,6 +25,7 @@
 
 ```powershell
 cd D:\project\palatium-ai
+npm --prefix web run build
 docker compose --profile docker-mcp --profile docker-api up -d --build
 ```
 
@@ -37,6 +38,7 @@ docker compose --profile docker-mcp --profile docker-api up -d --build
 | `mcp-edms` | 8080 | MCP stub EDMS (профиль `docker-mcp`) |
 | `mcp-analytics` | 8081 | MCP stub Analytics (профиль `docker-mcp`) |
 | `api` | 8000 | FastAPI + agents (профиль `docker-api`) |
+| `/ui/` | 8000 | Production chat UI, собранный из `web/` перед build |
 | `langfuse` | 3000 | Observability (профиль `observability`) |
 
 > **`docker-compose.override.yml`** отключает MCP/API в Docker по умолчанию.
@@ -443,7 +445,7 @@ crash-recovery). Именно поэтому профиль не входит в
 ### Ожидание готовности в `make up` / `make up-full` / `make rebuild-app`
 
 Эти цели не просто делают `up -d`: следом они запускают
-`python scripts/attachments_probe.py --wait …` и падают с ненулевым кодом, если
+`uv run --no-project python scripts/attachments_probe.py --wait …` и падают с ненулевым кодом, если
 S3-хранилище, clamd или API не ответили за отведённое время (420 s для `up`/`up-full`,
 120 s для `rebuild-app`). До этого `make up` печатал «FAIL clamav» на исправно
 поднятом стеке: clamd грузит базу сигнатур до 5 минут (`start_period`), а проба
@@ -567,7 +569,7 @@ docker run --rm -p 8000:8000 `
 > `loop=`-настройки из `main()`. На Linux это эквивалентно: asyncio создаёт
 > `SelectorEventLoop`, который нужен psycopg. Повторять такой запуск на Windows нельзя —
 > там по умолчанию `ProactorEventLoop`, и Postgres-checkpointer падает на connect:
-> используйте `python -m palatium_ai.main` (handbook §5.2.1).
+> используйте `uv run python -m palatium_ai.main` (handbook §5.2.1).
 
 ### 7.5. MCP stubs на хосте
 
@@ -760,8 +762,7 @@ uv run alembic upgrade head
 | Compose: `POSTGRES_PASSWORD is not set` | нет `--env-file` / нет ключа | `$env:COMPOSE_ENV_FILES="env/.env"` + `. $PROFILE` |
 | MCP tools пустые | stubs не в сети с API | Docker-профиль: сервис `mcp-edms`; Host-профиль: `dev-up.ps1` |
 | `OSError: Read-only file system: '/.cursor'` | audit писал в `/.cursor/logs` | путь `/app/logs/audit-chain.log` (`AUDIT_LOG_FILE`) |
-| `The option "--no-update" does not exist` | Poetry 2.x | в Dockerfile `poetry lock` без `--no-update` |
-| `pyproject.toml changed significantly... uv.lock` | content-hash | убрать `License ::` classifier, `poetry lock` |
+| `pyproject.toml changed significantly... uv.lock` | lock рассинхронен манифесту | `uv lock` (перегенерировать `uv.lock`) и закоммитить его вместе с правкой `pyproject.toml` |
 | Permission / read-only | Compose `read_only: true` | tmpfs на `/app/tmp`, `/app/logs` |
 
 ---

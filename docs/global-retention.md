@@ -88,7 +88,7 @@ Env: скопируйте блок **§10b** из [`env/.env.example`](../env/.e
 
 ## 5. CLI
 
-Entrypoint: `python -m palatium_ai.jobs.retention`.
+Entrypoint: `uv run python -m palatium_ai.jobs.retention`.
 
 | Флаг | Смысл |
 |------|--------|

@@ -20,11 +20,19 @@ param(
     [string]$Command = "help"
 )
 
+# uv is the only dependency manager on dev (025): Poetry is legacy and is not kept in parallel.
+$uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $uvCmd) {
+    Write-Host "uv not found. Install uv (https://docs.astral.sh/uv/) and re-run." -ForegroundColor Red
+    exit 1
+}
+$Uv = $uvCmd.Source
+
 function Show-Help {
     @"
 Доступные команды:
-  init         - Создать .env файлы из шаблона и установить зависимости
-  install      - Установить зависимости (poetry install --with dev)
+  init         - Создать .env файлы из шаблона и синхронизировать зависимости (uv sync --frozen)
+  install      - Синхронизировать зависимости (uv sync --frozen)
   dev          - Запустить приложение в режиме разработки
   staging      - Запустить приложение в режиме стейджинга
   prod         - Запустить приложение в режиме продакшена
@@ -59,29 +67,53 @@ function Init-Environment {
         Write-Host "  ⚠️  env/.env.prod уже существует" -ForegroundColor Yellow
     }
     Write-Host "📦 Установка зависимостей..." -ForegroundColor Cyan
-    poetry install --with dev
+    & $Uv sync --frozen
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "❌ uv sync --frozen failed (exit $LASTEXITCODE)." -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
     Write-Host "✅ Готово! Отредактируйте файлы в env/ и заполните свои настройки." -ForegroundColor Green
 }
 
 function Install-Dependencies {
     Write-Host "📦 Установка зависимостей..." -ForegroundColor Cyan
-    poetry install --with dev
+    & $Uv sync --frozen
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "❌ uv sync --frozen failed (exit $LASTEXITCODE)." -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
     Write-Host "✅ Зависимости установлены." -ForegroundColor Green
+}
+
+# `uv run` re-syncs on every start, and on Windows a failed hardlink makes uv re-copy the
+# editable package each time (dev-up.ps1 pins UV_LINK_MODE for the same reason). The venv is
+# created once here, then `--no-sync` keeps a launch to "start the app".
+function Start-App {
+    if (-not $env:UV_LINK_MODE) { $env:UV_LINK_MODE = "copy" }
+    if (-not (Test-Path (Join-Path $PSScriptRoot ".venv"))) {
+        & $Uv sync --frozen
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ uv sync --frozen failed (exit $LASTEXITCODE) — run '.\run.ps1 install' first." -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+    }
+    & $Uv run --no-sync python -m palatium_ai.main
+    exit $LASTEXITCODE
 }
 
 function Run-Dev {
     $env:ENV_FILE = "env/.env.dev"
-    poetry run python -m palatium_ai.main
+    Start-App
 }
 
 function Run-Staging {
     $env:ENV_FILE = "env/.env.staging"
-    poetry run python -m palatium_ai.main
+    Start-App
 }
 
 function Run-Prod {
     $env:ENV_FILE = "env/.env.prod"
-    poetry run python -m palatium_ai.main
+    Start-App
 }
 
 # Основная логика

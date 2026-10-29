@@ -76,6 +76,7 @@ class LiteLLMEmbeddingAdapter:
         params: dict[str, object] = {
             "model": resolved_model,
             "input": texts,
+            "timeout": self._config.timeout,
             "api_key": self._api_key,
             "api_base": self._base_url,
             # Same process-wide session as chat calls: embedding traffic is continuous

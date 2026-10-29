@@ -129,6 +129,15 @@ def test_attachments_builder_verifies_ocr_python_extras() -> None:
     assert "import PIL, pytesseract, fitz" in install, "WITH_ATTACHMENTS=1 installs the extra but never asserts OCR Python extras"
 
 
+def test_runtime_image_contains_the_built_chat_ui() -> None:
+    """The API's /ui routes only exist when web/dist is shipped in the runtime image."""
+    text = _dockerfile_text()
+    runtime_block = text.split("FROM base AS runtime", 1)[1].split("FROM builder AS test", 1)[0]
+
+    assert "npm --prefix web run build" in runtime_block
+    assert "COPY --chown=app:app web/dist /app/web/dist" in runtime_block
+
+
 def test_no_bare_trailing_or_true_can_hide_a_failed_install() -> None:
     """The specific trap: `A && B && cleanup || true` reports success when A or B failed.
 

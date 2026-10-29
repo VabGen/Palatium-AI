@@ -52,7 +52,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-RUN apt-get update \
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -169,8 +170,8 @@ RUN groupadd --system --gid 999 app \
     && mkdir -p /app/logs /app/tmp \
     && chown -R app:app /app \
     && if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
-         apt-get update \
-         && apt-get install -y --no-install-recommends \
+         apt-get -o Acquire::Retries=10 update \
+         && apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
               tesseract-ocr \
               tesseract-ocr-eng \
               tesseract-ocr-rus \
@@ -187,14 +188,19 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=app:app /app/alembic /app/alembic
+# Build with `npm --prefix web run build` before `docker compose up --build`.
+# Docker packages the same production artifact the host UI build produces.
+COPY --chown=app:app web/dist /app/web/dist
 # Shipped for licence compliance: the image carries MIT code, so it carries the notice
 # (OCI `org.opencontainers.image.licenses` above is a label, not the licence text).
 COPY --chown=app:app LICENSE /app/LICENSE
 COPY --chown=app:app scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
 
+# The Compose runtime sets read_only: true; avoid rewriting permissions on the
+# virtualenv on every UI-only image rebuild.
 RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
     && chmod 0555 /app/scripts/docker-entrypoint.sh \
-    && chmod -R a-w /app/.venv /app/src /app/alembic /app/alembic.ini /app/LICENSE \
+    && chmod -R a-w /app/web /app/LICENSE \
     && chmod u+w /app/logs /app/tmp
 
 USER app

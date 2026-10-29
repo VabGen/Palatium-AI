@@ -43,43 +43,45 @@ repos:
 
   - repo: local
     hooks:
+      # Entries go through uv: `python` is not on PATH on a stock Windows box, and a bare
+      # `mypy`/`basedpyright` would not be the one pinned in the lock (025).
       - id: check-debt-markers
         name: debt markers (086)
-        entry: python scripts/check_todos.py
+        entry: uv run --no-project python scripts/check_todos.py
         language: system
         pass_filenames: false
 
       - id: check-import-layers
         name: import layers (000-architecture)
-        entry: python scripts/check_import_layers.py
+        entry: uv run --no-project python scripts/check_import_layers.py
         language: system
         pass_filenames: false
         files: ^src/palatium_ai/.*\.py$
 
       - id: lint-observability
         name: lint observability (no raw query in logs/metrics/OTel)
-        entry: python scripts/lint_observability.py
+        entry: uv run --no-project python scripts/lint_observability.py
         language: system
         pass_filenames: false
         files: ^src/palatium_ai/.*\.py$
 
       - id: mypy-strict
         name: mypy --strict (src/palatium_ai)
-        entry: mypy --strict src/palatium_ai
+        entry: uv run mypy --strict src/palatium_ai
         language: system
         pass_filenames: false
         files: \.py$
         stages: [pre-push]
 
       # ── Basedpyright ─────────────────────────────────────────────────────────
-      # pip install basedpyright
+      # Not a project dependency (pyproject: ruff + mypy are the gates); install it into the
+      # same env with `uv add --dev basedpyright` or run it from a global install — either
+      # way the entry below resolves it through uv, not from PATH.
       # Ловит ошибки, которые mypy пропускает (Protocol ellipsis, redis overloads,
-      # awaitable mismatches). Требует отдельной установки:
-      #   pip install basedpyright  ||  npm install -g basedpyright
-      # Запускается на pre-push (как mypy): ~30-60s, не на каждый коммит.
+      # awaitable mismatches). ~30-60s, поэтому pre-push (как mypy), не на каждый коммит.
       - id: basedpyright
         name: basedpyright (IDE parity, pre-push)
-        entry: basedpyright --project .
+        entry: uv run basedpyright --project .
         language: system
         pass_filenames: false
         files: \.py$

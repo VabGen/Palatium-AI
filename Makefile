@@ -15,22 +15,29 @@ endif
 COMPOSE  := docker compose --env-file $(ENV_FILE) --profile docker-mcp --profile docker-api
 # ^ профили обязательны: api.depends_on ссылается на mcp-edms/mcp-analytics.
 
+# Every Python entry point goes through uv (025): a bare `python` is not on PATH on a stock
+# Windows box, and even where it is, it is not the locked venv. `--no-project` is for the
+# stdlib-only helpers under scripts/ — a cold `uv run` re-installs the editable package just to
+# print compose flags, which is the same reason dev-up.ps1 pre-syncs once, then passes --no-sync.
+UV        ?= uv
+PY_HELPER := $(UV) run --no-project python
+
 # Profiles + overlays for the attachment stack, computed by the probe (010): it also
 # decides whether `attachments-s3` can be added, from the store image's availability.
 # These belong to the *default* launch, not to an extra "full" one — env/.env sets
 # ATTACHMENTS_BLOB_BACKEND=minio, and `ensure_bucket()` aborts the API boot when the
 # store is missing (application/wiring.py), so a plain `up` without them would crash-loop.
-# `=` (recursive, not `:=`) on purpose: python runs when a recipe uses it, not on `make help`.
+# `=` (recursive, not `:=`) on purpose: uv runs when a recipe uses it, not on `make help`.
 # It also stays off the path of `ps`/`logs`/`shell` — `--compose-args` runs `docker manifest
 # inspect`, so only the targets that create or recreate api/mcp may expand it. Recreating the
 # api container *without* the overlays silently downgrades it to the dev backends from
 # env/.env (scanner disabled, filesystem blob), which is pinned by
 # tests/unit/test_make_helpers.py::test_every_api_recreating_target_loads_the_attachment_overlays.
-FULL_FLAGS = $(shell python scripts/attachments_probe.py --compose-args)
+FULL_FLAGS = $(shell $(PY_HELPER) scripts/attachments_probe.py --compose-args)
 
 # No POSIX tools on the critical path: `grep`/`cut`/`tr` are absent from a stock Windows
 # PATH, which made this empty and `require-key` refuse `models`/`test-tier` (see make_helpers).
-LITELLM_MASTER_KEY ?= $(shell python scripts/make_helpers.py env-get LITELLM_MASTER_KEY --env-file $(ENV_FILE))
+LITELLM_MASTER_KEY ?= $(shell $(PY_HELPER) scripts/make_helpers.py env-get LITELLM_MASTER_KEY --env-file $(ENV_FILE))
 
 .DEFAULT_GOAL := help
 .PHONY: help init install up up-full rebuild-app obs-up obs-down down reset ps logs \
@@ -40,13 +47,13 @@ LITELLM_MASTER_KEY ?= $(shell python scripts/make_helpers.py env-get LITELLM_MAS
 
 # ──────────────────────────────────────────────────────────────────────────────
 help:  ## Показать эту справку
-	@python scripts/make_helpers.py help
+	@$(PY_HELPER) scripts/make_helpers.py help
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Стек
 # ──────────────────────────────────────────────────────────────────────────────
 init: ## Создать env/.env из шаблона + uv sync
-	@python scripts/make_helpers.py init-env --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/make_helpers.py init-env --env-file $(ENV_FILE)
 	@uv sync --frozen
 
 install: ## uv sync --frozen (dev groups from [tool.uv] default-groups)
@@ -57,10 +64,10 @@ install: ## uv sync --frozen (dev groups from [tool.uv] default-groups)
 # perfectly healthy launch. Readiness is decided by the checks below, which retry only
 # what is not answering yet — clamd needs up to 5 min to load its signatures, and
 # `make up` used to print "FAIL clamav" for a stack that was working as designed.
-up: ## Собрать и запустить всё, КРОМЕ observability (API + MCP + AV + S3)
+up: ## Собрать и запустить всё, КРОМЕ observability (API + MCP + AV + S3 + memory jobs)
 	docker compose --env-file $(ENV_FILE) $(FULL_FLAGS) up -d --build
-	@python scripts/attachments_probe.py --mode --full --env-file $(ENV_FILE)
-	@python scripts/attachments_probe.py --wait 420 --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/attachments_probe.py --mode --full --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/attachments_probe.py --wait 420 --env-file $(ENV_FILE)
 	@echo "✓ http://localhost:8000/docs"
 
 up-full: ## Собрать и запустить ВЕСЬ стек, включая observability (Langfuse v3 + ClickHouse)
@@ -68,8 +75,8 @@ up-full: ## Собрать и запустить ВЕСЬ стек, включа
 	@echo "        fit the default Docker VM (~7.7 GiB) — raise it in %USERPROFILE%\.wslconfig"
 	@echo "        (memory=12GB) and restart Docker Desktop first, or the OOM killer will fire."
 	docker compose --env-file $(ENV_FILE) --profile observability $(FULL_FLAGS) up -d --build
-	@python scripts/attachments_probe.py --mode --full --env-file $(ENV_FILE)
-	@python scripts/attachments_probe.py --wait 420 --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/attachments_probe.py --mode --full --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/attachments_probe.py --wait 420 --env-file $(ENV_FILE)
 	@echo "✓ API http://localhost:8000/docs · Langfuse http://localhost:3000"
 
 # Readiness BEFORE `verify`: a fresh api needs ~60 s (entrypoint alembic + uvicorn
@@ -77,13 +84,13 @@ up-full: ## Собрать и запустить ВЕСЬ стек, включа
 # "API FAIL / LiteLLM FAIL" on a healthy recreate — and because make stops at the first
 # non-zero exit, the recipe aborted *before* the probes that do wait could retry. The
 # waiting probe is the only step here that can turn a cold start into a truthful verdict.
-rebuild-app: ## Пересобрать и перезапустить ТОЛЬКО api + MCP-серверы (инфра не трогается)
+rebuild-app: ## Пересобрать и перезапустить api + MCP-серверы + memory jobs (инфра не трогается)
 	docker compose --env-file $(ENV_FILE) $(FULL_FLAGS) build api mcp-edms mcp-analytics
-	docker compose --env-file $(ENV_FILE) $(FULL_FLAGS) up -d --no-deps api mcp-edms mcp-analytics
-	@python scripts/attachments_probe.py --mode --full --env-file $(ENV_FILE)
-	@python scripts/attachments_probe.py --skip-s3 --wait 120 --env-file $(ENV_FILE)
-	@python scripts/make_helpers.py verify
-	@echo "✓ api + mcp-edms + mcp-analytics пересобраны и перезапущены"
+	docker compose --env-file $(ENV_FILE) $(FULL_FLAGS) up -d --no-deps api mcp-edms mcp-analytics memory-consolidate
+	@$(PY_HELPER) scripts/attachments_probe.py --mode --full --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/attachments_probe.py --skip-s3 --wait 120 --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/make_helpers.py verify
+	@echo "✓ api + mcp-edms + mcp-analytics + memory-consolidate пересобраны и перезапущены"
 
 obs-up: ## Поднять observability (Langfuse v3 + ClickHouse + worker + store)
 	docker compose --env-file $(ENV_FILE) --profile observability up -d minio silo-init clickhouse langfuse-web langfuse-worker
@@ -114,16 +121,16 @@ logs-litellm: ## Логи litellm
 # Проверки
 # ──────────────────────────────────────────────────────────────────────────────
 verify: ## Health всех endpoints (exit != 0, если что-то лежит)
-	@python scripts/make_helpers.py verify
+	@$(PY_HELPER) scripts/make_helpers.py verify
 
 require-key:
-	@python scripts/make_helpers.py require-key LITELLM_MASTER_KEY --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/make_helpers.py require-key LITELLM_MASTER_KEY --env-file $(ENV_FILE)
 
 models: require-key ## Список tier-моделей LiteLLM
-	@python scripts/make_helpers.py models --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/make_helpers.py models --env-file $(ENV_FILE)
 
 test-tier: require-key ## Тестовый запрос через tier-mid
-	@python scripts/make_helpers.py chat --model tier-mid --env-file $(ENV_FILE)
+	@$(PY_HELPER) scripts/make_helpers.py chat --model tier-mid --env-file $(ENV_FILE)
 
 validate: ## Валидация docker-compose.yml
 	$(COMPOSE) config --quiet && echo "✅ docker-compose.yml валиден"
@@ -133,10 +140,10 @@ validate: ## Валидация docker-compose.yml
 # требует OIDC-identity workflow. `make supply-chain SUPPLY_CHAIN_ARGS=--no-build` переиспользует
 # уже собранный образ.
 supply-chain: ## Скан образа (Trivy) + SBOM CycloneDX (подпись — только в CI)
-	@python scripts/ci_supply_chain.py $(SUPPLY_CHAIN_ARGS)
+	@$(PY_HELPER) scripts/ci_supply_chain.py $(SUPPLY_CHAIN_ARGS)
 
 perf: ## Нагрузочные тесты (slow, вне PR-CI, 080): scaling hot-path + p95 памяти (нужен DATABASE_URL)
-	@uv run pytest tests/perf -q -m slow
+	@$(UV) run pytest tests/perf -q -m slow
 
 list-dbs: ## Список БД + расширений Postgres
 	$(COMPOSE) exec postgres psql -U postgres -c "\l"
@@ -161,20 +168,20 @@ attach-down: ## Остановить AV и S3 (данные и volumes сохр�
 	$(COMPOSE) --profile attachments --profile attachments-s3 stop clamav minio
 
 attach-s3-up: ## Поднять S3-хранилище minio (профиль attachments-s3) + preflight образа
-	python scripts/attachments_probe.py --preflight-image --skip-s3 --skip-clamav --skip-api
+	$(PY_HELPER) scripts/attachments_probe.py --preflight-image --skip-s3 --skip-clamav --skip-api
 	$(COMPOSE) --profile attachments-s3 up -d minio
 
 attach-s3-down: ## Остановить S3 (volume palatium_minio_data сохраняется)
 	$(COMPOSE) --profile attachments-s3 stop minio
 
 attach-probe: ## Диагностика вложений: API + clamd + S3 (что именно лежит)
-	python scripts/attachments_probe.py
+	$(PY_HELPER) scripts/attachments_probe.py
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UI
 # ──────────────────────────────────────────────────────────────────────────────
 swagger: ## Открыть Swagger UI
-	@python -c "import webbrowser; webbrowser.open('http://localhost:8000/docs')"
+	@$(PY_HELPER) -c "import webbrowser; webbrowser.open('http://localhost:8000/docs')"
 
 litellm-ui: ## Открыть LiteLLM UI
-	@python -c "import webbrowser; webbrowser.open('http://localhost:4000/ui')"
+	@$(PY_HELPER) -c "import webbrowser; webbrowser.open('http://localhost:4000/ui')"

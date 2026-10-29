@@ -11,6 +11,8 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 from sqlalchemy import Float, case, cast, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from palatium_ai.domain.ports.embeddings import EmbeddingPort
 
 _VALID_MEMORY_TYPES: frozenset[str] = frozenset({"preference", "fact", "incident", "episode"})
+logger = structlog.get_logger(__name__)
 
 
 def merge_hybrid_scores(
@@ -261,12 +264,18 @@ class PostgresMemoryPort:
             fts_hits = await self._search_fts(user_id=user_id, namespace=ns, query=cleaned, limit=safe_limit)
             vector_hits: list[tuple[str, float, dict[str, object]]] = []
             if self._embeddings is not None:
-                vector_hits = await self._search_vector(
-                    user_id=user_id,
-                    namespace=ns,
-                    query=cleaned,
-                    limit=safe_limit,
-                )
+                try:
+                    vector_hits = await self._search_vector(
+                        user_id=user_id,
+                        namespace=ns,
+                        query=cleaned,
+                        limit=safe_limit,
+                    )
+                except Exception as exc:  # noqa: BLE001  # optional vector recall degrades to lexical search
+                    logger.warning(
+                        "memory.search.embedding_failed",
+                        error_type=type(exc).__name__,
+                    )
             if fts_hits or vector_hits:
                 return merge_hybrid_memory_hits(
                     fts_hits,
