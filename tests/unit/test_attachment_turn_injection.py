@@ -176,6 +176,56 @@ async def test_turn_context_is_resolved_for_the_calling_user() -> None:
     assert stub.calls == [((attachment_id,), "u-1", "t-1")]
 
 
+def _primed_context(attachment_id: object, text: str = "Договор поставки №42") -> AttachmentTurnContext:
+    return AttachmentTurnContext(
+        blocks=(
+            AttachmentContextBlock(
+                attachment_id=attachment_id,  # type: ignore[arg-type]  # UUID built by the test
+                filename="contract.txt",
+                source="attachment:contract.txt",
+                fenced_text=_fence(text),
+                action="allow",
+                page_count=1,
+            ),
+        )
+    )
+
+
+async def test_rehydrate_reuses_the_entry_context_for_the_same_ids() -> None:
+    """One turn resolves an attachment once, even if continuation asks again (P5).
+
+    The reported symptom was a duplicated ``attachment.build_turn_context`` per turn.
+    The entry already fenced these ids, so a rehydrate of exactly those ids must return
+    that fence instead of re-reading rows and blobs.
+    """
+    attachment_id = uuid4()
+    stub = _StubAttachmentService(_primed_context(attachment_id))
+    service = _intent_service(object(), stub)
+
+    entry = await service._turn_attachment_context([attachment_id], thread_id="t-2", user_id="u-2")
+    ctx = service._bind_turn_attachment_context(thread_id="t-2", user_id="u-2", primed=entry)
+    assert ctx.rehydrate is not None
+
+    assert await ctx.rehydrate([attachment_id]) == entry.fenced_text
+    assert len(stub.calls) == 1, "the same ids were read twice inside one turn"
+
+
+async def test_rehydrate_reads_attachments_it_did_not_fence_at_entry() -> None:
+    """A different id set is a genuine new read — the memo must not answer it."""
+    fenced_id = uuid4()
+    other_id = uuid4()
+    stub = _StubAttachmentService(_primed_context(fenced_id))
+    service = _intent_service(object(), stub)
+
+    entry = await service._turn_attachment_context([fenced_id], thread_id="t-3", user_id="u-3")
+    ctx = service._bind_turn_attachment_context(thread_id="t-3", user_id="u-3", primed=entry)
+    assert ctx.rehydrate is not None
+
+    await ctx.rehydrate([other_id])
+
+    assert [call[0] for call in stub.calls] == [(fenced_id,), (other_id,)]
+
+
 async def test_unusable_attachment_fails_the_turn_instead_of_being_dropped() -> None:
     """Fail closed: a quarantined file must surface, not vanish from the answer (020)."""
     stub = _StubAttachmentService(error=AttachmentNotUsableError(uuid4(), state="quarantined"))

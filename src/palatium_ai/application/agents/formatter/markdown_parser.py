@@ -393,7 +393,7 @@ def _try_parse_steps(lines: list[str], index: int) -> tuple[StepsBlock | None, i
             break
         body = match.group("body").strip()
         if title and body:
-            items.append(StepItem(title=title[:200], body=body[:2000], status="pending"))
+            items.append(StepItem(title=title[:200], body=body[:2000]))
         i += 1
     if len(items) >= 2:
         return StepsBlock(type="steps", items=tuple(items)), i - index

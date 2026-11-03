@@ -267,7 +267,10 @@ function extensionOf(name: string): string {
 export function resolveMimeType(file: File): string | null {
   const declared = (file.type || '').toLowerCase();
   const extension = extensionOf(file.name);
-  if (declared && MEDIA_EXTENSIONS[declared]) {
+  // `Object.hasOwn`, а не truthiness: `File.type` приходит из чужой страницы, и
+  // declared="constructor" дал бы `Object` — `.includes` на нём бросил бы TypeError
+  // прямо в обработчике выбора файла (хост-контекст недоверенный, 020).
+  if (declared && Object.hasOwn(MEDIA_EXTENSIONS, declared)) {
     return MEDIA_EXTENSIONS[declared].includes(extension) ? declared : null;
   }
   const match = Object.entries(MEDIA_EXTENSIONS).find(([, extensions]) =>

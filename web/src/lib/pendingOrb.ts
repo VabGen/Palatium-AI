@@ -64,7 +64,15 @@ const NODE_PHASES: Readonly<Record<string, PendingPhase>> = {
   formatter: { state: 'composing', label: 'msg.pending.composing' },
 };
 
-/** Фаза для узла графа; `null` (ещё ни одного `hop`) — нейтральная. */
+/**
+ * Фаза для узла графа; `null` (ещё ни одного `hop`) — нейтральная.
+ *
+ * `Object.hasOwn`, а не `NODE_PHASES[node] ?? DEFAULT`: индекс по недоверенной
+ * строке из SSE проходит и по цепочке прототипов, и `node="constructor"` вернул
+ * бы `Object` (truthy) — тогда орб получил бы функцию вместо фазы, а подпись
+ * `role="status"` пропала бы молча.
+ */
 export function pendingPhaseForNode(node: string | null): PendingPhase {
-  return (node !== null ? NODE_PHASES[node] : undefined) ?? DEFAULT_PENDING_PHASE;
+  if (node === null || !Object.hasOwn(NODE_PHASES, node)) return DEFAULT_PENDING_PHASE;
+  return NODE_PHASES[node] ?? DEFAULT_PENDING_PHASE;
 }

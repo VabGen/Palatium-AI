@@ -30,6 +30,7 @@ from palatium_ai.domain.ports.document_parser import (
 )
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
 from palatium_ai.infrastructure.parsing.image_decode_guard import assert_image_decode_within_budget
+from palatium_ai.infrastructure.parsing.pymupdf_compat import pymupdf
 
 if TYPE_CHECKING:
     from palatium_ai.core.config.llm.gateway import GatewayLLMConfig
@@ -59,7 +60,7 @@ _FIGURE_USER_PROMPT = "Describe the charts and figures on this page (skip plain 
 
 
 class GatewayPdfVisionParser:
-    """Rasterize PDF pages (fitz) and send them to a vision model on the gateway."""
+    """Rasterize PDF pages (pymupdf) and send them to a vision model on the gateway."""
 
     def __init__(
         self,
@@ -194,10 +195,10 @@ class GatewayPdfVisionParser:
 
     def _count_pages(self, data: bytes) -> int:
         try:
-            import fitz
+            pymupdf_module = pymupdf()
         except ImportError:
             return 0
-        doc = fitz.open(stream=data, filetype="pdf")
+        doc = pymupdf_module.open(stream=data, filetype="pdf")
         try:
             return int(doc.page_count)
         finally:
@@ -205,12 +206,12 @@ class GatewayPdfVisionParser:
 
     def _image_candidates(self, data: bytes) -> tuple[PdfFigurePageCandidate, ...]:
         try:
-            import fitz
+            pymupdf_module = pymupdf()
         except ImportError as exc:
             raise DocumentParseError("pdf vision extras missing; install pymupdf") from exc
 
         try:
-            doc = fitz.open(stream=data, filetype="pdf")
+            doc = pymupdf_module.open(stream=data, filetype="pdf")
         except Exception as exc:
             raise DocumentParseError("pdf is corrupt or not a pdf") from exc
 
@@ -234,17 +235,17 @@ class GatewayPdfVisionParser:
         page_numbers: tuple[int, ...] | None,
     ) -> list[tuple[int, bytes]]:
         try:
-            import fitz
+            pymupdf_module = pymupdf()
         except ImportError as exc:
             raise DocumentParseError("pdf vision extras missing; install pymupdf and Pillow") from exc
 
         try:
-            doc = fitz.open(stream=data, filetype="pdf")
+            doc = pymupdf_module.open(stream=data, filetype="pdf")
         except Exception as exc:
             raise DocumentParseError("pdf is corrupt or not a pdf") from exc
 
         scale = self._dpi / 72.0
-        matrix = fitz.Matrix(scale, scale)
+        matrix = pymupdf_module.Matrix(scale, scale)
         results: list[tuple[int, bytes]] = []
         try:
             if page_numbers is None:

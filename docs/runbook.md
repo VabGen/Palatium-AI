@@ -741,18 +741,49 @@ docker compose --env-file env/.env exec -T postgres `
 ### 3.17b. `hop_budget_exceeded` / turn ~20–30 s
 
 **Симптом:** в логе `agent.turn.hops` с `hop_budget_exceeded=True`,
-`hop_slowest_node` = `formatter` или `researcher`, бюджет `TURN_HOP_BUDGET_MS`
-(default 15000).
+`hop_slowest_node` = `formatter` или `researcher`, бюджет `hop_budget_ms`
+(база — `TURN_HOP_BUDGET_MS`, default 15000, × множитель стратегии).
 
-**Это soft SLO**, не hard-fail: Critic LLM и Formatter repair уже soft-degrade
-при нехватке бюджета; Formatter presentation LLM **намеренно не** гейтится
-(бренд UI). Основная длительность — latency корпоративного LLM + MCP.
+**Что именно сравнивается.** Бюджет считает работу агентов, а не ожидание
+внешних систем:
 
-**Что делать:** смотреть `hop_ms` по узлам; не поднимать `max_wal_size` и не
-менять транспорт на «WebSocket Responses» ради этого. Опции: быстрее tier для
-Formatter, меньше repair, `web_fallback` только при пустом local (и skip при
-уже превышенном бюджете). Поднять `TURN_HOP_BUDGET_MS` — только если осознанно
-сдвигаете алерт `PalatiumTurnHopBudgetExceeded`, не «ускорение».
+- `hop_total_ms` — суммарное время в узлах графа;
+- `hop_io_ms` — его часть, ушедшая на внешний I/O (`attachment_parse` — парсинг/OCR
+  документа, до 25 с на два скана). Эти спаны пишет `AttachmentPipeline` и коллектор
+  вычитает их: OCR не «шаг агента»;
+- `hop_agent_ms = hop_total_ms − hop_io_ms` — **только это** сравнивается с
+  `hop_budget_ms` и только это гейтит soft-degrade (Critic LLM, Formatter repair,
+  `web_fallback`).
+
+Отсюда два разных вердикта:
+
+- `hop_budget_exceeded=True` + warning `agent.turn.slow` (поле `reason="agent_work"`)
+  и счётчик `PalatiumTurnHopBudgetExceeded` — **агенты** вышли за бюджет: смотреть
+  `hop_ms` по узлам, `hop_agent_ms`, ретраи LLM (ниже);
+- `hop_wall_over_budget=True` + INFO `agent.turn.slow_io` — ход долгий из-за
+  внешнего I/O (`hop_io_ms_by_kind`), это факт для отчёта, а не дефект графа.
+  Алерт на счётчик не срабатывает намеренно: иначе каждая задача с PDF-сканом
+  гасит сигнал.
+
+**Бюджет по классу нагрузки.** `HopBudgetPolicy.effective_budget_ms` масштабирует
+базу по стратегии: `format_only` 0.6, `clarify` 0.5, `ack_only` 0.4 — low-risk ходы
+деградируют раньше; worker-проход (`retrieve_then_reason`, `direct_tool_call`,
+`code_sandbox`, `data_analysis` — continuation + intent + weaving + supervisor +
+worker + critic + formatter) — 2.0, `reason_only` — 1.6. Без масштаба вверх один
+и тот же 15-секундный порог был превышен **по построению** на каждом research-ходе,
+и алерт перестал быть сигналом.
+
+**Это soft SLO**, не hard-fail: Critic LLM и Formatter repair soft-degrade при
+нехватке бюджета; Formatter presentation LLM **намеренно не** гейтится (бренд UI).
+Основная длительность — latency корпоративного LLM + MCP.
+
+**Что делать:** смотреть `hop_ms` по узлам и `hop_agent_ms`; не поднимать
+`max_wal_size` и не менять транспорт на «WebSocket Responses» ради этого. Опции:
+быстрее tier для Formatter, меньше repair, `web_fallback` только при пустом local
+(и skip при уже превышенном бюджете). Поднять `TURN_HOP_BUDGET_MS` — только если
+осознанно сдвигаете алерт `PalatiumTurnHopBudgetExceeded`, не «ускорение».
+Медленный ход **без** `hop_budget_exceeded`, но с большим `hop_io_ms` — это I/O
+(OCR/парсинг), чинится кэшем/движком распознавания, не бюджетом.
 
 **Медленный узел на LLM — retry или холодный провайдер?** Смотреть
 `llm.attempt_failed` (WARNING, `agent_role`, `attempt`, `max_retries`,
@@ -808,6 +839,39 @@ OPENAI_EMBEDDING_BASE_URL="https://api.openai.com/v1"
 Проверка: `docker compose exec minio df -h /data` — место и mount; повторы → SMART
 хоста / место на Docker disk image / права volume.
 
+**Почему это роняет загрузку файлов целиком.** Профиль `attachments-s3` поднимает
+Silo/MinIO **с одним диском** (`/data`), без erasure-кодирования: кворум здесь — сам
+диск, поэтому `taking drive offline` = хранилище недоступно, а не «деградация до
+одного узла». API в этот момент падает на blob-операциях (`ensure_bucket`, presign,
+put), и retry помогает только после `bringing drive … online`. `IncompleteBody` /
+`.usage-cache.bin has incomplete body` — последствие того же обрыва записи, лечится
+перезапуском сервиса, а не `down -v`.
+
+### 3.17f. LiteLLM: `Attempting Prisma DB reconnect` / пропуски фоновых job
+
+**Симптомы:** `db_health_watchdog_connection_error`, `httpx.ConnectTimeout`,
+`LiteLLM Redis Caching: Got exception from REDIS: Timeout connecting to server`,
+`Execution of job "ProxyConfig.reload_mcp_servers_from_db …" skipped: maximum number
+of running instances reached`.
+
+**Причина:** это не дефект LiteLLM, а его реакция на недоступный Postgres (и, если
+Redis на том же томе, на общий I/O-столл). Prisma-клиент пересоздаётся, а фоновый poll
+MCP-серверов не укладывается в свой 30-секундный интервал и пропускает запуск. Все
+три строки уходят вместе с восстановлением Postgres.
+
+**Что уже сделано:** `litellm` в compose зависит от `postgres: condition:
+service_healthy` (тест `test_litellm_waits_for_postgres_before_its_prisma_migrations`):
+холодный старт больше не прогоняет `prisma migrate deploy` по восстанавливающемуся
+кластеру. Поднимать интервал `reload_mcp_servers_from_db` не нужно — это скрыло бы
+латентность БД, а не устранило её.
+
+**`Found 0 MCP servers in database` — ожидаемо, не баг.** По 070 платформенные
+инструменты живут в Host-local реестре (`PlatformToolHandler`), а EDMS/analytics — это
+отдельные контейнеры `mcp-edms` / `mcp-analytics`, а не MCP-серверы, зарегистрированные
+в БД LiteLLM. Пустой список — нормальное состояние стека; наполнять его вручную нельзя
+(иначе второй источник истины рядом с пинами 070).
+
+
 ### 3.18. MinIO / ClamAV недоступны из API
 
 **MinIO.** Endpoint проверяется **на старте** (`ensure_bucket()`): неверный адрес/креды →
@@ -820,6 +884,34 @@ Test-NetConnection -ComputerName localhost -Port 9000
 docker compose --env-file env/.env exec api `
     python -c "import socket; socket.create_connection(('host.docker.internal', 9000), 3).close(); print('ok')"
 ```
+
+**`Failed to resolve 'minio'` / `Temporary failure in name resolution`.** Адрес в конфиге
+верный, а контейнер `minio` остался **без endpoint'а в сети** (бывает после сбоя
+Docker Desktop/WSL при пересоздании сети): `NetworkSettings.Networks` пуст, хотя
+`NetworkMode=palatium-net`, контейнер при этом `Up (healthy)`. Имени `minio` в сети
+нет ни для кого — `api` падает на `ensure_bucket()`, `silo-init` — на `lookup minio …
+server misbehaving`. Retry тут не лечит: адреса нет вообще, а не «медленно».
+
+```powershell
+# Пустая сеть у контейнера против остальных сервисов в palatium-net — это и есть симптом
+docker inspect palatium-ai-minio-1 --format '{{json .NetworkSettings.Networks}}'
+docker network inspect palatium-net --format '{{range .Containers}}{{.Name}} {{end}}'
+
+# Вернуть в сеть С АЛИАСОМ: без --alias имя `minio` не появится, будет только имя контейнера
+docker network disconnect palatium-net palatium-ai-minio-1
+docker network connect --alias minio palatium-net palatium-ai-minio-1
+docker restart palatium-ai-api-1
+```
+
+Проверять резолв — из соседнего контейнера (`api` в этот момент в crash-loop):
+
+```powershell
+docker exec palatium-ai-mcp-edms-1 python -c "import socket; print(socket.gethostbyname('minio'))"
+```
+
+Канонический путь (вернёт и алиасы, и `depends_on`-порядок) — пересоздать сервис:
+`docker compose --env-file env/.env --profile attachments-s3 up -d --force-recreate minio`,
+затем `silo-init` (он `restart: "no"`, сам не перезапустится) и `api`.
 
 **ClamAV.** Контактируется **в момент `complete`**, не при старте: мёртвый `clamd` не
 ломает boot, но каждый upload получает `status="quarantined"`,
@@ -2078,6 +2170,29 @@ uv run --no-project python scripts/attachments_probe.py --preflight-image   # т
 - карточка есть, ответ не сработал → смотреть `hitl.choice` (одноразовость,
   TTL) и `attachment_reference.resolve` c `mode="explicit"`.
 
+**Явная множественность («сравни оба файла»).** Ось `attachment_scope="all"`
+(её ставит Intent, а не эвристика по глаголу сравнения — иначе «сравни эти два
+подхода» ложно тянуло бы файлы) вместе с `file_reference=thread_file` означает
+«все файлы диалога». Тогда шаг плана помечается как покрывающий всё множество,
+а worker читает файлы **по одному** (`AttachmentReferenceResolver.resolve(
+all_requested=True)` → `attachment_ids`), после чего синтез идёт один раз по
+объединённому evidence:
+
+- бюджет символов одного `read_attachment` (`READ_ATTACHMENT_OUTPUT_MAX_CHARS`)
+  **делится** между файлами (`12000 // N`), иначе второй документ молча выпадал бы
+  из промпта; усечение видно модели через `truncated` в payload;
+- потолок — `_MAX_PLURAL_READ_FILES` (4 файла) в одном ходе: при большем числе
+  пишется warning `researcher.plural_read_capped` (тихое усечение запрещено, 040);
+- файл, который не прочитался, не отменяет сравнение остальных:
+  `researcher.plural_read_file_failed`; если не прочитался ни один — типизированный
+  отказ (`MCP_TOOL_ERROR`);
+- диагностика: `researcher.plural_read_resolved` (сколько файлов), затем обычные
+  `mcp.*` спаны и `attachment_reference.resolve` с `all_requested=true`.
+
+Проверка: в треде с двумя файлами «сравни оба файла» должен дать ответ,
+опирающийся на оба документа (два `read_attachment` в трассе), а не отказ
+«неоднозначно» и не ответ по одному файлу.
+
 **Гейт F2 (structured streaming).** `palatium_sse_layout_shift_total{contract}` —
 не просто счётчик: для `contract="structured_incremental"` это **алерт при
 `increase(...[5m]) > 0`** (см. `.cursor/plans/structured-streaming.md` §3).
@@ -2088,6 +2203,23 @@ shift ожидаем и алертом не считается).
 
 Проверка после флипа: в треде с одним загруженным файлом запрос «перечитай этот файл»
 должен дать ответ по содержимому файла, а не «файл не приложен к диалогу».
+
+### 16.12. P5-гигиена: шум в логах PDF, skills в образе, один `build_turn_context` за ход
+
+Четыре сигнала выглядели как ошибки, но были шумом/сборкой. Что теперь правда:
+
+| Сигнал | Было | Стало |
+|---|---|---|
+| `The **fitz** API is deprecated…` | адаптеры импортировали deprecated-алиас | `pymupdf_compat.pymupdf()` грузит `pymupdf` (алиас — только для старого пина); в образе проверяется `import PIL, pytesseract, pymupdf` |
+| `Multiple definitions in dictionary … key /Info` | MuPDF писал в stderr мимо structlog на каждую страницу | `mupdf_display_warnings(False)` при импорте; **errors не глушим** (035: реальный сбой рендера обязан быть виден) |
+| `skill_catalog.root_missing /app/skills/procedural` | дерева не было в образе (`read_only` + нет COPY) | `COPY skills` в builder и runtime, `chmod -R a-w`; регресс-тест в `test_dockerfile_build_contract.py` |
+| `attachment.build_turn_context` дважды за ход | имя лога решения в continuation-узле совпадало с именем span'а сервисного вызова; плюс rehydrate заново читал те же id | лог переименован в `attachment.sticky_decision`; rehydrate тех же id возвращает уже собранный fence — лог `attachment.rehydrate_reused` |
+
+Проверка: на PDF-ходе в логе один `trace.start attachment.build_turn_context`;
+`fitz`-deprecation и `/Info` отсутствуют; `skill_catalog` не пуст
+(`skill_reference` отвечает). Если `attachment.rehydrate_reused` нет, а
+`build_turn_context` за ход всё равно дважды — это уже реальное двойное чтение:
+смотреть, кто передаёт другой набор id (`attachment.sticky_decision`).
 
 ---
 

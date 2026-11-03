@@ -86,16 +86,21 @@ Also decide:
     pasted text, or it is general knowledge. Also "none" when has_thread_files=false.
   Do NOT set "thread_file" when the ask is answerable from what you can see in the text;
   this axis routes to a storage read of the user's own file.
-- attachment_scope (which files of THIS turn the ask targets — only when attachment_count > 0):
+- attachment_scope (which files the ask targets; also applies to a thread-file ask):
   • "auto" — DEFAULT: no explicit plurality; a general ask («сделай выжимку», «план по
     документам») covers every eligible file.
   • "all" — the ask explicitly covers the whole set («по всем трём», «по всем документам»).
+    With file_reference="thread_file" it means EVERY file already uploaded in this dialog:
+    «сравни оба файла», «прочитай все документы из чата», «сопоставь их» after two files.
   • "single" — the ask is about ONE file in the singular («дай текст файла», «сделай
     реферирование файла»). A singular pointer at the upload — «этот документ», «этот
     файл», «данное приложение», "this document" — is a singular ask too, whatever the
     verb («что в этом документе?», «что написано в этом файле?»), even without the
     word «один». With two or more files this makes the platform ask the user which
     file to use instead of guessing — so use it only for genuine singular asks.
+  Plurality is about the ask, not about the noun: «сравни эти два подхода» is not a file
+  ask at all (file_reference="none"), so it must not become attachment_scope="all" with
+  thread files.
   Never set "single" when the ask is about the whole set, and never "all" for one file.
 - attachment_kind (modality the ask names — only when attachment_count > 0):
   • "any" — DEFAULT: no modality named.
@@ -117,10 +122,20 @@ Also decide:
     «удали из памяти…», "forget…"). Put the subject to delete into memory_text.
   • "none" — everything else, including questions ABOUT memory («что ты помнишь
     про…?»), greetings, and text that merely mentions remembering.
-  For save/forget: task_kind=tool_execution, requires_mcp=true, grounding="none";
-  memory_key = a short latin slug for the subject (db_port, manager_name) so a later
-  correction updates the same entry. Do not answer the write yourself: the platform
-  asks the user to approve the mutation, and no mutation happens without that.
+  For save/forget WITHOUT a residual ask: task_kind=tool_execution, requires_mcp=true,
+  grounding="none"; memory_key = a short latin slug for the subject (db_port,
+  manager_name) so a later correction updates the same entry. Do not answer the write
+  yourself: the platform asks the user to approve the mutation, and no mutation
+  happens without that.
+- residual_ask (does the SAME message also ask something besides the memory command?):
+  • true — the message carries another answerable ask: a question («а ты кто?»), a
+    greeting/self-introduction («привет, я Геннадий»), a request, a follow-up. The
+    platform stages the approval card AND answers that other ask in the same turn, so
+    classify task_kind / requires_mcp / grounding for the residual ask — never as
+    tool_execution just because a command is present.
+  • false — DEFAULT: the message is only the «запомни …» / «забудь …» order.
+  memory_text still holds ONLY the atomic fact; the command itself never inflates
+  task_kind. A greeting or identity question alone is a residual ask, not a command.
 - confidence: how sure you are of task_kind. Below 0.7 a clarification_needed label is
   treated as a guess and the platform answers on the default path instead.
 - grounding (need for external data — orthogonal to task_kind):
@@ -186,6 +201,12 @@ Examples (input → output axes; reasoning omitted):
 - {"text":"сравни оба файла","has_prior_dialog":false,"attachment_count":2} →
   knowledge_request, attachment_scope="all", grounding="required"
   (explicit plurality — every upload is in scope)
+- {"text":"сравни оба файла из этого чата","has_prior_dialog":true,
+  "has_thread_files":true} → knowledge_request, requires_mcp=true,
+  underspecification_kind="none", grounding="required",
+  file_reference="thread_file", attachment_scope="all",
+  grounding_reason="compare both earlier uploads"
+  (plurality over stored files: the platform reads every file of the dialog, not one)
 - {"text":"а из БД взять этот файл и ещё раз прочитать","has_prior_dialog":true,
   "has_thread_files":true} → knowledge_request, requires_mcp=true,
   underspecification_kind="none", grounding="required",
@@ -224,10 +245,17 @@ Examples (input → output axes; reasoning omitted):
 - {"text":"спасибо!","has_prior_dialog":true} → social_conversation, response_shape="auto"
 - {"text":"Запомни, что порт базы теперь 5433","has_prior_dialog":false} →
   tool_execution, requires_mcp=true, memory_mutation="save",
-  memory_text="порт базы теперь 5433", memory_key="db_port", grounding="none"
+  memory_text="порт базы теперь 5433", memory_key="db_port", grounding="none",
+  residual_ask=false
+- {"text":"Привет, я Геннадий! Запомни, что обращаться ко мне «мой хозяин». А ты кто?",
+  "has_prior_dialog":false} → knowledge_request, requires_mcp=false,
+  memory_mutation="save", memory_text="обращаться к пользователю «мой хозяин»",
+  memory_key="addressing_preference", residual_ask=true, grounding="none"
+  (a question and a greeting ride next to the command: the card AND an answer)
 - {"text":"Забудь про мой рабочий порт базы","has_prior_dialog":true} →
   tool_execution, requires_mcp=true, memory_mutation="forget",
-  memory_text="рабочий порт базы", memory_key="db_port", grounding="none"
+  memory_text="рабочий порт базы", memory_key="db_port", grounding="none",
+  residual_ask=false
 - {"text":"что ты помнишь про порт базы?","has_prior_dialog":true} →
   knowledge_request, requires_mcp=true, memory_mutation="none"
 
@@ -238,5 +266,5 @@ Respond ONLY with valid JSON:
 "transformation":"none","file_reference":"none",
 "attachment_scope":"auto","attachment_kind":"any","attachment_focus":"current_uploads",
 "response_shape":"auto",
-"memory_mutation":"none","memory_text":"","memory_key":"",
+"memory_mutation":"none","memory_text":"","memory_key":"","residual_ask":false,
 "confidence":0.0,"reasoning":"<brief explanation>"}"""

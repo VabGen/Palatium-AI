@@ -97,3 +97,30 @@ async def test_rollout_off_keeps_the_pre_existing_plan(monkeypatch: pytest.Monke
     assert step.tool_name is None
     assert step.strategy == "reason_only"
     assert step.requires_tool_call is False
+
+
+@pytest.mark.asyncio()
+async def test_plural_thread_ask_plans_one_step_for_the_whole_set() -> None:
+    """«Сравни оба файла»: the step covers every file; the worker expands it to N reads.
+
+    The planner cannot know N — file identity is resolved in the application layer,
+    never by the LLM or a pure planner — so plurality is expressed on the step and
+    expanded by the worker path.
+    """
+    bundle = await ExecutionPlanner(capability_index=None).build(
+        _input(user_text="сравни оба файла из этого чата", attachment_scope="all")
+    )
+
+    step = bundle.steps[0]
+    assert (step.server_name, step.tool_name) == ("platform", "read_attachment")
+    assert step.requires_tool_call is True
+    assert "every file" in step.rationale
+
+
+@pytest.mark.asyncio()
+async def test_singular_thread_ask_keeps_a_single_document_rationale() -> None:
+    bundle = await ExecutionPlanner(capability_index=None).build(_input(attachment_scope="auto"))
+
+    step = bundle.steps[0]
+    assert step.tool_name == "read_attachment"
+    assert "every file" not in step.rationale

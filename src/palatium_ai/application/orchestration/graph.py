@@ -86,12 +86,14 @@ def _wire_agent_edges(graph: Any) -> None:
     """
     graph.add_edge(START, NODE_INTENT_CLASSIFIER)
     # Explicit memory mutations leave the pipeline before retrieval/generation: the
-    # gate stages a HITL card and ends the turn (060; no prose "I remembered it").
+    # gate stages a HITL card (060; no prose "I remembered it"). A mixed ask (question
+    # next to the command) continues to the normal pipeline so the question is answered
+    # too — see route_after_memory_mutation.
     graph.add_conditional_edges(NODE_INTENT_CLASSIFIER, nodes.route_after_intent)
     # Multi-file turns pass the attachment stage first: selection/map-reduce may end
     # the turn with a file-choice card, otherwise the pipeline continues unchanged.
     graph.add_conditional_edges(NODE_ATTACHMENT_SELECTION, nodes.route_after_attachment_selection)
-    graph.add_edge(NODE_MEMORY_MUTATION, END)
+    graph.add_conditional_edges(NODE_MEMORY_MUTATION, nodes.route_after_memory_mutation)
     graph.add_edge(NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_SUPERVISOR)
     graph.add_edge(NODE_SUPERVISOR, NODE_CONTEXT_ENRICHER_WEAVING)
     graph.add_conditional_edges(NODE_CONTEXT_ENRICHER_WEAVING, nodes.route_after_context)

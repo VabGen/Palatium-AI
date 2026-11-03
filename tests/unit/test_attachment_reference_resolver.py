@@ -213,3 +213,22 @@ async def test_metrics_record_the_outcome_kind_without_a_new_metric_name() -> No
         )
         >= 1
     )
+
+
+@pytest.mark.asyncio()
+async def test_all_requested_resolves_the_whole_set_instead_of_refusing_ambiguity() -> None:
+    """«Сравни оба файла» must plan N reads, not a refusal or a single pick."""
+    rows = [_attachment("a.pdf"), _attachment("b.pdf")]
+    resolver = AttachmentReferenceResolver(repository=_FakeRepository(rows))
+
+    resolution = await resolver.resolve(
+        user_id="user-1",
+        thread_id="thread-1",
+        hint_text="сравни оба файла",
+        all_requested=True,
+    )
+
+    assert resolution.status == "resolved"
+    assert resolution.reason == "all_requested"
+    assert resolution.attachment_ids == (rows[0].id, rows[1].id)
+    assert resolution.attachment_id == rows[0].id

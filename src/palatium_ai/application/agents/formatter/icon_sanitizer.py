@@ -128,6 +128,51 @@ def coerce_icon_name(raw: str) -> IconToken | None:
     return cast("IconToken", name)
 
 
+def coerce_icon_fields(node: object) -> tuple[object, int]:
+    """Blank icon names outside the UI registry; return ``(node, dropped)``.
+
+    An icon is layout chrome: the client resolves the token through a closed registry
+    and draws nothing for an unknown one, so a stray ``"icon": "document-check"`` must
+    cost the icon — never the block, and never the whole schema-first turn (which
+    falls back to the legacy contract when the document fails validation). Content is
+    untouched; names are canonicalised to the allow-list spelling.
+
+    Walks the payload because every block variant, list/step/kv item and ``actions[]``
+    can carry the field — the union has no single owner for it (055).
+    """
+    if isinstance(node, dict):
+        dropped = 0
+        cleaned: dict[str, object] = {}
+        for key, value in node.items():
+            if key == "icon":
+                coerced, lost = _coerce_icon_value(value)
+                cleaned[key] = coerced
+                dropped += lost
+                continue
+            nested, lost = coerce_icon_fields(value)
+            cleaned[key] = nested
+            dropped += lost
+        return cleaned, dropped
+    if isinstance(node, list):
+        items: list[object] = []
+        dropped = 0
+        for item in node:
+            nested, lost = coerce_icon_fields(item)
+            items.append(nested)
+            dropped += lost
+        return items, dropped
+    return node, 0
+
+
+def _coerce_icon_value(value: object) -> tuple[object, int]:
+    if not isinstance(value, str):
+        return value, 0
+    if not value.strip():
+        return None, 0
+    name = coerce_icon_name(value)
+    return (None, 1) if name is None else (name, 0)
+
+
 def sanitize_markdown_buffer(text: str) -> str:
     """Map emoji → icon tokens and drop unmapped pictographs (post-stream / one-shot)."""
     return _emoji_to_icon_tokens(text)

@@ -10,7 +10,14 @@ from pydantic import BaseModel, Field
 
 from palatium_ai.application.orchestration import selectors
 from palatium_ai.domain.agents.execution import ExecutionStrategy
-from palatium_ai.domain.policies.types import FILE_REFERENCE_DEFAULT, RESPONSE_SHAPE_DEFAULT, FileReferenceKind, ResponseShape
+from palatium_ai.domain.policies.types import (
+    ATTACHMENT_SCOPE_DEFAULT,
+    FILE_REFERENCE_DEFAULT,
+    RESPONSE_SHAPE_DEFAULT,
+    AttachmentScope,
+    FileReferenceKind,
+    ResponseShape,
+)
 
 if TYPE_CHECKING:
     from palatium_ai.application.orchestration.state import AgentGraphState
@@ -35,10 +42,14 @@ class OrchestrationSnapshot(BaseModel):
     route_plan: str = Field(min_length=1)
     response_shape: ResponseShape = RESPONSE_SHAPE_DEFAULT
     file_reference: FileReferenceKind = FILE_REFERENCE_DEFAULT
+    #: Plurality of a thread-file ask (Intent axis); ``all`` expands to N reads.
+    attachment_scope: AttachmentScope = ATTACHMENT_SCOPE_DEFAULT
     classification_reasoning: str = Field(min_length=1)
     worker_summary: str | None = None
     critic_summary: str | None = None
     selected_strategy: ExecutionStrategy
+    #: True when this turn carries its own fenced upload (the file owns the turn).
+    has_attachment_context: bool = False
 
     @classmethod
     def from_state(cls, state: AgentGraphState) -> OrchestrationSnapshot:
@@ -56,10 +67,12 @@ class OrchestrationSnapshot(BaseModel):
             route_plan=selectors.resolved_route_plan(state),
             response_shape=selectors.resolved_response_shape(state),
             file_reference=selectors.resolved_file_reference(state),  # type: ignore[arg-type]  # Literal registry (017)
+            attachment_scope=selectors.resolved_attachment_scope(state),  # type: ignore[arg-type]  # Literal registry (017)
             classification_reasoning=selectors.resolved_reasoning(state),
             worker_summary=selectors.resolved_worker_summary(state),
             critic_summary=selectors.resolved_critic_summary(state),
             selected_strategy=selectors.selected_strategy(state),
+            has_attachment_context=selectors.uploads_in_scope(state) and bool((state.get("untrusted_context") or "").strip()),
         )
 
     def context_packet(

@@ -3,6 +3,7 @@
 from .content_document import (
     ICON_NAME_SET,
     ICON_NAMES,
+    NESTED_ITEM_PREFIX,
     ActionKind,
     ActionSpec,
     ActionStyle,
@@ -23,6 +24,7 @@ from .content_document import (
     ListBlock,
     ListItem,
     ParagraphBlock,
+    StepItem,
     StepsBlock,
     TableBlock,
     VerbosityBudget,
@@ -36,6 +38,7 @@ from .revision import DocumentRevision, block_content_hash, document_content_has
 __all__ = [
     "ICON_NAMES",
     "ICON_NAME_SET",
+    "NESTED_ITEM_PREFIX",
     "ActionKind",
     "ActionSpec",
     "ActionStyle",
@@ -57,6 +60,7 @@ __all__ = [
     "ListBlock",
     "ListItem",
     "ParagraphBlock",
+    "StepItem",
     "StepsBlock",
     "TableBlock",
     "VerbosityBudget",

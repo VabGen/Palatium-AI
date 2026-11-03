@@ -8,6 +8,7 @@ import json
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.application.agents.intent_classifier.config import INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS
 from palatium_ai.application.agents.intent_classifier.parsing import parse_classifier_output
 from palatium_ai.application.agents.intent_classifier.prompts import INTENT_CLASSIFIER_SYSTEM_PROMPT
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -93,6 +94,7 @@ class IntentClassifierAgent(BaseAgent):
                 self._config,
                 messages,
                 response_format="json_object",
+                max_tokens=INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS,
             )
             parsed = parse_classifier_output(completion.content, has_thread_files=has_thread_files)
         except Exception as exc:  # noqa: BLE001  # returns typed AgentOutput failure; nothing propagates (030.8)

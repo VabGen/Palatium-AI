@@ -11,6 +11,7 @@ from palatium_ai.application.agents.supervisor.routing import (
     ROUTE_MATRIX,
     clamp_confidence,
     default_plans,
+    thread_file_reread,
 )
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -35,7 +36,13 @@ class SupervisorAgent(BaseAgent):
         return self._config
 
     def get_required_context_keys(self) -> list[str]:
-        return ["task_kind", "requires_mcp", "classification_confidence"]
+        return [
+            "task_kind",
+            "requires_mcp",
+            "classification_confidence",
+            "file_reference",
+            "has_attachment_context",
+        ]
 
     def get_available_tools(self) -> list[str]:
         return []
@@ -57,6 +64,7 @@ class SupervisorAgent(BaseAgent):
         executable_kind = WorkflowExecutionPolicy.executable_task_kind(
             task_kind,
             requires_mcp=requires_mcp,
+            thread_file_reread=thread_file_reread(input.context),
         )
 
         try:

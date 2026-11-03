@@ -126,7 +126,44 @@ def test_attachments_runtime_installs_tesseract_when_requested() -> None:
 def test_attachments_builder_verifies_ocr_python_extras() -> None:
     """Optional ``attachments`` extra must actually expose Pillow/pytesseract/pymupdf."""
     install = _install_run()
-    assert "import PIL, pytesseract, fitz" in install, "WITH_ATTACHMENTS=1 installs the extra but never asserts OCR Python extras"
+    assert "import PIL, pytesseract, pymupdf" in install, (
+        "WITH_ATTACHMENTS=1 installs the extra but never asserts OCR Python extras"
+    )
+    # `fitz` is the deprecated alias of `pymupdf`: asserting it kept the DeprecationWarning
+    # in every PDF turn's log (P5).
+    assert "pytesseract, fitz" not in install, "the build still proves the deprecated `fitz` alias instead of `pymupdf`"
+
+
+def test_runtime_image_contains_the_procedural_skills() -> None:
+    """`skill_reference` can only serve what the image actually ships.
+
+    With the tree absent, every container start logged ``skill_catalog.root_missing
+    /app/skills/procedural`` and the catalog stayed empty (P5). Both stages matter:
+    the builder has to copy the tree as build context, the runtime has to pick it up
+    from the builder.
+    """
+    text = _dockerfile_text()
+    builder_block = text.split("FROM deps AS builder", 1)[1].split("FROM base AS runtime", 1)[0]
+    runtime_block = text.split("FROM base AS runtime", 1)[1].split("FROM builder AS test", 1)[0]
+
+    assert "COPY skills ./skills" in builder_block, "the build context never receives skills/"
+    assert "COPY --from=builder --chown=app:app /app/skills /app/skills" in runtime_block, (
+        "skills/ never reaches the runtime image"
+    )
+    # Read-only product asset, like web/dist: nothing writes to a SKILL.md at runtime.
+    assert "/app/skills" in runtime_block.split("chmod -R a-w", 1)[-1], "shipped skills must be read-only"
+
+
+def test_dockerignore_keeps_skill_markdown_in_the_build_context() -> None:
+    """`*.md` is excluded at the context root; SKILL.md files live one level deeper."""
+    patterns = [
+        line.strip()
+        for line in (_REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+    assert "skills" not in patterns, "skills/ is excluded from the build context"
+    assert "**/*.md" not in patterns, "`**/*.md` would strip every SKILL.md from the image"
 
 
 def test_runtime_image_contains_the_built_chat_ui() -> None:

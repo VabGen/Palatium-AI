@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react';
 import { TokenIcon } from '../icons/TokenIcon';
+import { iconForStepStatus, iconForTone } from '../icons/semanticIcons';
 import { InlineMarkdown } from './InlineMarkdown';
 import { WidgetEmbed } from './WidgetEmbed';
 import { t } from '../i18n';
@@ -111,20 +112,28 @@ const ParagraphView = memo(({ block }: { block: ParagraphBlock }) => (
   </p>
 ));
 
+const NESTED_ITEM_PREFIX = '· ';
+
 const ListView = memo(({ block }: { block: ListBlock }) => {
   const Tag = block.style === 'ordered' ? 'ol' : 'ul';
   return (
     <Tag className={`block-list style-${block.style}`}>
-      {block.items.map((item, i) => (
-        <li key={i}>
-          <TokenIcon token={item.icon} size={16} />
-          <span>
-            {item.emphasis && <strong>{item.emphasis}</strong>}
-            {item.emphasis && ' — '}
-            <InlineMarkdown text={item.text} />
-          </span>
-        </li>
-      ))}
+      {block.items.map((item, i) => {
+        // Nesting is carried as a text prefix (the contract has no level field).
+        // Printing it as-is renders the marker twice: "• · подпункт".
+        const nested = item.text.startsWith(NESTED_ITEM_PREFIX);
+        const text = nested ? item.text.slice(NESTED_ITEM_PREFIX.length) : item.text;
+        return (
+          <li key={i} className={nested ? 'block-list-item nested' : 'block-list-item'}>
+            <TokenIcon token={item.icon} size={16} />
+            <span>
+              {item.emphasis && <strong>{item.emphasis}</strong>}
+              {item.emphasis && ' — '}
+              <InlineMarkdown text={text} />
+            </span>
+          </li>
+        );
+      })}
     </Tag>
   );
 });
@@ -156,32 +165,21 @@ const TableView = memo(({ block }: { block: TableBlock }) => (
   </div>
 ));
 
-const CalloutView = memo(({ block }: { block: CalloutBlock }) => {
-  const icon =
-    block.icon ??
-    (block.tone === 'danger'
-      ? 'danger'
-      : block.tone === 'warning'
-        ? 'warning'
-        : block.tone === 'success'
-          ? 'success'
-          : 'info');
-  return (
-    <aside className={`block-callout tone-${block.tone}`}>
-      <TokenIcon token={icon} size={18} animated />
-      <div>
-        {block.title && (
-          <strong>
-            <InlineMarkdown text={block.title} />
-          </strong>
-        )}
-        <p>
-          <InlineMarkdown text={block.body} />
-        </p>
-      </div>
-    </aside>
-  );
-});
+const CalloutView = memo(({ block }: { block: CalloutBlock }) => (
+  <aside className={`block-callout tone-${block.tone}`}>
+    <TokenIcon token={block.icon ?? iconForTone(block.tone)} size={18} animated />
+    <div>
+      {block.title && (
+        <strong>
+          <InlineMarkdown text={block.title} />
+        </strong>
+      )}
+      <p>
+        <InlineMarkdown text={block.body} />
+      </p>
+    </div>
+  </aside>
+));
 
 const CodeView = memo(({ block }: { block: CodeBlock }) => (
   <pre className="block-code">
@@ -213,21 +211,29 @@ const KeyValueView = memo(({ block }: { block: KeyValueBlock }) => (
 
 const StepsView = memo(({ block }: { block: StepsBlock }) => (
   <ol className="block-steps">
-    {block.items.map((item, i) => (
-      <li key={i} className={`step status-${item.status}`}>
-        <div className="step-marker">
-          <TokenIcon token={item.icon ?? 'check'} size={16} />
-        </div>
-        <div className="step-body">
-          <strong>
-            <InlineMarkdown text={item.title} />
-          </strong>
-          <p>
-            <InlineMarkdown text={item.body} />
-          </p>
-        </div>
-      </li>
-    ))}
+    {block.items.map((item, i) => {
+      const icon = item.icon ?? iconForStepStatus(item.status);
+      return (
+        <li key={i} className={item.status ? `step status-${item.status}` : 'step'}>
+          <div className="step-marker">
+            {/*
+              Маркер несёт порядковый номер, пока не известно состояние: номер —
+              факт из данных, а иконка статуса без статуса была бы выдумкой
+              (и одинаковой у всех строк).
+            */}
+            {icon ? <TokenIcon token={icon} size={16} /> : <span aria-hidden>{i + 1}</span>}
+          </div>
+          <div className="step-body">
+            <strong>
+              <InlineMarkdown text={item.title} />
+            </strong>
+            <p>
+              <InlineMarkdown text={item.body} />
+            </p>
+          </div>
+        </li>
+      );
+    })}
   </ol>
 ));
 

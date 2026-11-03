@@ -279,6 +279,19 @@ def resolved_file_reference(state: AgentGraphState) -> str:
     return str(ensure_routing_intent(state).file_reference)
 
 
+def resolved_attachment_scope(state: AgentGraphState) -> str:
+    """Plurality axis from Intent (auto/all/single) with the registry default.
+
+    ``all`` on a thread-file ask means "every file of this dialog": the worker reads
+    them one by one instead of refusing with an ambiguity (055).
+    """
+    from palatium_ai.domain.policies.types import ATTACHMENT_SCOPE_DEFAULT
+
+    classification = classification_result(state)
+    output = classification.output if classification is not None else None
+    return str(output.attachment_scope) if output is not None else ATTACHMENT_SCOPE_DEFAULT
+
+
 def resolved_grounding(state: AgentGraphState) -> GroundingMode:
     """Grounding mode from Continuity (default optional)."""
     from palatium_ai.domain.policies.types import GROUNDING_DEFAULT

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from palatium_ai.domain.policies.types import (
         FormatterGenerationPath,
         FormatterSchemaOutcome,
+        PartialBlockOutcome,
     )
 
 # Adaptive Grounding latency histogram — custom buckets (pre-flip hardening).
@@ -347,6 +348,16 @@ try:  # pragma: no cover - optional dependency
         "Formatter generation attempts by contract and schema verdict.",
         ["path", "outcome"],
     )
+    # Structured preview health: a closed streamed block that never became a
+    # ``block_delta``. ``invalid`` means the model broke the ContentBlock contract
+    # mid-stream; ``unparsable`` means the scanner saw a closed element that is not
+    # JSON (protocol defect). Both are invisible in the final-document ratio until
+    # the whole document fails, so they need their own series (040).
+    _palatium_formatter_partial_block_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_formatter_partial_block_total",
+        "Streamed ContentDocument blocks that never became a typed frame.",
+        ["outcome"],
+    )
     # Denominator = every citation the provider emitted; numerator = outcome
     # "resolved". "unanchored" means the model attributed text it never wrote — a
     # grounding signal, not a rendering detail (040, W3a).
@@ -428,6 +439,7 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_citation_resolution_total = _NoopMetric()
     _palatium_citation_highlight_total = _NoopMetric()
     _palatium_formatter_schema_total = _NoopMetric()
+    _palatium_formatter_partial_block_total = _NoopMetric()
 
 
 @dataclass
@@ -443,6 +455,7 @@ class AgentMetrics:
     _extract_skips: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _lint_findings: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _schema_outcomes: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
+    _partial_blocks: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _citation_outcomes: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _highlight_outcomes: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _judge_scores: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
@@ -616,6 +629,16 @@ class AgentMetrics:
     def formatter_schema_count(self, path: str, outcome: str) -> int:
         with self._lock:
             return self._schema_outcomes[(path, outcome)]
+
+    def record_partial_block(self, *, outcome: PartialBlockOutcome) -> None:
+        """Count a streamed block that produced no typed frame (structured preview)."""
+        _palatium_formatter_partial_block_total.labels(outcome=outcome).inc()
+        with self._lock:
+            self._partial_blocks[outcome] += 1
+
+    def partial_block_count(self, outcome: str) -> int:
+        with self._lock:
+            return self._partial_blocks[outcome]
 
     def record_citation_resolution(self, *, anchor: str, outcome: str) -> None:
         """Count one provider citation by anchor and resolution outcome (W3a).

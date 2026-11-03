@@ -87,6 +87,34 @@ def _cancel_pending_tasks(*tasks: asyncio.Task[Any] | None) -> None:
             task.cancel()
 
 
+def _with_staged_mutation_card(
+    final_state: AgentGraphState,
+    formatted: FormatterTaskResult | None,
+) -> FormatterTaskResult | None:
+    """Carry the memory gate's approval card into the turn's final document.
+
+    A mixed ask (command + question) stages the card and then runs the normal pipeline,
+    whose Formatter replaces ``formatted``. The card is the only path to the side
+    effect, so it must survive that overwrite (060, 020); if the pipeline produced
+    nothing, the gate's preview is still a better answer than a "graph produced no
+    result" failure. Cards already present are not duplicated (idempotent finalize).
+    """
+    staged = final_state.get("memory_mutation_result")
+    if not isinstance(staged, FormatterTaskResult) or not staged.hitl_cards:
+        return formatted
+    if not isinstance(formatted, FormatterTaskResult):
+        return staged
+    known = {card.card_id for card in formatted.hitl_cards}
+    if all(card.card_id in known for card in staged.hitl_cards):
+        return formatted
+    return formatted.model_copy(
+        update={
+            "hitl_cards": (*staged.hitl_cards, *formatted.hitl_cards),
+            "requires_review": True,
+        }
+    )
+
+
 class IntentGraphRunner:
     """Runs the agent graph and finalizes successful formatted turns."""
 
@@ -596,6 +624,23 @@ class IntentGraphRunner:
                 hop_slowest_node=hop_fields["hop_slowest_node"],
                 hop_slowest_ms=hop_fields["hop_slowest_ms"],
                 hop_total_ms=hop_fields["hop_total_ms"],
+                hop_agent_ms=hop_fields["hop_agent_ms"],
+                hop_io_ms=hop_fields["hop_io_ms"],
+                hop_budget_ms=hop_fields["hop_budget_ms"],
+                reason="agent_work",
+            )
+        elif hop_fields["hop_wall_over_budget"]:
+            # Slow because of documented external I/O (OCR/parse), not agent work:
+            # reported, but it must not count as an agent-budget violation.
+            logger.info(
+                "agent.turn.slow_io",
+                thread_id=thread_id,
+                task_id=task_id,
+                trace_id=trace_id,
+                hop_total_ms=hop_fields["hop_total_ms"],
+                hop_agent_ms=hop_fields["hop_agent_ms"],
+                hop_io_ms=hop_fields["hop_io_ms"],
+                hop_io_ms_by_kind=hop_fields["hop_io_ms_by_kind"],
                 hop_budget_ms=hop_fields["hop_budget_ms"],
             )
         if tenant_key is not None:
@@ -642,7 +687,7 @@ class IntentGraphRunner:
             msg = "IntentGraphRunner.bind_attach_hitl_cards must be called before finalize"
             raise RuntimeError(msg)
 
-        formatted = final_state.get("formatted")
+        formatted = _with_staged_mutation_card(final_state, final_state.get("formatted"))
         classification = final_state.get("classification")
         routing_intent = final_state.get("routing_intent")
         if routing_intent is not None:

@@ -52,6 +52,10 @@ class AgentGraphState(TypedDict, total=False):
     execution: ResearcherTaskResult
     critic: CriticTaskResult
     formatted: FormatterTaskResult
+    #: Staged by the memory gate. A mixed ask (command + question) leaves the gate for
+    #: the normal pipeline, whose Formatter overwrites ``formatted``; this key keeps the
+    #: approval card — the only path to the write — for finalization to re-attach (060).
+    memory_mutation_result: FormatterTaskResult
     revision_feedback: str
     requires_clarification: bool
     clarification_question: str

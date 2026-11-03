@@ -66,5 +66,7 @@ async def test_embed_passes_configured_timeout_to_litellm(monkeypatch: pytest.Mo
     assert result == [[0.1, 0.2, 0.3]]
     timeout = captured["timeout"]
     assert isinstance(timeout, Timeout)
-    assert timeout.total == 17
+    # httpx models the budget per phase (there is no "total" attribute): read/write/pool
+    # carry the whole-request timeout, connect carries the handshake budget.
+    assert (timeout.read, timeout.write, timeout.pool) == (17, 17, 17)
     assert timeout.connect == 3

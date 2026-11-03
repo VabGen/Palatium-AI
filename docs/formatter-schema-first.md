@@ -46,6 +46,7 @@ legacy и пишется warning `formatter.rollout.zero_coverage`. Так од�
 | Метрика | Значения |
 |---|---|
 | `palatium_formatter_schema_total{path,outcome}` | `path`: `schema_first` / `legacy_markdown`; `outcome`: `valid`, `invalid`, `empty_blocks`, `unsupported`, `fallback` |
+| `palatium_formatter_partial_block_total{outcome}` | стриминговые блоки, не ставшие типизированным кадром: `unparsable` (сканер/протокол), `invalid` (контракт `ContentBlock`) |
 | `palatium_agent_errors_total{error_type}` | `schema_first_llm_stage_failure`, `llm_stage_failure` — транспорт/таймаут |
 | `palatium_content_lint_findings_total{rule,severity}` | дефекты, валидные по схеме, но неверные для пользователя |
 | `palatium_citation_resolution_total{anchor,outcome}` | якоря провайдера: знаменатель — всё, что он прислал (W3a) |
@@ -89,6 +90,34 @@ histogram_quantile(0.95, sum by (le) (rate(palatium_agent_request_duration_secon
 
 Fallback спроектирован как degraded-graceful: при отказе провайдера, невалидном JSON или
 пустом `blocks` на непустом ответе вызов переоткрывает legacy-путь, а не теряет ответ.
+
+## Декодирование ответа модели (JSON-конверт)
+
+`response_format=json_schema` — просьба, а не гарантия. Провайдер возвращает текст,
+и в нём встречается Markdown-обёртка ```` ```json … ``` ````, проза до/после
+конверта, висячие запятые, сырые переводы строк в строковых значениях. Это дефект
+формата, а не повод переоткрывать legacy: один декодер — `domain/llm/json_codec.py`
+(`JSONCodec`: фенсы, проза, ремонт) + `domain/llm/response_parser.py`
+(`parse_llm_response` / `parse_llm_payload`) — используют и `schema_first`, и
+JSON-путь legacy, и Critic. `ContentDocument.model_validate_json` напрямую больше
+не вызывается: сырой текст Pydantic не разбирает.
+
+Что считается декодированием (ход не теряется):
+
+| Дефект модели | Поведение |
+|---|---|
+| fence/проза вокруг JSON, висячие запятые, сырые `\n` в строке | кодек извлекает и ремонтирует; `formatter.document_json.repaired` в логе |
+| отсутствует `meta` | дефолты `parse_formatter_document` (`confidence` клампится `align_formatter_meta`) |
+| `{"document": {…}}` вместо документа | `extract_nested` разворачивает обёртку |
+| `icon` вне реестра UI (`"icon": "document-check"`) | иконка снимается (chrome), блок и проза сохраняются |
+| payload — не объект / обрезан / не JSON | `outcome=invalid` → legacy-перегенерация (не `failure_or_fallback`) |
+
+Границы: **топ-уровневые** структуры только. Обрезанный payload не «спасается»
+одним из своих внутренних объектов — это была бы тихая потеря ответа (050).
+Границы `IconToken` — реестр UI, а не содержание: неизвестная иконка стоит иконки,
+но не блока. Логи не содержат прозы: `compact_validation_error` печатает
+`field: message`, а `LLMJSONError.reason` — класс сбоя (`no_json` / `unbalanced` /
+`unrecoverable` / `not_object`), не текст модели (020, 040).
 
 ## Детерминированный lint (W0a)
 

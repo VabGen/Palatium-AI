@@ -43,8 +43,11 @@ from dataclasses import dataclass
 
 from pydantic import TypeAdapter, ValidationError
 
+from palatium_ai.application.agents.formatter.icon_sanitizer import coerce_icon_fields
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.content import ContentBlock, ParagraphBlock, validate_content_block
+from palatium_ai.domain.llm.response_parser import compact_validation_error
 from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
 from palatium_ai.domain.policies.stream_display import StreamDisplayPolicy
 
@@ -181,8 +184,16 @@ def _frame_from_block(raw: str, index: int, *, already_emitted: int = 0) -> Part
     """Parse one closed element; typed block when valid, prose either way."""
     try:
         node = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("formatter.partial_parse.block_skipped", chars=len(raw))
+    except json.JSONDecodeError as exc:
+        # A balanced slice that is not JSON means the scanner/protocol is at fault,
+        # not the model's content — a different series from a schema violation (040).
+        logger.warning(
+            "formatter.partial_parse.block_skipped",
+            index=index,
+            chars=len(raw),
+            error=f"{exc.msg} at pos {exc.pos}",
+        )
+        agent_metrics.record_partial_block(outcome="unparsable")
         return None
     parts: list[str] = []
     _collect_prose(node, parts)
@@ -199,17 +210,42 @@ def _frame_from_block(raw: str, index: int, *, already_emitted: int = 0) -> Part
 
 
 def _typed_block(node: object, index: int) -> ContentBlock | None:
-    """Validate the element against the block union; ``None`` when it does not fit."""
+    """Validate the element against the block union; ``None`` when it does not fit.
+
+    Layout-only slips are normalised first (an unknown icon name is chrome the client
+    cannot draw): the block, its prose and — for the final document — the whole turn
+    must not be lost over a decoration the schema-first fallback cannot restore.
+    """
+    normalized, dropped_icons = coerce_icon_fields(node)
+    if dropped_icons:
+        logger.info("formatter.partial_parse.icons_dropped", index=index, count=dropped_icons)
     try:
-        block = _BLOCK_ADAPTER.validate_python(node)
+        block = _BLOCK_ADAPTER.validate_python(normalized)
         validate_content_block(block)
-    except ValidationError, ValueError:
+    except (ValidationError, ValueError) as exc:
         # The provider enforces the schema, so this is a contract signal, not a
         # reason to drop the turn — the prose preview and the final document still
         # have a chance to be correct (050: no silent truncation of the answer).
-        logger.warning("formatter.partial_parse.block_invalid", index=index)
+        # The type and the failing field are the only way to tell prompt drift from
+        # a scanner defect; the payload itself is never logged (020).
+        logger.warning(
+            "formatter.partial_parse.block_invalid",
+            index=index,
+            block_type=_block_type(node),
+            error=compact_validation_error(exc),
+        )
+        agent_metrics.record_partial_block(outcome="invalid")
         return None
     return block
+
+
+def _block_type(node: object) -> str:
+    """The declared block type for diagnostics; never used for control flow."""
+    if isinstance(node, dict):
+        declared = node.get("type")
+        if isinstance(declared, str) and declared.strip():
+            return declared.strip()[:32]
+    return "unknown"
 
 
 def _root_title(buffer: str) -> str | None:

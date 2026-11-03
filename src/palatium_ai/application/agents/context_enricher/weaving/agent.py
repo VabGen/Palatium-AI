@@ -63,6 +63,7 @@ class ContextWeaverAgent(BaseAgent):
             "has_attachment_context",
             "has_trusted_prior",
             "file_reference",
+            "attachment_scope",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -112,6 +113,7 @@ class ContextWeaverAgent(BaseAgent):
             response_shape=task_input.response_shape,
             execution_plan=execution_plan,
             context_summary=context_summary,
+            attachment_scope=task_input.attachment_scope,
         )
         output = ContextWeaverOutput(
             context_packet=context_packet,

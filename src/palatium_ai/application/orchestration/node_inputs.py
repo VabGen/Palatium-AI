@@ -29,6 +29,8 @@ def build_supervisor_input(snapshot: OrchestrationSnapshot) -> SupervisorInput:
         requires_mcp=snapshot.requires_mcp,
         candidate_capabilities=snapshot.candidate_capabilities,
         classification_confidence=snapshot.classification.confidence,
+        file_reference=snapshot.file_reference,
+        has_attachment_context=snapshot.has_attachment_context,
     )
 
 
@@ -48,6 +50,7 @@ def build_context_weaver_input(
         candidate_capabilities=snapshot.candidate_capabilities,
         response_shape=snapshot.response_shape,
         file_reference=snapshot.file_reference,
+        attachment_scope=snapshot.attachment_scope,
         grounding=selectors.resolved_grounding(state),
         grounding_reason=selectors.resolved_grounding_reason(state),
         has_attachment_context=selectors.uploads_in_scope(state) and bool((state.get("untrusted_context") or "").strip()),

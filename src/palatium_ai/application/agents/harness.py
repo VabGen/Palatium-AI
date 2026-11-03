@@ -26,7 +26,7 @@ from palatium_ai.core.security.secret_scanner import (
 )
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
+from palatium_ai.domain.llm.errors import EmptyLLMCompletionError, StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.models import (
     ChatMessage,
     LLMCompletion,
@@ -65,12 +65,17 @@ def _resolve_call_timeout_seconds(
     *,
     max_tokens: int | None,
 ) -> float:
-    """Dynamic provider timeout capped by agent budget (Phase 4)."""
+    """Dynamic provider timeout capped by agent budget (Phase 4) and per-call ceiling."""
     dynamic = compute_llm_timeout_seconds(
         prompt_tokens=_prompt_token_estimate(messages),
         max_tokens=max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS,
     )
-    return min(dynamic, float(config.timeout_seconds))
+    resolved = min(dynamic, float(config.timeout_seconds))
+    if config.llm_call_timeout_seconds is not None:
+        # A retry loop multiplies this bound: without the ceiling, a classification
+        # call could sit on the provider until the whole-agent budget expires.
+        resolved = min(resolved, float(config.llm_call_timeout_seconds))
+    return resolved
 
 
 def _with_system_prompt_cache(messages: list[ChatMessage]) -> list[ChatMessage]:
@@ -349,6 +354,25 @@ class Harness:
                     ),
                     timeout=call_timeout,
                 )
+                # A 200 with empty content is a provider defect, not an answer: raising
+                # here keeps it inside the retry loop (a parse error later would not be
+                # retried) and skips billing for a call that produced nothing.
+                if not completion.content.strip() and not completion.citations:
+                    agent_metrics.record_error(config.role, "llm_empty_response")
+                    logger.warning(
+                        "llm.empty_response",
+                        agent=config.name,
+                        agent_role=config.role,
+                        model=resolved_model,
+                        attempt=attempt + 1,
+                        max_retries=config.max_retries,
+                        response_format=response_format or "text",
+                        finish_reason=completion.finish_reason,
+                    )
+                    raise EmptyLLMCompletionError(
+                        model=completion.model or resolved_model or "",
+                        finish_reason=completion.finish_reason,
+                    )
                 cost_usd = self._record_llm_usage(
                     config=config,
                     completion=completion,

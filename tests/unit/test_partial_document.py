@@ -16,7 +16,7 @@ from palatium_ai.application.agents.formatter.partial_document import (
     PartialDocumentScanner,
     PartialFrame,
 )
-from palatium_ai.domain.content import CodeBlock, ContentDocument, ListBlock, TableBlock
+from palatium_ai.domain.content import CodeBlock, ContentDocument, ListBlock, ParagraphBlock, TableBlock
 
 DOCUMENT = {
     "schema_version": 1,
@@ -195,3 +195,52 @@ def test_blocks_array_closing_stops_scanning() -> None:
     assert _prose(frames) == ["a"]
     # Further deltas cannot resurrect blocks from the (already closed) array.
     assert scanner.feed('{"type":"paragraph","text":"b"}') == []
+
+
+def test_unknown_icon_is_dropped_but_the_block_still_paints() -> None:
+    """Chrome the UI cannot draw must not cost the user the block (and its prose)."""
+    raw = json.dumps(
+        {
+            "blocks": [
+                {"type": "paragraph", "text": "Живой текст", "icon": "document-check"},
+                {"type": "list", "items": [{"text": "Пункт", "icon": "Warning"}]},
+            ]
+        },
+        ensure_ascii=False,
+    )
+    frames = PartialDocumentScanner().feed(raw)
+
+    assert [frame.index for frame in frames] == [0, 1]
+    paragraph, listed = frames[0].block, frames[1].block
+    assert isinstance(paragraph, ParagraphBlock)
+    assert paragraph.text == "Живой текст"
+    assert paragraph.icon is None
+    # A registry name in the wrong case is canonicalised, not dropped.
+    assert isinstance(listed, ListBlock)
+    assert listed.items[0].icon == "warning"
+    # The preview is exactly what the final document will validate (no icon drift).
+    document = ContentDocument.model_validate({"locale": "en-US", "blocks": [paragraph, listed], "meta": {"confidence": 1}})
+    assert document.blocks == (paragraph, listed)
+
+
+def test_unparsable_closed_element_is_counted() -> None:
+    """A balanced slice that is not JSON is a scanner/protocol defect, not a model one."""
+    from palatium_ai.core.observability.metrics import agent_metrics
+
+    before = agent_metrics.partial_block_count("unparsable")
+    PartialDocumentScanner().feed('{"blocks":[{"type":"paragraph",,},{"type":"paragraph","text":"Живой блок"}]}')
+    assert agent_metrics.partial_block_count("unparsable") == before + 1
+
+
+def test_invalid_block_is_counted_without_logging_its_prose() -> None:
+    """Schema violations get their own series; the repair owner reads the metric (040)."""
+    from palatium_ai.core.observability.metrics import agent_metrics
+
+    before = agent_metrics.partial_block_count("invalid")
+    raw = json.dumps({"blocks": [{"type": "callout", "tone": "info", "text": "нет поля body"}]}, ensure_ascii=False)
+    frames = PartialDocumentScanner().feed(raw)
+
+    # Prose still paints; the typed frame does not.
+    assert frames[0].block is None
+    assert frames[0].text == "нет поля body"
+    assert agent_metrics.partial_block_count("invalid") == before + 1

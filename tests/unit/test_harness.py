@@ -11,6 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from palatium_ai.application.agents.harness import Harness
+from palatium_ai.core.exceptions import AgentExecutionError
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.agents.base import BaseAgent
@@ -95,6 +96,35 @@ class _FlakyLLM:
         )
 
 
+class _EmptyThenValidLLM:
+    """Answers ``200 OK`` with no content, then a valid payload — the observed defect."""
+
+    def __init__(self, *, always_empty: bool = False) -> None:
+        self.calls = 0
+        self._always_empty = always_empty
+
+    async def generate(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        response_format: LLMResponseFormat | None = None,
+        response_model: object = None,
+        timeout_seconds: float | None = None,
+    ) -> LLMCompletion:
+        _ = messages, temperature, max_tokens, response_format, response_model, timeout_seconds
+        self.calls += 1
+        if self._always_empty or self.calls == 1:
+            return LLMCompletion(content="   ", model=model or "tier-small", finish_reason="stop")
+        return LLMCompletion(
+            content="{}",
+            model=model or "tier-small",
+            usage=LLMUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        )
+
+
 @pytest.mark.asyncio()
 async def test_harness_execute_with_guardrails_success() -> None:
     harness = Harness()
@@ -150,6 +180,38 @@ async def test_harness_execute_with_guardrails_redacts_context_secret() -> None:
     assert agent.seen is not None
     assert "hunter2" not in agent.seen.context["dialog_window_json"]
     assert agent_metrics.secret_redaction_count("intent_classifier", "assembled_context.dialog_window_json") >= 1
+
+
+@pytest.mark.asyncio()
+async def test_call_llm_retries_empty_completion() -> None:
+    """``200 OK`` with empty content is retried, not reported as an agent failure.
+
+    Observed with ``response_format=json_object`` on a passed-out provider: the call
+    succeeded, nothing was generated, and the raise only happened later in the JSON
+    parser — outside the retry loop — so a provider defect became a hard failure
+    (``LLMJSONError: No JSON found: ''`` in the researcher trace).
+    """
+    llm = _EmptyThenValidLLM()
+    harness = Harness(llm=llm)
+    before = agent_metrics.error_count("intent_classifier", "llm_empty_response")
+
+    completion = await harness.call_llm(_RETRY_CONFIG, [ChatMessage(role="user", content="hi")])
+
+    assert completion.content == "{}"
+    assert llm.calls == 2
+    assert agent_metrics.error_count("intent_classifier", "llm_empty_response") == before + 1
+
+
+@pytest.mark.asyncio()
+async def test_call_llm_empty_completion_exhausts_retries_as_agent_error() -> None:
+    """Every attempt empty → typed ``AgentExecutionError``, never a silent empty answer."""
+    llm = _EmptyThenValidLLM(always_empty=True)
+    harness = Harness(llm=llm)
+
+    with pytest.raises(AgentExecutionError):
+        await harness.call_llm(_RETRY_CONFIG, [ChatMessage(role="user", content="hi")])
+
+    assert llm.calls == 2
 
 
 @pytest.mark.asyncio()

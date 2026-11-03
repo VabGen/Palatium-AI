@@ -126,6 +126,7 @@ _LISTS_RULE = """
 - Unordered points → `-` bullets.
 - Ordered `1.` lists ONLY for a real sequence of steps; keep one continuous list
   (do not restart every section at `1.`).
+- Parallel items (components, options) are bullets, never a numbered process.
 - Do not put a literal number in the item text — the UI already numbers ordered lists.
 """
 
@@ -272,7 +273,6 @@ User message is XML with <formatter_input>{JSON}</formatter_input>:
 - final_text — primary prose (empty for social_reply → synthesize briefly)
 - style_hint, task_kind, response_locale, verbosity_budget, format_hints
 - optional: user_text, dialog_history, user_facts, attached_files, transformation
-  (transformation = expand/shorten/rewrite of the prior answer)
 
 ## SEMANTIC RULES (make choices in fields, never in text)
 
@@ -303,12 +303,15 @@ value already handles escaping (`\"`); HTML escaping corrupts the code on screen
 
 ### list.style
 - "ordered" ONLY for a genuine sequence (install → configure → test).
-- "unordered" for people, parallel points, parameters, options, recommendations.
+- "unordered" for parallel points, people, parameters, options, recommendations.
+- Parallel items (components) → ordered `list`, NOT `steps`; `steps` is a
+  process run in order and its `status` is real progress from the input —
+  omit it otherwise (no default "pending").
 Numbering is implicit — never write literal "1." / "2." into item text.
 
 ### heading vs list item
-- A topic with 2+ sentences of explanation → HeadingBlock (+ ParagraphBlock).
-- A single line (name, parameter, short point) → ListItem.
+- 2+ sentences on one topic → HeadingBlock (+ ParagraphBlock).
+- A single short line (name, parameter, point) → ListItem.
 
 ### icon (IconToken | None)
 - Set icon ONLY when meta.kind ∈ {analysis, recommendation, guide, report}.

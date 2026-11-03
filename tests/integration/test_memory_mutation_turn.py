@@ -18,6 +18,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from palatium_ai.application.agents.harness import Harness
+from palatium_ai.application.agents.intent_classifier import INTENT_CLASSIFIER_CONFIG, IntentClassifierAgent
 from palatium_ai.application.orchestration.agent_registry import GraphAgents
 from palatium_ai.application.orchestration.graph import build_agent_graph
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
@@ -32,6 +34,7 @@ from palatium_ai.domain.memory.namespaces import user_namespace
 from palatium_ai.domain.memory.scratchpad import ScratchpadSlot, SessionScratchpad
 from tests.conftest import (
     FakeLLMPort,
+    SequentialFakeLLMPort,
     make_analyst_agent,
     make_coder_agent,
     make_continuation_agent,
@@ -90,6 +93,32 @@ _MUTATION_FORGET_MISS_JSON = json.dumps(
         "reasoning": "explicit memory deletion",
     }
 )
+#: Command + greeting + question in one message (the turn that used to be silenced).
+_MIXED_MUTATION_JSON = json.dumps(
+    {
+        "task_kind": "knowledge_request",
+        "requires_mcp": False,
+        "candidate_capabilities": ["compose"],
+        "grounding": "none",
+        "memory_mutation": "save",
+        "memory_text": "обращаться к пользователю «мой хозяин»",
+        "memory_key": "addressing_preference",
+        "residual_ask": True,
+        "confidence": 0.93,
+        "reasoning": "greeting and identity question next to a memory command",
+    }
+)
+_CONTEXTUALIZER_MIXED_JSON = json.dumps(
+    {
+        "rewritten_query": "Привет, я Геннадий. А ты кто?",
+        "continuation_kind": "new_topic",
+        "confidence": 0.9,
+        "refers_to_prior": False,
+        "prior_assistant_excerpt": None,
+        "reasoning": "new topic",
+    }
+)
+_ANSWER_TEXT = "Я — Palatium, ваш ИИ-ассистент."
 
 
 class _FakeSessionService:
@@ -417,3 +446,100 @@ async def test_rejected_save_card_leaves_memory_untouched() -> None:
     )
 
     assert await stack.port.get(namespace=user_namespace(_USER), key="db_port") is None
+
+
+def _mixed_turn_service(*, intent_json: str) -> _MutationTurnStack:
+    """Graph whose answer pipeline is real but whose LLM answers are canned.
+
+    The shared harness answers Intent and then the Contextualizer (the only two LLM
+    calls on this route); Researcher/Formatter keep their own fakes so the test can
+    prove which of them produced the turn's prose.
+    """
+    save, forget, port, hitl, _handler = make_memory_hitl_stack()
+    gate = MemoryMutationGate(save_service=save, forget_service=forget, memory_port=port)  # type: ignore[arg-type]
+    pipeline_llm = SequentialFakeLLMPort([intent_json, _CONTEXTUALIZER_MIXED_JSON])
+    harness = Harness(llm=pipeline_llm)
+    researcher_llm = FakeLLMPort(
+        json.dumps({"summary": _ANSWER_TEXT, "confidence": 0.93, "sources_used": ["llm_internal_reasoning"]}),
+    )
+    formatter_llm = FakeLLMPort(_formatter_json(_ANSWER_TEXT))
+    graph = build_agent_graph(
+        GraphAgents(
+            continuation_agent=make_continuation_agent(harness=harness),
+            intent_agent=IntentClassifierAgent(harness, INTENT_CLASSIFIER_CONFIG),
+            supervisor_agent=make_supervisor_agent(harness),
+            weaving_agent=make_weaving_agent(harness=harness),
+            researcher_agent=make_researcher_agent(researcher_llm),
+            coder_agent=make_coder_agent(harness=harness),
+            analyst_agent=make_analyst_agent(harness=harness),
+            critic_agent=make_critic_agent(
+                FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}'),
+            ),
+            formatter_agent=make_formatter_agent(formatter_llm),
+            memory_mutation_gate=gate,
+        ),
+        harness=harness,
+        checkpointer=make_graph_checkpointer(),
+    )
+    service = IntentService(
+        graph,  # type: ignore[arg-type]
+        session_service=_FakeSessionService(),  # type: ignore[arg-type]
+        hitl_service=hitl,  # type: ignore[arg-type]
+    )
+    return _MutationTurnStack(
+        service=service,
+        gate=gate,
+        port=port,  # type: ignore[arg-type]
+        save=save,  # type: ignore[arg-type]
+        forget=forget,  # type: ignore[arg-type]
+        hitl=hitl,  # type: ignore[arg-type]
+        researcher_llm=researcher_llm,
+        formatter_llm=formatter_llm,
+    )
+
+
+@pytest.mark.integration()
+@pytest.mark.asyncio()
+async def test_mixed_ask_stages_the_card_and_answers_the_question() -> None:
+    """A command must not silence the question next to it (regression).
+
+    Before the ``residual_ask`` axis the turn ended on the gate preview, so «а ты кто?»
+    was never answered and the chat looked mute after the approval step.
+    """
+    stack = _mixed_turn_service(intent_json=_MIXED_MUTATION_JSON)
+
+    result = await stack.service.process(
+        text="Привет, я Геннадий! Запомни, что обращаться ко мне «мой хозяин». А ты кто?",
+        thread_id=_THREAD,
+        task_id="task-mem-mixed",
+        user_id=_USER,
+        org_id=_ORG,
+    )
+
+    # The card is still the only path to the write, and the answer is the question's.
+    assert len(result.hitl_cards) == 1
+    card = result.hitl_cards[0]
+    assert card.task_id.startswith(MEM_SAVE_TASK_PREFIX)
+    assert result.requires_review is True
+    assert result.output is not None
+    assert _ANSWER_TEXT in result.output.plain_text()
+    assert len(stack.researcher_llm.calls) >= 1
+    assert await stack.port.get(namespace=user_namespace(_USER), key="addressing_preference") is None
+
+    facade = HitlRespondFacade(
+        hitl_service=stack.hitl,
+        intent_service=AsyncMock(),
+        memory_save_service=stack.save,
+        memory_forget_service=stack.forget,
+    )
+    outcome = await facade.respond(
+        card.card_id,
+        _action_request(card, action_id="approve", idempotency_key="mem-turn-mixed-approve"),
+        actor_subject=_USER,
+        actor_org_id=_ORG,
+        is_admin=False,
+    )
+    assert outcome.resumed is not None
+    stored = await stack.port.get(namespace=user_namespace(_USER), key="addressing_preference")
+    assert stored is not None
+    assert "мой хозяин" in str(stored["text"])

@@ -197,6 +197,13 @@ FormatterGenerationPath = Literal["schema_first", "legacy_markdown"]
 # a non-schema event in the denominator (050).
 FormatterSchemaOutcome = Literal["valid", "invalid", "empty_blocks", "unsupported", "fallback"]
 
+# Why one streamed ``blocks[]`` element never became a typed ``block_delta``.
+#   unparsable — the closed element is not JSON at all (scanner/protocol defect).
+#   invalid    — valid JSON that violates the ContentBlock contract (model defect).
+# Layout-only violations (an icon outside the UI registry) are normalised before
+# validation and never reach this axis: chrome must not cost the block.
+PartialBlockOutcome = Literal["unparsable", "invalid"]
+
 # --- Answer writer (single-writer contract, P1a) ---
 
 # Which component owns the user-visible deliverable for one turn. Exactly one writer:
@@ -269,6 +276,7 @@ __all__ = [
     "GroundingMode",
     "MemoryMutationKind",
     "ModelTier",
+    "PartialBlockOutcome",
     "PresentationOwner",
     "ResponseShape",
     "RouteStrategy",

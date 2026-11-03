@@ -10,16 +10,24 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from uuid import UUID
 
+from palatium_ai.domain.attachments.context import AttachmentTurnContext
+
 RehydrateFn = Callable[[Sequence[UUID]], Awaitable[str]]
 ClearPendingFn = Callable[[], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
 class TurnAttachmentContext:
-    """Callbacks to fence attachments / clear sticky pending mid-graph."""
+    """Callbacks to fence attachments / clear sticky pending mid-graph.
+
+    ``primed`` is the context the turn entry already built. Rehydrating exactly those
+    ids must reuse it: a second read of the same rows and blobs inside one turn buys
+    nothing and showed up in the logs as a duplicated ``build_turn_context`` call (P5).
+    """
 
     rehydrate: RehydrateFn | None = None
     clear_pending: ClearPendingFn | None = None
+    primed: AttachmentTurnContext | None = None
 
 
 _current: ContextVar[TurnAttachmentContext | None] = ContextVar(

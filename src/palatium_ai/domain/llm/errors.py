@@ -44,3 +44,20 @@ class VisionImageUnavailableError(PalatiumError):
     def __init__(self, reason: str) -> None:
         self.reason = reason
         super().__init__(f"vision image unavailable: {reason}")
+
+
+class EmptyLLMCompletionError(PalatiumError):
+    """Provider answered ``200 OK`` with empty content.
+
+    Observed in production with ``response_format=json_object``: the call succeeds,
+    nothing is generated, and the failure only surfaces later as a parse error
+    (``No JSON found: ''``) — outside the retry loop, so a retryable provider defect
+    is reported as a hard agent failure. Raised inside the generation boundary so the
+    harness retry/backoff applies.
+    """
+
+    def __init__(self, *, model: str = "", finish_reason: str | None = None) -> None:
+        self.model = model
+        self.finish_reason = finish_reason
+        detail = f" (model={model}, finish_reason={finish_reason})" if model or finish_reason else ""
+        super().__init__(f"empty LLM completion{detail}")

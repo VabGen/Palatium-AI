@@ -29,6 +29,7 @@ from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.llm.json_codec import LLMJSONError
 from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.llm.response_parser import compact_validation_error
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 
@@ -46,7 +47,7 @@ def hop_skip_repairs() -> bool:
     return (
         hop is not None
         and HopBudgetPolicy.should_skip_formatter_repairs(
-            hop_total_ms=hop.total_ms(),
+            hop_total_ms=hop.agent_ms(),
             budget_ms=hop.budget_ms,
         ).degrade
     )
@@ -55,8 +56,7 @@ def hop_skip_repairs() -> bool:
 def _format_repair_error(exc: Exception) -> str:
     """Compact structured error for the repair prompt — no noisy ``input_value`` dumps."""
     if isinstance(exc, ValidationError):
-        compact = [{"field": ".".join(str(x) for x in err["loc"]), "error": err["msg"]} for err in exc.errors()]
-        return json.dumps(compact, ensure_ascii=False)
+        return compact_validation_error(exc)
     return str(exc)
 
 

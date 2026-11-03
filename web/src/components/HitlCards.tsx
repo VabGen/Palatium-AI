@@ -4,6 +4,7 @@ import { fetchHitlStepUpChallenge, respondHitlCard } from '../api/client';
 import { formatHitlError } from '../lib/hitl';
 import { formatDateTime, formatNumber, t } from '../i18n';
 import { TokenIcon } from '../icons/TokenIcon';
+import { iconForActionKind } from '../icons/semanticIcons';
 import type {
   DocumentRevision,
   FormatterTaskResult,
@@ -310,7 +311,11 @@ function HitlCard({
               disabled={busyAction !== null}
               onClick={() => void choose(option.action_id, option.action_token)}
             >
-              <TokenIcon token={option.icon} size={16} animated={option.style === 'primary'} />
+              <TokenIcon
+                token={option.icon ?? iconForActionKind(option.kind)}
+                size={16}
+                animated={option.style === 'primary'}
+              />
               <span>
                 {busyAction === option.action_id
                   ? mayNeedStepUp

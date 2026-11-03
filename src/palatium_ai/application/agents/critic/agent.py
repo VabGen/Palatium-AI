@@ -8,6 +8,8 @@ import json
 
 from typing import TYPE_CHECKING, Literal
 
+from pydantic import ValidationError
+
 from palatium_ai.application.agents.critic.config import (
     ACCURACY_REVIEW_THRESHOLD,
     PASSTHROUGH_ACCURACY,
@@ -26,7 +28,9 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.critic import CriticOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
+from palatium_ai.domain.llm.json_codec import LLMJSONError
 from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.llm.response_parser import compact_validation_error, parse_llm_response
 from palatium_ai.domain.policies import CriticPolicy
 from palatium_ai.domain.policies.constitution import Constitution, ConstitutionViolation, PrincipleId
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
@@ -77,7 +81,7 @@ class CriticAgent(BaseAgent):
         hop = get_hop_collector()
         if hop is not None:
             budget_gate = HopBudgetPolicy.should_skip_critic_llm(
-                hop_total_ms=hop.total_ms(),
+                hop_total_ms=hop.agent_ms(),
                 budget_ms=hop.budget_ms,
             )
             if budget_gate.degrade:
@@ -143,14 +147,31 @@ class CriticAgent(BaseAgent):
 
         try:
             # Provider structured output: the harness builds the json_schema payload
-            # from the model, so the response is guaranteed to match CriticOutput.
+            # from the model. The decoder still strips fences/prose and repairs minor
+            # JSON defects — providers return them even under a strict schema (055).
             completion = await self._harness.call_llm(
                 self._config,
                 messages,
                 response_format="json_schema",
                 response_model=CriticOutput,
             )
-            output = CriticOutput.model_validate_json(completion.content)
+            output = parse_llm_response(completion.content, CriticOutput)
+        except (ValidationError, LLMJSONError) as exc:
+            # Model-side defect: worth a distinct series, and no traceback — this is a
+            # prompt/provider signal, not an unexpected crash (040).
+            logger.warning(
+                "critic.structured_output_invalid",
+                task_id=str(input.task_id),
+                error=compact_validation_error(exc),
+            )
+            agent_metrics.record_error(self._config.role, "structured_output_invalid")
+            return AgentOutput(
+                task_id=input.task_id,
+                status="failure",
+                confidence=0.0,
+                output=_empty_critic_output(),
+                error_message="LLM stage failed in critic agent",
+            )
         except Exception:
             logger.exception("critic LLM stage failed", task_id=str(input.task_id))
             agent_metrics.record_error(self._config.role, "llm_stage_failure")

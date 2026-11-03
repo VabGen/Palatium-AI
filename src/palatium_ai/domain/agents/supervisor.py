@@ -8,6 +8,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from palatium_ai.domain.policies.types import (
+    FILE_REFERENCE_DEFAULT,
+    FileReferenceKind,
+)
+
 from .contracts import TaskResult
 from .intent import TaskKind
 
@@ -25,6 +30,11 @@ class SupervisorInput(BaseModel):
     requires_mcp: bool
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
     classification_confidence: float = Field(ge=0.0, le=1.0)
+    #: Continuity axis: the ask targets a file this dialog already holds (055, 070).
+    file_reference: FileReferenceKind = Field(default=FILE_REFERENCE_DEFAULT)
+    #: True when the turn carries its own fenced upload — that file owns the turn and
+    #: a storage re-read must not run next to it.
+    has_attachment_context: bool = False
 
 
 class SupervisorOutput(BaseModel):

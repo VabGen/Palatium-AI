@@ -45,8 +45,15 @@ class AttachmentReferenceResolver:
         thread_id: str,
         hint_text: str = "",
         filename: str = "",
+        all_requested: bool = False,
     ) -> FileReferenceResolution:
-        """Return a typed resolution; refusals carry user-safe candidate names."""
+        """Return a typed resolution; refusals carry user-safe candidate names.
+
+        ``all_requested`` is the explicit-plurality case («сравни оба файла»): Intent
+        already decided the ask spans the whole set, so the resolver returns every
+        readable file instead of refusing with ``several_thread_files``. Identity is
+        still code-owned — the model only said "all of them" (055).
+        """
         scoped_thread = (thread_id or "").strip()
         if not scoped_thread:
             # The read path is thread-scoped by contract (P0-A): without an id no
@@ -61,7 +68,11 @@ class AttachmentReferenceResolver:
             return FileReferenceResolution(status="no_candidates", reason="thread_has_no_files")
         attachments = await self._repository.list_for_thread(scoped_thread, user_id=user_id)
         candidates = _usable_candidates(attachments)
-        resolution = FileReferencePolicy.resolve(candidates, hint_text=hint_text, filename=filename)
+        resolution = (
+            FileReferencePolicy.resolve_all(candidates)
+            if all_requested
+            else FileReferencePolicy.resolve(candidates, hint_text=hint_text, filename=filename)
+        )
         if not candidates and attachments:
             resolution = resolution.model_copy(update={"reason": "thread_files_not_readable"})
         if resolution.status != "resolved":
@@ -87,6 +98,8 @@ class AttachmentReferenceResolver:
             reason=resolution.reason,
             candidate_count=len(candidates),
             thread_file_count=len(attachments),
+            resolved_count=len(resolution.attachment_ids),
+            all_requested=all_requested,
         )
         return resolution
 

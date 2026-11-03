@@ -40,7 +40,17 @@ JSONValue = dict[str, Any] | list[Any]
 
 
 class LLMJSONError(ValueError):
-    """Raised when an LLM response contains no recoverable JSON."""
+    """Raised when an LLM response contains no recoverable JSON.
+
+    ``reason`` is a short payload-free label (``no_json`` / ``unbalanced`` /
+    ``unrecoverable`` / ``not_object`` / ``not_array``) so callers can log the
+    failure class without echoing the model's prose into logs (020, 040). The
+    message keeps the candidate head: it is fed back into repair prompts.
+    """
+
+    def __init__(self, message: str, *, reason: str = "unrecoverable") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 # ────────────────────────── extraction ──────────────────────────
@@ -48,11 +58,42 @@ class LLMJSONError(ValueError):
 _FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
 # Trailing commas before } or ] — common LLM JSON defect.
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+_STRUCTURAL = "{["
 
 
-def _strip_fence(text: str) -> str:
-    fence = _FENCE.search(text.strip())
-    return fence.group(1).strip() if fence is not None else text.strip()
+def _first_structural(text: str, start: int = 0) -> int:
+    """Index of the first ``{``/``[`` at or after ``start``; -1 when there is none."""
+    for index in range(start, len(text)):
+        if text[index] in _STRUCTURAL:
+            return index
+    return -1
+
+
+def _candidate_starts(text: str) -> list[int]:
+    """Ordered structural starting points, most trusted first.
+
+    Only *top-level* positions are considered — the fenced body's first token, then
+    the first token of the whole text. Scanning every brace would let a truncated
+    payload be "recovered" from one of its own inner objects: a silently partial
+    document is worse than a loud fallback (050).
+    """
+    starts: list[int] = []
+    fence = _FENCE.search(text)
+    if fence is not None:
+        fenced_at = _first_structural(text, fence.start(1))
+        if fenced_at >= 0:
+            starts.append(fenced_at)
+    whole_at = _first_structural(text)
+    if whole_at >= 0 and whole_at not in starts:
+        starts.append(whole_at)
+    return starts
+
+
+def _no_json_error(text: str) -> LLMJSONError:
+    head = text[:_CANDIDATE_HEAD_LEN]
+    if _first_structural(text) < 0:
+        return LLMJSONError(f"No JSON found in LLM response: {head!r}", reason="no_json")
+    return LLMJSONError(f"Unbalanced JSON in LLM response: {head!r}", reason="unbalanced")
 
 
 def _find_matching(text: str, start: int, open_ch: str, close_ch: str) -> int:
@@ -223,21 +264,28 @@ class JSONCodec:
             return result
 
         raise LLMJSONError(
-            f"Unrecoverable JSON in LLM response (attempts: {'; '.join(errors)}): {candidate[:_CANDIDATE_HEAD_LEN]!r}"
+            f"Unrecoverable JSON in LLM response (attempts: {'; '.join(errors)}): {candidate[:_CANDIDATE_HEAD_LEN]!r}",
+            reason="unrecoverable",
         )
 
     def loads_object(self, raw: str) -> dict[str, Any]:
         """Like :meth:`loads`, but guarantees a top-level JSON object."""
         result = self.loads(raw)
         if not isinstance(result, dict):
-            raise LLMJSONError(f"Expected JSON object, got {type(result).__name__}: {raw[:_CANDIDATE_HEAD_LEN]!r}")
+            raise LLMJSONError(
+                f"Expected JSON object, got {type(result).__name__}: {raw[:_CANDIDATE_HEAD_LEN]!r}",
+                reason="not_object",
+            )
         return result
 
     def loads_array(self, raw: str) -> list[Any]:
         """Like :meth:`loads`, but guarantees a top-level JSON array."""
         result = self.loads(raw)
         if not isinstance(result, list):
-            raise LLMJSONError(f"Expected JSON array, got {type(result).__name__}: {raw[:_CANDIDATE_HEAD_LEN]!r}")
+            raise LLMJSONError(
+                f"Expected JSON array, got {type(result).__name__}: {raw[:_CANDIDATE_HEAD_LEN]!r}",
+                reason="not_array",
+            )
         return result
 
     # -- internals ----------------------------------------------------
@@ -246,27 +294,19 @@ class JSONCodec:
     def extract(raw: str) -> str:
         """Return the first balanced ``{...}`` or ``[...]`` substring.
 
-        Ignores prose around the payload and markdown fences. Prefers the
-        structural token appearing earlier in the text; brackets inside
-        strings are skipped by the scanner.
+        Ignores prose around the payload and markdown fences. A fenced region is
+        preferred when present, but the structure is balanced against the original
+        text — brackets inside strings (including a ``` inside a code block's
+        content) never end the payload early. Only top-level starts are tried, so a
+        truncated payload fails loudly instead of yielding one of its inner objects.
         """
-        text = _strip_fence(raw)
-
-        obj_start = text.find("{")
-        arr_start = text.find("[")
-        if obj_start < 0 and arr_start < 0:
-            raise LLMJSONError(f"No JSON found in LLM response: {text[:_CANDIDATE_HEAD_LEN]!r}")
-
-        if arr_start >= 0 and (obj_start < 0 or arr_start < obj_start):
-            end = _find_matching(text, arr_start, "[", "]")
-            start = arr_start
-        else:
-            end = _find_matching(text, obj_start, "{", "}")
-            start = obj_start
-
-        if end < 0:
-            raise LLMJSONError(f"Unbalanced JSON in LLM response: {text[:_CANDIDATE_HEAD_LEN]!r}")
-        return text[start : end + 1]
+        text = raw.strip()
+        for start in _candidate_starts(text):
+            close = "}" if text[start] == "{" else "]"
+            end = _find_matching(text, start, text[start], close)
+            if end >= 0:
+                return text[start : end + 1]
+        raise _no_json_error(text)
 
     def _report_repair(self, name: str, candidate: str) -> None:
         head = candidate[:_CANDIDATE_HEAD_LEN]

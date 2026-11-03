@@ -66,11 +66,22 @@ class _ReadRegistry(_ResearcherEvalMcpRegistry):
     ) -> MCPToolResult:
         _ = allow_unpinned
         self.calls.append((server_name, tool_call))
+        attachment_id = str(tool_call.arguments.get("attachment_id", _ATTACHMENT_ID))
         return MCPToolResult(
             content=[
                 {
                     "type": "text",
-                    "text": wrap_untrusted_tool_output(_FILE_TEXT, source=f"attachment:{_ATTACHMENT_ID}"),
+                    "text": json.dumps(
+                        {
+                            "tool": "read_attachment",
+                            "attachment_id": attachment_id,
+                            "fenced_text": wrap_untrusted_tool_output(
+                                f"{_FILE_TEXT} [{attachment_id[:8]}]",
+                                source=f"attachment:{attachment_id}",
+                            ),
+                        },
+                        ensure_ascii=False,
+                    ),
                 },
             ],
             is_error=False,
@@ -117,6 +128,8 @@ def _packet(task_id: str):
 
 async def _run(
     resolver: _FakeResolver | None,
+    *,
+    packet: object | None = None,
 ) -> tuple[AgentOutput, SequentialStaticLLMPort, _ReadRegistry]:
     task_id = str(uuid4())
     llm = SequentialStaticLLMPort([_SYNTHESIS])
@@ -132,7 +145,10 @@ async def _run(
     output = await harness.execute_with_guardrails(
         agent,
         researcher_to_agent_input(
-            ResearcherInput(task_id=task_id, context_packet=_packet(task_id)),
+            ResearcherInput(
+                task_id=task_id,
+                context_packet=packet if packet is not None else _packet(task_id),  # type: ignore[arg-type]  # test double (017)
+            ),
             trace_id="file-reread",
             thread_id="thread-reread",
             user_id="actor-user",
@@ -232,3 +248,56 @@ async def test_refusal_text_never_names_internal_context_fields() -> None:
     summary = output.output.summary
     for leaked in ("attachment_context", "prior_context", "memory_hints", "context_packet"):
         assert leaked not in summary
+
+
+def _plural_resolution() -> FileReferenceResolution:
+    return FileReferencePolicy.resolve_all(
+        [
+            FileRefCandidate(attachment_id=uuid4(), filename="Договор.pdf"),
+            FileRefCandidate(attachment_id=uuid4(), filename="Приложение.docx"),
+        ]
+    )
+
+
+def _plural_packet(task_id: str):
+    """Thread re-read whose plurality Intent already resolved (scope="all")."""
+    return _packet(task_id).model_copy(
+        update={
+            "user_text": "сравни оба файла из этого чата",
+            "attachment_scope": "all",
+        }
+    )
+
+
+@pytest.mark.asyncio()
+async def test_plural_ask_reads_every_file_then_synthesizes_once() -> None:
+    """«Сравни оба файла» = N reads + one answer, not one read and a guess."""
+    task_id = str(uuid4())
+    resolution = _plural_resolution()
+    resolver = _FakeResolver(resolution)
+
+    output, llm, registry = await _run(resolver, packet=_plural_packet(task_id))
+
+    assert output.status == "success"
+    assert resolver.calls[0]["all_requested"] == "True"
+    read_ids = [call.arguments["attachment_id"] for _server, call in registry.calls]
+    assert read_ids == [str(item) for item in resolution.attachment_ids]
+    assert len(read_ids) == 2
+    # Each file gets a slice of ONE document budget so the merged evidence still fits
+    # the synthesis prompt (065) instead of dropping the second file silently.
+    for _server, call in registry.calls:
+        assert call.arguments["max_chars"] == str(12000 // 2)
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio()
+async def test_plural_ask_with_one_file_falls_back_to_the_single_read_path() -> None:
+    task_id = str(uuid4())
+    single = FileReferencePolicy.resolve_all([FileRefCandidate(attachment_id=_ATTACHMENT_ID, filename="Договор.pdf")])
+    resolver = _FakeResolver(single)
+
+    output, _, registry = await _run(resolver, packet=_plural_packet(task_id))
+
+    assert output.status == "success"
+    assert len(registry.calls) == 1
+    assert registry.calls[0][1].arguments["attachment_id"] == str(_ATTACHMENT_ID)

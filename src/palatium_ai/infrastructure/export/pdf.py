@@ -11,6 +11,7 @@ from fpdf import FPDF
 from structlog import get_logger
 
 from palatium_ai.domain.content import (
+    NESTED_ITEM_PREFIX,
     CalloutBlock,
     ChartBlock,
     CodeBlock,
@@ -117,6 +118,11 @@ def _render_list(pdf: FPDF, font_name: str, block: object) -> bool:
     for index, item in enumerate(block.items, start=1):
         prefix = f"{index}." if block.style == "ordered" else "-"
         emphasis = f"{item.emphasis} - " if item.emphasis else ""
+        # Nested rows carry their level as a text prefix; printing it behind the
+        # bullet doubles the marker ("- · пункт").
+        if item.text.startswith(NESTED_ITEM_PREFIX):
+            _write(pdf, f"    - {emphasis}{item.text[len(NESTED_ITEM_PREFIX) :]}")
+            continue
         _write(pdf, f"{prefix} {emphasis}{item.text}")
     pdf.ln(2)
     return True
@@ -187,7 +193,10 @@ def _render_steps(pdf: FPDF, font_name: str, block: object) -> bool:
         return False
     for index, item in enumerate(block.items, start=1):
         pdf.set_font(font_name, style="B", size=12)
-        _write(pdf, f"{index}. {item.title} ({item.status})")
+        # Status is optional: printing the empty one as "(None)" would invent a
+        # state in the exported document.
+        suffix = f" ({item.status})" if item.status else ""
+        _write(pdf, f"{index}. {item.title}{suffix}")
         pdf.set_font(font_name, size=11)
         _write(pdf, item.body)
         pdf.ln(1)

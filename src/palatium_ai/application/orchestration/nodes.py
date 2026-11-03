@@ -222,8 +222,10 @@ async def continuation_node(
             transformation=routing_intent.transformation,
         )
         agent_metrics.record_attachment_sticky(action=rehydrate.reason)
+        # Not `attachment.build_turn_context`: that name is the traced span of the actual
+        # service call, so reusing it here made one decision look like a duplicated read (P5).
         logger.info(
-            "attachment.build_turn_context",
+            "attachment.sticky_decision",
             rehydrate_source=rehydrate.rehydrate_source,
             rehydrate_reason=rehydrate.reason,
             attachment_count=len(rehydrate.attachment_ids),
@@ -376,10 +378,13 @@ async def memory_mutation_node(
     state: AgentGraphState,
     gate: MemoryMutationGate,
 ) -> AgentGraphState:
-    """Explicit memory mutation: resolve the target, stage a HITL card, end the turn.
+    """Explicit memory mutation: resolve the target, stage a HITL card.
 
     Agentless by design (060/070): the write is an MCP call that only runs after the
     human approves the card, so no worker or formatter may phrase this turn as done.
+    A bare command ends the turn on the card preview; a mixed ask keeps the staged
+    result in state so ``route_after_memory_mutation`` can let the pipeline answer the
+    other half, and finalization re-attaches the card to that answer (055).
     """
     classification = state.get("classification")
     output = classification.output if classification is not None else None
@@ -394,7 +399,7 @@ async def memory_mutation_node(
         key=output.memory_key if output is not None else "",
         locale=str(state.get("response_locale") or ""),
     )
-    return cast("AgentGraphState", {"formatted": result})
+    return cast("AgentGraphState", {"formatted": result, "memory_mutation_result": result})
 
 
 @traceable(name=NODE_ATTACHMENT_SELECTION)
@@ -458,6 +463,21 @@ def route_after_attachment_selection(state: AgentGraphState) -> str:
     if state.get("formatted") is not None:
         return END
     return GRAPH_NODE_CONTINUATION
+
+
+def route_after_memory_mutation(state: AgentGraphState) -> str:
+    """Answer the rest of a mixed ask after staging the card; a bare command ends here.
+
+    The gate's preview is the whole answer for a pure «запомни …» order (no prose
+    success claim about a write the human has not approved). When the same message
+    also asks something («а ты кто?», a greeting), that ask still deserves an answer:
+    the pipeline answers it and finalization re-attaches the staged card (060/055).
+    """
+    classification = state.get("classification")
+    output = classification.output if classification is not None else None
+    if output is not None and output.residual_ask:
+        return GRAPH_NODE_CONTINUATION
+    return END
 
 
 def _attachment_kinds(blocks: tuple[object, ...]) -> tuple[Literal["image", "document"], ...]:

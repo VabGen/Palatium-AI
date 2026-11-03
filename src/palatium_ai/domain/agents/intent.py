@@ -165,6 +165,15 @@ class IntentClassifierOutput(BaseModel):
             "later correction updates the same entry instead of adding a second fact."
         ),
     )
+    residual_ask: bool = Field(
+        default=False,
+        description=(
+            "True when the same message also carries an answerable ask besides the "
+            "memory command («запомни X. А ты кто?»). The mutation still stages its "
+            "HITL card, and the pipeline answers the residual ask in the same turn — "
+            "an execution must not silence the question next to it."
+        ),
+    )
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str = Field(min_length=1)
 

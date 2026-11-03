@@ -71,6 +71,7 @@ def parse_classifier_output(raw_content: str, *, has_thread_files: bool = False)
         has_thread_files=has_thread_files,
     )
     memory_mutation, memory_text, memory_key = _coerce_memory_mutation(payload)
+    residual_ask = _coerce_bool_flag(payload.get("residual_ask")) and memory_mutation != "none"
     attachment_scope = _coerce_attachment_scope(payload.get("attachment_scope"))
     attachment_kind = _coerce_attachment_kind(payload.get("attachment_kind"))
     attachment_focus = _coerce_attachment_focus(payload.get("attachment_focus"))
@@ -80,8 +81,12 @@ def parse_classifier_output(raw_content: str, *, has_thread_files: bool = False)
         # A mutation is an execution, never a menu: the gate owns the HITL card (020).
         requires_user_choice = False
         underspecification_kind = "none"
-        task_kind = "tool_execution"
-        requires_mcp = True
+        if not residual_ask:
+            # A bare «запомни …» leaves the pipeline before generation, so the command
+            # owns task_kind. A mixed ask keeps the classifier's label for its *other*
+            # half: forcing tool_execution there would route the question to a tool.
+            task_kind = "tool_execution"
+            requires_mcp = True
 
     return UserChoiceIntentPolicy.normalize(
         IntentClassifierOutput(
@@ -101,6 +106,7 @@ def parse_classifier_output(raw_content: str, *, has_thread_files: bool = False)
             memory_mutation=memory_mutation,
             memory_text=memory_text,
             memory_key=memory_key,
+            residual_ask=residual_ask,
             confidence=float(payload.get("confidence", 0.0)),
             reasoning=str(payload.get("reasoning", "No reasoning provided")),
         ),

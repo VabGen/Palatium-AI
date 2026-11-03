@@ -1260,6 +1260,24 @@ textarea {
   font-weight: 600;
   min-width: 1.2rem;
 }
+.block-list.style-unordered li::before {
+  content: '•';
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 1.2rem;
+}
+/* One level of sub-points: indent, dash marker, no counter (decoded from a text
+   prefix — see NESTED_ITEM_PREFIX in domain/content/content_document.py). */
+.block-list li.nested {
+  padding-left: 1.4rem;
+}
+.block-list.style-unordered li.nested::before {
+  content: '–';
+  color: var(--text-muted);
+}
+.block-list.style-ordered li.nested {
+  counter-increment: none;
+}
 
 .block-table-wrap {
   overflow: auto;
@@ -1372,6 +1390,14 @@ textarea {
   background: var(--accent-soft);
   color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--stroke));
+}
+/* Порядковый номер вместо статуса: тот же размер и цвет, что у иконки, чтобы
+   строки не прыгали при появлении реального статуса. */
+.step-marker > span {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 .step.status-done .step-marker {
   color: var(--success);

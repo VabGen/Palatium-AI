@@ -59,6 +59,10 @@ class FileReferenceResolution(BaseModel):
 
     status: FileReferenceStatus
     attachment_id: UUID | None = None
+    #: Every file the ask covers. Singular resolution carries one id; an explicit
+    #: "all files of this dialog" ask carries the whole owner-scoped set, newest first,
+    #: so the worker reads N files instead of guessing one (055).
+    attachment_ids: tuple[UUID, ...] = ()
     #: User-safe display name of the resolved file (never an internal id).
     filename: str = ""
     #: User-safe display names of the thread's files, for an honest refusal message.
@@ -120,6 +124,29 @@ class FileReferencePolicy:
         if len(scoped) == 1:
             return _resolved(scoped[0], reason="single_thread_file")
         return FileReferenceResolution(status="ambiguous", candidates=names, reason="several_thread_files")
+
+    @staticmethod
+    def resolve_all(candidates: Sequence[FileRefCandidate]) -> FileReferenceResolution:
+        """Resolve an ask that explicitly covers *every* file of the dialog.
+
+        Called only when Intent already said the ask spans the whole set
+        (``attachment_scope="all"``): the model decides plurality, code decides
+        identity. No name matching happens here — «сравни оба файла» names no file,
+        and comparing «эти два подхода» names none either, so a verb/numeral heuristic
+        would be the wrong layer (055).
+        """
+        scoped = list(candidates)
+        if not scoped:
+            return FileReferenceResolution(status="no_candidates", reason="thread_has_no_files")
+        names = tuple(item.filename for item in scoped)
+        return FileReferenceResolution(
+            status="resolved",
+            attachment_id=scoped[0].attachment_id,
+            attachment_ids=tuple(item.attachment_id for item in scoped),
+            filename=_format_names(names),
+            candidates=names,
+            reason="all_requested",
+        )
 
     @staticmethod
     def is_named_reference(resolution: FileReferenceResolution) -> bool:
@@ -200,6 +227,7 @@ def _resolved(candidate: FileRefCandidate, *, reason: str) -> FileReferenceResol
     return FileReferenceResolution(
         status="resolved",
         attachment_id=candidate.attachment_id,
+        attachment_ids=(candidate.attachment_id,),
         filename=candidate.filename,
         candidates=(candidate.filename,),
         reason=reason,

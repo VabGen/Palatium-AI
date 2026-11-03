@@ -12,9 +12,11 @@ what to write, which keeps the security decision testable without a database.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 from palatium_ai.core.logging import logger
+from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.security.prompt_injection import (
     PromptInjectionReport,
@@ -52,6 +54,8 @@ if TYPE_CHECKING:
     from palatium_ai.domain.ports.scanner import MalwareScannerPort, ScanVerdict
 
 _REFUSING_ACTIONS = frozenset({"quarantine", "reject"})
+#: External I/O kind for parse/OCR spans reported to the turn hop collector.
+_PARSE_IO_KIND = "attachment_parse"
 _OOXML_MIME_TYPES = frozenset(
     {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -59,6 +63,17 @@ _OOXML_MIME_TYPES = frozenset(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
 )
+
+
+def _report_parse_io(started_at: float) -> None:
+    """Report parse/OCR duration as external I/O on the active turn.
+
+    OCR of a scan is machine work nobody in the graph controls: counting it as an
+    agent hop made every attachment turn look like a slow graph (055).
+    """
+    hop = get_hop_collector()
+    if hop is not None:
+        hop.record_external_io(kind=_PARSE_IO_KIND, duration_ms=round((perf_counter() - started_at) * 1000))
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +136,7 @@ class AttachmentPipeline:
         if not self._parser.supports(mime_type):
             return None
         try:
-            parsed = await self._parser.parse(data, mime_type=mime_type, filename=attachment.filename)
+            parsed = await self._call_parser(data, attachment, mime_type=mime_type)
         except DocumentParseError:
             logger.warning(
                 "attachment.reparse refused",
@@ -325,6 +340,14 @@ class AttachmentPipeline:
         data = await self._blob_store.read_bytes(attachment.blob_key)
         return data, stat.size_bytes
 
+    async def _call_parser(self, data: bytes, attachment: Attachment, *, mime_type: str) -> ParsedDocument:
+        """Parser call with its duration attributed to external I/O, not agent work."""
+        started = perf_counter()
+        try:
+            return await self._parser.parse(data, mime_type=mime_type, filename=attachment.filename)
+        finally:
+            _report_parse_io(started)
+
     async def _parse(
         self,
         data: bytes,
@@ -342,7 +365,7 @@ class AttachmentPipeline:
                 detected_mime_type=mime_type,
             )
         try:
-            parsed = await self._parser.parse(data, mime_type=mime_type, filename=attachment.filename)
+            parsed = await self._call_parser(data, attachment, mime_type=mime_type)
         except DocumentParseError as exc:
             logger.warning(
                 "attachment parse refused",

@@ -28,6 +28,7 @@ from palatium_ai.infrastructure.parsing.document_parser import (
 from palatium_ai.infrastructure.parsing.image_ocr import GatewayImageOcrParser
 from palatium_ai.infrastructure.parsing.pdf_ocr import TesseractPdfOcrParser
 from palatium_ai.infrastructure.parsing.pdf_vision import GatewayPdfVisionParser
+from palatium_ai.infrastructure.parsing.pymupdf_compat import pymupdf_available
 from palatium_ai.infrastructure.parsing.routed_parser import RoutedDocumentParser
 from palatium_ai.infrastructure.parsing.tesseract_cmd import resolve_tesseract_cmd
 from palatium_ai.infrastructure.parsing.tesseract_ocr import FallbackImageOcrParser, TesseractImageOcrParser
@@ -169,7 +170,7 @@ def _build_pdf_backends(
     """Optional PDF OCR / vision backends layered by RoutedDocumentParser."""
     pdf_ocr: DocumentParserPort | None = None
     pdf_vision: GatewayPdfVisionParser | None = None
-    if tesseract_cmd is not None and _module_available("fitz") and _module_available("pytesseract"):
+    if tesseract_cmd is not None and pymupdf_available() and _module_available("pytesseract"):
         pdf_ocr = TesseractPdfOcrParser(
             max_chars=config.max_parsed_chars,
             max_pages=min(config.max_parsed_pages, 10),
@@ -178,7 +179,7 @@ def _build_pdf_backends(
             limiter=ocr_limiter,
             tesseract_cmd=tesseract_cmd,
         )
-    if model_supports_vision and _module_available("fitz"):
+    if model_supports_vision and pymupdf_available():
         model = (config.image_ocr_model or "").strip()
         gateway = getattr(getattr(settings, "llm", None), "gateway", None)
         if gateway is not None and model:

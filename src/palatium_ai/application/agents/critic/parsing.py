@@ -4,8 +4,9 @@
 
 Critic LLM output is decoded via provider structured output
 (``response_format="json_schema"`` + ``response_model=CriticOutput``) inside the
-agent, so no manual JSON coercion lives here: the harness/model guarantees the
-shape or the call fails loudly.
+agent and then through the shared ``parse_llm_response`` contract: the provider is
+asked for the shape, but a model that wraps its JSON in a Markdown fence still gets
+decoded there instead of failing the review (055).
 """
 
 from __future__ import annotations

@@ -75,3 +75,32 @@ async def test_critic_uses_response_model() -> None:
     assert result.output.accuracy_score == 9
     assert result.output.requires_review is False
     assert result.status == "success"
+
+
+@pytest.mark.asyncio()
+async def test_critic_decodes_a_fenced_json_answer() -> None:
+    """A Markdown fence around the schema payload must not fail the review (055)."""
+    body = '{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok"}'
+    harness = _CapturingHarness(f"```json\n{body}\n```")
+    agent = CriticAgent(harness, CRITIC_CONFIG)  # type: ignore[arg-type]
+
+    result = await agent.run(_agent_input(_packet()))
+
+    assert isinstance(result.output, CriticOutput)
+    assert result.output.accuracy_score == 9
+    assert result.status == "success"
+
+
+@pytest.mark.asyncio()
+async def test_critic_counts_a_model_defect_separately_from_a_transport_failure() -> None:
+    """Schema/JSON defects are a prompt signal, not an infrastructure error (040)."""
+    from palatium_ai.core.observability.metrics import agent_metrics
+
+    harness = _CapturingHarness("```json\n{not-json\n```")
+    agent = CriticAgent(harness, CRITIC_CONFIG)  # type: ignore[arg-type]
+    before = agent_metrics.error_count(CRITIC_CONFIG.role, "structured_output_invalid")
+
+    result = await agent.run(_agent_input(_packet()))
+
+    assert result.status == "failure"
+    assert agent_metrics.error_count(CRITIC_CONFIG.role, "structured_output_invalid") == before + 1

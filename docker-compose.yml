@@ -171,6 +171,10 @@ services:
     # `volumes:` below had to move with it — the two lines are one contract (test-guarded).
     image: pgvector/pgvector:pg18@sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
     restart: unless-stopped
+    # Crash recovery on this volume took ~250 s, and Docker's 10 s default delivered
+    # SIGKILL in the middle of it (the "probably corrupted" line in the log). The grace
+    # period has to outlast recovery + a final checkpoint, not just an idle shutdown.
+    stop_grace_period: 5m
     mem_limit: 1024m
     # Docker's default /dev/shm is 64 MiB. Postgres ships
     # `dynamic_shared_memory_type=posix`, so parallel workers (max_parallel_workers=8)
@@ -396,37 +400,79 @@ services:
       # и делайте: docker compose up -d --force-recreate litellm
       # =====================================================================
 
+      # # ---- TIER NANO ----
+      # TIER_NANO_MODEL: "openai/generative-model"
+      # TIER_NANO_API_KEY: ${QWEN_API_KEY}
+      # TIER_NANO_API_BASE: ${QWEN_BASE_URL}
+      # TIER_NANO_TIMEOUT: "60"
+
+      # # ---- TIER SMALL ----
+      # TIER_SMALL_MODEL: "openai/generative-model"
+      # TIER_SMALL_API_KEY: ${QWEN_API_KEY}
+      # TIER_SMALL_API_BASE: ${QWEN_BASE_URL}
+      # TIER_SMALL_TIMEOUT: "60"
+
+      # # ---- TIER MID ----
+      # TIER_MID_MODEL: "openai/generative-model"
+      # TIER_MID_API_KEY: ${QWEN_API_KEY}
+      # TIER_MID_API_BASE: ${QWEN_BASE_URL}
+      # TIER_MID_TIMEOUT: "60"
+
+      # # ---- TIER FRONTIER ----
+      # TIER_FRONTIER_MODEL: "openai/generative-model"
+      # TIER_FRONTIER_API_KEY: ${QWEN_API_KEY}
+      # TIER_FRONTIER_API_BASE: ${QWEN_BASE_URL}
+      # TIER_FRONTIER_TIMEOUT: "60"
+
+      # # ---- TIER DEEP ----
+      # TIER_DEEP_MODEL: "openai/generative-model"
+      # TIER_DEEP_API_KEY: ${QWEN_API_KEY}
+      # TIER_DEEP_API_BASE: ${QWEN_BASE_URL}
+      # TIER_DEEP_TIMEOUT: "120"
+
       # ---- TIER NANO ----
-      TIER_NANO_MODEL: "openai/generative-model"
-      TIER_NANO_API_KEY: ${QWEN_API_KEY}
-      TIER_NANO_API_BASE: ${QWEN_BASE_URL}
+      # Быстрые, лёгкие задачи: классификация интентов, извлечение сущностей, маршрутизация.
+      TIER_NANO_MODEL: "openai/nemotron-3-nano:30b-cloud"
+      TIER_NANO_API_KEY: ${OLLAMA_API_KEY}
+      TIER_NANO_API_BASE: ${OLLAMA_BASE_URL}
       TIER_NANO_TIMEOUT: "60"
 
       # ---- TIER SMALL ----
-      TIER_SMALL_MODEL: "openai/generative-model"
-      TIER_SMALL_API_KEY: ${QWEN_API_KEY}
-      TIER_SMALL_API_BASE: ${QWEN_BASE_URL}
+      # Повседневные задачи с балансом скорости и качества.
+      TIER_SMALL_MODEL: "openai/gemma4:31b-cloud"
+      TIER_SMALL_API_KEY: ${OLLAMA_API_KEY}
+      TIER_SMALL_API_BASE: ${OLLAMA_BASE_URL}
       TIER_SMALL_TIMEOUT: "60"
 
       # ---- TIER MID ----
+      # Универсальная "рабочая лошадка" для широкого круга задач средней сложности.
       TIER_MID_MODEL: "openai/generative-model"
       TIER_MID_API_KEY: ${QWEN_API_KEY}
       TIER_MID_API_BASE: ${QWEN_BASE_URL}
       TIER_MID_TIMEOUT: "60"
 
       # ---- TIER FRONTIER ----
-      TIER_FRONTIER_MODEL: "openai/generative-model"
-      TIER_FRONTIER_API_KEY: ${QWEN_API_KEY}
-      TIER_FRONTIER_API_BASE: ${QWEN_BASE_URL}
+      # Сложные задачи, требующие глубокого понимания и качества ответа.
+      TIER_FRONTIER_MODEL: "openai/beam:cloud"
+      TIER_FRONTIER_API_KEY: ${OLLAMA_API_KEY}
+      TIER_FRONTIER_API_BASE: ${OLLAMA_BASE_URL}
       TIER_FRONTIER_TIMEOUT: "60"
 
       # ---- TIER DEEP ----
-      TIER_DEEP_MODEL: "openai/generative-model"
-      TIER_DEEP_API_KEY: ${QWEN_API_KEY}
-      TIER_DEEP_API_BASE: ${QWEN_BASE_URL}
+      # Максимально сложные аналитические и многошаговые задачи.
+      TIER_DEEP_MODEL: "openai/gpt-oss:120b-cloud"
+      TIER_DEEP_API_KEY: ${OLLAMA_API_KEY}
+      TIER_DEEP_API_BASE: ${OLLAMA_BASE_URL}
       TIER_DEEP_TIMEOUT: "120"
 
     depends_on:
+      # Prisma opens ``LITELLM_DB_URL`` before port 4000 exists: a cold container runs
+      # `prisma migrate deploy` and then keeps a DB health watchdog. Without this gate a
+      # start racing a Postgres recovery loop still "succeeds" — and then spends minutes
+      # in `Attempting Prisma DB reconnect` / `httpx.ConnectTimeout` while the API waits
+      # on `condition: service_healthy` (observed on the 16 GB host).
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -739,8 +785,9 @@ services:
     profiles: [ "attachments" ]
     image: clamav/clamav:1.5.4-debian@sha256:9bb8712a50f0e75166e936c452cd82dd5e5be0b85586598930b5bbb84a99a578
     restart: unless-stopped
+    # Signature-DB metadata is flushed on SIGTERM; the default 10 s cuts the flush.
+    stop_grace_period: 2m
     # ~1 GiB at rest: clamd keeps the whole signature database in memory, so this
-    # ceiling must stay above the database size, not just above the process.
     mem_limit: 1792m
     # The upstream entrypoint starts clamd detached and leaves `tail` as PID 1, so a
     # reaped daemon would leave the container "Up" with every scan hanging until the
@@ -801,6 +848,9 @@ services:
     profiles: [ "attachments-s3", "observability" ]
     image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46
     restart: unless-stopped
+    # The usage scanner writes `.usage-cache.bin` / `.usage.json` on shutdown; a short
+    # grace kills it mid-write (observed `IncompleteBody` / `InsufficientWriteQuorum`).
+    stop_grace_period: 3m
     # ~200 MiB for the Go runtime even while idle, so this is the one ceiling that is
     # not a round multiple of its steady state.
     mem_limit: 448m

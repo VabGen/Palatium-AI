@@ -268,10 +268,30 @@ class IntentService:
             return {}
         return {PENDING_ATTACHMENT_IDS_KEY: self._serialize_pending_attachment_ids(attachment_ids)}
 
-    def _bind_turn_attachment_context(self, *, thread_id: str, user_id: str | None) -> TurnAttachmentContext:
-        """Callbacks for continuation_node rehydrate / clear sticky (SB2)."""
+    def _bind_turn_attachment_context(
+        self,
+        *,
+        thread_id: str,
+        user_id: str | None,
+        primed: AttachmentTurnContext | None = None,
+    ) -> TurnAttachmentContext:
+        """Callbacks for continuation_node rehydrate / clear sticky (SB2).
+
+        ``primed`` is what the entry already fenced for this turn. A rehydrate of the
+        same ids returns it instead of re-reading the attachment rows and blobs, so one
+        turn resolves each attachment exactly once (P5: the duplicated call in logs).
+        """
 
         async def _rehydrate(ids: Sequence[UUID]) -> str:
+            wanted = tuple(ids)
+            if primed is not None and primed.fenced_text.strip() and primed.attachment_ids == wanted:
+                logger.info(
+                    "attachment.rehydrate_reused",
+                    thread_id=thread_id,
+                    attachment_count=len(wanted),
+                    reason="same_ids_fenced_at_entry",
+                )
+                return primed.fenced_text
             # P0-A: cross-thread UUID in dialog prior must not fence foreign text.
             # Entry-path explicit ids still raise AttachmentNotFoundError to the API.
             try:
@@ -292,7 +312,7 @@ class IntentService:
         async def _clear() -> None:
             await self._clear_pending_attachments(thread_id=thread_id)
 
-        return TurnAttachmentContext(rehydrate=_rehydrate, clear_pending=_clear)
+        return TurnAttachmentContext(rehydrate=_rehydrate, clear_pending=_clear, primed=primed)
 
     @traceable(name="intent_service.classify")
     async def classify(
@@ -579,7 +599,11 @@ class IntentService:
             thread_key=thread_id,
             user_text=text,
         )
-        attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
+        attach_ctx = self._bind_turn_attachment_context(
+            thread_id=thread_id,
+            user_id=user_id,
+            primed=turn_attachments,
+        )
         with turn_response_cache(cache_ctx), turn_attachment_context(attach_ctx):
             final_state = await self._graph_runner.run_graph(
                 text=text,
@@ -781,7 +805,11 @@ class IntentService:
             thread_key=thread_id,
             user_text=text,
         )
-        attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
+        attach_ctx = self._bind_turn_attachment_context(
+            thread_id=thread_id,
+            user_id=user_id,
+            primed=turn_attachments,
+        )
         with (
             turn_response_cache(cache_ctx),
             turn_sse_bridge(TurnSseBridge(stream_contract=self._stream_contract(user_id))),

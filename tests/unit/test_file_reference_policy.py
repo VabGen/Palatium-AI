@@ -231,3 +231,27 @@ def test_only_a_named_reference_promotes_the_turn_to_a_storage_read() -> None:
     single = FileReferencePolicy.resolve([only], hint_text="а что там по срокам?")
     assert FileReferencePolicy.is_named_reference(named) is True
     assert FileReferencePolicy.is_named_reference(single) is False
+
+
+def test_resolve_all_returns_every_file_without_name_matching() -> None:
+    """«Сравни оба файла» names no file: plurality is code-resolved, not guessed."""
+    first = _candidate("Договор.pdf")
+    second = _candidate("Приложение.docx")
+    resolution = FileReferencePolicy.resolve_all([first, second])
+    assert resolution.status == "resolved"
+    assert resolution.reason == "all_requested"
+    assert resolution.attachment_id == first.attachment_id
+    assert resolution.attachment_ids == (first.attachment_id, second.attachment_id)
+    assert resolution.candidates == ("Договор.pdf", "Приложение.docx")
+
+
+def test_resolve_all_on_an_empty_thread_refuses() -> None:
+    resolution = FileReferencePolicy.resolve_all([])
+    assert resolution.status == "no_candidates"
+    assert resolution.attachment_ids == ()
+
+
+def test_single_resolution_carries_exactly_one_id() -> None:
+    only = _candidate("СФУТ 9.03-2025.pdf")
+    resolution = FileReferencePolicy.resolve([only], hint_text="перечитай файл")
+    assert resolution.attachment_ids == (only.attachment_id,)

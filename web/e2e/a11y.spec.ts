@@ -14,6 +14,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { ru } from '../src/i18n/messages';
+import type { ContentDocument } from '../src/types/contentDocument';
 import {
   answerDocument,
   defaultApi,
@@ -70,6 +71,30 @@ async function tabInto(page: Page, limit: number): Promise<FocusSnapshot[]> {
     if (active) visited.push(active);
   }
   return visited;
+}
+
+/**
+ * Один ход до готового документа: задерживающий ответ не нужен, проверяется
+ * итоговая отрисовка блоков (там и живёт анимированная иконка).
+ */
+async function runStream(page: Page, output: ContentDocument): Promise<void> {
+  const server = defaultApi();
+  server.reply('intents.process.stream', { json: { task_id: 'task-1', output } });
+  await stubSessionSocket(page);
+  await server.install(page);
+  await openWidget(page);
+  await page.locator('.composer-textarea').fill('Составь письмо');
+  await page.getByRole('button', { name: 'Отправить сообщение' }).click();
+}
+
+/**
+ * Документ с callout, чей явный `icon` заведомо попадает в Lottie-таблицу.
+ * `icon` задан явно: проверяется рендер иконки, а не деривация из тона.
+ */
+function documentWithAnimatedCallout(icon: 'success' | 'danger'): ContentDocument {
+  const document = answerDocument();
+  document.blocks.push({ type: 'callout', tone: 'success', icon, body: 'Проверка статуса.' });
+  return document;
 }
 
 async function scan(page: Page): Promise<void> {
@@ -321,5 +346,45 @@ test.describe('reduced motion', () => {
     expect(phase.position).toBe('static');
     expect(phase.clipPath).toBe('none');
     expect(phase.width).toBeGreaterThan(40);
+  });
+
+  /**
+   * Иконка статуса — тоже движение, и CSS её не гасит: Lottie-web рисует своим
+   * rAF-циклом, `.icon-animated { animation: none }` снимает анимацию только с
+   * Lucide-фоллбека. Поэтому при выключенном движении Lottie не рендерится
+   * вовсе: пользователь получает статичный Lucide-глиф, а rAF-цикл не стартует.
+   *
+   * Проверяется выбор рендерера, а не пиксели: насколько корректно движется
+   * конкретный Lottie — свойство ассета, а не компонента.
+   */
+  test('иконка статуса: при выключенном движении Lottie не монтируется', async ({ page }) => {
+    const document = documentWithAnimatedCallout('success');
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await runStream(page, document);
+
+    await expect(page.locator('.block-callout')).toHaveCount(1);
+    await expect(page.locator('.block-callout .token-lottie')).toHaveCount(0);
+    // Глиф остаётся: выключенное движение не должно прятать смысл статуса.
+    const glyph = page.locator('.block-callout svg.icon-animated');
+    await expect(glyph).toHaveCount(1);
+    expect(await glyph.evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThan(
+      0
+    );
+  });
+
+  test('контроль: то же место без reduced-motion идёт через Lottie', async ({ page }) => {
+    // Без этого кейса предыдущий был бы зелёным и в сборке, где Lottie не
+    // подключён вовсе. `no-preference` задан явно: иначе кейс зависел бы от
+    // системной настройки машины («уменьшить движение» в Windows) — а гейт,
+    // который краснеет от настройки ОС разработчика, ничего не проверяет (080).
+    const document = documentWithAnimatedCallout('success');
+
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await runStream(page, document);
+
+    await expect(page.locator('.block-callout .token-lottie')).toHaveCount(1);
+    // Lucide-фоллбек при этом не рисуется — иначе статус был бы двойным.
+    await expect(page.locator('.block-callout svg.icon-animated')).toHaveCount(0);
   });
 });

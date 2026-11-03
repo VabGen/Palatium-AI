@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 
 from palatium_ai.domain.content.content_document import (
+    NESTED_ITEM_PREFIX,
     CodeBlock,
     ContentBlock,
     HeadingBlock,
@@ -334,9 +335,9 @@ def _flatten_nested_bullet(item: ListItem, indent: int) -> ListItem:
     silently and read as a sibling. A visible marker keeps the sub-point readable
     without inventing a second list shape (055).
     """
-    if indent < 2 or item.text.startswith("· "):
+    if indent < 2 or item.text.startswith(NESTED_ITEM_PREFIX):
         return item
-    return item.model_copy(update={"text": f"· {item.text}"})
+    return item.model_copy(update={"text": f"{NESTED_ITEM_PREFIX}{item.text}"})
 
 
 def _list_item_from_groups(emphasis_raw: str | None, body_raw: str | None) -> ListItem | None:

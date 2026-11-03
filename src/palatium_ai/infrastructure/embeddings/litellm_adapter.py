@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from httpx import Timeout
 from litellm import aembedding
 
 from palatium_ai.core.types.embeddings import (
@@ -76,7 +77,9 @@ class LiteLLMEmbeddingAdapter:
         params: dict[str, object] = {
             "model": resolved_model,
             "input": texts,
-            "timeout": self._config.timeout,
+            # Separate connect budget: a dead gateway must not consume the whole
+            # request timeout while the turn waits (080).
+            "timeout": Timeout(self._config.timeout, connect=self._config.connect_timeout),
             "api_key": self._api_key,
             "api_base": self._base_url,
             # Same process-wide session as chat calls: embedding traffic is continuous

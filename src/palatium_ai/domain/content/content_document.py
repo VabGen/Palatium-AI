@@ -8,7 +8,7 @@ from typing import Annotated, Literal, get_args
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic.json_schema import SkipJsonSchema
+from pydantic.json_schema import SkipJsonSchema  # noqa: TC002 - pydantic evaluates model annotations at runtime
 
 from palatium_ai.domain.content.citations.models import CitationRef
 from palatium_ai.domain.content.code_text import normalize_code_entities
@@ -37,6 +37,11 @@ IconToken = Literal[
 # Closed allow-list for Formatter <icon name="…"/> tokens (emoji forbidden).
 ICON_NAMES: tuple[str, ...] = get_args(IconToken)
 ICON_NAME_SET: frozenset[str] = frozenset(ICON_NAMES)
+
+#: Nesting marker for list rows. ``ListItem`` carries no level field, so one level of
+#: sub-points is encoded as this prefix on the text (decoded by the UI and by
+#: ``plain_text``). Kept here so producer and consumers cannot drift apart.
+NESTED_ITEM_PREFIX = "· "
 
 CalloutTone = Literal["info", "success", "warning", "danger"]
 ListStyle = Literal["ordered", "unordered"]
@@ -183,7 +188,11 @@ class StepItem(BaseModel):
 
     title: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=2000)
-    status: StepStatus = "pending"
+    #: Absent = no process state is known, NOT "pending". The UI draws a status
+    #: marker only for a real state; a default here would assert "nothing started"
+    #: about a document that never had a process (e.g. an enumerated list of
+    #: components), and every row would show the same "pending" glyph.
+    status: StepStatus | None = None
     icon: IconToken | None = None
 
 
@@ -299,13 +308,13 @@ class DocumentMeta(BaseModel):
     # ``citations``: this value is the server's decision from the transformation axis,
     # not a field the model may pick — under a strict provider schema a listed field
     # becomes *required*, and the model would have to invent a budget it does not own.
-    verbosity_budget: Annotated[VerbosityBudget, SkipJsonSchema()] = "standard"
+    verbosity_budget: SkipJsonSchema[VerbosityBudget] = "standard"
     # Provider citation anchors (W3b). ``SkipJsonSchema`` is load-bearing: the whole
     # ``ContentDocument`` becomes the provider's strict output schema, and a field
     # listed there is *required* — the model would have to invent offsets it does not
     # have. Anchors come from provider annotations, so the agent attaches them after
     # validation; the field is part of the wire contract to the client, not to the LLM.
-    citations: Annotated[tuple[CitationRef, ...], SkipJsonSchema()] = ()
+    citations: SkipJsonSchema[tuple[CitationRef, ...]] = ()
 
 
 class ContentDocument(BaseModel):
@@ -384,7 +393,10 @@ def _structured_block_plain_lines(block: ContentBlock) -> list[str]:
     """Flatten list/table/steps/kv/chart blocks."""
     match block:
         case ListBlock(items=items):
-            return [f"• {item.text}" for item in items]
+            # Nesting is encoded as a ``· `` prefix on the item text (ListItem has no
+            # level field). Rendering it behind another bullet produced ``• · пункт``
+            # in the transcript, and the model mirrored that malformed pattern back.
+            return [_plain_list_line(item.text) for item in items]
         case StepsBlock(items=items):
             return [f"• {item.title} — {item.body}" for item in items]
         case KeyValueBlock(items=items):
@@ -395,6 +407,13 @@ def _structured_block_plain_lines(block: ContentBlock) -> list[str]:
             return [f"{title or 'chart'}: {', '.join(labels)}"]
         case _:
             return []
+
+
+def _plain_list_line(text: str) -> str:
+    """One transcript line per list item: bullet at the root, indent for nested rows."""
+    if text.startswith(NESTED_ITEM_PREFIX):
+        return f"  · {text[len(NESTED_ITEM_PREFIX) :]}"
+    return f"• {text}"
 
 
 def parse_content_document(payload: object) -> ContentDocument:

@@ -333,6 +333,24 @@ def test_litellm_healthcheck_covers_its_migration_startup() -> None:
     assert int(start_period.removesuffix("s")) >= 120, f"litellm start_period {start_period} is shorter than the migration run"
 
 
+def test_litellm_waits_for_postgres_before_its_prisma_migrations() -> None:
+    """LiteLLM's own database is on the same cluster as the app's (060, 082).
+
+    A cold container runs ``prisma migrate deploy`` before port 4000 opens, so starting
+    it while Postgres is still recovering turns the boot into a reconnect/watchdog
+    storm (``Attempting Prisma DB reconnect``, ``httpx.ConnectTimeout``) instead of a
+    failure — the API then sits on ``condition: service_healthy`` for minutes. Redis
+    alone is not the dependency that decides whether LiteLLM can boot.
+    """
+    depends_on = _service("litellm").get("depends_on", {})
+    assert isinstance(depends_on, dict), f"litellm must gate on explicit services, got {depends_on!r}"
+    postgres = depends_on.get("postgres")
+    assert isinstance(postgres, dict), "litellm must depend on postgres, not just redis"
+    assert postgres.get("condition") == "service_healthy", (
+        "LiteLLM runs Prisma migrations at boot; it must wait for a healthy Postgres"
+    )
+
+
 def test_litellm_runs_a_single_worker() -> None:
     """Each LiteLLM worker forks its own Prisma (Rust) query engine.
 

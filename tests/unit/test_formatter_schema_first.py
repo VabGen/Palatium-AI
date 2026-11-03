@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -192,6 +194,153 @@ async def test_schema_first_falls_back_when_the_model_drops_blocks(
         ]
     )
     agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first")  # type: ignore[arg-type]
+
+    output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    assert [call["response_format"] for call in harness.calls] == ["json_schema", "text"]
+
+
+def _fenced(document_json: str, *, surrounding_prose: bool = True) -> str:
+    """Exactly what the provider returned in the reported incident."""
+    preamble = "Вот документ в требуемом формате:\n" if surrounding_prose else ""
+    return f"{preamble}```json\n{document_json}\n```"
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("surrounding_prose", (False, True))
+async def test_schema_first_accepts_a_fenced_document(surrounding_prose: bool) -> None:
+    """Providers wrap JSON in a Markdown fence even under ``json_schema`` (2026-10-30)."""
+    harness = _StubHarness([LLMCompletion(content=_fenced(_document_json(), surrounding_prose=surrounding_prose), model="test")])
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+
+    output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    assert output.output.title == "Status"
+    # Decoded, not retried: no second (legacy) generation for a formatting slip.
+    assert [call["response_format"] for call in harness.calls] == ["json_schema"]
+
+
+@pytest.mark.asyncio()
+async def test_schema_first_survives_a_document_without_meta() -> None:
+    """A dropped ``meta`` is a decode default, not a reason to regenerate the answer."""
+    raw = json.loads(_document_json())
+    del raw["meta"]
+    harness = _StubHarness([LLMCompletion(content=_fenced(json.dumps(raw, ensure_ascii=False)), model="test")])
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+
+    output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    assert output.output.blocks == ContentDocument.model_validate_json(_document_json()).blocks
+    assert [call["response_format"] for call in harness.calls] == ["json_schema"]
+
+
+@pytest.mark.asyncio()
+async def test_schema_first_drops_an_unknown_icon_instead_of_the_block() -> None:
+    """Icon names are a closed UI registry: an unknown one is chrome, not content."""
+    raw = json.loads(_document_json())
+    raw["blocks"][0]["icon"] = "document-check"
+    harness = _StubHarness([LLMCompletion(content=json.dumps(raw, ensure_ascii=False), model="test")])
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+
+    output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    callout = output.output.blocks[0]
+    assert isinstance(callout, CalloutBlock)
+    assert callout.icon is None
+    assert callout.body == "No errors."
+    assert [call["response_format"] for call in harness.calls] == ["json_schema"]
+
+
+@pytest.mark.asyncio()
+async def test_schema_first_falls_back_on_truncated_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cut-off payload is a model defect: the legacy contract retries, no stack trace."""
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
+        lambda _raw, _task: _fixed_document(),
+    )
+    truncated = _document_json()[: len(_document_json()) // 2]
+    harness = _StubHarness(
+        [
+            LLMCompletion(content=truncated, model="test"),
+            LLMCompletion(content="Done. No errors.", model="test"),
+        ]
+    )
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+    before = _schema_count("schema_first", "invalid")
+
+    output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    assert [call["response_format"] for call in harness.calls] == ["json_schema", "text"]
+    assert _schema_count("schema_first", "invalid") == before + 1
+
+
+@pytest.mark.asyncio()
+async def test_schema_first_unwraps_a_nested_document_payload() -> None:
+    """Some gateways answer with ``{"document": {...}}`` around the schema payload."""
+    harness = _StubHarness([LLMCompletion(content=json.dumps({"document": json.loads(_document_json())}), model="test")])
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+
+    output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    assert output.output.title == "Status"
+    assert [call["response_format"] for call in harness.calls] == ["json_schema"]
+
+
+@pytest.mark.asyncio()
+async def test_schema_first_invalid_document_log_carries_no_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator gets the failing field; the model's prose stays out of the logs (020)."""
+    from structlog.testing import capture_logs
+
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
+        lambda _raw, _task: _fixed_document(),
+    )
+    leaked = "секретный текст клиента"
+    raw = json.loads(_document_json())
+    # ``body`` is required: the payload fails validation and its prose is what a
+    # ``str(ValidationError)`` would have echoed into the log.
+    raw["blocks"] = [{"type": "callout", "tone": "info", "text": leaked}]
+    harness = _StubHarness(
+        [
+            LLMCompletion(content=json.dumps(raw, ensure_ascii=False), model="test"),
+            LLMCompletion(content="Done. No errors.", model="test"),
+        ]
+    )
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
+
+    with capture_logs() as logs:
+        await agent.run(_agent_input())
+
+    assert any(entry.get("event") == "formatter.schema_first.invalid_json" for entry in logs)
+    assert all(leaked not in str(entry) for entry in logs)
+
+
+@pytest.mark.asyncio()
+async def test_schema_first_falls_back_when_the_payload_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An array-wrapped answer is a model defect: retry on the legacy contract."""
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
+        lambda _raw, _task: _fixed_document(),
+    )
+    harness = _StubHarness(
+        [
+            LLMCompletion(content=f"[{_document_json()}]", model="test"),
+            LLMCompletion(content="Done. No errors.", model="test"),
+        ]
+    )
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="schema_first", rollout_pct=100)  # type: ignore[arg-type]
 
     output = await agent.run(_agent_input())
 

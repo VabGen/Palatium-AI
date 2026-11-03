@@ -6,9 +6,8 @@ from __future__ import annotations
 
 import json
 
-from typing import TYPE_CHECKING
-
 from palatium_ai.application.agents.researcher.config import SUMMARY_MAX_CHARS
+from palatium_ai.application.tools.mcp import MCPToolCallOutcome
 from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutput
 from palatium_ai.domain.llm.json_codec import loads_llm_json
@@ -16,9 +15,6 @@ from palatium_ai.domain.memory.tool_output import (
     compress_worker_context,
     wrap_untrusted_tool_output,
 )
-
-if TYPE_CHECKING:
-    from palatium_ai.application.tools.mcp import MCPToolCallOutcome
 
 FAILURE_PLACEHOLDER_SUMMARY = "(no output)"
 
@@ -116,6 +112,35 @@ def mcp_joined_text(outcome: MCPToolCallOutcome) -> str:
         if isinstance(text, str) and text:
             parts.append(text)
     return redact_text("\n".join(parts))
+
+
+def merge_attachment_read_outcomes(outcomes: tuple[MCPToolCallOutcome, ...]) -> MCPToolCallOutcome:
+    """Fold several ``read_attachment`` payloads into one evidence body.
+
+    Each read returns a JSON envelope whose ``fenced_text`` is that file's own
+    untrusted fence. Concatenating the envelopes would nest JSON inside the prompt,
+    so only the fences are kept: the synthesis step must see N documents, each
+    attributed to its own file. A payload that is not the expected envelope is passed
+    through unchanged rather than dropped (a lossy merge would hide a file).
+    """
+    blocks: list[str] = []
+    for outcome in outcomes:
+        for item in outcome.content:
+            text = item.get("text")
+            if not isinstance(text, str) or not text:
+                continue
+            blocks.append(_attachment_fence(text))
+    return MCPToolCallOutcome(content=[{"type": "text", "text": "\n".join(blocks)}])
+
+
+def _attachment_fence(raw: str) -> str:
+    """Extract ``fenced_text`` from a read_attachment envelope, else keep ``raw``."""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    fence = payload.get("fenced_text") if isinstance(payload, dict) else None
+    return fence if isinstance(fence, str) and fence else raw
 
 
 def mcp_payload_is_empty(raw: str) -> bool:

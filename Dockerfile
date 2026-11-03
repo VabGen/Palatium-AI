@@ -104,6 +104,11 @@ ARG WITH_ATTACHMENTS=0
 
 # Только src — mcp_servers идёт через свой Dockerfile (не часть этого образа).
 COPY src ./src
+# Product procedural skills (skills/procedural/**/SKILL.md): the runtime catalog scans
+# this tree from the process cwd. Without it every start logged
+# `skill_catalog.root_missing /app/skills/procedural` and `skill_reference` had nothing
+# to serve (P5). They are product assets, so they ship in the image, not via a dev mount.
+COPY skills ./skills
 COPY alembic.ini ./
 COPY alembic ./alembic
 
@@ -122,7 +127,7 @@ RUN --mount=type=cache,target=/tmp/uv_cache \
     && if [ "${WITH_GRAPHITI}" = "1" ]; then set -- "$@" --extra graphiti; fi \
     && uv sync "$@" \
     && if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
-         /app/.venv/bin/python -c "import PIL, pytesseract, fitz"; \
+         /app/.venv/bin/python -c "import PIL, pytesseract, pymupdf"; \
        fi \
     && if [ "${WITH_GRAPHITI}" = "1" ]; then \
          /app/.venv/bin/python -c "import graphiti_core"; \
@@ -186,6 +191,8 @@ WORKDIR /app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
+# Procedural skills are read-only product assets: `skill_reference` only ever reads them.
+COPY --from=builder --chown=app:app /app/skills /app/skills
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=app:app /app/alembic /app/alembic
 # Build with `npm --prefix web run build` before `docker compose up --build`.
@@ -200,7 +207,7 @@ COPY --chown=app:app scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint
 # virtualenv on every UI-only image rebuild.
 RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
     && chmod 0555 /app/scripts/docker-entrypoint.sh \
-    && chmod -R a-w /app/web /app/LICENSE \
+    && chmod -R a-w /app/web /app/skills /app/LICENSE \
     && chmod u+w /app/logs /app/tmp
 
 USER app

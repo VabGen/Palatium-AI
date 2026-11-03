@@ -34,6 +34,7 @@ from palatium_ai.application.agents.formatter.parsing import (
     build_formatter_user_payload,
     decode_formatter_input,
     formatter_attachment_stats,
+    parse_formatter_document,
 )
 from palatium_ai.application.agents.formatter.partial_document import PartialDocumentScanner
 from palatium_ai.application.agents.formatter.prompts import (
@@ -58,7 +59,9 @@ from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.content.citations import CitationRef, normalize_citations
 from palatium_ai.domain.content.lint import ContentLint
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
+from palatium_ai.domain.llm.json_codec import LLMJSONError
 from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
+from palatium_ai.domain.llm.response_parser import compact_validation_error
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.policies.shape import ShapeRecipePolicy
 
@@ -302,16 +305,21 @@ class FormatterAgent(BaseAgent):
                 task_id=input.task_id,
                 untrusted_context=task_input.context_packet.untrusted_context,
             )
-            document = ContentDocument.model_validate_json(completion.content)
+            # The provider streams raw text: fences, prose around the payload, minor
+            # JSON defects and a missing ``meta`` are decoder concerns, not turn
+            # failures. Same contract as the legacy JSON path (055).
+            document = parse_formatter_document(completion.content)
         except StructuredOutputUnsupportedError:
             logger.warning("formatter.schema_first.unsupported", task_id=str(input.task_id))
             agent_metrics.record_formatter_schema(path="schema_first", outcome="unsupported")
             return await self._run_legacy(input, task_input)
-        except ValidationError as exc:
+        except (ValidationError, LLMJSONError) as exc:
+            # A model-side defect: the legacy Markdown contract can still produce the
+            # document, so it is a retry path — not the transport-failure path below.
             logger.warning(
                 "formatter.schema_first.invalid_json",
                 task_id=str(input.task_id),
-                error=str(exc)[:300],
+                error=compact_validation_error(exc),
             )
             agent_metrics.record_formatter_schema(path="schema_first", outcome="invalid")
             return await self._run_legacy(input, task_input)

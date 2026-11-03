@@ -111,8 +111,11 @@ class ExecutionPlanner:
             requires_mcp=task_input.requires_mcp,
         )
 
+        # Route is set from the same fact (Supervisor collapses the kind), so a re-read
+        # never reaches a worker that cannot call tools; the gate documents that the
+        # plan and the route are one decision, not two (055).
         if task_input.route == "researcher" and _file_reread_requested(task_input) and is_file_reread_enabled(user_id_var.get()):
-            return _file_reread_plan()
+            return _file_reread_plan(plural=task_input.attachment_scope == "all")
 
         route_plan = _route_local_plan(task_input.route, executable_kind, task_input.requires_mcp)
         if route_plan is not None:
@@ -168,8 +171,13 @@ def _file_reread_requested(task_input: ContextWeaverInput) -> bool:
     return task_input.file_reference == "thread_file" and not task_input.has_attachment_context
 
 
-def _file_reread_plan() -> ToolExecutionPlan:
-    """Direct owner-scoped storage read; the reference is resolved in the worker path."""
+def _file_reread_plan(*, plural: bool = False) -> ToolExecutionPlan:
+    """Direct owner-scoped storage read; the reference is resolved in the worker path.
+
+    ``plural`` marks an explicit "every file of this dialog" ask: identity is still
+    resolved in the application layer, but the step covers the whole set and the
+    worker issues one read per file instead of a single read and a wrong summary.
+    """
     return ToolExecutionPlan(
         strategy="direct_tool_call",
         capability="attachments",
@@ -177,8 +185,13 @@ def _file_reread_plan() -> ToolExecutionPlan:
         tool_name="read_attachment",
         requires_tool_call=True,
         rationale=(
-            "Thread file re-read: the ask targets a file already uploaded in this dialog; "
-            "read its owner-scoped body from storage instead of claiming it is missing."
+            "Thread file re-read: the ask targets files already uploaded in this dialog; "
+            "read their owner-scoped bodies from storage instead of claiming they are missing."
+            + (
+                " The ask covers the whole set: read every file, one call per file, and answer over the combined evidence."
+                if plural
+                else ""
+            )
         ),
     )
 

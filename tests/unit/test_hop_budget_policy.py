@@ -45,11 +45,17 @@ def test_disabled_budget() -> None:
     assert decision.reason == "budget_disabled"
 
 
-def test_format_only_budget_is_tighter() -> None:
-    full = HopBudgetPolicy.effective_budget_ms(base_ms=15_000, strategy="retrieve_then_reason")
-    fmt = HopBudgetPolicy.effective_budget_ms(base_ms=15_000, strategy="format_only")
-    assert full == 15_000
-    assert fmt == 9_000
+def test_worker_budget_scales_above_chat_budget() -> None:
+    """A worker pass costs ~7 hops, so one chat budget would alert by construction.
+
+    The scale is not a free pass: the comparison already excludes external I/O
+    (OCR/parse), so the scaled budget governs genuine agent work only.
+    """
+    chat = HopBudgetPolicy.effective_budget_ms(base_ms=15_000, strategy="format_only")
+    worker = HopBudgetPolicy.effective_budget_ms(base_ms=15_000, strategy="retrieve_then_reason")
+    assert chat == 9_000
+    assert worker == 30_000
+    assert worker > chat
 
 
 def test_apply_strategy_budget_on_collector() -> None:
@@ -59,4 +65,43 @@ def test_apply_strategy_budget_on_collector() -> None:
     hop.apply_strategy_budget("format_only", scaler=HopBudgetPolicy.effective_budget_ms)
     assert hop.budget_ms == 9_000
     hop.apply_strategy_budget("retrieve_then_reason", scaler=HopBudgetPolicy.effective_budget_ms)
-    assert hop.budget_ms == 15_000
+    assert hop.budget_ms == 30_000
+
+
+def test_external_io_is_not_agent_work() -> None:
+    """A 25 s OCR must not read as a slow graph (nor trigger soft degrade)."""
+    from palatium_ai.core.observability.hop_timings import HopTimingCollector
+
+    hop = HopTimingCollector(budget_ms=15_000, base_budget_ms=15_000)
+    hop.record(node="researcher", agent="researcher", duration_ms=27_000)
+    hop.record_external_io(kind="attachment_parse", duration_ms=25_000)
+
+    assert hop.total_ms() == 27_000
+    assert hop.io_ms() == 25_000
+    assert hop.agent_ms() == 2_000
+
+    status = hop.budget_status()
+    assert status["hop_budget_exceeded"] is False
+    assert status["hop_wall_over_budget"] is True
+    assert status["hop_io_ms"] == 25_000
+    assert (
+        HopBudgetPolicy.should_skip_critic_llm(
+            hop_total_ms=hop.agent_ms(),
+            budget_ms=hop.budget_ms,
+        ).degrade
+        is False
+    )
+
+
+def test_agent_work_over_budget_still_alerts() -> None:
+    """Excluding I/O must not hide a genuine agent regression."""
+    from palatium_ai.core.observability.hop_timings import HopTimingCollector
+
+    hop = HopTimingCollector(budget_ms=15_000, base_budget_ms=15_000)
+    hop.record(node="researcher", agent="researcher", duration_ms=40_000)
+    hop.record_external_io(kind="attachment_parse", duration_ms=5_000)
+
+    status = hop.budget_status()
+    assert status["hop_budget_exceeded"] is True
+    assert status["hop_wall_over_budget"] is False
+    assert status["hop_agent_ms"] == 35_000

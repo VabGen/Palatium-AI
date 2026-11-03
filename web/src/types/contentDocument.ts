@@ -91,7 +91,8 @@ export type KeyValueBlock = {
 export type StepItem = {
   title: string;
   body: string;
-  status: StepStatus;
+  /** Absent = нет состояния процесса (не «в работе»): см. `iconForStepStatus`. */
+  status?: StepStatus | null;
   icon?: IconToken | null;
 };
 

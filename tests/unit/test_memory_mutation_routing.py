@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 
+from langgraph.graph import END
+
 from palatium_ai.application.agents.intent_classifier.parsing import parse_classifier_output
-from palatium_ai.application.orchestration.nodes import route_after_intent
+from palatium_ai.application.orchestration.nodes import route_after_intent, route_after_memory_mutation
+from palatium_ai.core.types.graph_nodes import NODE_CONTEXT_ENRICHER_CONTINUATION
 from palatium_ai.domain.agents.intent import IntentClassifierOutput, IntentTaskResult
 
 
@@ -86,3 +89,51 @@ def test_route_after_intent_sends_mutation_to_gate() -> None:
 def test_route_after_intent_keeps_normal_flow() -> None:
     state = {"task_id": "task-1", "thread_id": "thread-1", "classification": _classification()}
     assert route_after_intent(state) == "context_enricher_continuation"
+
+
+def test_parse_mixed_ask_keeps_the_question_label() -> None:
+    """A command next to a question must not erase the question's own routing axes."""
+    output = parse_classifier_output(
+        _payload(
+            task_kind="knowledge_request",
+            requires_mcp=False,
+            memory_mutation="save",
+            memory_text="обращаться к пользователю «мой хозяин»",
+            memory_key="addressing_preference",
+            residual_ask=True,
+        )
+    )
+
+    assert output.residual_ask is True
+    assert output.memory_mutation == "save"
+    # The write is still an execution (no menu), but the residual ask owns task_kind.
+    assert output.task_kind == "knowledge_request"
+    assert output.requires_mcp is False
+    assert output.requires_user_choice is False
+    assert output.underspecification_kind == "none"
+
+
+def test_parse_residual_ask_without_mutation_is_not_an_axis() -> None:
+    """The flag only describes a command's neighbourhood; alone it routes nothing."""
+    output = parse_classifier_output(_payload(residual_ask=True))
+
+    assert output.residual_ask is False
+    assert output.memory_mutation == "none"
+
+
+def test_route_after_memory_mutation_answers_the_residual_ask() -> None:
+    state = {
+        "task_id": "task-1",
+        "thread_id": "thread-1",
+        "classification": _classification(memory_mutation="save", memory_text="x", residual_ask=True),
+    }
+    assert route_after_memory_mutation(state) == NODE_CONTEXT_ENRICHER_CONTINUATION
+
+
+def test_route_after_memory_mutation_ends_on_a_bare_command() -> None:
+    state = {
+        "task_id": "task-1",
+        "thread_id": "thread-1",
+        "classification": _classification(memory_mutation="save", memory_text="x"),
+    }
+    assert route_after_memory_mutation(state) == END

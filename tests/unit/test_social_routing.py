@@ -98,6 +98,47 @@ async def test_supervisor_multi_step_routes_researcher_with_honest_plan() -> Non
 
 
 @pytest.mark.asyncio()
+async def test_supervisor_routes_thread_file_reread_to_researcher() -> None:
+    """«покажи таблицей содержимое файла из треда» must land on a tool-capable worker.
+
+    The text lives in storage, not in the prior answer: routing such a turn to the
+    Formatter produced "приложите файл заново" while the file was still in the thread.
+    """
+    result = await run_supervisor(
+        SupervisorInput(
+            task_id="t-reread",
+            user_text="покажи таблицей содержимое файла ht_1-5.webp",
+            task_kind="response_formatting",
+            requires_mcp=False,
+            candidate_capabilities=("format",),
+            classification_confidence=0.9,
+            file_reference="thread_file",
+        ),
+    )
+    assert result.output is not None
+    assert result.output.route == "researcher"
+
+
+@pytest.mark.asyncio()
+async def test_supervisor_keeps_formatter_when_the_turn_carries_a_fresh_upload() -> None:
+    """A fence of this turn owns the file — the re-read collapse must not fire."""
+    result = await run_supervisor(
+        SupervisorInput(
+            task_id="t-upload",
+            user_text="покажи таблицей содержимое этого файла",
+            task_kind="response_formatting",
+            requires_mcp=False,
+            candidate_capabilities=("format",),
+            classification_confidence=0.9,
+            file_reference="thread_file",
+            has_attachment_context=True,
+        ),
+    )
+    assert result.output is not None
+    assert result.output.route == "formatter"
+
+
+@pytest.mark.asyncio()
 async def test_planner_multi_step_is_single_retrieve_pass() -> None:
     bundle = await ExecutionPlanner(capability_index=None).build(
         ContextWeaverInput(

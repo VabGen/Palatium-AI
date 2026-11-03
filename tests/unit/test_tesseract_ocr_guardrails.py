@@ -21,6 +21,7 @@ import pytest
 
 from palatium_ai.domain.ports.document_parser import DocumentParseError
 from palatium_ai.infrastructure.parsing import (
+    pymupdf_compat,
     tesseract_ocr as image_ocr_module,
 )
 from palatium_ai.infrastructure.parsing.pdf_ocr import TesseractPdfOcrParser
@@ -32,7 +33,7 @@ _TIMEOUT_SECONDS = 90.0
 _BUDGET_SECONDS = 300.0
 
 
-def _fake_fitz(page_count: int) -> SimpleNamespace:
+def _fake_pymupdf(page_count: int) -> SimpleNamespace:
     """Minimal PyMuPDF surface used by the adapter (rasterize + close)."""
     page = SimpleNamespace(
         get_pixmap=lambda **_: SimpleNamespace(width=1, height=1, samples=b"\x00\x00\x00"),
@@ -45,6 +46,7 @@ def _fake_fitz(page_count: int) -> SimpleNamespace:
     return SimpleNamespace(
         Matrix=lambda *_args: object(),
         open=lambda **_: doc,
+        TOOLS=SimpleNamespace(mupdf_display_warnings=lambda _enabled: None),
     )
 
 
@@ -59,7 +61,11 @@ def _install_pdf_modules(
         image_to_string=image_to_string,
     )
     fake_pil = SimpleNamespace(Image=SimpleNamespace(frombytes=lambda *_: object()))
-    monkeypatch.setitem(sys.modules, "fitz", _fake_fitz(page_count=page_count))
+    # The adapter resolves PyMuPDF through the compat module (which prefers the real
+    # `pymupdf` name), so the fake has to be registered there and the once-per-process
+    # cache reset or the first test's fake would leak into the next.
+    monkeypatch.setitem(sys.modules, "pymupdf", _fake_pymupdf(page_count=page_count))
+    monkeypatch.setattr(pymupdf_compat, "_module", None)
     monkeypatch.setitem(sys.modules, "pytesseract", fake_pytesseract)
     monkeypatch.setitem(sys.modules, "PIL", fake_pil)
 

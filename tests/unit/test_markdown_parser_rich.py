@@ -62,6 +62,17 @@ def test_parse_steps() -> None:
     assert consumed == 2
 
 
+def test_steps_carry_no_invented_status() -> None:
+    """Markdown не описывает состояние процесса — парсер не имеет права его выдумать.
+
+    Регрессия: каждому шагу ставился ``pending``, и UI рисовал одинаковые часы
+    у всех строк перечня (9 компонентов = 9 «в ожидании»).
+    """
+    block, _ = _try_parse_steps(["1. **Шаг 1:** a", "2. **Шаг 2:** b"], 0)
+    assert isinstance(block, StepsBlock)
+    assert [item.status for item in block.items] == [None, None]
+
+
 def test_single_kv_item_is_not_a_panel() -> None:
     block, consumed = _try_parse_kv_panel(["- **Только один:** без пары"], 0)
     assert block is None

@@ -17,10 +17,13 @@ from palatium_ai.application.agents.formatter.config import (
     REVIEW_CONFIDENCE_CAP,
     FormatterStyleHint,
 )
+from palatium_ai.application.agents.formatter.icon_sanitizer import coerce_icon_fields
+from palatium_ai.core.logging import get_logger
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.content.markdown_blocks import plain_paragraph_count
-from palatium_ai.domain.llm.response_parser import parse_llm_response
+from palatium_ai.domain.llm.json_codec import JSONCodec
+from palatium_ai.domain.llm.response_parser import parse_llm_payload
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.policies.transform import TransformPolicy
@@ -36,11 +39,33 @@ from palatium_ai.domain.policies.untrusted_content import (
 )
 from palatium_ai.domain.policies.verbosity import VerbosityPolicy
 
+logger = get_logger(__name__)
+
+
+def _log_document_repair(repair: str, head: str) -> None:
+    """Telemetry for a decoded model JSON: the strategy, never the prose (020)."""
+    _ = head
+    logger.warning("formatter.document_json.repaired", repair=repair)
+
+
+#: One decoder for every JSON-shaped Formatter answer: fences/prose are extracted,
+#: deterministic repairs run before the heuristic one (``json_repair``).
+_DOCUMENT_CODEC = JSONCodec(on_repair=_log_document_repair)
+
 
 def parse_formatter_document(raw_content: str) -> ContentDocument:
-    """Извлекает JSON и валидирует как ContentDocument."""
-    return parse_llm_response(
-        raw_content,
+    """Извлекает JSON и валидирует как ContentDocument.
+
+    One contract for every JSON-shaped model answer (``schema_first`` streaming and
+    the legacy Markdown path): fences/prose/trailing commas are handled by the codec,
+    a missing ``meta`` gets the documented defaults, and layout values the UI registry
+    cannot render (unknown icon names) are dropped instead of failing the document.
+    """
+    payload, dropped_icons = coerce_icon_fields(_DOCUMENT_CODEC.loads(raw_content))
+    if dropped_icons:
+        logger.warning("formatter.icons.dropped", count=dropped_icons)
+    return parse_llm_payload(
+        payload,
         ContentDocument,
         default_factory={
             "meta": {
@@ -59,6 +84,7 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
         citation_refs_from_untrusted_context,
         sanitize_source_refs,
     )
+    from palatium_ai.domain.content.citations.markers import strip_citation_markers
     from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
 
     # Last user-facing boundary of every Formatter path (LLM, fast path, deterministic
@@ -86,6 +112,10 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     # Prefer LLM refs when present; always union attachment file citations (W2 G03).
     # Bare UUIDs / attachment:<uuid> are not user-facing — sanitize drops them.
     merged_refs = sanitize_source_refs((*document.meta.source_refs, *attachment_refs))
+    # Sources are structured data (footer chips); a ``[1]`` left in prose points at
+    # nothing clickable and paints as a bare artifact. Dangling numbers are kept for
+    # the ``dangling_citation`` lint rule — only resolvable markers are noise.
+    document = strip_citation_markers(document, source_count=len(merged_refs))
 
     return document.model_copy(
         update={

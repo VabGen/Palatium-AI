@@ -11,7 +11,7 @@ Pages are OCR-ed **concurrently**, bounded by that semaphore. Sequential pages w
 observed bottleneck: a 10-page scan spent ~2.7 min even though
 ``ATTACHMENTS_OCR_MAX_CONCURRENCY`` only ever bounded *documents*, so one upload could
 never use more than one slot. Each page now renders and OCRs in its own worker thread
-over its **own** ``fitz.Document`` (PyMuPDF objects are not thread-safe), which keeps
+over its **own** ``pymupdf.Document`` (PyMuPDF objects are not thread-safe), which keeps
 peak memory proportional to the concurrency cap rather than to the page count.
 
 A timed-out page yields an empty page instead of stopping the document, so the router
@@ -34,6 +34,7 @@ from palatium_ai.domain.ports.document_parser import (
     ParsedDocument,
     ParsedPage,
 )
+from palatium_ai.infrastructure.parsing.pymupdf_compat import pymupdf
 
 if TYPE_CHECKING:
     from asyncio import Semaphore
@@ -53,7 +54,7 @@ _MAX_PAGE_TIMEOUTS = 2
 class _Extras:
     """Imported OCR stack plus the render matrix — resolved once per document."""
 
-    fitz: Any
+    pymupdf_module: Any
     pytesseract: Any
     image_factory: Any
     matrix: Any
@@ -84,7 +85,7 @@ class _PageOcr:
 
 
 class TesseractPdfOcrParser:
-    """Rasterize PDF pages (fitz) and OCR them when the text layer is empty."""
+    """Rasterize PDF pages (pymupdf) and OCR them when the text layer is empty."""
 
     def __init__(
         self,
@@ -135,26 +136,29 @@ class TesseractPdfOcrParser:
     def _inspect(self, data: bytes) -> tuple[_Extras, int]:
         """Import the OCR stack and read the page count in one worker thread."""
         try:
-            import fitz
             import pytesseract
 
             from PIL import Image
         except ImportError as exc:
             msg = "pdf OCR extras missing; install pymupdf, Pillow and pytesseract"
             raise DocumentParseError(msg) from exc
+        try:
+            pymupdf_module = pymupdf()
+        except ImportError as exc:
+            raise DocumentParseError(str(exc)) from exc
 
         if self._tesseract_cmd:
             pytesseract.pytesseract.tesseract_cmd = self._tesseract_cmd
 
         scale = self._dpi / 72.0
         extras = _Extras(
-            fitz=fitz,
+            pymupdf_module=pymupdf_module,
             pytesseract=pytesseract,
             image_factory=Image,
-            matrix=fitz.Matrix(scale, scale),
+            matrix=pymupdf_module.Matrix(scale, scale),
         )
         try:
-            doc = fitz.open(stream=data, filetype="pdf")
+            doc = pymupdf_module.open(stream=data, filetype="pdf")
         except Exception as exc:
             raise DocumentParseError("pdf is corrupt or not a pdf") from exc
         try:
@@ -197,8 +201,8 @@ class TesseractPdfOcrParser:
         try:
             # A fresh Document per page: one shared instance is not safe across the
             # concurrent workers, and xref parsing is negligible next to OCR itself.
-            doc = extras.fitz.open(stream=data, filetype="pdf")
-        except Exception as exc:  # noqa: BLE001  # fitz raises its own types; one page must not fail the document (035)
+            doc = extras.pymupdf_module.open(stream=data, filetype="pdf")
+        except Exception as exc:  # noqa: BLE001  # pymupdf raises its own types; one page must not fail the document (035)
             logger.warning("pdf page render failed", page=index + 1, error_type=type(exc).__name__)
             return ""
         try:

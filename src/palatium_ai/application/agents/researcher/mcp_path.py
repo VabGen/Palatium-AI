@@ -13,6 +13,7 @@ from uuid import UUID
 from langgraph.types import interrupt
 
 from palatium_ai.application.agents.researcher.config import (
+    READ_ATTACHMENT_OUTPUT_MAX_CHARS,
     SUMMARY_MAX_CHARS,
     researcher_completion_budget,
     researcher_llm_config,
@@ -23,6 +24,7 @@ from palatium_ai.application.agents.researcher.parsing import (
     approval_granted,
     mcp_joined_text,
     mcp_payload_is_empty,
+    merge_attachment_read_outcomes,
     parse_researcher_output,
     redact_mcp_arguments,
     score_mcp_tool_confidence,
@@ -81,6 +83,11 @@ logger = get_logger(__name__)
 #: Host-local tool that materialises a thread file's text (070).
 _READ_ATTACHMENT_TOOL = "read_attachment"
 _PLATFORM_SERVER = "platform"
+#: Intent scope value meaning "every file of this dialog is in the ask" (055).
+_PLURAL_READ_SCOPE = "all"
+#: Ceiling on files read in one turn: the evidence still has to fit one prompt, and an
+#: unbounded loop over a long-lived dialog is a latency/cost amplifier (050, 065).
+_MAX_PLURAL_READ_FILES = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +105,113 @@ class McpPathDeps:
     #: Optional: required only for the thread file re-read path. Without it the
     #: worker refuses the re-read instead of letting the model invent a file id.
     file_reference_resolver: AttachmentReferenceResolver | None = None
+
+
+async def _plural_read_ids(
+    deps: McpPathDeps,
+    task_input: object,
+    context: AgentContext,
+) -> tuple[UUID, ...] | None:
+    """Ids for an explicit "read every file" ask; ``None`` keeps the single-file path.
+
+    A single resolved candidate is not plural: the singular path already reads it, so
+    the two paths never disagree about which file an ask targets. A failed plural
+    resolution also falls through — the singular path owns the typed refusal and its
+    user-facing copy.
+    """
+    task_input = _require_researcher_input(task_input)
+    if task_input.context_packet.attachment_scope != _PLURAL_READ_SCOPE:
+        return None
+    resolver = deps.file_reference_resolver
+    user_id = (context.user_id or "").strip()
+    if resolver is None or not user_id or not context.thread_id:
+        # No registry → the singular path owns the refusal (and its user-facing copy).
+        return None
+    resolution = await resolver.resolve(
+        user_id=user_id,
+        thread_id=context.thread_id,
+        hint_text=_file_reference_hint(task_input),
+        all_requested=True,
+    )
+    ids = resolution.attachment_ids[:_MAX_PLURAL_READ_FILES]
+    if len(ids) < 2:
+        if resolution.status != "resolved":
+            logger.info(
+                "researcher.plural_read_unresolved",
+                status=resolution.status,
+                reason=resolution.reason,
+                task_id=task_input.task_id,
+            )
+        return None
+    if len(resolution.attachment_ids) > len(ids):
+        # Silent truncation would answer about "all files" while skipping some (040).
+        logger.warning(
+            "researcher.plural_read_capped",
+            resolved_count=len(resolution.attachment_ids),
+            read_count=len(ids),
+            task_id=task_input.task_id,
+        )
+    logger.info(
+        "researcher.plural_read_resolved",
+        reason=resolution.reason,
+        file_count=len(ids),
+        task_id=task_input.task_id,
+    )
+    return ids
+
+
+async def _execute_plural_read(
+    deps: McpPathDeps,
+    task_input: ResearcherInput,
+    context: AgentContext,
+    server_name: str,
+    tool_name: str,
+    attachment_ids: tuple[UUID, ...],
+    mcp_registry: MCPRegistryPort,
+    task_uuid: UUID,
+    *,
+    allow_unpinned: bool = False,
+) -> AgentOutput:
+    """Read N thread files, then synthesize once over the merged fences.
+
+    The per-file character budget is one document budget *divided* among the files:
+    the synthesis prompt contracts exactly one attachment payload (065), so N full
+    documents would silently truncate the last one. Each read reports ``truncated``
+    itself, which keeps the loss visible to the model instead of silent.
+    """
+    user_id = (context.user_id or "").strip()
+    per_file_chars = max(1, READ_ATTACHMENT_OUTPUT_MAX_CHARS // len(attachment_ids))
+    outcomes: list[MCPToolCallOutcome] = []
+    for attachment_id in attachment_ids:
+        outcome_or_failure = await invoke_mcp_tool(
+            deps,
+            task_input,
+            context,
+            server_name,
+            tool_name,
+            {
+                "attachment_id": str(attachment_id),
+                "user_id": user_id,
+                "max_chars": str(per_file_chars),
+            },
+            mcp_registry,
+            task_uuid,
+            allow_unpinned=allow_unpinned,
+        )
+        if isinstance(outcome_or_failure, AgentOutput):
+            # One unreadable file must not void the comparison of the others.
+            logger.warning(
+                "researcher.plural_read_file_failed",
+                attachment_id=str(attachment_id),
+                task_id=str(task_uuid),
+            )
+            agent_metrics.record_error(deps.agent_role, "plural_read_file_failed")
+            continue
+        outcomes.append(outcome_or_failure)
+    if not outcomes:
+        return failure_output(task_uuid, summary=None, error=MCP_TOOL_ERROR)
+    merged = merge_attachment_read_outcomes(tuple(outcomes))
+    return await mcp_outcome_to_output(deps, task_input, merged, server_name, tool_name, task_uuid)
 
 
 async def _build_file_reread_arguments(
@@ -181,7 +295,7 @@ def _hop_blocks_last_resort(tool_name: str, *, agent_role: str) -> bool:
     if hop is None:
         return False
     decision = HopBudgetPolicy.should_skip_last_resort_retrieval(
-        hop_total_ms=hop.total_ms(),
+        hop_total_ms=hop.agent_ms(),
         budget_ms=hop.budget_ms,
     )
     if not decision.degrade:
@@ -191,7 +305,7 @@ def _hop_blocks_last_resort(tool_name: str, *, agent_role: str) -> bool:
         "researcher.hop_budget_skip_last_resort",
         tool_name=tool_name,
         reason=decision.reason,
-        hop_total_ms=hop.total_ms(),
+        hop_agent_ms=hop.agent_ms(),
         hop_budget_ms=hop.budget_ms,
     )
     return True
@@ -225,6 +339,25 @@ async def execute_mcp_capability(
     descriptor = await fetch_mcp_descriptor(deps, mcp_registry, server_name, tool_name, task_input.task_id)
     if descriptor is None:
         return None
+
+    # Explicit "every file of this dialog" ask → one read per file, one synthesis over
+    # the combined evidence. Resolved here, not by the model: plurality is Intent's
+    # axis, identity stays a policy decision (055, 070).
+    plural_ids: tuple[UUID, ...] | None = None
+    if (server_name, tool_name) == (_PLATFORM_SERVER, _READ_ATTACHMENT_TOOL):
+        plural_ids = await _plural_read_ids(deps, task_input, context)
+    if plural_ids is not None:
+        return await _execute_plural_read(
+            deps,
+            task_input,
+            context,
+            server_name,
+            tool_name,
+            plural_ids,
+            mcp_registry,
+            task_uuid,
+            allow_unpinned=resolve_platform_pin(descriptor, server_name=server_name) is None,
+        )
 
     args_or_failure = await build_mcp_tool_arguments(deps, task_input, context, server_name, tool_name, descriptor, task_uuid)
     if isinstance(args_or_failure, AgentOutput):

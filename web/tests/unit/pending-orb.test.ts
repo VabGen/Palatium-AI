@@ -25,6 +25,18 @@ describe('pendingPhaseForNode', () => {
     expect(pendingPhaseForNode('node_from_a_newer_backend')).toEqual(DEFAULT_PENDING_PHASE);
   });
 
+  /**
+   * Regression: `NODE_PHASES[node]` шёл по цепочке прототипов, и `node="constructor"`
+   * из SSE возвращал `Object` — truthy, поэтому `?? DEFAULT` не срабатывал. Орб
+   * получал функцию вместо фазы, а подпись `role="status"` пропадала молча.
+   */
+  it.each(['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty'])(
+    'ignores the inherited property %s',
+    node => {
+      expect(pendingPhaseForNode(node)).toEqual(DEFAULT_PENDING_PHASE);
+    }
+  );
+
   it('returns only phases with a translated label', () => {
     const nodes = [
       'context_enricher_continuation',
