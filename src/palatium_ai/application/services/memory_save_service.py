@@ -17,7 +17,11 @@ from palatium_ai.core.security.secret_scanner import scan_text
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
 from palatium_ai.domain.memory.save_payload import MemorySavePayload
-from palatium_ai.domain.memory.types import MEMORY_EXPLICIT_WRITE_KEY
+from palatium_ai.domain.memory.types import (
+    MEMORY_EXPLICIT_WRITE_KEY,
+    MEMORY_ORIGIN_KEY,
+    MEMORY_TRUST_KEY,
+)
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
@@ -113,6 +117,8 @@ class MemorySaveService:
             # Deliberate durable memory: recall may cross threads for this entry even
             # when it is a fact (inferred facts stay thread-scoped — P0-B bleed).
             MEMORY_EXPLICIT_WRITE_KEY: True,
+            MEMORY_ORIGIN_KEY: "user_hitl",
+            MEMORY_TRUST_KEY: "verified",
         }
         task_id = f"{MEM_SAVE_TASK_PREFIX}{uuid4().hex[:12]}"
         payload = MemorySavePayload(

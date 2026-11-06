@@ -58,6 +58,24 @@ def test_pii_quoted_from_evidence_is_legitimate() -> None:
     assert Constitution.check(draft=draft, sources=(evidence,)) == ()
 
 
+def test_name_recall_is_not_a_scanned_pii_violation() -> None:
+    """First names are outside PiiKind; memory recall must not trip the scanner."""
+    draft = "Вас зовут Геннадий."
+    assert (
+        Constitution.check(
+            draft=draft,
+            sources=("как меня зовут?", "привет меня зовут геннадий а тебя как?"),
+        )
+        == ()
+    )
+
+
+def test_pii_article_allows_memory_backed_identity() -> None:
+    article = next(a for a in Constitution.articles() if a.id == "no_pii_echo_without_permission")
+    assert "memory_hints" in article.statement
+    assert "first names" in article.statement.lower() or "name" in article.statement.lower()
+
+
 @pytest.mark.parametrize(
     "draft",
     (

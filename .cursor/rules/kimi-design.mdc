@@ -1,0 +1,62 @@
+---
+description: "Kimi Design System — токены, зонирование, правила вёрстки"
+globs: ["**/*.{tsx,jsx,html,css}"]
+alwaysApply: true
+---
+
+# Kimi Design System — обязательные правила
+
+## 1. Layout-First Coordinate Zoning (жёсткое зонирование)
+
+Каждый экран или крупный компонент **обязан** иметь явные зоны, описанные в спеке:
+
+- `[ZONE_TOP]` — навигация, высота **64px**.
+- `[ZONE_HERO]` — главный визуальный акцент.
+- `[ZONE_BODY]` — основной контент.
+- `[ZONE_FOOTER]` — вторичные действия, копирайт.
+
+В коде зоны должны быть явно поименованы (через `data-zone` или комментарии), чтобы Cursor и человек видели структуру. **Нельзя** смешивать контент разных зон в одном блоке без явной причины.
+
+> Источник: `kimi-design.md` — «Layout-First Coordinate Zoning: Divide screen space into explicit zones: `[ZONE_TOP]`, `[ZONE_HERO]`, `[ZONE_BODY]`, `[ZONE_FOOTER]`»[reference:0].
+
+## 2. Design System Token Contracts (никогда не хардкодить)
+
+Используй **только** эти значения. Любой «сырой» hex-код или произвольный отступ — ошибка.
+
+### Цвета (палитра из спеки)
+
+- `--kimi-obsidian: #0B0F19` — основной тёмный фон (Obsidian).
+- `--kimi-pure-white: #F8FAFC` — светлый фон / поверхности (Pure White).
+- `--kimi-amber: #D97706` — акцент (Amber Accent).
+
+> Источник: `kimi-design.md` — «Palette: `#0B0F19` (Obsidian), `#F8FAFC` (Pure White), `#D97706` (Amber Accent)»[reference:1].
+
+Дополнительно из Brand Book: **фирменный синий** — центральный цвет системы, вокруг которого строится вся архитектура[reference:2]. Если в проекте нужен синий, добавь его как `--kimi-brand-blue` и используй только для акцентов и фокуса, не для фонов.
+
+### Типографика (триумвират из Brand Book)
+
+- `--font-display: "Geist Display", sans-serif` — заголовки.
+- `--font-body: "Inter", sans-serif` — основной текст.
+- `--font-mono: "Geist Mono", monospace` — код и данные.
+- (Опционально) `--font-serif: "Sentient", serif` — литературные акценты.
+
+> Источник: Brand Book — «This typographic triad establishes a versatile Visual Infra — balancing the functional efficiency of **Inter**, the developer-grade precision of **Geist Mono**, and the literary warmth of **Sentient**»[reference:3]. В `kimi-design.md` для заголовков указан **Geist Display**[reference:4].
+
+### Сетка отступов (spacing rhythm)
+
+Используй шкалу: **4, 8, 16, 24, 32, 48, 64 px**.
+
+```css
+--space-1: 4px;
+--space-2: 8px;
+--space-3: 16px;
+--space-4: 24px;
+--space-5: 32px;
+--space-6: 48px;
+--space-7: 64px;
+
+
+
+
+
+<!-- Изучи мои правила в .cursor/rules/kimi-design.mdc, а также локальные референсы в папках awesome-kimi-k3-frontend-prompt и kimi-skills. На основе этой информации составь пошаговый план реализации [главной страницы / карточки / дашборда] в стиле Kimi. На каждом шаге указывай, какие зоны (ZONE_TOP и т.д.) и какие токены (--kimi-...) ты будешь использовать. Пока не пиши код — сначала утвердим план. -->

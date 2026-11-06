@@ -1,0 +1,26 @@
+{
+  "schema": "memory_cmd_origin_trust_v1",
+  "plan": "context-memory-dialog-2026.md",
+  "adr": "0008",
+  "origins": ["user_hitl", "extract", "compact", "system", "legacy"],
+  "trusts": ["verified", "inferred", "quarantined"],
+  "write_rules": {
+    "user_hitl": {"trust": "verified"},
+    "extract": {"trust": "inferred"},
+    "compact": {"trust": "inferred"},
+    "system": {"trust": "inferred_or_explicit"},
+    "legacy_missing_fields": {
+      "origin": "legacy",
+      "trust": "verified_iff_explicit_write_else_inferred"
+    }
+  },
+  "recall": {
+    "quarantined": "excluded",
+    "inferred_score_factor": 0.5
+  },
+  "promote": {
+    "verified": "existing_thresholds",
+    "inferred": "access_frequency_gte_promote_min_and_non_pii",
+    "quarantined": "never"
+  }
+}

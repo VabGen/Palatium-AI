@@ -43,6 +43,9 @@ Rules:
 - If continuation_kind is answer and worker_summary/prior content is present: the user
   asked about prior dialog — do NOT require clarification; score whether the draft
   answers from that prior content.
+- memory_hints hold recalled user facts for this turn. Echoing a name or preference
+  from memory_hints when the user asks about themselves is correct — do NOT list
+  no_pii_echo_without_permission for first names alone (scanner owns contact/ID leaks).
 - If selected_strategy is ack_only / task_kind is social_conversation: judge only that
   a short social reply is appropriate (no tools, no invented facts).
 - If candidate_capabilities includes "draft" or "compose": worker_summary must contain

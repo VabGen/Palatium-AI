@@ -47,6 +47,7 @@ from palatium_ai.application.services.memory_fact_persistence import MemoryFactP
 from palatium_ai.application.services.memory_forget_service import MemoryForgetService
 from palatium_ai.application.services.memory_mutation import MemoryMutationGate
 from palatium_ai.application.services.memory_save_service import MemorySaveService
+from palatium_ai.application.services.memory_verify_service import MemoryVerifyService
 from palatium_ai.application.services.memory_write_service import MemoryWriteService
 from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
 from palatium_ai.application.services.response_cache_service import ResponseCacheService
@@ -78,6 +79,7 @@ from palatium_ai.infrastructure.memory.dialog_turn_store import PostgresDialogTu
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
 from palatium_ai.infrastructure.parsing.factory import build_document_parser
+from palatium_ai.infrastructure.project_context.filesystem_agents_md import FilesystemAgentsMdLoader
 from palatium_ai.infrastructure.scanning.factory import build_malware_scanner
 from palatium_ai.infrastructure.skills.filesystem_skill_catalog import FilesystemSkillCatalog
 
@@ -317,12 +319,16 @@ def build_intent_service(
     DocumentIngestService,
     MemorySaveService,
     MemoryForgetService,
+    MemoryVerifyService,
+    FilesystemSkillCatalog,
 ]:
     """Создаёт IntentService + optional sleep-time extract worker handle.
 
-    The memory save/forget services are built here (not in bootstrap) because the
+    The memory save/forget/verify services are built here (not in bootstrap) because the
     chat-turn memory-mutation gate needs the same instances: a second set would own
     a second pending-card store and the approved card could not find its payload.
+    Skill catalog is returned so Host-local ``skill_manage`` and JIT ``skill_catalog``
+    share one index (CMD4 invalidate after write).
     """
     llm_factory = LLMClientFactory(settings, vision_image_source=vision_image_source)
     _assert_mcp_timeout_budget(settings)
@@ -378,6 +384,12 @@ def build_intent_service(
     skill_catalog = FilesystemSkillCatalog(
         settings.skills.roots,
         reference_max_chars=settings.skills.reference_max_chars,
+        product_lock_path=settings.skills.product_lock_path,
+    )
+    project_context = FilesystemAgentsMdLoader(
+        relative_path=settings.project_context.agents_md_path,
+        max_chars=settings.project_context.agents_md_max_chars,
+        enabled=settings.project_context.agents_md_enabled,
     )
     context_builder = ContextBuilder(
         dialog_store=resolved_dialog_store,
@@ -386,6 +398,7 @@ def build_intent_service(
         summarizer=compact_summarizer,
         skill_catalog=skill_catalog,
         skill_catalog_max_chars=settings.skills.catalog_max_chars,
+        project_context=project_context,
     )
     harness = Harness(
         context_builder=context_builder,
@@ -409,6 +422,7 @@ def build_intent_service(
         FORMATTER_CONFIG,
         mode=settings.formatter.formatter_mode,
         rollout_pct=settings.formatter.formatter_rollout_pct,
+        shape_precheck=settings.formatter.formatter_shape_precheck,
     )
     option_synthesizer = OptionSynthesizer(
         llm_factory.get_client_for_agent(INTENT_CLASSIFIER_CONFIG),
@@ -436,6 +450,12 @@ def build_intent_service(
         mcp_tool_call_repository=mcp_tool_call_repository,
         memory_port=resolved_memory,
         scratchpad=session_scratchpad,
+    )
+    memory_verify_service = MemoryVerifyService(
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
     )
     memory_mutation_gate = MemoryMutationGate(
         save_service=memory_save_service,
@@ -566,6 +586,7 @@ def build_intent_service(
         vision_images=vision_images,
         formatter_mode=settings.formatter.formatter_mode,
         formatter_rollout_pct=settings.formatter.formatter_rollout_pct,
+        origin_ceiling=settings.memory.origin_ceiling,
     )
     return (
         intent_service,
@@ -574,6 +595,8 @@ def build_intent_service(
         document_ingest,
         memory_save_service,
         memory_forget_service,
+        memory_verify_service,
+        skill_catalog,
     )
 
 

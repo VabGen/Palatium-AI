@@ -69,3 +69,4 @@ ADR — не бюрократия, а страховка от повторног
 | [0005](0005-content-document-response-shapes.md) | Единый `ContentDocument` + `response_shape`; reject per-scenario schemas | accepted |
 | [0006](0006-canvas-server-authoritative-documents.md) | Canvas = server-authoritative `ContentDocument`; reject Yjs CRDT | accepted |
 | [0007](0007-vision-image-parts.md) | Vision как `ImagePart` сообщения, не base64 в тексте; OCR остаётся | accepted |
+| [0008](0008-memory-origin-trust-ceiling.md) | Origin ceiling + staged trust (ASI-06) на medium | proposed |

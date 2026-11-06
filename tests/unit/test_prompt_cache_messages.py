@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from palatium_ai.application.agents.harness import _with_system_prompt_cache
 from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 from palatium_ai.infrastructure.llm.litellm_adapter import _to_litellm_messages
 
 
@@ -15,6 +18,24 @@ def test_with_system_prompt_cache_marks_first_system() -> None:
     out = _with_system_prompt_cache(messages)
     assert out[0].cache_control == "ephemeral"
     assert out[1].cache_control is None
+
+
+def test_with_system_prompt_cache_records_all_assembly_tiers(monkeypatch: Any) -> None:
+    tiers: list[str] = []
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.harness.agent_metrics.record_prompt_cache_hint",
+        lambda *, tier: tiers.append(tier),
+    )
+    assembled = PromptAssemblyPolicy.assemble(
+        PromptAssemblyParts(
+            system_identity="You are the researcher.",
+            memory_block="- prefers duck",
+            dialog_block="user: hi",
+            user_content='{"user_text":"next?"}',
+        )
+    )
+    _with_system_prompt_cache(list(assembled.messages))
+    assert tiers == ["stable", "context", "volatile"]
 
 
 def test_to_litellm_messages_emits_cache_control_block() -> None:

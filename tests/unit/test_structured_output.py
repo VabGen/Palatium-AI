@@ -252,7 +252,7 @@ async def test_formatter_repair_stays_on_text(monkeypatch: pytest.MonkeyPatch) -
             LLMCompletion(content="> [!SUCCESS]\n> No errors.", model="test"),
         ],
     )
-    document = await generate_document(
+    document, _completion = await generate_document(
         harness=harness,
         config=FORMATTER_CONFIG,
         messages=[ChatMessage(role="user", content="hi")],

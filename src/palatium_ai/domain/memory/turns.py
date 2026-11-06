@@ -83,9 +83,16 @@ class DialogTurnWindow(BaseModel):
         max_chars: int = 12_000,
         per_turn_max_chars: int = 1200,
         user_turn_max_chars: int | None = None,
+        pinned_user_texts: tuple[str, ...] | list[str] = (),
+        max_pins: int = 4,
     ) -> str:
-        """Компактный текст истории для LLM (newest-first char budget)."""
-        if not self.turns:
+        """Компактный текст истории для LLM (newest-first char budget).
+
+        ``pinned_user_texts`` (scratchpad / identity pins) that are absent from the
+        selected window are prepended as synthetic ``user:`` lines so a 12-turn
+        trim cannot erase «меня зовут …» while medium hints still know it (065).
+        """
+        if not self.turns and not pinned_user_texts:
             return "(no prior turns)"
         user_cap = user_turn_max_chars if user_turn_max_chars is not None else max(per_turn_max_chars, 8_000)
         selected: list[str] = []
@@ -109,4 +116,23 @@ class DialogTurnWindow(BaseModel):
             selected.append(line)
             used += extra
         selected.reverse()
-        return "\n".join(selected)
+        haystack = "\n".join(selected).casefold()
+        pins: list[str] = []
+        for raw in pinned_user_texts:
+            text = str(raw).strip()
+            if not text or len(text) < 3:
+                continue
+            if text.casefold() in haystack:
+                continue
+            body = text if len(text) <= user_cap else f"{text[:user_cap]}…"
+            line = f"user: {body}"
+            pins.append(line)
+            if len(pins) >= max(0, max_pins):
+                break
+        if pins:
+            pin_block = "\n".join(pins)
+            if used + len(pin_block) + (1 if selected else 0) <= max_chars:
+                selected = [*pins, *selected]
+            elif not selected:
+                selected = pins[:1]
+        return "\n".join(selected) if selected else "(no prior turns)"

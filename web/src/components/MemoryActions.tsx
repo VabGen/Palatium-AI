@@ -96,9 +96,9 @@ export function MemoryActions({
         disabled={disabled}
         onClick={() => setOpen(prev => !prev)}
       >
-        <Brain size={14} />
+        <Brain size={14} strokeWidth={1.75} aria-hidden />
         <span>{t('memory.toggle')}</span>
-        <ChevronDown size={14} className="memory-chevron" />
+        <ChevronDown size={13} className="memory-chevron" aria-hidden />
       </button>
 
       {open && (

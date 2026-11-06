@@ -137,7 +137,7 @@ async def _compile_legacy(agent: FormatterAgent, payload: dict[str, object]) -> 
         ChatMessage(role="system", content=FORMATTER_SYSTEM_PROMPT),
         ChatMessage(role="user", content=build_formatter_user_message(payload)),
     ]
-    return await generate_document(
+    document, _completion = await generate_document(
         harness=agent._harness,
         config=agent.config,
         messages=messages,
@@ -146,6 +146,7 @@ async def _compile_legacy(agent: FormatterAgent, payload: dict[str, object]) -> 
         worker_summary="Done.",
         agent_role=FORMATTER_CONFIG.role,
     )
+    return document
 
 
 async def _compile_schema_first(agent: FormatterAgent) -> ContentDocument:
@@ -277,7 +278,7 @@ async def test_live_repair_accepts_a_schema_document() -> None:
             content=build_formatter_user_message(_payload("Done. No errors.", style_hint="brand_sections_icons")),
         ),
     ]
-    document = await generate_document(
+    document, _completion = await generate_document(
         harness=agent._harness,
         config=agent.config,
         messages=messages,

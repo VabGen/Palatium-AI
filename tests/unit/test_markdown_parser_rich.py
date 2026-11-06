@@ -62,6 +62,19 @@ def test_parse_steps() -> None:
     assert consumed == 2
 
 
+def test_parse_steps_without_colon_separator() -> None:
+    """Bold title + body without ``:`` must still become one StepsBlock (any locale)."""
+    lines = [
+        "1. **Бульон** сварить кости 1,5–2 часа",
+        "2. **Овощи** нарезать соломкой",
+    ]
+    block, consumed = _try_parse_steps(lines, 0)
+    assert isinstance(block, StepsBlock)
+    assert consumed == 2
+    assert block.items[0].title == "Бульон"
+    assert "кости" in block.items[0].body
+
+
 def test_steps_carry_no_invented_status() -> None:
     """Markdown не описывает состояние процесса — парсер не имеет права его выдумать.
 

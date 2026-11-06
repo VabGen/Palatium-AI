@@ -56,6 +56,8 @@ if TYPE_CHECKING:
     from .memory_recall import MemoryRecallDecision, MemoryRecallPolicy
     from .parallel_workers import ParallelWorkerPolicy, ParallelWorkersDecision
     from .presentation import PresentationOwnershipDecision, PresentationOwnershipPolicy
+    from .mechanical_restructure import MechanicalRestructureDecision, MechanicalRestructurePolicy
+    from .presentation_icons import PresentationIconPolicy
     from .promotion import PromotionPolicy
     from .researcher_tier import ResearcherTierDecision, ResearcherTierPolicy
     from .response_cache import ResponseCacheKeyParts, ResponseCacheKeyPolicy
@@ -83,6 +85,7 @@ __all__ = [
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
     "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS",
     "GROUNDING_DEFAULT",
+    "INFERRED_SCORE_FACTOR",
     "LAST_RESORT_PLATFORM_TOOLS",
     "LOW_RISK_ROUTE_STRATEGIES",
     "RESPONSE_SHAPE_DEFAULT",
@@ -90,6 +93,7 @@ __all__ = [
     "TRANSFORMATION_DEFAULT",
     "AckReplyPolicy",
     "AgentRole",
+    "AssembledPrompt",
     "AttachmentRehydrateDecision",
     "AttachmentSelection",
     "AttachmentSelectionPolicy",
@@ -123,11 +127,17 @@ __all__ = [
     "MemoryRecallDecision",
     "MemoryRecallPolicy",
     "ModelTier",
+    "OriginCeilingPolicy",
     "ParallelWorkerPolicy",
     "ParallelWorkersDecision",
+    "MechanicalRestructureDecision",
+    "MechanicalRestructurePolicy",
+    "PresentationIconPolicy",
     "PresentationOwnershipDecision",
     "PresentationOwnershipPolicy",
     "PromotionPolicy",
+    "PromptAssemblyParts",
+    "PromptAssemblyPolicy",
     "ReplyLocalePolicy",
     "ResearcherTierDecision",
     "ResearcherTierPolicy",
@@ -197,10 +207,18 @@ _LAZY: dict[str, tuple[str, str]] = {
     "MemoryNamespacePolicy": (".memory_namespace", "MemoryNamespacePolicy"),
     "MemoryRecallDecision": (".memory_recall", "MemoryRecallDecision"),
     "MemoryRecallPolicy": (".memory_recall", "MemoryRecallPolicy"),
+    "OriginCeilingPolicy": (".origin_ceiling", "OriginCeilingPolicy"),
+    "INFERRED_SCORE_FACTOR": (".origin_ceiling", "INFERRED_SCORE_FACTOR"),
+    "PromptAssemblyPolicy": (".prompt_assembly", "PromptAssemblyPolicy"),
+    "PromptAssemblyParts": (".prompt_assembly", "PromptAssemblyParts"),
+    "AssembledPrompt": (".prompt_assembly", "AssembledPrompt"),
     "ParallelWorkerPolicy": (".parallel_workers", "ParallelWorkerPolicy"),
     "ParallelWorkersDecision": (".parallel_workers", "ParallelWorkersDecision"),
     "PresentationOwnershipDecision": (".presentation", "PresentationOwnershipDecision"),
     "PresentationOwnershipPolicy": (".presentation", "PresentationOwnershipPolicy"),
+    "MechanicalRestructureDecision": (".mechanical_restructure", "MechanicalRestructureDecision"),
+    "MechanicalRestructurePolicy": (".mechanical_restructure", "MechanicalRestructurePolicy"),
+    "PresentationIconPolicy": (".presentation_icons", "PresentationIconPolicy"),
     "PromotionPolicy": (".promotion", "PromotionPolicy"),
     "ReplyLocalePolicy": (".locale", "ReplyLocalePolicy"),
     "ResearcherTierDecision": (".researcher_tier", "ResearcherTierDecision"),

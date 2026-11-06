@@ -28,7 +28,7 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.llm.json_codec import LLMJSONError
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
 from palatium_ai.domain.llm.response_parser import compact_validation_error
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
@@ -70,7 +70,8 @@ async def generate_document(
     worker_summary: str = "",
     agent_role: str,
     allow_worker_fallback: bool = True,
-) -> ContentDocument:
+) -> tuple[ContentDocument, LLMCompletion]:
+    """Parse streamed Markdown into a document; return the completion for W3a citations."""
     completion, markdown = await call_formatter_llm(
         harness=harness,
         config=config,
@@ -85,7 +86,7 @@ async def generate_document(
 
     for attempt in range(FORMATTER_SCHEMA_REPAIR_ATTEMPTS):
         try:
-            return markdown_to_content_document(current_raw, task_input)
+            return markdown_to_content_document(current_raw, task_input), completion
         except PARSE_ERRORS as exc:
             last_error = exc
             if attempt == FORMATTER_SCHEMA_REPAIR_ATTEMPTS - 1:

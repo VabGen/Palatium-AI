@@ -33,7 +33,7 @@ from palatium_ai.core.observability.turn_tokens import turn_token_usage
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
 from palatium_ai.domain.attachments.context import AttachmentTurnContext
-from palatium_ai.domain.llm.models import ImagePart
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.file_reference import FileReferencePolicy
@@ -139,6 +139,7 @@ class IntentGraphRunner:
         graph_write: GraphWritePort | None = None,
         file_reference_resolver: AttachmentReferenceResolver | None = None,
         vision_images: VisionImageService | None = None,
+        origin_ceiling: bool = True,
     ) -> None:
         self._graph = graph
         self._session_service = session_service
@@ -158,6 +159,7 @@ class IntentGraphRunner:
         self._graph_write = graph_write
         self._file_reference_resolver = file_reference_resolver
         self._vision_images = vision_images
+        self._origin_ceiling = origin_ceiling
         self._attach_hitl_cards: AttachHitlCards | None = None
 
     def bind_attach_hitl_cards(self, attach: AttachHitlCards) -> None:
@@ -442,6 +444,7 @@ class IntentGraphRunner:
             # decision is one per turn, and workers then read it from state (ADR 0007).
             self._admitted_image_parts(attachment_context),
         )
+        document_parts = self._admitted_document_parts(attachment_context)
 
         if exclude_trailing_user and dialog_window.turns and dialog_window.turns[-1].role == "user":
             prior_turns = dialog_window.turns[:-1]
@@ -496,6 +499,7 @@ class IntentGraphRunner:
             scratchpad=pad,
             graph_write=self._graph_write,
             as_of=datetime.now(UTC),
+            origin_ceiling=self._origin_ceiling,
         )
         graph_input: AgentGraphState = {
             "task_id": task_id,
@@ -512,6 +516,7 @@ class IntentGraphRunner:
             "untrusted_context": untrusted_context,
             "attachment_context": attachment_context or AttachmentTurnContext(),
             "image_parts": image_parts,
+            "document_parts": document_parts,
             "thread_file_named": await self._names_thread_file(
                 text=text,
                 thread_id=thread_id,
@@ -551,6 +556,16 @@ class IntentGraphRunner:
             )
             return ()
         return outcome.parts
+
+    def _admitted_document_parts(
+        self, attachment_context: AttachmentTurnContext | None
+    ) -> tuple[DocumentPart, ...]:
+        """Text attachments as citeable provider document blocks (W3a), decided once."""
+        from palatium_ai.domain.policies.document_parts import document_parts_from_blocks
+
+        if attachment_context is None or not attachment_context.blocks:
+            return ()
+        return document_parts_from_blocks(attachment_context.blocks)
 
     async def _names_thread_file(
         self,
@@ -753,12 +768,18 @@ class IntentGraphRunner:
             # dependency (000). One computation feeds the payload and the caller.
             revision = turn_revision(formatted, final_state)
             if self._dialog_turn_store is not None:
+                from palatium_ai.application.orchestration import selectors as graph_selectors
+
                 await self._dialog_turn_store.append_turn(
                     thread_id=thread_id,
                     role="assistant",
                     content=assistant_turn_content(formatted),
                     task_id=task_id,
-                    payload=assistant_turn_payload(formatted, revision=revision),
+                    payload=assistant_turn_payload(
+                        formatted,
+                        revision=revision,
+                        response_shape=str(graph_selectors.resolved_response_shape(final_state)),
+                    ),
                 )
             await self.refresh_scratchpad(thread_id=thread_id)
             pinned_locale = (

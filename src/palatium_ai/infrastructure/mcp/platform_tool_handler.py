@@ -20,12 +20,15 @@ from palatium_ai.domain.knowledge.types import IngestDocumentCommand, SearchKnow
 from palatium_ai.domain.mcp.models import MCPToolResult
 from palatium_ai.infrastructure.mcp.graph_web_tool_ops import graph_query, web_fallback
 from palatium_ai.infrastructure.mcp.memory_tool_ops import (
+    explain_belief,
     extract_transcript_memories,
     forget_memory,
+    memory_audit,
+    memory_verify,
     save_memory,
     search_memory,
 )
-from palatium_ai.infrastructure.mcp.skill_tool_ops import skill_reference
+from palatium_ai.infrastructure.mcp.skill_tool_ops import skill_manage, skill_reference
 
 if TYPE_CHECKING:
     from palatium_ai.application.services.memory_extract import MemoryExtractService
@@ -58,6 +61,7 @@ class PlatformToolHandler:
         web_search_port: WebSearchPort | None = None,
         skill_catalog: SkillCatalogPort | None = None,
         attachment_read: AttachmentReadPort | None = None,
+        skills_self_authored_enabled: bool = False,
     ) -> None:
         self._knowledge = knowledge_port
         self._memory = memory_port
@@ -67,6 +71,7 @@ class PlatformToolHandler:
         self._web_search = web_search_port
         self._skills = skill_catalog
         self._attachment_read = attachment_read
+        self._skills_self_authored_enabled = bool(skills_self_authored_enabled)
 
     async def call_tool(self, tool_name: str, arguments: dict[str, object]) -> MCPToolResult:
         handlers = {
@@ -76,8 +81,12 @@ class PlatformToolHandler:
             "save_memory": self._save_memory,
             "forget_memory": self._forget_memory,
             "extract_transcript_memories": self._extract_transcript_memories,
+            "explain_belief": self._explain_belief,
+            "memory_audit": self._memory_audit,
+            "memory_verify": self._memory_verify,
             "graph_query": self._graph_query,
             "skill_reference": self._skill_reference,
+            "skill_manage": self._skill_manage,
             "web_fallback": self._web_fallback,
             "read_attachment": self._read_attachment,
         }
@@ -96,6 +105,13 @@ class PlatformToolHandler:
     async def _skill_reference(self, arguments: dict[str, object]) -> MCPToolResult:
         return await skill_reference(self._skills, arguments)
 
+    async def _skill_manage(self, arguments: dict[str, object]) -> MCPToolResult:
+        return await skill_manage(
+            self._skills,
+            arguments,
+            enabled=self._skills_self_authored_enabled,
+        )
+
     async def _web_fallback(self, arguments: dict[str, object]) -> MCPToolResult:
         return await web_fallback(self._web_search, arguments)
 
@@ -113,6 +129,21 @@ class PlatformToolHandler:
         if self._memory is None:
             return _error_result("forget_memory unavailable: memory port not configured")
         return await forget_memory(self._memory, arguments, graph_write=self._graph_write)
+
+    async def _explain_belief(self, arguments: dict[str, object]) -> MCPToolResult:
+        if self._memory is None:
+            return _error_result("explain_belief unavailable: memory port not configured")
+        return await explain_belief(self._memory, arguments)
+
+    async def _memory_audit(self, arguments: dict[str, object]) -> MCPToolResult:
+        if self._memory is None:
+            return _error_result("memory_audit unavailable: memory port not configured")
+        return await memory_audit(self._memory, arguments)
+
+    async def _memory_verify(self, arguments: dict[str, object]) -> MCPToolResult:
+        if self._memory is None:
+            return _error_result("memory_verify unavailable: memory port not configured")
+        return await memory_verify(self._memory, arguments)
 
     async def _ingest_document(self, arguments: dict[str, object]) -> MCPToolResult:
         user_id = arguments.get("user_id")

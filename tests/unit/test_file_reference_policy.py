@@ -41,14 +41,14 @@ def test_name_in_turn_text_wins_over_single_candidate() -> None:
     assert resolution.reason == "name_in_turn_text"
 
 
-def test_partial_name_with_two_candidates_is_ambiguous() -> None:
-    """A tail of a spaced name is not enough evidence when the thread has several files."""
+def test_unique_revision_tail_resolves_spaced_filename() -> None:
+    """A digit-bearing tail that uniquely identifies one thread file is enough."""
     spaced = _candidate("СФУТ 9.03-2025.pdf")
     other = _candidate("приложение.docx")
     resolution = FileReferencePolicy.resolve([spaced, other], hint_text="открой 9.03-2025 и покажи требования")
-    assert resolution.status == "ambiguous"
-    assert resolution.attachment_id is None
-    assert set(resolution.candidates) == {"СФУТ 9.03-2025.pdf", "приложение.docx"}
+    assert resolution.status == "resolved"
+    assert resolution.attachment_id == spaced.attachment_id
+    assert resolution.reason == "name_in_turn_text"
 
 
 def test_two_named_files_are_ambiguous() -> None:
@@ -168,22 +168,60 @@ def test_assistant_prose_word_does_not_select_an_unrelated_file() -> None:
     assert resolution.attachment_id is None
 
 
-@pytest.mark.parametrize("text", ("составь ответ на обращение", "в ответ на ваше обращением"))
-def test_plain_word_in_user_text_is_not_a_document_reference(text: str) -> None:
-    """A generic word is prose, not a name: the thread has two files → card, no read."""
+def test_unique_stem_in_user_text_resolves_the_named_file() -> None:
+    """Live UX: «составь ответ на файл обращение» must open Обращение.docx, not a card.
+
+    A unique full stem in *user* text is a named reference among thread files.
+    Inflected prose (``обращением``) stays unbounded and does not resolve (055).
+    """
+    letter = _candidate("Обращение.docx")
+    scan1 = _candidate("Скан 1 _Приложение.pdf")
+    scan2 = _candidate("Скан 2 _Приложение.pdf")
+    resolution = FileReferencePolicy.resolve(
+        [letter, scan1, scan2],
+        hint_text="составь ответ на файл обращение",
+    )
+    assert resolution.status == "resolved"
+    assert resolution.attachment_id == letter.attachment_id
+    assert resolution.reason == "name_in_turn_text"
+
+    declined = FileReferencePolicy.resolve(
+        [letter, scan1, scan2],
+        hint_text="в ответ на ваше обращением",
+    )
+    assert declined.status == "ambiguous"
+    assert declined.attachment_id is None
+
+
+def test_sibling_digit_token_resolves_scan_file() -> None:
+    """Live UX: «анализ файла скан_2» → Скан 2, not a three-file choice card."""
+    letter = _candidate("Обращение.docx")
+    scan1 = _candidate("Скан 1 _Приложение.pdf")
+    scan2 = _candidate("Скан 2 _Приложение.pdf")
+    resolution = FileReferencePolicy.resolve(
+        [letter, scan1, scan2],
+        hint_text="сделай тезисный анализ файда скан_2",
+    )
+    assert resolution.status == "resolved"
+    assert resolution.attachment_id == scan2.attachment_id
+    assert resolution.reason == "name_in_turn_text"
+
+
+def test_shared_prefix_without_digit_stays_ambiguous() -> None:
+    """«скан» alone names both siblings — card, not a guess."""
     resolution = FileReferencePolicy.resolve(
         [
-            _candidate("Обращение.docx"),
-            _candidate("Кодекс_корпоративной_этики_V2_0_ред_10(1).docx"),
+            _candidate("Скан 1 _Приложение.pdf"),
+            _candidate("Скан 2 _Приложение.pdf"),
         ],
-        hint_text=text,
+        hint_text="открой скан ещё раз",
     )
     assert resolution.status == "ambiguous"
     assert resolution.attachment_id is None
 
 
 def test_name_shaped_stem_still_resolves() -> None:
-    """User-authored name-shaped stem (digits or several words) remains sufficient."""
+    """User-authored multi-word / digit stem remains sufficient."""
     target = _candidate("Годовой отчет 2025.pdf")
     resolution = FileReferencePolicy.resolve(
         [target, _candidate("Обращение.docx")],

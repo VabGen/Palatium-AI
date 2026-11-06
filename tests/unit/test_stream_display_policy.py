@@ -17,7 +17,7 @@ from palatium_ai.application.agents.formatter.partial_document import (
     PartialDocumentScanner,
     PartialFrame,
 )
-from palatium_ai.domain.content import ContentBlock
+from palatium_ai.domain.content import ContentBlock, ParagraphBlock
 from palatium_ai.domain.policies.stream_display import StreamDisplayPolicy
 
 BLOCK_TYPES = (
@@ -98,12 +98,13 @@ def test_open_paragraph_prose_arrives_before_the_block_closes(chunk_size: int) -
     stop = raw.index("подписания") + len("подписания")
 
     frames = _stream(raw[:stop], chunk_size)
-    partial = [frame for frame in frames if frame.block is None and frame.text]
+    partial = [frame for frame in frames if frame.text and frame.index == 0]
 
     assert partial, "an open paragraph must paint its prefix"
-    assert all(frame.index == 0 for frame in partial)
     assert text.startswith("".join(frame.text for frame in partial))
-    assert all(frame.block is None for frame in frames), "no typed block before close"
+    # Typed provisional ParagraphBlock so BlockRenderer upserts without markdown fallback.
+    assert all(isinstance(frame.block, ParagraphBlock) for frame in partial)
+    assert partial[-1].block is not None and text.startswith(partial[-1].block.text)
 
 
 @pytest.mark.parametrize("chunk_size", (1, 2, 5, 11))
@@ -116,7 +117,14 @@ def test_streamed_prefix_plus_remainder_equals_the_block_text(chunk_size: int) -
     rendered = _render(frames)
 
     assert rendered == text
-    assert sum(1 for frame in frames if frame.block is not None) == 1
+    # Provisional open frames + one closed frame share index 0; last typed wins.
+    last_by_index: dict[int, object] = {}
+    for frame in frames:
+        if frame.block is not None and frame.index >= 0:
+            last_by_index[frame.index] = frame.block
+    assert list(last_by_index) == [0]
+    assert isinstance(last_by_index[0], ParagraphBlock)
+    assert last_by_index[0].text == text
     # Prefix frames + the closing remainder: no character painted twice, none lost.
     assert "".join(frame.text for frame in frames if frame.index >= 0) == text
 

@@ -332,6 +332,7 @@ async def _maybe_deferred_durable_recall(
         pin_kinds=pin_kinds,
         graph_write=ctx.graph_write,
         as_of=ctx.as_of,
+        origin_ceiling=ctx.origin_ceiling,
     )
 
 
@@ -666,6 +667,7 @@ async def researcher_node(
             user_id=(state.get("user_id") or "").strip(),
             org_id=(state.get("org_id") or "").strip(),
             image_parts=selectors.turn_image_parts(state),
+            document_parts=selectors.turn_document_parts(state),
         )
         agent_output = await harness.execute_with_guardrails(agent, agent_input)
         result = researcher_output_to_task_result(
@@ -794,6 +796,7 @@ async def parallel_workers_node(
                 user_id=(state.get("user_id") or "").strip(),
                 org_id=(state.get("org_id") or "").strip(),
                 image_parts=selectors.turn_image_parts(state),
+                document_parts=selectors.turn_document_parts(state),
             )
             agent_output = await harness.execute_with_guardrails(researcher, agent_input)
             return researcher_output_to_task_result(
@@ -808,6 +811,7 @@ async def parallel_workers_node(
                 trace_id=_trace_id(state),
                 thread_id=snapshot.thread_id,
                 image_parts=selectors.turn_image_parts(state),
+                document_parts=selectors.turn_document_parts(state),
             )
             agent_output = await harness.execute_with_guardrails(analyst, agent_input)
             return analyst_output_to_execution_result(
@@ -855,8 +859,7 @@ def _try_worker_owned_document(
     """
     from palatium_ai.application.agents.formatter.answer_delta import (
         emit_answer_deltas,
-        emit_document_block,
-        emit_document_title,
+        emit_content_document,
     )
     from palatium_ai.application.agents.formatter.worker_writer import render_worker_document
 
@@ -876,13 +879,8 @@ def _try_worker_owned_document(
         return None
 
     document = decision.document
-    if _structured_preview_active():
-        # The deterministic document already exists: paint it additively, so a
-        # worker-owned turn keeps early TTFT instead of waiting for the final result.
-        if document.title:
-            emit_document_title(document.title)
-        for index, block in enumerate(document.blocks):
-            emit_document_block(index=index, block=block)
+    # Finished document: structured paints typed blocks; legacy paints plain_text.
+    emit_content_document(document)
     agent_metrics.record_node_execution(agent.config.role, "emit:deterministic_gfm")
     logger.info(
         "formatter.worker_writer",
@@ -935,10 +933,10 @@ async def formatter_node(
             has_turn_attachments=bool((state.get("untrusted_context") or "").strip()),
         )
         if cached is not None:
-            from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+            from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
 
             if cached.output is not None:
-                emit_answer_deltas(cached.output.plain_text())
+                emit_content_document(cached.output)
             return cast("AgentGraphState", {"formatted": cached}), cached
         if current_owner(state) == "worker":
             worker_result = _try_worker_owned_document(agent, state, task_input)
@@ -957,6 +955,7 @@ async def formatter_node(
             task_input,
             trace_id=_trace_id(state),
             thread_id=snapshot.thread_id,
+            document_parts=selectors.turn_document_parts(state),
         )
         agent_output = await harness.execute_with_guardrails(agent, agent_input)
         result = formatter_output_to_task_result(
@@ -978,7 +977,7 @@ def _attachment_failure_formatter_result(
     heuristic; a worker that successfully read the file via ``read_attachment``
     already has a non-empty draft and keeps it (no false override).
     """
-    from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+    from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
     from palatium_ai.application.agents.formatter.deterministic import aligned_document_from_source
     from palatium_ai.application.agents.formatter.messages import localized_message
 
@@ -1004,7 +1003,7 @@ def _attachment_failure_formatter_result(
     if not text:
         return None
     document, _mode = aligned_document_from_source(text, task_input=task_input, confidence=0.0)
-    emit_answer_deltas(text)
+    emit_content_document(document)
     result = FormatterTaskResult(
         task_id=task_input.task_id,
         agent_role="formatter",
@@ -1025,7 +1024,7 @@ def _mcp_failure_formatter_result(
     Adaptive Grounding ON: ``mcp_empty_result`` is not stubbed here (optional→LLM
     already answered; required→clarification). Tool errors still use localized copy.
     """
-    from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+    from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
     from palatium_ai.application.agents.formatter.deterministic import aligned_document_from_source
     from palatium_ai.application.agents.formatter.messages import localized_message
     from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
@@ -1063,7 +1062,7 @@ def _mcp_failure_formatter_result(
     if not text:
         return None
     document, _mode = aligned_document_from_source(text, task_input=task_input, confidence=0.0)
-    emit_answer_deltas(text)
+    emit_content_document(document)
     result = FormatterTaskResult(
         task_id=task_input.task_id,
         agent_role="formatter",
@@ -1086,7 +1085,7 @@ def _mcp_degraded_formatter_result(
     they can still be analysed; without them it points at the unavailable capability
     instead of pretending the request ran (035).
     """
-    from palatium_ai.application.agents.formatter.answer_delta import emit_answer_deltas
+    from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
     from palatium_ai.application.agents.formatter.deterministic import aligned_document_from_source
     from palatium_ai.application.agents.formatter.messages import localized_message
 
@@ -1098,7 +1097,7 @@ def _mcp_degraded_formatter_result(
     if not text:
         return None
     document, _mode = aligned_document_from_source(text, task_input=task_input, confidence=0.0)
-    emit_answer_deltas(text)
+    emit_content_document(document)
     result = FormatterTaskResult(
         task_id=task_input.task_id,
         agent_role="formatter",
@@ -1114,6 +1113,7 @@ def _mcp_degraded_formatter_result(
 def _formatter_clarification_result(
     state: AgentGraphState,
 ) -> tuple[AgentGraphState, FormatterTaskResult]:
+    from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
     from palatium_ai.domain.content import ContentDocument
     from palatium_ai.domain.content.content_document import DocumentMeta, ParagraphBlock
 
@@ -1132,6 +1132,7 @@ def _formatter_clarification_result(
             interaction="none",
         ),
     )
+    emit_content_document(doc)
     result = FormatterTaskResult(
         task_id=selectors.require_task_id(state),
         agent_role="formatter",

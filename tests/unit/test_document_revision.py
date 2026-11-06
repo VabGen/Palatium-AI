@@ -221,6 +221,17 @@ def test_turn_payload_carries_the_revision_only_when_it_was_computed() -> None:
     assert with_revision["revision"] == revision.model_dump(mode="json")
 
 
+def test_turn_payload_persists_response_shape_when_provided() -> None:
+    document = _doc("План.")
+    payload = assistant_turn_payload(_result(document), response_shape="plan")
+    omit = assistant_turn_payload(_result(document))
+    coerced = assistant_turn_payload(_result(document), response_shape="not-a-shape")
+
+    assert payload is not None and payload["response_shape"] == "plan"
+    assert omit is not None and "response_shape" not in omit
+    assert coerced is not None and coerced["response_shape"] == "auto"
+
+
 def _state(
     window: DialogTurnWindow | None,
     *,

@@ -26,7 +26,7 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.llm.models import ImagePart
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
 
 if TYPE_CHECKING:
@@ -83,6 +83,7 @@ class ResearcherAgent(BaseAgent):
             "skill_catalog",
             "memory_hints_json",
             "dialog_window_json",
+            "project_agents_md",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -144,8 +145,10 @@ class ResearcherAgent(BaseAgent):
                     task_input=task_input,
                     context=context,
                     skill_catalog=input.context.get("skill_catalog", ""),
+                    project_agents_md=input.context.get("project_agents_md", ""),
                     task_id=input.task_id,
                     image_parts=input.image_parts,
+                    document_parts=input.document_parts,
                 )
                 if handled is not None:
                     return handled
@@ -177,9 +180,11 @@ class ResearcherAgent(BaseAgent):
             task_input=task_input,
             context=context,
             skill_catalog=input.context.get("skill_catalog", ""),
+            project_agents_md=input.context.get("project_agents_md", ""),
             task_id=input.task_id,
             agent_role=self._config.role,
             image_parts=input.image_parts,
+            document_parts=input.document_parts,
         )
 
     async def _maybe_adaptive_empty(
@@ -191,6 +196,8 @@ class ResearcherAgent(BaseAgent):
         skill_catalog: str,
         task_id: object,
         image_parts: tuple[ImagePart, ...] = (),
+        document_parts: tuple[DocumentPart, ...] = (),
+        project_agents_md: str = "",
     ) -> AgentOutput | None:
         """Empty MCP → stub (flag off), degrade LLM (optional), or clarification (required)."""
         from palatium_ai.application.agents.researcher.outcomes import required_empty_clarification_output
@@ -256,10 +263,12 @@ class ResearcherAgent(BaseAgent):
             task_input=task_input,
             context=context,
             skill_catalog=skill_catalog,
+            project_agents_md=project_agents_md,
             task_id=task_id,  # type: ignore[arg-type]
             agent_role=self._config.role,
             grounding_degraded=True,
             image_parts=image_parts,
+            document_parts=document_parts,
         )
         agent_metrics.record_grounding_latency(
             mode=mode,

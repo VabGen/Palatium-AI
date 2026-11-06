@@ -16,7 +16,7 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.analyst import AnalystOutput
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -47,19 +47,20 @@ class AnalystAgent(BaseAgent):
             "context_summary": task_input.context_packet.context_summary,
             "revision_feedback": task_input.revision_feedback or "",
         }
+        assembled = PromptAssemblyPolicy.assemble(
+            PromptAssemblyParts(
+                system_identity=ANALYST_SYSTEM_PROMPT,
+                user_content=json.dumps(user_payload, ensure_ascii=False),
+                # Media rides on the user turn; admission already happened at
+                # graph entry, so the worker only forwards what was approved.
+                image_parts=input.image_parts,
+                document_parts=input.document_parts,
+            )
+        )
         try:
             completion = await self._harness.call_llm(
                 self._config,
-                [
-                    ChatMessage(role="system", content=ANALYST_SYSTEM_PROMPT),
-                    ChatMessage(
-                        role="user",
-                        content=json.dumps(user_payload, ensure_ascii=False),
-                        # Images ride on the user turn; admission already happened at
-                        # graph entry, so the worker only forwards what was approved.
-                        image_parts=input.image_parts,
-                    ),
-                ],
+                list(assembled.messages),
                 response_format="json_object",
             )
             output = parse_analyst_output(completion.content)

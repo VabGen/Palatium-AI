@@ -27,7 +27,7 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.agents.text_ingestor import TextIngestorOutput
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -78,18 +78,18 @@ class TextIngestorAgent(BaseAgent):
         if task_input.enrich_context_prefix and chunks:
             limited = chunks[:MAX_CHUNKS_FOR_CONTEXT_PREFIX]
             try:
+                assembled = PromptAssemblyPolicy.assemble(
+                    PromptAssemblyParts(
+                        system_identity=TEXT_INGESTOR_CONTEXT_PREFIX_SYSTEM_PROMPT,
+                        user_content=build_context_prefix_user_prompt(
+                            document_title=task_input.document_title,
+                            chunks=limited,
+                        ),
+                    )
+                )
                 completion = await self._harness.call_llm(
                     self._config,
-                    [
-                        ChatMessage(role="system", content=TEXT_INGESTOR_CONTEXT_PREFIX_SYSTEM_PROMPT),
-                        ChatMessage(
-                            role="user",
-                            content=build_context_prefix_user_prompt(
-                                document_title=task_input.document_title,
-                                chunks=limited,
-                            ),
-                        ),
-                    ],
+                    list(assembled.messages),
                     response_format="json_object",
                 )
                 prefixes = parse_context_prefixes(completion.content, expected=len(limited))

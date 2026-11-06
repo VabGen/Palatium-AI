@@ -21,7 +21,8 @@ from palatium_ai.domain.memory.scoring import (
     lexical_relevance,
     recency_score,
 )
-from palatium_ai.domain.memory.types import MEMORY_EXPLICIT_WRITE_KEY
+from palatium_ai.domain.memory.types import MEMORY_EXPLICIT_WRITE_KEY, resolve_memory_trust
+from palatium_ai.domain.policies.origin_ceiling import OriginCeilingPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.graph.write_port import GraphFactRecord, GraphWritePort
@@ -57,6 +58,7 @@ async def recall_for_thread(
     pin_kinds: tuple[str, ...] | None = None,
     graph_write: GraphWritePort | None = None,
     as_of: datetime | None = None,
+    origin_ceiling: bool = True,
 ) -> MemoryRecallBundle:
     """Pin scratchpad slots first, then durable medium + active L4 facts.
 
@@ -66,6 +68,7 @@ async def recall_for_thread(
     transform whose source is the prior answer, not a pinned earlier ask (055).
     ``as_of`` pins the bi-temporal view of L4 (default: now, UTC) so every recall in
     one turn sees the same graph snapshot.
+    ``origin_ceiling`` (ADR 0008): exclude quarantined and demote inferred scores.
     """
     allowed_pin_kinds = {kind.strip().lower() for kind in pin_kinds} if pin_kinds is not None else None
     pinned = [
@@ -101,6 +104,7 @@ async def recall_for_thread(
             limit=limit,
             min_confidence=min_confidence,
             kinds=kinds,
+            origin_ceiling=origin_ceiling,
         )
     graph_hits = await _select_graph_hits(
         graph_write,
@@ -175,12 +179,21 @@ async def _select_durable_hits(
     limit: int,
     min_confidence: float,
     kinds: tuple[str, ...] | None = None,
+    origin_ceiling: bool = True,
 ) -> list[MemoryHit]:
     durable: list[MemoryHit] = []
     seen_texts: set[str] = {hit.text.strip().lower() for hit in pinned if hit.text.strip()}
     allowed_kinds = {k.strip().lower() for k in kinds} if kinds else None
     bump = getattr(memory_port, "bump_access", None)
-    ranked = sorted(raw, key=lambda pair: _item_score(pair[1]), reverse=True)
+
+    def _rank_key(pair: tuple[tuple[str, ...], dict[str, object]]) -> float:
+        score = _item_score(pair[1])
+        if not origin_ceiling:
+            return score
+        trust = resolve_memory_trust(pair[1])
+        return OriginCeilingPolicy.adjust_score(score, trust)
+
+    ranked = sorted(raw, key=_rank_key, reverse=True)
     for idx, (namespace, item) in enumerate(ranked):
         if _is_user_namespace(namespace):
             kind = str(item.get("kind", "fact")).strip().lower() or "fact"
@@ -196,6 +209,7 @@ async def _select_durable_hits(
             min_confidence=min_confidence,
             seen=seen_texts,
             allowed_kinds=allowed_kinds,
+            origin_ceiling=origin_ceiling,
         )
         if hit is None:
             continue
@@ -326,6 +340,7 @@ def _durable_hit_from_item(
     min_confidence: float,
     seen: set[str],
     allowed_kinds: set[str] | None = None,
+    origin_ceiling: bool = True,
 ) -> MemoryHit | None:
     if str(item.get("kind", "")).strip().lower() == "scratchpad":
         return None
@@ -334,6 +349,10 @@ def _durable_hit_from_item(
         return None
     text = str(item.get("text", "")).strip()
     if not text or text.lower() in seen:
+        return None
+    trust = resolve_memory_trust(item)
+    if origin_ceiling and not OriginCeilingPolicy.allow_in_recall(trust):
+        agent_metrics.record_memory_origin_ceiling(action="excluded")
         return None
     # Stored confidence wins; else search-time `_score` (M2 importance) so Write
     # paths that omit confidence are not silently dropped by the Select gate.
@@ -344,6 +363,11 @@ def _durable_hit_from_item(
     if confidence < min_confidence:
         return None
     score_f = _item_score(item)
+    if origin_ceiling:
+        adjusted = OriginCeilingPolicy.adjust_score(score_f or 1.0, trust)
+        if trust == "inferred" and adjusted < (score_f or 1.0):
+            agent_metrics.record_memory_origin_ceiling(action="demoted")
+        score_f = adjusted
     score = max(0, int(score_f * 100) if score_f else max(0, limit - idx))
     return MemoryHit(
         text=text[:2000],

@@ -42,6 +42,32 @@ def citations_from_response(response: object) -> tuple[CitationRef, ...]:
     return tuple(found[:_MAX_DECODED])
 
 
+def citations_from_stream_chunk(chunk: object) -> tuple[CitationRef, ...]:
+    """Citations on a stream chunk (final delta / choice), if the provider attached any.
+
+    OpenAI-compatible streams put ``annotations`` on ``choices[0].delta``; Anthropic via
+    LiteLLM may surface content blocks with ``citations`` on the same delta. Empty is
+    normal for mid-stream tokens — callers merge non-empty chunks into the completion.
+    """
+    choices = _as_list(_get(chunk, "choices"))
+    if not choices:
+        # Some gateways reuse the non-stream shape on the last frame.
+        return citations_from_response(chunk)
+    first = choices[0]
+    delta = _get(first, "delta")
+    message = _get(first, "message")
+    carriers = [obj for obj in (delta, message) if obj is not None]
+    if not carriers:
+        return ()
+    found: list[CitationRef] = []
+    for carrier in carriers:
+        found.extend(_from_openai_annotations(_as_list(_get(carrier, "annotations"))))
+        content = _get(carrier, "content")
+        if isinstance(content, list | tuple):
+            found.extend(_from_anthropic_blocks(content))
+    return tuple(found[:_MAX_DECODED])
+
+
 def _first_message(response: object) -> object | None:
     choices = _as_list(_get(response, "choices"))
     if not choices:
@@ -133,4 +159,4 @@ def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-__all__ = ["citations_from_response"]
+__all__ = ["citations_from_response", "citations_from_stream_chunk"]

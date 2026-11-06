@@ -14,7 +14,7 @@
 export const ru = {
   // --- Шапка ---
   'app.title': 'Palatium',
-  'app.tagline': 'Структурированные ответы агентов',
+  'app.tagline': 'Ассистент',
   'header.newChat': 'Новый диалог',
   'header.collapse': 'Свернуть ассистента',
   'badge.dev': 'DEV',
@@ -27,13 +27,17 @@ export const ru = {
 
   // --- Пустое состояние ---
   'empty.greeting': 'Здравствуйте, {name}',
-  'empty.title': 'Спросите что угодно',
-  'empty.body':
-    'Ответ придёт структурированным. Его можно скопировать, выгрузить в PDF или оценить.',
+  'empty.title': 'Чем помочь?',
+  'empty.body': 'Структурированный ответ — с источниками и экспортом.',
   'empty.attachmentsHint':
     'Приложите PDF, DOCX, изображение, CSV, MD или TXT (до {size}) и спросите о нём — файл проверяется до попадания в модель.',
-  'empty.suggestion.0': 'Какие планы на сегодня',
-  'empty.suggestion.1': 'Составь план встречи на завтра',
+  'empty.suggestionsLabel': 'Примеры запросов',
+  'empty.suggestion.kicker.0': 'День',
+  'empty.suggestion.kicker.1': 'Встреча',
+  'empty.suggestion.kicker.2': 'Документ',
+  'empty.suggestion.0': 'Обзор проекта',
+  'empty.suggestion.1': 'Найти документ',
+  'empty.suggestion.2': 'Последние изменения',
 
   // --- Сообщения ---
   // Индикатор работы: подпись НЕ видна (орб без облака и текста), но состояние
@@ -88,8 +92,19 @@ export const ru = {
   'action.exportPdf': 'Выгрузить в PDF',
   'action.regenerate': 'Сформировать ответ заново',
 
+  // --- Artifacts pane (ADR 0006 surface) ---
+  'artifact.paneLabel': 'Панель артефакта',
+  'artifact.kicker': 'Артефакт',
+  'artifact.untitled': 'Ответ',
+  'artifact.close': 'Закрыть артефакт',
+  'artifact.open': 'Открыть артефакт',
+  'artifact.anchorLabel': 'Артефакт: {title}',
+
   // --- Композер ---
-  'composer.placeholder': 'Сообщение для Palatium…',
+  'composer.placeholder': 'Спросите о документах…',
+  'composer.tools': 'Инструменты композера',
+  'composer.menu.project': 'Проект',
+  'composer.menu.memory': 'Память',
   'composer.attach': 'Прикрепить файл',
   'composer.attachTitle':
     'Прикрепить файл (PDF, DOCX, изображения, CSV, MD, TXT — до {size} каждый)',
@@ -149,8 +164,8 @@ export const ru = {
   'attach.analyzeRequested': 'Запрос на анализ таблицы отправлен',
   'attach.index': 'В базу знаний',
   'attach.indexRequested': 'Индексация отправлена на подтверждение',
-  'attach.projectId': 'Проект (база знаний)',
-  'attach.projectIdHint': 'Если указан — файл индексируется в project KB',
+  'attach.projectId': 'Проект',
+  'attach.projectIdHint': 'База знаний',
   'attach.containsPii': 'PII',
   'attach.connectors': 'Внешние источники',
   'attach.connectorReady': 'доступен',
@@ -261,7 +276,7 @@ export type MessageKey = keyof typeof ru;
 
 export const en: Record<MessageKey, string> = {
   'app.title': 'Palatium',
-  'app.tagline': 'Structured agent replies',
+  'app.tagline': 'Assistant',
   'header.newChat': 'New chat',
   'header.collapse': 'Collapse assistant',
   'badge.dev': 'DEV',
@@ -272,12 +287,17 @@ export const en: Record<MessageKey, string> = {
   'launcher.open': 'Open the Palatium assistant',
 
   'empty.greeting': 'Hello, {name}',
-  'empty.title': 'Ask anything',
-  'empty.body': "I'll provide structured answers. You can copy, export, or give feedback.",
+  'empty.title': 'How can I help?',
+  'empty.body': 'Structured answers — with sources and export.',
   'empty.attachmentsHint':
     'Attach a PDF, DOCX, image, CSV, MD or TXT (up to {size}) and ask about it — the file is scanned before it reaches a model.',
-  'empty.suggestion.0': "What is on today's agenda",
-  'empty.suggestion.1': "Draft an agenda for tomorrow's meeting",
+  'empty.suggestionsLabel': 'Example prompts',
+  'empty.suggestion.kicker.0': 'Day',
+  'empty.suggestion.kicker.1': 'Meeting',
+  'empty.suggestion.kicker.2': 'Document',
+  'empty.suggestion.0': 'Project overview',
+  'empty.suggestion.1': 'Find a document',
+  'empty.suggestion.2': 'Recent changes',
 
   'msg.pending.thinking': 'Thinking…',
   'msg.pending.context': 'Gathering context…',
@@ -324,7 +344,17 @@ export const en: Record<MessageKey, string> = {
   'action.exportPdf': 'Export as PDF',
   'action.regenerate': 'Regenerate response',
 
-  'composer.placeholder': 'Message Palatium…',
+  'artifact.paneLabel': 'Artifact panel',
+  'artifact.kicker': 'Artifact',
+  'artifact.untitled': 'Answer',
+  'artifact.close': 'Close artifact',
+  'artifact.open': 'Open artifact',
+  'artifact.anchorLabel': 'Artifact: {title}',
+
+  'composer.placeholder': 'Ask about documents…',
+  'composer.tools': 'Composer tools',
+  'composer.menu.project': 'Project',
+  'composer.menu.memory': 'Memory',
   'composer.attach': 'Attach a file',
   'composer.attachTitle': 'Attach a file (PDF, DOCX, images, CSV, MD, TXT — up to {size} each)',
   'composer.send': 'Send message',
@@ -379,8 +409,8 @@ export const en: Record<MessageKey, string> = {
   'attach.analyzeRequested': 'Table analysis request sent',
   'attach.index': 'Add to knowledge',
   'attach.indexRequested': 'Indexing sent for approval',
-  'attach.projectId': 'Project (knowledge base)',
-  'attach.projectIdHint': 'When set, the file is indexed into that project KB',
+  'attach.projectId': 'Project',
+  'attach.projectIdHint': 'Knowledge base',
   'attach.containsPii': 'PII',
   'attach.connectors': 'External sources',
   'attach.connectorReady': 'ready',

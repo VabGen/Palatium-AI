@@ -38,6 +38,8 @@ class TurnRecallContext:
     graph_write: GraphWritePort | None = None
     # Turn-start snapshot (UTC): entry and deferred recall see the same L4 view.
     as_of: datetime | None = None
+    # ADR 0008 / CMD1: demote inferred + exclude quarantined (flag MEMORY_ORIGIN_CEILING).
+    origin_ceiling: bool = True
 
 
 _current: ContextVar[TurnRecallContext | None] = ContextVar("turn_recall_context", default=None)

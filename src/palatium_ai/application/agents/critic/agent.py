@@ -29,11 +29,11 @@ from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.critic import CriticOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.json_codec import LLMJSONError
-from palatium_ai.domain.llm.models import ChatMessage
 from palatium_ai.domain.llm.response_parser import compact_validation_error, parse_llm_response
 from palatium_ai.domain.policies import CriticPolicy
 from palatium_ai.domain.policies.constitution import Constitution, ConstitutionViolation, PrincipleId
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
 if TYPE_CHECKING:
@@ -59,6 +59,7 @@ class CriticAgent(BaseAgent):
             "continuation_kind",
             "user_input_chars",
             "worker_confidence",
+            "memory_hints_json",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -70,12 +71,16 @@ class CriticAgent(BaseAgent):
         task_input = decode_critic_input({**input.context, "_task_id": str(input.task_id)})
         # Deterministic constitution pass runs before any judge decision: a skipped
         # judge (budget/policy) must not become a skipped safety check (020).
+        # memory_hints are first-class turn inputs for PII permission (060): a name the
+        # user stated earlier is allowed evidence, not an invented leak (055).
+        allowed_sources = (
+            task_input.context_packet.user_text,
+            task_input.context_packet.untrusted_context or "",
+            *task_input.memory_hints,
+        )
         deterministic = Constitution.check(
             draft=task_input.worker_summary,
-            sources=(
-                task_input.context_packet.user_text,
-                task_input.context_packet.untrusted_context or "",
-            ),
+            sources=allowed_sources,
         )
 
         hop = get_hop_collector()
@@ -119,11 +124,12 @@ class CriticAgent(BaseAgent):
             )
             return self._finalize(input=input, output=output, deterministic=deterministic)
 
-        messages = [
-            ChatMessage(role="system", content=CRITIC_SYSTEM_PROMPT),
-            ChatMessage(
-                role="user",
-                content=json.dumps(
+        memory_block = "\n".join(f"- {hint}" for hint in task_input.memory_hints if str(hint).strip())
+        assembled = PromptAssemblyPolicy.assemble(
+            PromptAssemblyParts(
+                system_identity=CRITIC_SYSTEM_PROMPT,
+                memory_block=memory_block,
+                user_content=json.dumps(
                     {
                         "user_text": task_input.context_packet.user_text,
                         "task_kind": task_input.context_packet.task_kind,
@@ -135,6 +141,7 @@ class CriticAgent(BaseAgent):
                         # Neutral LLM-facing name (055): internal field names are
                         # echoed verbatim by the model into user prose.
                         "attached_files": task_input.context_packet.untrusted_context,
+                        "memory_hints": list(task_input.memory_hints),
                         "classification_confidence": task_input.classification_confidence,
                         "classification_reasoning": task_input.classification_reasoning,
                         "route_plan": task_input.context_packet.route_plan,
@@ -142,8 +149,9 @@ class CriticAgent(BaseAgent):
                     },
                     ensure_ascii=False,
                 ),
-            ),
-        ]
+            )
+        )
+        messages = list(assembled.messages)
 
         try:
             # Provider structured output: the harness builds the json_schema payload
@@ -228,15 +236,45 @@ def _empty_critic_output() -> CriticOutput:
     )
 
 
+#: Pattern-scanned articles (constitution docstring): the scanner is SoT. A judge that
+#: invents ``no_pii_echo_without_permission`` for a first-name recall must not escalate
+#: when the deterministic pass is clean (055 — live "как меня зовут?" / quality_review).
+_SCANNER_OWNED_PRINCIPLES: frozenset[PrincipleId] = frozenset({"no_pii_echo_without_permission"})
+
+
 def _merge_constitution(
     output: CriticOutput,
     deterministic: tuple[ConstitutionViolation, ...],
 ) -> CriticOutput:
-    """Union of judged and deterministic article ids, order-stable, no duplicates."""
-    if not deterministic:
+    """Union of judged and deterministic article ids, order-stable, no duplicates.
+
+    Scanner-owned principles stay only when the deterministic pass found them: the
+    judge may not invent a PII leak for classes the scanner does not cover (names).
+    """
+    deterministic_ids = {item.principle for item in deterministic}
+    judged = tuple(
+        principle
+        for principle in output.violations
+        if principle not in _SCANNER_OWNED_PRINCIPLES or principle in deterministic_ids
+    )
+    merged_violations = tuple(dict.fromkeys((*judged, *deterministic_ids)))
+    updates: dict[str, object] = {}
+    if merged_violations != output.violations:
+        updates["violations"] = merged_violations
+    dropped_false_pii = any(principle in _SCANNER_OWNED_PRINCIPLES for principle in output.violations) and not any(
+        principle in _SCANNER_OWNED_PRINCIPLES for principle in merged_violations
+    )
+    # Drop the review bit / depressed safety the judge tied solely to the invented PII
+    # hit; remaining accuracy/safety thresholds in ``_finalize`` still apply for
+    # unrelated low scores.
+    if dropped_false_pii and not merged_violations:
+        if output.requires_review:
+            updates["requires_review"] = False
+        if output.safety_score < SAFETY_REVIEW_THRESHOLD:
+            updates["safety_score"] = SAFETY_REVIEW_THRESHOLD
+    if not updates:
         return output
-    merged = tuple(dict.fromkeys((*output.violations, *(item.principle for item in deterministic))))
-    return output.model_copy(update={"violations": merged})
+    return output.model_copy(update=updates)
 
 
 def _record_violations(

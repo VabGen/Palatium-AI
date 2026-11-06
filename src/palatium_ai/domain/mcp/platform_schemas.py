@@ -148,6 +148,73 @@ PLATFORM_FORGET_MEMORY_SCHEMA = pinned_input_schema(PlatformForgetMemoryInput)
 PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA = pinned_input_schema(PlatformExtractTranscriptMemoriesInput)
 
 
+class PlatformExplainBeliefInput(BaseModel):
+    """Input for ``mcp:platform.explain_belief`` (read; provenance of one entry)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str = Field(min_length=1, max_length=128)
+    namespace_kind: str = Field(min_length=1, max_length=16, description="thread|user|org")
+    scope_id: str = Field(min_length=1, max_length=128, description="thread_id, user_id, or org_id")
+    entry_key: str = Field(min_length=1, max_length=256)
+    org_id: str = Field(
+        default="",
+        max_length=128,
+        description="Required when namespace_kind=org; must equal scope_id.",
+    )
+
+
+class PlatformMemoryAuditInput(BaseModel):
+    """Input for ``mcp:platform.memory_audit`` (read; owner-scoped low-trust listing)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str = Field(min_length=1, max_length=128, description="Owner user id (RLS / ACL scope).")
+    thread_id: str = Field(
+        default="",
+        max_length=128,
+        description="Optional thread namespace to include alongside user scope.",
+    )
+    org_id: str = Field(default="", max_length=128, description="Optional org namespace to include.")
+    trust_filter: str = Field(
+        default="low",
+        max_length=16,
+        description="low|inferred|quarantined|all — default low = inferred+quarantined.",
+    )
+    origin_filter: str = Field(
+        default="",
+        max_length=16,
+        description="Optional origin filter (user_hitl|extract|compact|system|legacy); empty = any.",
+    )
+    limit: str = Field(default="32", max_length=3, description="Max rows (1-128) as string.")
+
+
+class PlatformMemoryVerifyInput(BaseModel):
+    """Input for ``mcp:platform.memory_verify`` (write; HITL required)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str = Field(min_length=1, max_length=128)
+    namespace_kind: str = Field(min_length=1, max_length=16, description="thread|user|org")
+    scope_id: str = Field(min_length=1, max_length=128)
+    entry_key: str = Field(min_length=1, max_length=256)
+    verdict: str = Field(
+        min_length=1,
+        max_length=16,
+        description="confirmed → trust=verified; rejected → trust=quarantined.",
+    )
+    org_id: str = Field(
+        default="",
+        max_length=128,
+        description="Required when namespace_kind=org; must equal scope_id.",
+    )
+
+
+PLATFORM_EXPLAIN_BELIEF_SCHEMA = pinned_input_schema(PlatformExplainBeliefInput)
+PLATFORM_MEMORY_AUDIT_SCHEMA = pinned_input_schema(PlatformMemoryAuditInput)
+PLATFORM_MEMORY_VERIFY_SCHEMA = pinned_input_schema(PlatformMemoryVerifyInput)
+
+
 class PlatformGraphQueryInput(BaseModel):
     """Input for ``mcp:platform.graph_query`` (read-only parameterized Cypher)."""
 
@@ -199,6 +266,33 @@ class PlatformSkillReferenceInput(BaseModel):
     )
 
 
+class PlatformSkillManageInput(BaseModel):
+    """Input for ``mcp:platform.skill_manage`` (write; HITL; feature-flagged)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    action: str = Field(
+        min_length=1,
+        max_length=16,
+        description="create|update|delete",
+    )
+    skill_name: str = Field(
+        min_length=1,
+        max_length=64,
+        description="Skill id; must match frontmatter.name for create/update.",
+    )
+    content: str = Field(
+        default="",
+        max_length=30_000,
+        description="Full SKILL.md markdown with YAML frontmatter (create/update).",
+    )
+    description: str = Field(
+        default="",
+        max_length=500,
+        description="Optional; when set must equal frontmatter.description.",
+    )
+
+
 class PlatformReadAttachmentInput(BaseModel):
     """Input for ``mcp:platform.read_attachment`` (read; lazy OCR write-through)."""
 
@@ -234,27 +328,36 @@ class PlatformReadAttachmentInput(BaseModel):
 PLATFORM_GRAPH_QUERY_SCHEMA = pinned_input_schema(PlatformGraphQueryInput)
 PLATFORM_WEB_FALLBACK_SCHEMA = pinned_input_schema(PlatformWebFallbackInput)
 PLATFORM_SKILL_REFERENCE_SCHEMA = pinned_input_schema(PlatformSkillReferenceInput)
+PLATFORM_SKILL_MANAGE_SCHEMA = pinned_input_schema(PlatformSkillManageInput)
 PLATFORM_READ_ATTACHMENT_SCHEMA = pinned_input_schema(PlatformReadAttachmentInput)
 
 __all__ = [
+    "PLATFORM_EXPLAIN_BELIEF_SCHEMA",
     "PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA",
     "PLATFORM_FORGET_MEMORY_SCHEMA",
     "PLATFORM_GRAPH_QUERY_SCHEMA",
     "PLATFORM_INGEST_DOCUMENT_SCHEMA",
+    "PLATFORM_MEMORY_AUDIT_SCHEMA",
+    "PLATFORM_MEMORY_VERIFY_SCHEMA",
     "PLATFORM_READ_ATTACHMENT_SCHEMA",
     "PLATFORM_SAVE_MEMORY_SCHEMA",
     "PLATFORM_SEARCH_KNOWLEDGE_SCHEMA",
     "PLATFORM_SEARCH_MEMORY_SCHEMA",
+    "PLATFORM_SKILL_MANAGE_SCHEMA",
     "PLATFORM_SKILL_REFERENCE_SCHEMA",
     "PLATFORM_WEB_FALLBACK_SCHEMA",
+    "PlatformExplainBeliefInput",
     "PlatformExtractTranscriptMemoriesInput",
     "PlatformForgetMemoryInput",
     "PlatformGraphQueryInput",
     "PlatformIngestDocumentInput",
+    "PlatformMemoryAuditInput",
+    "PlatformMemoryVerifyInput",
     "PlatformReadAttachmentInput",
     "PlatformSaveMemoryInput",
     "PlatformSearchKnowledgeInput",
     "PlatformSearchMemoryInput",
+    "PlatformSkillManageInput",
     "PlatformSkillReferenceInput",
     "PlatformWebFallbackInput",
 ]

@@ -167,6 +167,28 @@ try:  # pragma: no cover - optional dependency
         "Hot-path memory Select outcomes by source (Super Brain SB0).",
         ["source"],
     )
+    # CMD0/ADR 0008: origin ceiling + staged trust (labels closed; no user_id).
+    _palatium_memory_trust_upgrade_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_memory_trust_upgrade_total",
+        "Medium trust upgrades inferred→verified (corroboration / HITL verify).",
+        ["reason"],
+    )
+    _palatium_memory_origin_ceiling_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_memory_origin_ceiling_total",
+        "Origin-ceiling actions on Select/promote (demoted|excluded|promote_blocked).",
+        ["action"],
+    )
+    # CMD2: prompt-cache tier hints + provider-reported cache token accounting.
+    _palatium_prompt_cache_hint_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_prompt_cache_hint_total",
+        "Prompt assembly cache-control hints by tier (CMD2).",
+        ["tier"],
+    )
+    _palatium_prompt_cache_tokens_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_prompt_cache_tokens_total",
+        "Provider prompt-cache tokens (read=hit, write=miss/create).",
+        ["direction"],
+    )
     _palatium_attachment_sticky_total: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_attachment_sticky_total",
         "Sticky attachment resolve actions (explicit/skip/rehydrate/clear).",
@@ -402,6 +424,10 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_memory_promote_errors_total = _NoopMetric()
     _palatium_memory_promote_blocked_pii_total = _NoopMetric()
     _palatium_memory_recall_source_total = _NoopMetric()
+    _palatium_memory_trust_upgrade_total = _NoopMetric()
+    _palatium_memory_origin_ceiling_total = _NoopMetric()
+    _palatium_prompt_cache_hint_total = _NoopMetric()
+    _palatium_prompt_cache_tokens_total = _NoopMetric()
     _palatium_attachment_sticky_total = _NoopMetric()
     _palatium_context_tokens_used = _NoopMetric()
     _palatium_audit_write_failures_total = _NoopMetric()
@@ -454,6 +480,7 @@ class AgentMetrics:
     _extract_refusals: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _extract_skips: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _lint_findings: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
+    _response_shapes: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _schema_outcomes: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _partial_blocks: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _citation_outcomes: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
@@ -589,12 +616,23 @@ class AgentMetrics:
     def record_response_shape(self, *, shape: str, outcome: str) -> None:
         """Count the requested shape (outcome=requested) and whether it was met.
 
-        ``outcome`` is a closed value set at the call sites: ``requested`` (axis was
-        carried into the turn), ``satisfied`` / ``mismatch`` (checked on the document).
+        Closed ``outcome`` set at call sites:
+        ``requested`` · ``satisfied`` · ``mismatch`` (Formatter post-check);
+        ``precheck_ok`` · ``precheck_mismatch`` · ``precheck_regenerated``
+        (FORMATTER_SHAPE_PRECHECK buffered path, before first block_delta);
+        ``mechanical_reuse`` · ``mechanical_promote`` · ``mechanical_flatten`` ·
+        ``mechanical_ok`` (0-LLM restructure path, wave 3).
         """
         safe_shape = (shape or "auto").strip()[:32] or "auto"
         safe_outcome = (outcome or "unknown").strip()[:32] or "unknown"
+        with self._lock:
+            self._response_shapes[(safe_shape, safe_outcome)] += 1
         _palatium_response_shape_total.labels(shape=safe_shape, outcome=safe_outcome).inc()
+
+    def response_shape_count(self, shape: str, outcome: str) -> int:
+        """In-process counter for unit tests / canary gates (wave 4)."""
+        with self._lock:
+            return self._response_shapes[(shape, outcome)]
 
     def record_answer_writer(self, *, owner: str, reason: str) -> None:
         """Count turns by resolved writer (P1a single-writer axis)."""
@@ -897,6 +935,28 @@ class AgentMetrics:
         """Count hot-path Select by source (scratchpad/medium/graph/skipped_*)."""
         safe = (source or "unknown").strip()[:64] or "unknown"
         _palatium_memory_recall_source_total.labels(source=safe).inc()
+
+    def record_memory_trust_upgrade(self, *, reason: str) -> None:
+        """Count inferred→verified upgrades (ADR 0008 corroboration / CMD3 verify)."""
+        safe = (reason or "unknown").strip()[:64] or "unknown"
+        _palatium_memory_trust_upgrade_total.labels(reason=safe).inc()
+
+    def record_memory_origin_ceiling(self, *, action: str) -> None:
+        """Count ceiling actions: demoted | excluded | promote_blocked."""
+        safe = (action or "unknown").strip()[:64] or "unknown"
+        _palatium_memory_origin_ceiling_total.labels(action=safe).inc()
+
+    def record_prompt_cache_hint(self, *, tier: str) -> None:
+        """Count prompt-cache hints by assembly tier (stable|context|volatile|skipped)."""
+        safe = (tier or "unknown").strip()[:32] or "unknown"
+        _palatium_prompt_cache_hint_total.labels(tier=safe).inc()
+
+    def record_prompt_cache_tokens(self, *, cache_read_tokens: int, cache_write_tokens: int) -> None:
+        """Provider-reported prompt-cache tokens (read=hit, write=create); zeroes skipped."""
+        if cache_read_tokens > 0:
+            _palatium_prompt_cache_tokens_total.labels(direction="read").inc(cache_read_tokens)
+        if cache_write_tokens > 0:
+            _palatium_prompt_cache_tokens_total.labels(direction="write").inc(cache_write_tokens)
 
     def record_attachment_sticky(self, *, action: str) -> None:
         """Count sticky attachment policy actions (SB0/SB1)."""

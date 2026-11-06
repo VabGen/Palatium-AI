@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 
 from palatium_ai.domain.memory.promotion import PromotionCandidate, PromotionThresholds
 from palatium_ai.domain.memory.scoring import ImportanceInputs, compute_importance, recency_score
+from palatium_ai.domain.memory.types import MemoryTrust, coerce_memory_trust
+from palatium_ai.domain.policies.origin_ceiling import OriginCeilingPolicy
 
 # Durable prefs (name, locale, likes) are promote-eligible on write — no wait for
 # reconsolidation bumps. Episodic facts still need ``min_access_frequency``.
@@ -30,6 +32,7 @@ class PromotionPolicy:
         *,
         thresholds: PromotionThresholds,
         now: datetime | None = None,
+        origin_ceiling: bool = True,
     ) -> bool:
         if candidate.promoted_at is not None:
             return False
@@ -41,8 +44,27 @@ class PromotionPolicy:
         )
         if candidate.access_frequency < min_access:
             return False
+        if origin_ceiling and not PromotionPolicy.origin_ceiling_allows(
+            candidate,
+            min_access_frequency=thresholds.min_access_frequency,
+        ):
+            return False
         importance = PromotionPolicy.effective_importance(candidate, now=now)
         return importance >= thresholds.min_importance
+
+    @staticmethod
+    def origin_ceiling_allows(
+        candidate: PromotionCandidate,
+        *,
+        min_access_frequency: int,
+    ) -> bool:
+        trust: MemoryTrust = coerce_memory_trust(candidate.trust) or "inferred"
+        return OriginCeilingPolicy.allow_promote(
+            trust,
+            access_frequency=candidate.access_frequency,
+            min_access_frequency=min_access_frequency,
+            contains_pii=candidate.contains_pii,
+        )
 
     @staticmethod
     def effective_importance(

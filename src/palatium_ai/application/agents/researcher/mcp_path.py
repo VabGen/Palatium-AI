@@ -66,6 +66,7 @@ from palatium_ai.domain.mcp.tool_policy import (
 from palatium_ai.domain.memory.tool_output import strip_untrusted_tool_output
 from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 from palatium_ai.domain.policies.retrieval import RetrievalPolicy
 from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
@@ -753,6 +754,7 @@ def _verbatim_mcp_output(
 
 def _synthesis_messages(task_input: ResearcherInput, *, tool_result: str, source: str) -> list[ChatMessage]:
     """Same researcher JSON contract as the dialog path; evidence is the MCP payload."""
+    memory_hints = list(task_input.memory_hints[:4])
     payload = {
         "user_text": task_input.context_packet.user_text,
         "task_kind": task_input.context_packet.task_kind,
@@ -763,11 +765,16 @@ def _synthesis_messages(task_input: ResearcherInput, *, tool_result: str, source
         "attached_files": task_input.context_packet.untrusted_context,
         "previous_answer": task_input.prior_context,
         "revision_feedback": task_input.revision_feedback,
-        "user_facts": list(task_input.memory_hints[:4]),
+        "user_facts": memory_hints,
         "mcp_tool_result": tool_result,
         "mcp_source": source,
     }
-    return [
-        ChatMessage(role="system", content=RESEARCHER_SYSTEM_PROMPT),
-        ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
-    ]
+    memory_block = "\n".join(f"- {hint}" for hint in memory_hints if str(hint).strip())
+    assembled = PromptAssemblyPolicy.assemble(
+        PromptAssemblyParts(
+            system_identity=RESEARCHER_SYSTEM_PROMPT,
+            memory_block=memory_block,
+            user_content=json.dumps(payload, ensure_ascii=False),
+        )
+    )
+    return list(assembled.messages)

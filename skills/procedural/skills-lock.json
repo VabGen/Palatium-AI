@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "hitl-irreversible": {
+      "version": "1.0.0",
+      "sha256": "4cd63c40217b5a7e3ee7e8eee242871097c51d0e1ddd53df3170296d4e8ff761",
+      "updated_at": "2026-11-03T08:45:29Z"
+    },
+    "memory-os-write": {
+      "version": "1.0.0",
+      "sha256": "ad170b150d6fda328c23079a89987bd91d6519e35d28f5e57cc33de6e27b0611",
+      "updated_at": "2026-11-03T08:45:29Z"
+    }
+  }
+}

@@ -155,6 +155,11 @@ class MemoryConfig(BaseConfig):
         le=128,
         validation_alias="MEMORY_PROMOTE_BATCH_LIMIT",
     )
+    origin_ceiling: bool = Field(
+        default=True,
+        validation_alias="MEMORY_ORIGIN_CEILING",
+        description="ADR 0008: demote inferred / exclude quarantined on recall; gate promote.",
+    )
     extract_max_queue: int = Field(
         default=DEFAULT_MAX_QUEUE,
         ge=MIN_TENANT_SLOTS,

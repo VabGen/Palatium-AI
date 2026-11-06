@@ -1,10 +1,11 @@
 # src/palatium_ai/jobs/memory_consolidate.py
 
-"""CLI entry: ``python -m palatium_ai.jobs.memory_consolidate`` (060, ADR 0002).
+"""CLI entry: ``python -m palatium_ai.jobs.memory_consolidate`` (060, ADR 0002/0008).
 
-Out-of-band sleep consolidation: promote medium → long-term, then run the memory
-retention sweep. Retention is dry-run unless ``--execute`` is passed to this CLI:
-destructive retention stays an explicit operator decision (020).
+Out-of-band sleep consolidation: corroborate inferred trust → promote medium →
+long-term, then run the memory retention sweep. Retention is dry-run unless
+``--execute`` is passed: destructive retention stays an explicit operator
+decision (020).
 """
 
 from __future__ import annotations
@@ -17,16 +18,18 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from palatium_ai.application.services.memory_corroboration import MemoryCorroborationService
 from palatium_ai.application.services.memory_sleep_consolidation import SleepConsolidationService
 from palatium_ai.application.services.retention import RetentionOrchestrator, retention_windows_from_settings
 from palatium_ai.core.config import get_settings
 from palatium_ai.core.logging import get_logger
 from palatium_ai.domain.policies.retention import MEMORY_RETENTION_CLASSES
 from palatium_ai.infrastructure.database.runtime import create_session_factory
+from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
 from palatium_ai.infrastructure.retention import MemoryRetentionHandler
 from palatium_ai.jobs.memory_promotion_factory import (
     build_memory_promotion_service,
-    resolve_promotion_user_ids,
+    resolve_consolidation_user_ids,
 )
 
 if TYPE_CHECKING:
@@ -45,14 +48,14 @@ EXIT_RUNTIME_ERROR = 3
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Sleep-time consolidation: promote + memory retention sweep.",
+        description="Sleep-time consolidation: corroborate + promote + memory retention.",
     )
     parser.add_argument(
         "--user-id",
         action="append",
         dest="user_ids",
         default=[],
-        help="RLS user_id scope to promote (repeatable).",
+        help="RLS user_id scope (repeatable).",
     )
     parser.add_argument(
         "--limit",
@@ -76,12 +79,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-promote",
         action="store_true",
-        help="Run only the retention sweep.",
+        help="Skip medium→graph promote.",
     )
     parser.add_argument(
         "--skip-retention",
         action="store_true",
-        help="Run only promote.",
+        help="Skip retention sweep.",
+    )
+    parser.add_argument(
+        "--skip-corroboration",
+        action="store_true",
+        help="Skip ADR 0008 inferred→verified batch (default: on when origin ceiling).",
     )
     return parser
 
@@ -116,34 +124,52 @@ async def _run(
     execute: bool,
     skip_promote: bool,
     skip_retention: bool,
+    skip_corroboration: bool,
 ) -> int:
-    if skip_promote and skip_retention:
-        _emit("both --skip-promote and --skip-retention set — nothing to do", error=True)
-        return EXIT_INVALID_CONFIG
+    run_corroboration = not skip_corroboration and settings.memory.origin_ceiling
     run_promote = not skip_promote and settings.memory.promote_enabled
+    if skip_promote and skip_retention and skip_corroboration:
+        _emit("all stages skipped — nothing to do", error=True)
+        return EXIT_INVALID_CONFIG
     if not skip_promote and not settings.memory.promote_enabled:
         _emit("MEMORY_PROMOTE_ENABLED=false — promote skipped")
-    if run_promote and not user_ids and not all_users:
-        _emit("at least one --user-id or --all-users is required for promote", error=True)
+    if skip_corroboration:
+        _emit("corroboration skipped (--skip-corroboration)")
+    elif not settings.memory.origin_ceiling:
+        _emit("MEMORY_ORIGIN_CEILING=false — corroboration skipped")
+
+    needs_users = run_promote or run_corroboration
+    if needs_users and not user_ids and not all_users:
+        _emit("at least one --user-id or --all-users is required", error=True)
         return EXIT_INVALID_CONFIG
     resolved_user_ids = (
-        await resolve_promotion_user_ids(
+        await resolve_consolidation_user_ids(
             session_factory,
             explicit=user_ids,
             all_users=all_users,
             min_importance=settings.memory.promote_min_importance,
+            include_corroboration_owners=run_corroboration,
         )
-        if run_promote
+        if needs_users
         else user_ids
     )
     if run_promote and not resolved_user_ids:
         _emit("no promotable owners found — promote skipped")
         run_promote = False
+    if run_corroboration and not resolved_user_ids and not all_users:
+        # Explicit empty list with corroboration only: nothing to scan.
+        run_corroboration = False
 
     windows = retention_windows_from_settings(settings)
     orchestrator = RetentionOrchestrator(windows=windows, handlers=_memory_handlers(session_factory, windows))
     promotion = build_memory_promotion_service(settings=settings, session_factory=session_factory) if run_promote else None
-    service = SleepConsolidationService(promotion=promotion, retention=orchestrator)
+    memory_port = PostgresMemoryPort(session_factory, retention_windows=windows)
+    corroboration = MemoryCorroborationService(memory_port) if run_corroboration else None
+    service = SleepConsolidationService(
+        promotion=promotion,
+        retention=orchestrator,
+        corroboration=corroboration,
+    )
     dry_run = not execute
     result = await service.run(
         user_ids=resolved_user_ids,
@@ -151,10 +177,13 @@ async def _run(
         dry_run=dry_run,
         run_promote=run_promote,
         run_retention=not skip_retention,
+        run_corroboration=run_corroboration,
     )
 
     mode = "dry-run" if result.dry_run else "execute"
     _emit(f"memory consolidation ({mode})")
+    for user_id, upgraded in result.corroborated.items():
+        _emit(f"  - {user_id}: corroborated={upgraded}")
     for user_id, promoted in result.promoted.items():
         _emit(f"  - {user_id}: promoted={promoted}")
     if result.retention is not None:
@@ -183,6 +212,7 @@ async def _async_main(argv: list[str] | None = None) -> int:
             execute=args.execute,
             skip_promote=args.skip_promote,
             skip_retention=args.skip_retention,
+            skip_corroboration=args.skip_corroboration,
         )
     except (OSError, RuntimeError, SQLAlchemyError, ValueError) as exc:
         logger.error("memory_consolidate.failed", error=str(exc))

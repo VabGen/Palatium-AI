@@ -120,6 +120,7 @@ class IntentService:
         vision_images: VisionImageService | None = None,
         formatter_mode: FormatterMode = "legacy",
         formatter_rollout_pct: int = 0,
+        origin_ceiling: bool = True,
     ) -> None:
         self._session_service = session_service
         self._hitl_service = hitl_service
@@ -156,6 +157,7 @@ class IntentService:
             graph_write=graph_write,
             file_reference_resolver=file_reference_resolver,
             vision_images=vision_images,
+            origin_ceiling=origin_ceiling,
         )
         self._hitl_flow = IntentHitlFlow(
             graph_runner=self._graph_runner,

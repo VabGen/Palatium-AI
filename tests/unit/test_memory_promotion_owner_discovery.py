@@ -51,6 +51,48 @@ async def test_resolve_merges_explicit_and_discovered_owners(monkeypatch: pytest
 
 
 @pytest.mark.asyncio()
+async def test_resolve_consolidation_unions_inferred_owners(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR 0008: corroboration must reach inferred-only tenants, not only promotable ones."""
+    promote = AsyncMock(return_value=["u-promote"])
+    inferred = AsyncMock(return_value=["u-inferred", "u-promote"])
+    monkeypatch.setattr(memory_promotion_factory, "list_promotion_owner_ids", promote)
+    monkeypatch.setattr(memory_promotion_factory, "list_corroboration_owner_ids", inferred)
+
+    resolved = await memory_promotion_factory.resolve_consolidation_user_ids(
+        session_factory=object(),  # type: ignore[arg-type]
+        explicit=[],
+        all_users=True,
+        min_importance=0.7,
+        include_corroboration_owners=True,
+    )
+
+    assert resolved == ["u-promote", "u-inferred"]
+    promote.assert_awaited_once()
+    inferred.assert_awaited_once()
+
+
+@pytest.mark.asyncio()
+async def test_resolve_consolidation_skips_inferred_rpc_when_corroboration_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promote = AsyncMock(return_value=["u1"])
+    inferred = AsyncMock(return_value=["u2"])
+    monkeypatch.setattr(memory_promotion_factory, "list_promotion_owner_ids", promote)
+    monkeypatch.setattr(memory_promotion_factory, "list_corroboration_owner_ids", inferred)
+
+    resolved = await memory_promotion_factory.resolve_consolidation_user_ids(
+        session_factory=object(),  # type: ignore[arg-type]
+        explicit=[],
+        all_users=True,
+        min_importance=0.7,
+        include_corroboration_owners=False,
+    )
+
+    assert resolved == ["u1"]
+    inferred.assert_not_called()
+
+
+@pytest.mark.asyncio()
 async def test_resolve_without_all_users_keeps_explicit_order(monkeypatch: pytest.MonkeyPatch) -> None:
     discovered = AsyncMock()
     monkeypatch.setattr(memory_promotion_factory, "list_promotion_owner_ids", discovered)

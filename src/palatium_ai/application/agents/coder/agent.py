@@ -19,7 +19,7 @@ from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.coder import CoderOutput
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -81,13 +81,17 @@ class CoderAgent(BaseAgent):
             "skill_catalog": skill_catalog,
             "skill_references": skill_references,
         }
+        assembled = PromptAssemblyPolicy.assemble(
+            PromptAssemblyParts(
+                system_identity=CODER_SYSTEM_PROMPT,
+                skill_catalog=skill_catalog,
+                user_content=json.dumps(user_payload, ensure_ascii=False),
+            )
+        )
         try:
             completion = await self._harness.call_llm(
                 self._config,
-                [
-                    ChatMessage(role="system", content=CODER_SYSTEM_PROMPT),
-                    ChatMessage(role="user", content=json.dumps(user_payload, ensure_ascii=False)),
-                ],
+                list(assembled.messages),
                 response_format="json_object",
             )
             output = parse_coder_output(completion.content)

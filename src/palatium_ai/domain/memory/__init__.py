@@ -35,11 +35,23 @@ from .turns import (
     attachment_ids_payload,
     parse_turn_attachment_ids,
 )
-from .types import MemoryType
+from .types import (
+    MEMORY_EXPLICIT_WRITE_KEY,
+    MEMORY_ORIGIN_KEY,
+    MEMORY_TRUST_KEY,
+    MemoryOrigin,
+    MemoryTrust,
+    MemoryType,
+    resolve_memory_origin,
+    resolve_memory_trust,
+)
 
 __all__ = [
     "ATTACHMENT_IDS_PAYLOAD_KEY",
     "DEFAULT_PROMPT_BUDGET",
+    "MEMORY_EXPLICIT_WRITE_KEY",
+    "MEMORY_ORIGIN_KEY",
+    "MEMORY_TRUST_KEY",
     "CompactMethod",
     "CompactRequest",
     "CompactResult",
@@ -58,10 +70,12 @@ __all__ = [
     "ExtractQueueStats",
     "ImportanceInputs",
     "MemoryHit",
+    "MemoryOrigin",
     "MemoryPort",
     "MemoryPromotionPort",
     "MemoryPromptBudget",
     "MemoryRecallBundle",
+    "MemoryTrust",
     "MemoryType",
     "PromotionCandidate",
     "PromotionThresholds",
@@ -77,6 +91,8 @@ __all__ = [
     "parse_turn_attachment_ids",
     "rank_by_search_importance",
     "recency_score",
+    "resolve_memory_origin",
+    "resolve_memory_trust",
     "thread_namespace",
     "user_namespace",
 ]

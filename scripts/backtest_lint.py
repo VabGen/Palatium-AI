@@ -52,11 +52,24 @@ HIGH_FINDING_SHARE = 0.05
 
 
 @dataclass(frozen=True, slots=True)
+class CorpusEntry:
+    """One assistant payload: typed document plus optional Intent ``response_shape``."""
+
+    document: ContentDocument
+    response_shape: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Corpus:
     """Validated documents of one JSONL export plus the lines that did not parse."""
 
-    documents: tuple[ContentDocument, ...]
+    entries: tuple[CorpusEntry, ...]
     skipped: int
+
+    @property
+    def documents(self) -> tuple[ContentDocument, ...]:
+        """Document-only view (golden FP gate and older call sites)."""
+        return tuple(entry.document for entry in self.entries)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,9 +80,10 @@ class RuleSummary:
     severity: str
     findings: int
     documents_hit: int
-    #: ``meta.kind`` → documents hit. The intent axis ``response_shape`` is not part of
-    #: the persisted payload, so it cannot be a breakdown dimension of this report.
+    #: ``meta.kind`` → documents hit (always on the document).
     by_kind: Mapping[str, int]
+    #: Intent ``response_shape`` from the payload when present; ``unset`` for older turns.
+    by_shape: Mapping[str, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +124,7 @@ def load_corpus(path: Path) -> Corpus:
     Lines that are not ``{"document": {...}}`` (or fail validation) are counted, never
     silently dropped: a loader that hides half the corpus would understate every share.
     """
-    documents: list[ContentDocument] = []
+    entries: list[CorpusEntry] = []
     skipped = 0
     with path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -123,10 +137,17 @@ def load_corpus(path: Path) -> Corpus:
                 if not isinstance(document, dict):
                     skipped += 1
                     continue
-                documents.append(ContentDocument.model_validate(document))
+                raw_shape = (payload or {}).get("response_shape")
+                shape = raw_shape.strip() if isinstance(raw_shape, str) and raw_shape.strip() else None
+                entries.append(
+                    CorpusEntry(
+                        document=ContentDocument.model_validate(document),
+                        response_shape=shape,
+                    )
+                )
             except json.JSONDecodeError, KeyError, ValueError:
                 skipped += 1
-    return Corpus(documents=tuple(documents), skipped=skipped)
+    return Corpus(entries=tuple(entries), skipped=skipped)
 
 
 def run_backtest(corpus: Corpus) -> Backtest:
@@ -134,13 +155,17 @@ def run_backtest(corpus: Corpus) -> Backtest:
     findings: Counter[str] = Counter()
     hit_documents: Counter[str] = Counter()
     by_kind: dict[str, Counter[str]] = defaultdict(Counter)
-    for document in corpus.documents:
+    by_shape: dict[str, Counter[str]] = defaultdict(Counter)
+    for entry in corpus.entries:
+        document = entry.document
         report = ContentLint.run(document)
         hit_rules = {finding.rule_id for finding in report.findings}
         findings.update(finding.rule_id for finding in report.findings)
         hit_documents.update(hit_rules)
+        shape_key = entry.response_shape or "unset"
         for rule_id in hit_rules:
             by_kind[rule_id][document.meta.kind] += 1
+            by_shape[rule_id][shape_key] += 1
     summaries = tuple(
         RuleSummary(
             rule_id=rule.rule_id,
@@ -148,6 +173,7 @@ def run_backtest(corpus: Corpus) -> Backtest:
             findings=findings.get(rule.rule_id, 0),
             documents_hit=hit_documents.get(rule.rule_id, 0),
             by_kind=dict(by_kind.get(rule.rule_id, {})),
+            by_shape=dict(by_shape.get(rule.rule_id, {})),
         )
         for rule in RULES
     )
@@ -189,14 +215,15 @@ def render_markdown(result: Backtest, golden: GoldenResult, threshold: float = H
         "",
         f"- documents: {result.documents} (skipped lines: {result.skipped})",
         "",
-        "| rule | severity | findings | documents hit | share | by kind |",
-        "|---|---|---|---|---|---|",
+        "| rule | severity | findings | documents hit | share | by kind | by shape |",
+        "|---|---|---|---|---|---|---|",
     ]
     for rule in result.rules:
         share = rule.documents_hit / result.documents if result.documents else 0.0
         kinds = ", ".join(f"{kind}={count}" for kind, count in sorted(rule.by_kind.items())) or "-"
+        shapes = ", ".join(f"{shape}={count}" for shape, count in sorted(rule.by_shape.items())) or "-"
         lines.append(
-            f"| `{rule.rule_id}` | {rule.severity} | {rule.findings} | {rule.documents_hit} | {share:.1%} | {kinds} |",
+            f"| `{rule.rule_id}` | {rule.severity} | {rule.findings} | {rule.documents_hit} | {share:.1%} | {kinds} | {shapes} |",
         )
 
     lines += [
@@ -239,6 +266,7 @@ def to_json(result: Backtest, golden: GoldenResult, threshold: float = HIGH_FIND
                 "documents_hit": rule.documents_hit,
                 "share": round(rule.documents_hit / result.documents, 4) if result.documents else 0.0,
                 "by_kind": dict(rule.by_kind),
+                "by_shape": dict(rule.by_shape),
             }
             for rule in result.rules
         ],

@@ -177,7 +177,18 @@ class PartialDocumentScanner:
             return []
         started = self._prose_emitted > 0
         self._prose_emitted += cut
-        return [PartialFrame(text=pending[:cut], index=index, continues_prose=started)]
+        # Full provisional paragraph (not just the delta): BlockRenderer upserts the
+        # same index so schema_first clients keep one typed preview mid-stream
+        # (streamObject / layout_shift=0). Dual-emit still carries ``text`` as delta.
+        full = decoded[: self._prose_emitted]
+        return [
+            PartialFrame(
+                text=pending[:cut],
+                index=index,
+                continues_prose=started,
+                block=ParagraphBlock(text=full),
+            )
+        ]
 
 
 def _frame_from_block(raw: str, index: int, *, already_emitted: int = 0) -> PartialFrame | None:

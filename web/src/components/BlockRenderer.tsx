@@ -31,8 +31,57 @@ type BlockRendererProps = {
   revision?: DocumentRevision | null;
 };
 
+/** Long answers: keep lead sections open; collapse later H2/H3 sections (any scenario). */
+const COLLAPSE_AFTER_SECTIONS = 2;
+const MIN_BLOCKS_FOR_COLLAPSE = 8;
+
+type DocSection = {
+  headingIndex: number | null;
+  bodyIndices: number[];
+};
+
+function groupDocSections(blocks: readonly ContentBlock[]): DocSection[] {
+  const sections: DocSection[] = [];
+  let current: DocSection = { headingIndex: null, bodyIndices: [] };
+  const push = () => {
+    if (current.headingIndex !== null || current.bodyIndices.length > 0) {
+      sections.push(current);
+    }
+  };
+  blocks.forEach((block, index) => {
+    if (block.type === 'heading' && block.level <= 2) {
+      push();
+      current = { headingIndex: index, bodyIndices: [] };
+      return;
+    }
+    current.bodyIndices.push(index);
+  });
+  push();
+  return sections;
+}
+
 export const BlockRenderer = memo(({ document, revision }: BlockRendererProps) => {
   const changed = useMemo(() => changedBlockIndices(revision), [revision]);
+  const sections = useMemo(() => groupDocSections(document.blocks), [document.blocks]);
+  const sourceRefs = document.meta.source_refs ?? [];
+  const collapseTail =
+    sections.length > COLLAPSE_AFTER_SECTIONS && document.blocks.length >= MIN_BLOCKS_FOR_COLLAPSE;
+
+  const renderIndexed = (index: number) => {
+    const block = document.blocks[index];
+    if (!block) return null;
+    const key = `${block.type}-${index}`;
+    if (!changed.has(index)) {
+      return <BlockView key={key} block={block} sourceRefs={sourceRefs} />;
+    }
+    return (
+      <div key={key} className="doc-block-changed" data-revision="changed">
+        <span className="sr-only">{t('revision.changedBlock')}</span>
+        <BlockView block={block} sourceRefs={sourceRefs} />
+      </div>
+    );
+  };
+
   return (
     <article className="doc" lang={document.locale}>
       {document.title && (
@@ -41,16 +90,28 @@ export const BlockRenderer = memo(({ document, revision }: BlockRendererProps) =
         </header>
       )}
       <div className="doc-blocks">
-        {document.blocks.map((block, index) => {
-          const key = `${block.type}-${index}`;
-          if (!changed.has(index)) {
-            return <BlockView key={key} block={block} />;
+        {sections.map((section, sectionIndex) => {
+          const collapse =
+            collapseTail &&
+            sectionIndex >= COLLAPSE_AFTER_SECTIONS &&
+            section.headingIndex !== null;
+          const heading =
+            section.headingIndex !== null ? document.blocks[section.headingIndex] : null;
+          const body = section.bodyIndices.map(renderIndexed);
+          if (collapse && heading && heading.type === 'heading') {
+            return (
+              <details key={`section-${sectionIndex}`} className="doc-section is-collapsible">
+                <summary className="doc-section-summary">
+                  <HeadingView block={heading} sourceRefs={sourceRefs} />
+                </summary>
+                <div className="doc-section-body">{body}</div>
+              </details>
+            );
           }
           return (
-            <div key={key} className="doc-block-changed" data-revision="changed">
-              {/* Разметка слева — визуальная; факт «блок изменён» нужен и на слух. */}
-              <span className="sr-only">{t('revision.changedBlock')}</span>
-              <BlockView block={block} />
+            <div key={`section-${sectionIndex}`} className="doc-section">
+              {section.headingIndex !== null ? renderIndexed(section.headingIndex) : null}
+              {body}
             </div>
           );
         })}
@@ -59,26 +120,28 @@ export const BlockRenderer = memo(({ document, revision }: BlockRendererProps) =
   );
 });
 
-const BlockView = memo(({ block }: { block: ContentBlock }) => {
+type WithSources = { sourceRefs: readonly string[] };
+
+const BlockView = memo(({ block, sourceRefs }: { block: ContentBlock } & WithSources) => {
   switch (block.type) {
     case 'heading':
-      return <HeadingView block={block} />;
+      return <HeadingView block={block} sourceRefs={sourceRefs} />;
     case 'paragraph':
-      return <ParagraphView block={block} />;
+      return <ParagraphView block={block} sourceRefs={sourceRefs} />;
     case 'list':
-      return <ListView block={block} />;
+      return <ListView block={block} sourceRefs={sourceRefs} />;
     case 'table':
-      return <TableView block={block} />;
+      return <TableView block={block} sourceRefs={sourceRefs} />;
     case 'callout':
-      return <CalloutView block={block} />;
+      return <CalloutView block={block} sourceRefs={sourceRefs} />;
     case 'code':
       return <CodeView block={block} />;
     case 'formula':
       return <FormulaView block={block} />;
     case 'kv':
-      return <KeyValueView block={block} />;
+      return <KeyValueView block={block} sourceRefs={sourceRefs} />;
     case 'steps':
-      return <StepsView block={block} />;
+      return <StepsView block={block} sourceRefs={sourceRefs} />;
     case 'chart':
       return <ChartView block={block} />;
     case 'divider':
@@ -91,45 +154,57 @@ const BlockView = memo(({ block }: { block: ContentBlock }) => {
 });
 
 // ---- Вьюхи с мемоизацией ----
-const HeadingView = memo(({ block }: { block: HeadingBlock }) => {
+const HeadingView = memo(({ block, sourceRefs }: { block: HeadingBlock } & WithSources) => {
   const Tag = `h${block.level}` as 'h1' | 'h2' | 'h3';
   return (
     <Tag className={`block-heading level-${block.level}`}>
       <TokenIcon token={block.icon} size={block.level === 1 ? 22 : 18} />
       <span>
-        <InlineMarkdown text={block.text} />
+        <InlineMarkdown text={block.text} sourceRefs={sourceRefs} />
       </span>
     </Tag>
   );
 });
 
-const ParagraphView = memo(({ block }: { block: ParagraphBlock }) => (
+const ParagraphView = memo(({ block, sourceRefs }: { block: ParagraphBlock } & WithSources) => (
   <p className="block-paragraph">
     <TokenIcon token={block.icon} size={16} />
     <span>
-      <InlineMarkdown text={block.text} />
+      <InlineMarkdown text={block.text} sourceRefs={sourceRefs} />
     </span>
   </p>
 ));
 
+/** Legacy text marker before ``ListItem.level`` existed (server still strips it). */
 const NESTED_ITEM_PREFIX = '· ';
 
-const ListView = memo(({ block }: { block: ListBlock }) => {
+function listItemPresentation(item: ListBlock['items'][number]): {
+  text: string;
+  level: number;
+} {
+  let text = item.text;
+  let level = typeof item.level === 'number' && item.level > 0 ? Math.min(item.level, 2) : 0;
+  while (text.startsWith(NESTED_ITEM_PREFIX)) {
+    text = text.slice(NESTED_ITEM_PREFIX.length);
+    level = Math.max(level, 1);
+  }
+  return { text, level };
+}
+
+const ListView = memo(({ block, sourceRefs }: { block: ListBlock } & WithSources) => {
   const Tag = block.style === 'ordered' ? 'ol' : 'ul';
   return (
     <Tag className={`block-list style-${block.style}`}>
       {block.items.map((item, i) => {
-        // Nesting is carried as a text prefix (the contract has no level field).
-        // Printing it as-is renders the marker twice: "• · подпункт".
-        const nested = item.text.startsWith(NESTED_ITEM_PREFIX);
-        const text = nested ? item.text.slice(NESTED_ITEM_PREFIX.length) : item.text;
+        const { text, level } = listItemPresentation(item);
+        const nestedClass = level > 0 ? ` nested level-${level}` : '';
         return (
-          <li key={i} className={nested ? 'block-list-item nested' : 'block-list-item'}>
+          <li key={i} className={`block-list-item${nestedClass}`}>
             <TokenIcon token={item.icon} size={16} />
             <span>
               {item.emphasis && <strong>{item.emphasis}</strong>}
               {item.emphasis && ' — '}
-              <InlineMarkdown text={text} />
+              <InlineMarkdown text={text} sourceRefs={sourceRefs} />
             </span>
           </li>
         );
@@ -138,14 +213,14 @@ const ListView = memo(({ block }: { block: ListBlock }) => {
   );
 });
 
-const TableView = memo(({ block }: { block: TableBlock }) => (
+const TableView = memo(({ block, sourceRefs }: { block: TableBlock } & WithSources) => (
   <div className="block-table-wrap">
     <table className="block-table">
       <thead>
         <tr>
           {block.columns.map(col => (
             <th key={col}>
-              <InlineMarkdown text={col} />
+              <InlineMarkdown text={col} sourceRefs={sourceRefs} />
             </th>
           ))}
         </tr>
@@ -155,7 +230,7 @@ const TableView = memo(({ block }: { block: TableBlock }) => (
           <tr key={ri}>
             {row.map((cell, ci) => (
               <td key={ci}>
-                <InlineMarkdown text={cell} />
+                <InlineMarkdown text={cell} sourceRefs={sourceRefs} />
               </td>
             ))}
           </tr>
@@ -165,17 +240,17 @@ const TableView = memo(({ block }: { block: TableBlock }) => (
   </div>
 ));
 
-const CalloutView = memo(({ block }: { block: CalloutBlock }) => (
+const CalloutView = memo(({ block, sourceRefs }: { block: CalloutBlock } & WithSources) => (
   <aside className={`block-callout tone-${block.tone}`}>
     <TokenIcon token={block.icon ?? iconForTone(block.tone)} size={18} animated />
     <div>
       {block.title && (
         <strong>
-          <InlineMarkdown text={block.title} />
+          <InlineMarkdown text={block.title} sourceRefs={sourceRefs} />
         </strong>
       )}
       <p>
-        <InlineMarkdown text={block.body} />
+        <InlineMarkdown text={block.body} sourceRefs={sourceRefs} />
       </p>
     </div>
   </aside>
@@ -193,23 +268,23 @@ const FormulaView = memo(({ block }: { block: FormulaBlock }) => (
   </div>
 ));
 
-const KeyValueView = memo(({ block }: { block: KeyValueBlock }) => (
+const KeyValueView = memo(({ block, sourceRefs }: { block: KeyValueBlock } & WithSources) => (
   <dl className="block-kv">
     {block.items.map(item => (
       <div className="kv-row" key={`${item.label}-${item.value}`}>
         <dt>
           <TokenIcon token={item.icon} size={14} />
-          <InlineMarkdown text={item.label} />
+          <InlineMarkdown text={item.label} sourceRefs={sourceRefs} />
         </dt>
         <dd>
-          <InlineMarkdown text={item.value} />
+          <InlineMarkdown text={item.value} sourceRefs={sourceRefs} />
         </dd>
       </div>
     ))}
   </dl>
 ));
 
-const StepsView = memo(({ block }: { block: StepsBlock }) => (
+const StepsView = memo(({ block, sourceRefs }: { block: StepsBlock } & WithSources) => (
   <ol className="block-steps">
     {block.items.map((item, i) => {
       const icon = item.icon ?? iconForStepStatus(item.status);
@@ -225,10 +300,10 @@ const StepsView = memo(({ block }: { block: StepsBlock }) => (
           </div>
           <div className="step-body">
             <strong>
-              <InlineMarkdown text={item.title} />
+              <InlineMarkdown text={item.title} sourceRefs={sourceRefs} />
             </strong>
             <p>
-              <InlineMarkdown text={item.body} />
+              <InlineMarkdown text={item.body} sourceRefs={sourceRefs} />
             </p>
           </div>
         </li>

@@ -38,10 +38,13 @@ IconToken = Literal[
 ICON_NAMES: tuple[str, ...] = get_args(IconToken)
 ICON_NAME_SET: frozenset[str] = frozenset(ICON_NAMES)
 
-#: Nesting marker for list rows. ``ListItem`` carries no level field, so one level of
-#: sub-points is encoded as this prefix on the text (decoded by the UI and by
-#: ``plain_text``). Kept here so producer and consumers cannot drift apart.
+#: Legacy nesting marker for list rows written before ``ListItem.level`` existed.
+#: Producers now set ``level``; readers still strip this prefix so persisted turns
+#: and GFM indent encoding stay readable (decoded by UI + ``plain_text``).
 NESTED_ITEM_PREFIX = "· "
+#: Max nesting depth for list rows (0 = root). Closed ceiling keeps the UI layout
+#: finite — deeper indent collapses to this level rather than inventing a tree type.
+LIST_LEVEL_MAX = 2
 
 CalloutTone = Literal["info", "success", "warning", "danger"]
 ListStyle = Literal["ordered", "unordered"]
@@ -103,6 +106,9 @@ class ListItem(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     icon: IconToken | None = None
     emphasis: str | None = Field(default=None, max_length=200)
+    #: Nesting depth (0 = root). Default keeps every legacy / schema_first payload valid
+    #: without a ``schema_version`` bump; producers must not encode depth in ``text``.
+    level: int = Field(default=0, ge=0, le=LIST_LEVEL_MAX)
 
 
 class ListBlock(BaseModel):
@@ -393,10 +399,7 @@ def _structured_block_plain_lines(block: ContentBlock) -> list[str]:
     """Flatten list/table/steps/kv/chart blocks."""
     match block:
         case ListBlock(items=items):
-            # Nesting is encoded as a ``· `` prefix on the item text (ListItem has no
-            # level field). Rendering it behind another bullet produced ``• · пункт``
-            # in the transcript, and the model mirrored that malformed pattern back.
-            return [_plain_list_line(item.text) for item in items]
+            return [_plain_list_line(item) for item in items]
         case StepsBlock(items=items):
             return [f"• {item.title} — {item.body}" for item in items]
         case KeyValueBlock(items=items):
@@ -409,11 +412,49 @@ def _structured_block_plain_lines(block: ContentBlock) -> list[str]:
             return []
 
 
-def _plain_list_line(text: str) -> str:
+def _plain_list_line(item: ListItem) -> str:
     """One transcript line per list item: bullet at the root, indent for nested rows."""
-    if text.startswith(NESTED_ITEM_PREFIX):
-        return f"  · {text[len(NESTED_ITEM_PREFIX) :]}"
+    text, level = normalize_list_item_nesting(item.text, item.level)
+    if level > 0:
+        return f"{'  ' * level}· {text}"
     return f"• {text}"
+
+
+def normalize_list_item_nesting(text: str, level: int = 0) -> tuple[str, int]:
+    """Decode legacy ``NESTED_ITEM_PREFIX`` into ``level``; never leave both encodings."""
+    cleaned = text
+    resolved = max(0, min(int(level), LIST_LEVEL_MAX))
+    while cleaned.startswith(NESTED_ITEM_PREFIX):
+        cleaned = cleaned[len(NESTED_ITEM_PREFIX) :]
+        resolved = min(LIST_LEVEL_MAX, max(resolved, 1))
+    return cleaned, resolved
+
+
+def normalize_document_list_nesting(document: ContentDocument) -> ContentDocument:
+    """Lift legacy text-prefix nesting onto ``ListItem.level`` for every list block."""
+    changed = False
+    blocks: list[ContentBlock] = []
+    for block in document.blocks:
+        if not isinstance(block, ListBlock):
+            blocks.append(block)
+            continue
+        items: list[ListItem] = []
+        list_changed = False
+        for item in block.items:
+            text, level = normalize_list_item_nesting(item.text, item.level)
+            if text != item.text or level != item.level:
+                list_changed = True
+                items.append(item.model_copy(update={"text": text, "level": level}))
+            else:
+                items.append(item)
+        if list_changed:
+            changed = True
+            blocks.append(block.model_copy(update={"items": tuple(items)}))
+        else:
+            blocks.append(block)
+    if not changed:
+        return document
+    return document.model_copy(update={"blocks": tuple(blocks)})
 
 
 def parse_content_document(payload: object) -> ContentDocument:

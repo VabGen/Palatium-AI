@@ -148,11 +148,12 @@ def assistant_turn_content(result: FormatterTaskResult) -> str:
     return result.output.plain_text(4000)
 
 
-def _previous_assistant_document(window: DialogTurnWindow | None) -> ContentDocument | None:
+def previous_assistant_document(window: DialogTurnWindow | None) -> ContentDocument | None:
     """Last persisted answer of the thread, if it is readable as a document.
 
     A malformed or legacy turn is skipped, not raised: an unreadable old answer is a
-    missing diff base, never a failed turn (035).
+    missing diff base, never a failed turn (035). Used by revision diffs and by
+    mechanical restructure (0-LLM layout reuse).
     """
     from pydantic import ValidationError
 
@@ -187,7 +188,7 @@ def assistant_revision(
     """
     if not revision_requested or result.output is None:
         return None
-    previous = _previous_assistant_document(window)
+    previous = previous_assistant_document(window)
     if previous is None:
         return None
     if document_content_hash(previous) == document_content_hash(result.output):
@@ -236,9 +237,15 @@ def assistant_turn_payload(
     result: FormatterTaskResult,
     *,
     revision: DocumentRevision | None = None,
+    response_shape: str | None = None,
 ) -> dict[str, object] | None:
-    """Persist document + HITL card ids/meta for hydrate — never capability tokens."""
+    """Persist document + HITL card ids/meta for hydrate — never capability tokens.
+
+    ``response_shape`` is the Intent axis (not ``meta.kind``): optional so older
+    turns stay readable; when set, lint/backtest can join findings by form (wave 4).
+    """
     from palatium_ai.domain.hitl.choice_resume import hitl_card_public_dump
+    from palatium_ai.domain.policies.shape import ShapeRecipePolicy
 
     if result.output is None and not result.hitl_cards:
         return None
@@ -249,6 +256,8 @@ def assistant_turn_payload(
     }
     if revision is not None:
         payload["revision"] = revision.model_dump(mode="json")
+    if response_shape is not None:
+        payload["response_shape"] = ShapeRecipePolicy.coerce(response_shape)
     return payload
 
 

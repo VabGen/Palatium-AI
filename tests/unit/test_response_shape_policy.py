@@ -48,7 +48,7 @@ def test_resolve_returns_recipe_for_answer_turns() -> None:
     recipe = ShapeRecipePolicy.resolve(shape="plan", task_kind="knowledge_request")
     assert recipe is not None
     assert recipe.shape == "plan"
-    assert recipe.block_requirements == ("steps", "list")
+    assert recipe.block_requirements == ("steps",)
 
 
 def test_comparison_table_accepts_wide_table() -> None:
@@ -123,7 +123,7 @@ def test_document_analysis_requires_heading_and_paragraph() -> None:
     assert no_heading.reason == "heading_block_missing"
 
 
-def test_plan_accepts_steps_and_ordered_list() -> None:
+def test_plan_accepts_steps_only() -> None:
     recipe = ShapeRecipePolicy.resolve(shape="plan", task_kind="knowledge_request")
     assert recipe is not None
     steps = StepsBlock(
@@ -138,14 +138,15 @@ def test_plan_accepts_steps_and_ordered_list() -> None:
         style="ordered",
         items=(ListItem(text="Согласовать"), ListItem(text="Подписать")),
     )
-    assert ShapeRecipePolicy.validate(_doc(ordered), recipe).satisfied is True
+    # Ordered list is no longer a valid plan surface (mixed numbering in UI).
+    assert ShapeRecipePolicy.validate(_doc(ordered), recipe).reason == "plan_not_ordered"
 
 
 def test_plan_rejects_unordered_list_and_short_steps() -> None:
     recipe = ShapeRecipePolicy.resolve(shape="plan", task_kind="knowledge_request")
     assert recipe is not None
     unordered = ListBlock(style="unordered", items=(ListItem(text="Согласовать"),))
-    assert ShapeRecipePolicy.validate(_doc(unordered), recipe).reason == "plan_not_ordered"
+    assert ShapeRecipePolicy.validate(_doc(unordered), recipe).reason == "plan_block_missing"
 
     one_step = StepsBlock(items=(StepItem(title="Согласовать", body="Один шаг."),))
     assert ShapeRecipePolicy.validate(_doc(one_step), recipe).reason == "plan_too_short"

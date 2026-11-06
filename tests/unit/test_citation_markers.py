@@ -1,4 +1,4 @@
-"""``[n]`` markers in prose duplicate ``meta.source_refs`` — they must not reach the UI."""
+"""Resolvable ``[n]`` stay in prose for UI cite chips; dangling markers untouched."""
 
 from __future__ import annotations
 
@@ -24,14 +24,15 @@ def _doc(*blocks: object, refs: tuple[str, ...] = ("Обращение.docx",)) 
     )
 
 
-def test_strips_marker_that_resolves_to_a_source() -> None:
-    doc = _doc(ParagraphBlock(text="[1] Вывод по документу[1]"))
+def test_keeps_resolvable_marker_for_inline_chips() -> None:
+    doc = _doc(ParagraphBlock(text="Вывод по документу[1]"))
 
     cleaned = strip_citation_markers(doc, source_count=len(doc.meta.source_refs))
 
     block = cleaned.blocks[0]
     assert isinstance(block, ParagraphBlock)
-    assert block.text == "Вывод по документу"
+    assert "[1]" in block.text
+    assert cleaned is doc
 
 
 def test_keeps_marker_without_a_matching_source() -> None:
@@ -63,24 +64,21 @@ def test_code_block_is_verbatim() -> None:
     assert cleaned.blocks == doc.blocks
 
 
-def test_drops_list_row_and_table_cell_content_is_cleaned() -> None:
+def test_list_and_table_keep_resolvable_markers() -> None:
     doc = _doc(
-        ListBlock(style="unordered", items=(ListItem(text="[1]"), ListItem(text="Пункт[1]"))),
-        TableBlock(columns=("A",), rows=(("[1] ячейка",),)),
+        ListBlock(style="unordered", items=(ListItem(text="Пункт[1]"),)),
+        TableBlock(columns=("A",), rows=(("ячейка[1]",),)),
     )
 
     cleaned = strip_citation_markers(doc, source_count=1)
 
-    assert len(cleaned.blocks) == 2
+    assert cleaned is doc
     list_block = cleaned.blocks[0]
     assert isinstance(list_block, ListBlock)
-    assert [item.text for item in list_block.items] == ["Пункт"]
-    table = cleaned.blocks[1]
-    assert isinstance(table, TableBlock)
-    assert table.rows == (("ячейка",),)
+    assert list_block.items[0].text == "Пункт[1]"
 
 
-def test_no_sources_means_nothing_to_strip() -> None:
+def test_no_sources_is_noop() -> None:
     doc = _doc(ParagraphBlock(text="Вывод[1]"), refs=())
 
     assert strip_citation_markers(doc, source_count=0) is doc

@@ -2255,21 +2255,39 @@ uv run python -m palatium_ai.jobs.retention --class checkpointer --class attachm
 # uv run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
 ```
 
-Sleep consolidation (promote + `memory_*` retention plan). The compose loop is part of
-the default stack (`make up` / menu "Start stack", profile `memory-jobs`); run it by hand
-only to scope a single pass:
+Sleep consolidation (corroborate → promote → `memory_*` retention). The compose loop is
+part of the default stack (`make up` / menu "Start stack", profile `memory-jobs`); run it
+by hand only to scope a single pass:
 
 ```powershell
 # Promotable-owner discovery (FORCE RLS: a plain SELECT DISTINCT user_id sees one tenant).
 uv run python -m palatium_ai.jobs.memory_promote --all-users
-# Promote named users only, then one memory retention sweep (dry-run).
+# Corroborate inferred→verified, promote named users, then one memory retention sweep (dry-run).
 uv run python -m palatium_ai.jobs.memory_consolidate --user-id <uuid> --user-id <uuid>
+# Skip ADR 0008 corroboration (promote + retention only):
+# uv run python -m palatium_ai.jobs.memory_consolidate --user-id <uuid> --skip-corroboration
 # Whole stand (compose loop): owners are discovered each pass.
 # docker compose --profile memory-jobs up -d memory-consolidate
 # Logs of the loop (`down` leaves it alone): docker compose --profile memory-jobs logs -f memory-consolidate
 # Apply retention in the same pass (staging only, after reviewing the dry-run):
 # uv run python -m palatium_ai.jobs.memory_consolidate --all-users --execute
 ```
+
+### 17.1 Memory origin ceiling (ADR 0008 / ASI-06)
+
+| Flag / window | Default | Effect |
+|---|---|---|
+| `MEMORY_ORIGIN_CEILING` | `true` | Hot-path demotes `trust=inferred`, excludes `quarantined`; promote gates respect trust |
+| `RETENTION_MEMORY_INFERRED_DAYS` | `7` | Cap TTL for extract/compact `inferred` rows (never exceeds class window; upsert uses `LEAST`) |
+| consolidate corroboration | on when ceiling | Batch upgrade `inferred→verified` on verified-overlap / peer-extract before promote (same `memory-consolidate` CronJob; not a separate service) |
+| `memory.corroboration_owner_ids` | migration `l2a3b4c5d6e7` | `--all-users` also discovers inferred-only tenants (FORCE RLS) |
+
+Rollback soak: set `MEMORY_ORIGIN_CEILING=false` (recall/promote behave as pre-CMD1). Keep
+ADR 0008 **proposed** until staging soak + ASI-06 eval green; do not flip to `accepted` on
+dev alone. Corroboration-only skip: `--skip-corroboration` on `memory_consolidate`.
+
+Related: [`adr/0008-memory-origin-trust-ceiling.md`](adr/0008-memory-origin-trust-ceiling.md),
+[`.cursor/plans/context-memory-dialog-2026.md`](../.cursor/plans/context-memory-dialog-2026.md).
 
 ---
 

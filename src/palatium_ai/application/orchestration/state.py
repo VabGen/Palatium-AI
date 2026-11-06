@@ -13,7 +13,7 @@ from palatium_ai.domain.agents.intent import IntentTaskResult
 from palatium_ai.domain.agents.researcher import ResearcherTaskResult
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult
 from palatium_ai.domain.attachments.context import AttachmentTurnContext
-from palatium_ai.domain.llm.models import ImagePart
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContextualizerTaskResult
 from palatium_ai.domain.memory.recall import MemoryRecallBundle
@@ -71,6 +71,8 @@ class AgentGraphState(TypedDict, total=False):
     # carries UUIDs + a closed mime (065: state stays serialisable, nothing to leak).
     # Admitted once so every worker sees the same set and no node pays a blob round trip.
     image_parts: tuple[ImagePart, ...]
+    #: Citeable text attachments admitted once at entry (W3a document blocks).
+    document_parts: tuple[DocumentPart, ...]
     # BCP-47 pin for user-facing replies (ReplyLocalePolicy); sticky across turns via session.
     response_locale: str
     #: The ask deterministically names a file this dialog holds (pre-graph resolution of

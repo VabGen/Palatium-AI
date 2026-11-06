@@ -10,43 +10,87 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307090b'/%3E%3Cpath d='M16 6l2.6 6.9L25.5 16l-6.9 2.6L16 25.5l-2.6-6.9L6.5 16l6.9-3.1z' fill='%233dbea0'/%3E%3C/svg%3E"
     />
     <style>
+      /*
+       * По умолчанию — product preview (чистый canvas).
+       * Isolation QA: `?hostile=1` или кнопка «Leak check» — Comic Sans + красный хост.
+       * Если стили протекут в Shadow DOM, это сразу видно внутри панели виджета.
+       */
       html,
       body {
         height: 100%;
+        min-height: 100dvh;
         margin: 0;
-        background: #07090b;
-        color: #93a0b4;
-        font-family: system-ui, sans-serif;
+        background: #0a0b0d;
+        color: #e8edf4;
+        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+
+      html.hostile,
+      html.hostile body {
+        background: #c41e3a;
+        color: #1a0508;
+        font-family: 'Comic Sans MS', 'Comic Sans', cursive, system-ui, sans-serif;
       }
 
       .stand {
         height: 100%;
+        min-height: 100dvh;
         display: grid;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: auto auto 1fr;
+      }
+
+      /* Product focus: bar collapses to a thin strip until Dev tools open. */
+      html:not(.devtools) .stand {
+        grid-template-rows: auto 0 1fr;
+      }
+
+      /*
+       * Explicit rows: `display:none` on `.stand-log` removes it from auto-placement,
+       * so `.stand-host` would slide into the 0/auto middle track and collapse to 0.
+       */
+      .stand-bar {
+        grid-row: 1;
+      }
+
+      .stand-log {
+        grid-row: 2;
+      }
+
+      .stand-host {
+        grid-row: 3;
+      }
+
+      .stand-bar,
+      .stand-log {
+        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
       }
 
       .stand-bar {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 8px;
-        padding: 10px 14px;
-        border-bottom: 1px solid #1d242e;
-        font-size: 13px;
+        gap: 6px;
+        padding: 5px 12px;
+        border-bottom: 1px solid #151a22;
+        font-size: 11px;
+        background: #080a0e;
+        color: #7d8796;
       }
 
       .stand-bar strong {
-        color: #e8edf4;
-        margin-right: 4px;
+        color: #c5ccd6;
+        margin-right: 2px;
+        letter-spacing: -0.02em;
+        font-weight: 600;
       }
 
       .stand-bar button {
         font: inherit;
-        color: #e8edf4;
+        color: #d5dbe3;
         background: #12161c;
         border: 1px solid #2a3340;
-        border-radius: 8px;
-        padding: 5px 10px;
+        border-radius: 7px;
+        padding: 4px 9px;
         cursor: pointer;
       }
 
@@ -54,21 +98,95 @@
         border-color: #3dbea0;
       }
 
+      .stand-bar button.is-active {
+        border-color: #3dbea0;
+        color: #3dbea0;
+      }
+
+      .stand-bar-extra {
+        display: none;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+      }
+
+      html.devtools .stand-bar-extra {
+        display: flex;
+      }
+
       .stand-hint {
         margin-left: auto;
+        opacity: 0.75;
+        font-size: 10px;
+      }
+
+      html:not(.devtools) .stand-hint {
+        display: none;
+      }
+
+      .stand-log {
+        max-height: 7.5rem;
+        overflow: auto;
+        padding: 8px 14px;
+        border-bottom: 1px solid #1d242e;
+        background: #0c1016;
+        color: #93a0b4;
+        font-size: 12px;
+        font-family: ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+      }
+
+      .stand-log:empty,
+      html:not(.devtools) .stand-log {
+        display: none;
       }
 
       .stand-host {
+        position: relative;
+        grid-row: 3;
         min-height: 0;
+        height: auto; /* fill the 1fr grid area via stretch, not % of a collapsed auto track */
+        align-self: stretch;
+        display: flex;
+        flex-direction: column;
+        background: #0a0b0d;
       }
 
-      palatium-assistant {
-        height: 100%;
+      .stand-host::before {
+        content: none;
+      }
+
+      html.hostile .stand-host {
+        background: #c41e3a;
+      }
+
+      html.hostile .stand-host::before {
+        content: 'HOST LEAK CHECK — Comic Sans / red (must NOT appear inside widget UI)';
+        display: block;
+        flex: 0 0 auto;
+        padding: 6px 10px;
+        font-size: 12px;
+        color: #ffe8ec;
+        font-family: 'Comic Sans MS', 'Comic Sans', cursive, system-ui, sans-serif;
       }
 
       /*
-       * Публичный styling API (план 2.6): хост переопределяет и токены, и части.
-       * Стенд показывает оба рычага — в СЭД это будут брендовые цвета.
+       * CE must expose a definite height: `height: auto` + flex stretch leaves
+       * percentage (`:host { height: 100% }`) unresolved → shell collapses to content.
+       * flex-basis 0 + height 100% makes the used size = remaining stand-host area.
+       */
+      palatium-assistant {
+        display: block;
+        flex: 1 1 0;
+        min-height: 0;
+        width: 100%;
+        height: 100%;
+        align-self: stretch;
+      }
+
+      /*
+       * Публичный styling API (план 2.6): хост переопределяет токены и части.
+       * В preview не красим header border — это ломает product chrome.
        */
       palatium-assistant::part(launcher) {
         background: #123024;
@@ -76,24 +194,30 @@
         border-color: #3dbea0;
         font-weight: 600;
       }
-
-      palatium-assistant::part(header) {
-        border-bottom-color: #3dbea0;
-      }
     </style>
   </head>
   <body>
     <div class="stand">
       <div class="stand-bar">
-        <strong>standalone</strong>
-        <button type="button" id="btn-context">Отправить контекст host'а</button>
-        <button type="button" id="btn-document">Сменить документ</button>
-        <button type="button" id="btn-expire">Испортить токен (401 → refresh)</button>
-        <button type="button" id="btn-collapse">Свернуть: close()</button>
-        <button type="button" id="btn-expand">Развернуть: open()</button>
+        <strong>Palatium</strong>
+        <button type="button" id="btn-devtools" title="Показать/скрыть инструменты стенда">
+          Dev tools
+        </button>
         <button type="button" id="btn-theme">Тема: светлая</button>
-        <span class="stand-hint" id="mode">режим: без host'а (dev-token)</span>
+        <button type="button" id="btn-collapse" title="Свернуть виджет">close()</button>
+        <button type="button" id="btn-expand" title="Развернуть виджет">open()</button>
+        <div class="stand-bar-extra">
+          <button type="button" id="btn-context">Контекст host'а</button>
+          <button type="button" id="btn-document">Сменить документ</button>
+          <button type="button" id="btn-refresh">Обновить токен</button>
+          <button type="button" id="btn-expire">Испортить токен</button>
+          <button type="button" id="btn-hostile" title="Включить красный host для проверки CSS leak">
+            Leak check
+          </button>
+          <span class="stand-hint" id="mode">режим: без host'а (dev-token)</span>
+        </div>
       </div>
+      <div class="stand-log" id="host-log" aria-live="polite"></div>
       <div class="stand-host">
         <palatium-assistant id="assistant" lang="ru"></palatium-assistant>
       </div>
@@ -107,6 +231,46 @@
     -->
     <script>
       (function () {
+        var params = new URLSearchParams(location.search);
+        var hostileBtn = document.getElementById('btn-hostile');
+        var devtoolsBtn = document.getElementById('btn-devtools');
+
+        function syncQuery(key, on) {
+          try {
+            if (on) params.set(key, '1');
+            else params.delete(key);
+            var next =
+              location.pathname + (params.toString() ? '?' + params.toString() : '') + location.hash;
+            history.replaceState(null, '', next);
+          } catch (_err) {
+            /* ignore */
+          }
+        }
+
+        function setHostile(on) {
+          document.documentElement.classList.toggle('hostile', on);
+          hostileBtn.classList.toggle('is-active', on);
+          hostileBtn.textContent = on ? 'Leak check: ON' : 'Leak check';
+          syncQuery('hostile', on);
+        }
+
+        function setDevtools(on) {
+          document.documentElement.classList.toggle('devtools', on);
+          devtoolsBtn.classList.toggle('is-active', on);
+          devtoolsBtn.textContent = on ? 'Dev tools: ON' : 'Dev tools';
+          syncQuery('devtools', on);
+        }
+
+        setHostile(params.has('hostile'));
+        /* Hostile QA implies full stand chrome so Leak check stays reachable. */
+        setDevtools(params.has('devtools') || params.has('hostile'));
+        hostileBtn.addEventListener('click', function () {
+          setHostile(!document.documentElement.classList.contains('hostile'));
+        });
+        devtoolsBtn.addEventListener('click', function () {
+          setDevtools(!document.documentElement.classList.contains('devtools'));
+        });
+
         var MOCK_USER = {
           id: '11111111-1111-4111-8111-111111111111',
           orgId: '114',
@@ -134,6 +298,20 @@
         var hostToken = null;
         var hostEnabled = false;
         var modeLabel = document.getElementById('mode');
+        var hostLog = document.getElementById('host-log');
+
+        function logHost(message, detail) {
+          var line = new Date().toISOString().slice(11, 19) + '  ' + message;
+          if (detail !== undefined) {
+            try {
+              line += '  ' + JSON.stringify(detail);
+            } catch (_err) {
+              line += '  [unserializable]';
+            }
+          }
+          hostLog.textContent = (hostLog.textContent ? hostLog.textContent + '\n' : '') + line;
+          console.info('[mock-host]', message, detail);
+        }
         /*
          * Тред диалога — ЗАБОТА ХОСТА, а не виджета (виджету storage запрещён).
          * Здесь он лежит в `sessionStorage` ровно для того, чтобы стенд
@@ -185,21 +363,33 @@
             window.dispatchEvent(
               new CustomEvent('sed:context-changed', { detail: buildContext() })
             );
+            modeLabel.style.color = '';
             modeLabel.textContent = 'режим: host (СЭД-контекст)';
           } catch (err) {
-            modeLabel.textContent = 'ошибка мок-хоста: ' + err.message;
+            // API down → don't keep a half-armed host; widget falls back to standalone.
+            hostEnabled = false;
+            hostToken = null;
+            modeLabel.style.color = '#f07178';
+            modeLabel.textContent = 'ошибка мок-хоста: ' + err.message + ' (standalone)';
           }
         });
 
         window.addEventListener('sed:auth-token-requested', async function () {
+          logHost('sed:auth-token-requested');
           try {
             hostToken = await mintToken();
             window.dispatchEvent(
               new CustomEvent('sed:auth-token-refreshed', { detail: { token: hostToken } })
             );
+            logHost('sed:auth-token-refreshed', { tokenLen: hostToken.length });
           } catch (err) {
             modeLabel.textContent = 'ошибка refresh: ' + err.message;
           }
+        });
+
+        // Пока виджет не эмитит (нет SED doc refs) — лог пуст; нужен для приёмки G1.
+        window.addEventListener('sed:action-requested', function (event) {
+          logHost('sed:action-requested', event.detail);
         });
 
         document.getElementById('btn-context').addEventListener('click', async function () {
@@ -210,6 +400,11 @@
               new CustomEvent('sed:context-changed', { detail: buildContext() })
             );
             modeLabel.textContent = 'режим: host (СЭД-контекст)';
+            logHost('sed:context-changed', {
+              userId: MOCK_USER.id,
+              documentId: documentRef.id,
+              hasThread: Boolean(hostThreadId),
+            });
           } catch (err) {
             modeLabel.textContent = 'ошибка мок-хоста: ' + err.message;
           }
@@ -223,12 +418,28 @@
             title: 'Исходящее №77',
           };
           window.dispatchEvent(new CustomEvent('sed:context-changed', { detail: buildContext() }));
+          logHost('sed:context-changed (document)', { documentId: documentRef.id });
+        });
+
+        document.getElementById('btn-refresh').addEventListener('click', async function () {
+          if (!hostEnabled) return;
+          try {
+            hostToken = await mintToken();
+            window.dispatchEvent(
+              new CustomEvent('sed:auth-token-refreshed', { detail: { token: hostToken } })
+            );
+            modeLabel.textContent = 'режим: host (токен обновлён вручную)';
+            logHost('sed:auth-token-refreshed (manual)', { tokenLen: hostToken.length });
+          } catch (err) {
+            modeLabel.textContent = 'ошибка refresh: ' + err.message;
+          }
         });
 
         document.getElementById('btn-expire').addEventListener('click', function () {
           if (!hostEnabled) return;
           hostToken = 'expired.token.value';
           window.dispatchEvent(new CustomEvent('sed:context-changed', { detail: buildContext() }));
+          logHost('token poisoned → next API call should emit sed:auth-token-requested');
         });
 
         // Публичный API сворачивания: `close()` показывает лончер, `open()` возвращает панель.
@@ -242,6 +453,19 @@
           assistant.open();
         });
 
+        // Product preview: always expand after upgrade (close() is for API demos only).
+        window.addEventListener(
+          'palatium:ready',
+          function () {
+            try {
+              assistant.open();
+            } catch (_err) {
+              /* ignore pre-upgrade */
+            }
+          },
+          { once: true }
+        );
+
         // Светлая тема — явный opt-in хоста (`data-theme`), а не prefers-color-scheme.
         var themeButton = document.getElementById('btn-theme');
         themeButton.addEventListener('click', function () {
@@ -254,7 +478,7 @@
         // Контекст, выставленный ДО загрузки виджета (проверка ветки window.__palatiumSedContext).
         // Хост, который уже знает тред (перезагрузка страницы), обязан вернуть его сразу:
         // иначе виджет успевает создать новый тред, и диалог «теряется» (E2E-04).
-        var hasPreload = new URLSearchParams(location.search).has('preload');
+        var hasPreload = params.has('preload');
         if (hasPreload || hostThreadId) {
           hostEnabled = true;
           mintToken()

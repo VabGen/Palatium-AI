@@ -49,6 +49,7 @@ class MemoryPromotionService:
         xmemory_decouple: bool = False,
         bayesian_trust: bool = False,
         claim_seconds: int = DEFAULT_PROMOTE_CLAIM_SECONDS,
+        origin_ceiling: bool = True,
     ) -> None:
         self._memory = memory
         self._graph_write = graph_write
@@ -56,6 +57,7 @@ class MemoryPromotionService:
         self._xmemory_decouple = xmemory_decouple
         self._bayesian_trust = bayesian_trust
         self._claim_seconds = max(1, claim_seconds)
+        self._origin_ceiling = origin_ceiling
 
     @traceable(name="memory_promotion.run_batch")
     async def run_batch(self, *, user_id: str, limit: int = 32) -> int:
@@ -96,7 +98,16 @@ class MemoryPromotionService:
         return promoted
 
     async def _try_promote(self, candidate: PromotionCandidate) -> PromoteOutcome:
-        if not PromotionPolicy.should_promote(candidate, thresholds=self._thresholds):
+        if not PromotionPolicy.should_promote(
+            candidate,
+            thresholds=self._thresholds,
+            origin_ceiling=self._origin_ceiling,
+        ):
+            if self._origin_ceiling and not PromotionPolicy.origin_ceiling_allows(
+                candidate,
+                min_access_frequency=self._thresholds.min_access_frequency,
+            ):
+                agent_metrics.record_memory_origin_ceiling(action="promote_blocked")
             return "skipped"
         # Claim before the graph write: listing then writing is a read-then-write pair, and
         # two promoters (schedule + operator CLI) that both saw "not promoted" would write

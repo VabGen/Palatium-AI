@@ -32,6 +32,22 @@ class ImagePart(BaseModel):
     mime: ImageMime
 
 
+class DocumentPart(BaseModel):
+    """Citeable text attachment for provider document blocks (W3a grounding).
+
+    ``title`` must equal the citation chip label from ``citation_refs_from_untrusted_context``
+    so Anthropic ``document_title`` resolves to the same ``source_ref``. ``text`` is
+    already-admitted ``safe_text`` (budgeted at turn entry) — the same coordinate space
+    as ``CitationLocator`` (docs/source-citation-highlight.md).
+    """
+
+    model_config = {"frozen": True}
+
+    attachment_id: UUID
+    title: str = Field(min_length=1, max_length=255)
+    text: str = Field(min_length=1, max_length=200_000)
+
+
 class ChatMessage(BaseModel):
     """Сообщение в диалоге с LLM."""
 
@@ -44,16 +60,21 @@ class ChatMessage(BaseModel):
     #: Images the model should look at (ADR 0007). Additive: text-only callers are
     #: unaffected, and an adapter without vision must reject rather than drop them.
     image_parts: tuple[ImagePart, ...] = ()
+    #: Citeable documents (text attachments) for provider grounding annotations.
+    document_parts: tuple[DocumentPart, ...] = ()
 
     @model_validator(mode="after")
-    def _images_only_in_user_messages(self) -> Self:
-        """User turns carry the ask; system/assistant images are never legitimate.
+    def _media_only_in_user_messages(self) -> Self:
+        """User turns carry the ask; system/assistant media are never legitimate.
 
         Allowing them would let retrieved or model-generated content smuggle an
-        "instruction" image past the point where prompt-injection gates look (020).
+        "instruction" image/document past the point where prompt-injection gates look (020).
         """
         if self.image_parts and self.role != "user":
             msg = "image_parts are only allowed on user messages"
+            raise ValueError(msg)
+        if self.document_parts and self.role != "user":
+            msg = "document_parts are only allowed on user messages"
             raise ValueError(msg)
         return self
 
@@ -66,6 +87,10 @@ class LLMUsage(BaseModel):
     prompt_tokens: int = Field(default=0, ge=0)
     completion_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
+    #: Provider prompt-cache accounting (OpenAI ``cached_tokens`` / Anthropic cache read).
+    #: Zero when the gateway omits details — never invent hits (040/CMD2).
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
 
 
 class LLMCompletion(BaseModel):
@@ -101,3 +126,5 @@ class LLMStreamDelta(BaseModel):
     usage: LLMUsage | None = None
     cost_usd: float | None = Field(default=None, ge=0.0)
     model: str | None = None
+    #: Citations often arrive only on the final stream chunk (provider annotations).
+    citations: tuple[CitationRef, ...] = ()

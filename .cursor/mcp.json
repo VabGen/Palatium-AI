@@ -1,0 +1,7 @@
+{
+    "mcpServers": {
+      "kimi-docs": {
+        "command": "mcp-docs"
+      }
+    }
+  }

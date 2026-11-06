@@ -87,18 +87,37 @@ def test_frames_are_stable_across_chunk_boundaries(chunk_size: int) -> None:
 
 
 def test_typed_blocks_match_the_final_document() -> None:
-    """block_delta payloads are exactly the document blocks — no preview-only shape."""
+    """Closed block_delta payloads match the final document (provisional paragraphs upsert)."""
     frames = _feed_all(5)
-    typed = [frame.block for frame in frames if frame.block is not None]
+    # Open-paragraph frames may emit the same index several times; last wins.
+    by_index: dict[int, object] = {}
+    for frame in frames:
+        if frame.block is not None and frame.index >= 0:
+            by_index[frame.index] = frame.block
+    typed = [by_index[i] for i in sorted(by_index)]
 
     document = ContentDocument.model_validate(DOCUMENT)
     assert typed == list(document.blocks)
-    assert [frame.index for frame in frames if frame.block is not None] == [0, 1, 2, 3, 4]
+    assert list(by_index) == [0, 1, 2, 3, 4]
     code = typed[4]
     assert isinstance(code, CodeBlock)
     assert code.content == "print('hi')"  # kept in the typed frame, not as prose
     assert isinstance(typed[2], ListBlock)
     assert len(typed[2].items) == 2
+
+
+def test_open_paragraph_emits_provisional_typed_block() -> None:
+    """Growing paragraph text is a ParagraphBlock at a stable index (typed progressive)."""
+    scanner = PartialDocumentScanner()
+    prefix = '{"locale":"ru-RU","blocks":[{"type":"paragraph","text":"'
+    frames = scanner.feed(prefix + "Первая")
+    assert frames
+    open_frames = [f for f in frames if f.index == 0 and isinstance(f.block, ParagraphBlock)]
+    assert open_frames
+    assert open_frames[-1].block.text == "Первая"
+    more = scanner.feed(" половина")
+    assert more[-1].block is not None and more[-1].block.text == "Первая половина"
+    assert more[-1].continues_prose is True
 
 
 def test_nothing_is_emitted_twice() -> None:

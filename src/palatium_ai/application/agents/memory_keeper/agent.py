@@ -18,8 +18,8 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.memory_keeper import MemoryKeeperOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.llm.models import ChatMessage
 from palatium_ai.domain.memory.tool_output import wrap_untrusted_tool_output
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -73,13 +73,16 @@ class MemoryKeeperAgent(BaseAgent):
             "<<<END_UNTRUSTED_TRANSCRIPT>>>"
         )
 
+        assembled = PromptAssemblyPolicy.assemble(
+            PromptAssemblyParts(
+                system_identity=MEMORY_KEEPER_SYSTEM_PROMPT,
+                user_content=user_prompt,
+            )
+        )
         try:
             completion = await self._harness.call_llm(
                 self._config,
-                [
-                    ChatMessage(role="system", content=MEMORY_KEEPER_SYSTEM_PROMPT),
-                    ChatMessage(role="user", content=user_prompt),
-                ],
+                list(assembled.messages),
                 response_format="json_object",
             )
             output = parse_memory_keeper_output(completion.content)

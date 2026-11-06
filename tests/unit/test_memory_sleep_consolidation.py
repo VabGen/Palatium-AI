@@ -78,3 +78,47 @@ async def test_run_requires_promotion_service_when_promoting() -> None:
 
     with pytest.raises(ValueError, match="promotion service is required"):
         await service.run(user_ids=["u1"])
+
+
+class _FakeCorroboration:
+    def __init__(self, counts: dict[str, int] | None = None) -> None:
+        self.calls: list[tuple[str, int]] = []
+        self._counts = counts or {}
+
+    async def run_for_user(self, *, user_id: str, limit: int = 64) -> int:
+        self.calls.append((user_id, limit))
+        return self._counts.get(user_id, 0)
+
+
+@pytest.mark.asyncio()
+async def test_run_corroborates_before_promote() -> None:
+    """ADR 0008: inferred→verified batch runs before promote so the same pass can lift rows."""
+    promotion = _FakePromotion({"u1": 1})
+    corroboration = _FakeCorroboration({"u1": 3})
+    service = SleepConsolidationService(
+        promotion=promotion,
+        corroboration=corroboration,  # type: ignore[arg-type]  # structural fake
+    )
+
+    result = await service.run(user_ids=["u1"], run_retention=False, limit=16)
+
+    assert corroboration.calls == [("u1", 64)]  # max(16*4, 64)
+    assert promotion.calls == [("u1", 16)]
+    assert result.corroborated == {"u1": 3}
+    assert result.promoted == {"u1": 1}
+
+
+@pytest.mark.asyncio()
+async def test_run_can_skip_corroboration() -> None:
+    promotion = _FakePromotion()
+    corroboration = _FakeCorroboration()
+    service = SleepConsolidationService(
+        promotion=promotion,
+        corroboration=corroboration,  # type: ignore[arg-type]  # structural fake
+    )
+
+    result = await service.run(user_ids=["u1"], run_corroboration=False, run_retention=False)
+
+    assert corroboration.calls == []
+    assert result.corroborated == {}
+    assert promotion.calls == [("u1", 32)]

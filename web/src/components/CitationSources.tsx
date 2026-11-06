@@ -63,10 +63,14 @@ export function CitationSources({ citations, userId = '', orgId = '' }: Citation
   return (
     <div className="citation-sources">
       <ul className="source-ref-chips" aria-label={t('attach.sources')}>
-        {groups.map(group => {
+        {groups.map((group, index) => {
           const isOpen = group.sourceRef === openSource;
           return (
-            <li key={group.sourceRef} className="source-ref-chip">
+            <li
+              key={group.sourceRef}
+              id={`source-ref-${index + 1}`}
+              className="source-ref-chip"
+            >
               <button
                 type="button"
                 className={`source-ref-button${isOpen ? ' is-open' : ''}`}
@@ -77,6 +81,9 @@ export function CitationSources({ citations, userId = '', orgId = '' }: Citation
                   setOpenSource(isOpen ? null : group.sourceRef);
                 }}
               >
+                <span className="source-ref-index" aria-hidden>
+                  {index + 1}
+                </span>
                 <span className="source-ref-name">{group.sourceRef}</span>
                 {group.citations.length > 1 && (
                   // Число не склоняется и не читается скринридером отдельно:

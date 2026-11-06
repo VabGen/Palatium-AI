@@ -1042,13 +1042,14 @@ services:
       retries: 5
       start_period: 30s
 
-  # Out-of-band sleep consolidation: medium → Neo4j promote + memory retention plan
-  # (M3 / SB4; 060). Not on the chat hot path. Retention stays dry-run here — the
-  # global retention CronJob owns destructive execute, so this loop cannot delete rows.
-  # Owners are discovered per pass (`--all-users`, SECURITY DEFINER RPC) because the
-  # app role cannot read other tenants' memory rows under FORCE RLS. Set
-  # MEMORY_PROMOTE_ALL_USERS=false to use an explicit MEMORY_PROMOTE_USER_IDS list.
-  # Requires GRAPH_QUERY_BACKEND=neo4j.
+  # Out-of-band sleep consolidation (ADR 0008 / 060): corroborate inferred→verified
+  # → promote medium→Neo4j → memory retention plan (dry-run). Not a separate
+  # corroboration container — same CronJob loop. Not on the chat hot path.
+  # Retention stays dry-run here; global retention CronJob owns destructive execute.
+  # Owners: SECURITY DEFINER RPCs (promotion_owner_ids ∪ corroboration_owner_ids)
+  # because FORCE RLS hides other tenants. Set MEMORY_PROMOTE_ALL_USERS=false for an
+  # explicit MEMORY_PROMOTE_USER_IDS list. Requires GRAPH_QUERY_BACKEND=neo4j.
+  # Rollback corroboration: MEMORY_ORIGIN_CEILING=false or CLI --skip-corroboration.
   memory-consolidate:
     profiles: [ "memory-jobs" ]
     # Same build as the API (one anchor): the worker has no server of its own, but it must
@@ -1080,6 +1081,8 @@ services:
       MEMORY_PROMOTE_INTERVAL_SECONDS: ${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}
       MEMORY_PROMOTE_ALL_USERS: ${MEMORY_PROMOTE_ALL_USERS:-true}
       MEMORY_PROMOTE_USER_IDS: ${MEMORY_PROMOTE_USER_IDS:-}
+      MEMORY_ORIGIN_CEILING: ${MEMORY_ORIGIN_CEILING:-true}
+      RETENTION_MEMORY_INFERRED_DAYS: ${RETENTION_MEMORY_INFERRED_DAYS:-7}
       # The root filesystem is read-only and only /tmp is a tmpfs. Without a writable
       # target the hash-chained audit writer crashed the pass with
       # "OSError: [Errno 30] Read-only file system: 'logs/audit-chain.log'".
@@ -1115,7 +1118,7 @@ services:
             [ -z "$$uid" ] && continue
             set -- "$$@" --user-id "$$uid"
           done
-          # One pass = promote every owner, then one retention sweep (dry-run).
+          # One pass = corroborate → promote → retention sweep (dry-run).
           python -m palatium_ai.jobs.memory_consolidate "$$@" || true
           sleep "$${MEMORY_PROMOTE_INTERVAL_SECONDS:-3600}"
         done

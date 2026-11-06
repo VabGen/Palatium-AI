@@ -68,6 +68,8 @@ class RetentionWindows(BaseModel, frozen=True):
     memory_medium_days: int = Field(default=30, ge=1, le=3650)
     memory_episode_days: int = Field(default=365, ge=1, le=3650)
     memory_pii_days: int = Field(default=90, ge=1, le=3650)
+    #: ADR 0008 / ASI-06 O3: extract/compact ``inferred`` facts expire sooner than HITL-verified.
+    memory_inferred_days: int = Field(default=7, ge=1, le=3650)
     attachment_pii_days: int = Field(default=90, ge=1, le=3650)
     knowledge_orphan_days: int = Field(default=7, ge=1, le=3650)
     graph_pii_days: int = Field(default=90, ge=1, le=3650)
@@ -121,19 +123,28 @@ class RetentionPolicy:
         memory_type: MemoryType | str,
         contains_pii: bool,
         windows: RetentionWindows = DEFAULT_RETENTION_WINDOWS,
+        trust: str | None = None,
     ) -> int:
-        """Days until medium-term memory row expires (access does not extend PII)."""
+        """Days until medium-term memory row expires (access does not extend PII).
+
+        ``trust=inferred`` (ADR 0008) never exceeds ``memory_inferred_days`` and never
+        exceeds the class window — unverified extract must not linger like HITL facts.
+        """
         kind = RetentionPolicy.memory_class(memory_type=memory_type, contains_pii=contains_pii)
         if kind == "memory_pii":
             base = windows.memory_episode_days if str(memory_type).strip().lower() == "episode" else windows.memory_medium_days
-            return RetentionPolicy.effective_days(
+            days = RetentionPolicy.effective_days(
                 base,
                 contains_pii=True,
                 pii_days=windows.memory_pii_days,
             )
-        if kind == "memory_episode":
-            return windows.memory_episode_days
-        return windows.memory_medium_days
+        elif kind == "memory_episode":
+            days = windows.memory_episode_days
+        else:
+            days = windows.memory_medium_days
+        if (trust or "").strip().lower() == "inferred":
+            return min(days, windows.memory_inferred_days)
+        return days
 
     @staticmethod
     def memory_expires_at(
@@ -142,6 +153,7 @@ class RetentionPolicy:
         contains_pii: bool,
         created_at: datetime,
         windows: RetentionWindows = DEFAULT_RETENTION_WINDOWS,
+        trust: str | None = None,
     ) -> datetime:
         """Timezone-aware expiry from created_at + TTL (PII clock = created_at only)."""
         _require_aware(created_at)
@@ -149,6 +161,7 @@ class RetentionPolicy:
             memory_type=memory_type,
             contains_pii=contains_pii,
             windows=windows,
+            trust=trust,
         )
         return created_at + timedelta(days=days)
 

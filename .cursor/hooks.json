@@ -10,7 +10,7 @@
     ],
     "beforeMCPExecution": [
       {
-        "command": ".cursor/hooks/mcp-rbac-guard.sh",
+        "command": "python .cursor/hooks/mcp-rbac-guard.py",
         "matcher": ".*",
         "failClosed": true,
         "timeout": 10

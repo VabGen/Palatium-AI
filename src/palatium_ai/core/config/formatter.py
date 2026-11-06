@@ -38,3 +38,13 @@ class FormatterConfig(BaseConfig):
             "100 = every caller (explicit full cutover)."
         ),
     )
+    formatter_shape_precheck: bool = Field(
+        default=False,
+        validation_alias="FORMATTER_SHAPE_PRECHECK",
+        description=(
+            "Experiment: when true and response_shape is explicit under schema_first, "
+            "buffer generation (no block_delta), validate ShapeRecipePolicy, regenerate "
+            "at most once on mismatch, then emit_content_document. Off by default — "
+            "post-stream repair stays forbidden (response-shapes §8)."
+        ),
+    )

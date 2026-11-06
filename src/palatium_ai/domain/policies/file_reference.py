@@ -35,6 +35,8 @@ _HINT_SCAN_CHARS = 20_000
 _MIN_NAME_RUN_WORDS = 2
 _MIN_NAME_RUN_WORD_CHARS = 3
 _MIN_NAME_RUN_CHARS = 10
+#: Digit-bearing runs ("скан"+"2") are short but uniquely identify siblings.
+_MIN_NAME_RUN_CHARS_WITH_DIGIT = 4
 # A refusal never becomes a wall of names.
 _MAX_LISTED_NAMES = 5
 #: Resolution reasons that mean "the ask named this file" (not a default pick).
@@ -196,14 +198,15 @@ class FileReferencePolicy:
     ) -> list[FileRefCandidate]:
         """Candidates whose name (or name-shaped part of it) occurs in ``hint_text``.
 
-        Three structural gates, no word lists:
+        Structural gates, no word lists:
         * occurrences must be delimiter-bounded — a name glued into a longer word
           (``...обращением``) is not a document reference;
-        * a single-word stem counts only when it reads as a name (digit/symbol or
-          several words), so an ordinary word like «обращение» cannot select a file;
-        * a multi-word run of the name (``кодекс корпоративной этики`` for
-          ``Кодекс_корпоративной_этики_V2_0_ред_10(1).docx``) counts when every
-          word is substantive and the run is long enough to be a title, not a phrase.
+        * a full stem as a bounded token selects the file when it uniquely identifies
+          one thread candidate (``обращение`` → ``Обращение.docx`` among others);
+        * a multi-word / digit-bearing run of the name (``скан_2``, ``кодекс
+          корпоративной этики``) counts when it uniquely points at one title.
+        Uniqueness is enforced by the caller (``len(matched) == 1``); this method
+        only collects candidates that the ask *could* name.
         """
         haystack = _normalize_text(hint_text[:_HINT_SCAN_CHARS])
         if not haystack:
@@ -218,7 +221,7 @@ class FileReferencePolicy:
                 matched.append(item)
                 continue
             stem = _normalize_name(_strip_extension(item.filename))
-            if _stem_is_named(haystack, stem) or _name_run_matches(haystack_words, stem):
+            if _stem_token_matches(haystack, stem) or _name_run_matches(haystack_words, stem):
                 matched.append(item)
         return matched
 
@@ -239,26 +242,43 @@ def _strip_extension(filename: str) -> str:
     return head if separator and head else filename
 
 
-def _stem_is_named(haystack: str, stem: str) -> bool:
-    """True when a name-shaped stem of sufficient length occurs as a bounded token."""
-    return len(stem) >= _MIN_NAME_MATCH_CHARS and _is_name_shaped(stem) and _occurs_as_bounded_token(haystack, stem)
+def _stem_token_matches(haystack: str, stem: str) -> bool:
+    """True when the full extension-stripped stem occurs as a bounded token in the ask.
+
+    Single plain stems (``обращение`` for ``Обращение.docx``) are allowed: among
+    several thread files uniqueness still gates resolution. Inflected prose
+    (``обращением``) stays unbounded and does not match (055).
+    """
+    return len(stem) >= _MIN_NAME_MATCH_CHARS and _occurs_as_bounded_token(haystack, stem)
 
 
 def _name_run_matches(haystack_words: Sequence[str], stem: str) -> bool:
-    """True when a long-enough contiguous run of the file name occurs in the ask."""
+    """True when a long-enough contiguous run of the file name occurs in the ask.
+
+    Digit tokens are discriminators (``скан_2`` → ``Скан 2 _Приложение.pdf``), not
+    fluff: they count as substantive even when shorter than the alphabetic minimum.
+    """
     name_words = _name_words(stem)
     if len(name_words) < _MIN_NAME_RUN_WORDS:
         return False
     for size in range(len(name_words), _MIN_NAME_RUN_WORDS - 1, -1):
         for start in range(len(name_words) - size + 1):
             run = name_words[start : start + size]
-            if any(len(word) < _MIN_NAME_RUN_WORD_CHARS for word in run):
+            if not all(_run_word_is_substantive(word) for word in run):
                 continue
-            if sum(len(word) for word in run) < _MIN_NAME_RUN_CHARS:
+            min_chars = _MIN_NAME_RUN_CHARS_WITH_DIGIT if any(word.isdigit() for word in run) else _MIN_NAME_RUN_CHARS
+            if sum(len(word) for word in run) < min_chars:
                 continue
             if _contains_word_run(haystack_words, run):
                 return True
     return False
+
+
+def _run_word_is_substantive(word: str) -> bool:
+    """Alphabetic title words need length; digit tokens distinguish siblings (скан 1/2)."""
+    if word.isdigit():
+        return True
+    return len(word) >= _MIN_NAME_RUN_WORD_CHARS
 
 
 def _contains_word_run(haystack_words: Sequence[str], run: Sequence[str]) -> bool:
@@ -281,19 +301,6 @@ def _name_words(text: str) -> list[str]:
     if current:
         words.append("".join(current))
     return words
-
-
-def _is_name_shaped(stem: str) -> bool:
-    """True when a stem reads as a document name, not as ordinary prose.
-
-    Structural shape test, not a word list: a name carries a digit/symbol
-    (``СФУТ 9.03-2025``, ``кодекс_корпоративной_этики_v2_0``) or spans several
-    words. A single plain word (``обращение``, ``договор``) is regular prose and
-    must not turn any sentence into a file reference (055).
-    """
-    if any(ch.isdigit() or not ch.isalpha() for ch in stem):
-        return True
-    return len(stem.split()) > 1
 
 
 def _occurs_as_bounded_token(haystack: str, needle: str) -> bool:

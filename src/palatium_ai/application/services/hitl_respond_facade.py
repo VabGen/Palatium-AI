@@ -30,11 +30,16 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.memory_consolidate_service import MemoryConsolidateService
     from palatium_ai.application.services.memory_forget_service import MemoryForgetService
     from palatium_ai.application.services.memory_save_service import MemorySaveService
+    from palatium_ai.application.services.memory_verify_service import MemoryVerifyService
+    from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.application.services.skill_manage_service import SkillManageService
 
 _OFF_GRAPH_TOOL_PREFIXES: tuple[str, ...] = (
     "doc-ingest-",
     "mem-save-",
     "mem-forget-",
+    "mem-verify-",
+    "skill-manage-",
     "mem-extract-",
     "att-index-",
     "att-restore-",
@@ -46,33 +51,43 @@ def _is_off_graph_tool_task(task_id: str) -> bool:
     return any(task_id.startswith(prefix) for prefix in _OFF_GRAPH_TOOL_PREFIXES)
 
 
+_OFF_GRAPH_DEFAULT_SUMMARY: tuple[tuple[str, str], ...] = (
+    ("att-analyze-", "Анализ вложения завершён (пустой summary)."),
+    ("att-index-", "Вложение проиндексировано в базу знаний."),
+    ("att-restore-", "Вложение восстановлено из карантина."),
+    ("mem-save-", "Запись сохранена в память."),
+    ("mem-forget-", "Запись удалена из памяти."),
+    ("mem-verify-", "Верификация записи памяти завершена."),
+    ("skill-manage-", "Управление навыком завершено."),
+    ("mem-extract-", "Извлечение из диалога поставлено в очередь."),
+)
+
+
+def _default_off_graph_summary(task_id: str) -> str | None:
+    for prefix, text in _OFF_GRAPH_DEFAULT_SUMMARY:
+        if task_id.startswith(prefix):
+            return text
+    return None
+
+
 def _formatter_from_off_graph_payload(
     *,
     task_id: str,
     payload: dict[str, object] | None,
+    locale: str = "und",
 ) -> FormatterTaskResult | None:
     """Map off-graph mutation payload into a chat document (analyze summary, etc.)."""
     if not payload:
         return None
-    summary = str(payload.get("summary", "")).strip()
+    summary = str(payload.get("summary", "")).strip() or (_default_off_graph_summary(task_id) or "")
     if not summary:
-        if task_id.startswith("att-analyze-"):
-            summary = "Анализ вложения завершён (пустой summary)."
-        elif task_id.startswith("att-index-"):
-            summary = "Вложение проиндексировано в базу знаний."
-        elif task_id.startswith("att-restore-"):
-            summary = "Вложение восстановлено из карантина."
-        elif task_id.startswith("mem-save-"):
-            summary = "Запись сохранена в память."
-        elif task_id.startswith("mem-forget-"):
-            summary = "Запись удалена из памяти."
-        elif task_id.startswith("mem-extract-"):
-            summary = "Извлечение из диалога поставлено в очередь."
-        else:
-            return None
+        return None
 
+    from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+
+    doc_locale = ReplyLocalePolicy.normalize(locale) or ReplyLocalePolicy.resolve(user_text=summary)
     doc = ContentDocument(
-        locale="ru-RU",
+        locale=doc_locale,
         title=None,
         blocks=(ParagraphBlock(type="paragraph", text=summary[:8000]),),
         meta=DocumentMeta(confidence=1.0, requires_review=False, source_refs=(), interaction="none"),
@@ -116,16 +131,22 @@ class HitlRespondFacade:
         document_ingest_service: DocumentIngestService | None = None,
         memory_save_service: MemorySaveService | None = None,
         memory_forget_service: MemoryForgetService | None = None,
+        memory_verify_service: MemoryVerifyService | None = None,
+        skill_manage_service: SkillManageService | None = None,
         memory_consolidate_service: MemoryConsolidateService | None = None,
         attachment_index_service: AttachmentService | None = None,
+        session_service: SessionService | None = None,
     ) -> None:
         self._hitl = hitl_service
         self._intent = intent_service
         self._document_ingest = document_ingest_service
         self._memory_save = memory_save_service
         self._memory_forget = memory_forget_service
+        self._memory_verify = memory_verify_service
+        self._skill_manage = skill_manage_service
         self._memory_consolidate = memory_consolidate_service
         self._attachment_index = attachment_index_service
+        self._session_service = session_service
 
     async def respond(
         self,
@@ -242,6 +263,10 @@ class HitlRespondFacade:
             return self._memory_save
         if task_id.startswith("mem-forget-"):
             return self._memory_forget
+        if task_id.startswith("mem-verify-"):
+            return self._memory_verify
+        if task_id.startswith("skill-manage-"):
+            return self._skill_manage
         if task_id.startswith("mem-extract-"):
             return self._memory_consolidate
         if task_id.startswith(("att-index-", "att-restore-", "att-analyze-")):
@@ -266,9 +291,19 @@ class HitlRespondFacade:
                 )
                 if body.action_id == "approve":
                     # Off-graph mutation summary is a new one-block answer, never a diff.
+                    from palatium_ai.application.services.session_locale import (
+                        resolve_thread_response_locale,
+                    )
+
+                    locale = await resolve_thread_response_locale(
+                        self._session_service,
+                        thread_id=card.thread_id,
+                        fallback_text=str((payload or {}).get("summary", "")),
+                    )
                     formatted = _formatter_from_off_graph_payload(
                         task_id=card.task_id,
                         payload=payload,
+                        locale=locale,
                     )
                     return FinalizedTurn(result=formatted) if formatted is not None else None
                 return None

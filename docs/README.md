@@ -15,11 +15,13 @@
 | **[adr/0002-global-retention-scheduler.md](adr/0002-global-retention-scheduler.md)** | ADR: global retention — out-of-band CronJob + узкая DB-роль |
 | **[../.cursor/plans/global-retention.md](../.cursor/plans/global-retention.md)** | План Global Data Retention W0–W6: политики, scheduler, GDPR/152-ФЗ (актуально на 2026-10-05) |
 | **[../.cursor/plans/memory-max-pro.md](../.cursor/plans/memory-max-pro.md)** | План Memory MAX PRO: hybrid cortex, LOCKED решения, волны M0–M8 (актуально на 2026-10-06) |
+| **[../.cursor/plans/context-memory-dialog-2026.md](../.cursor/plans/context-memory-dialog-2026.md)** | План Context·Dialog·Memory post-M8: prompt tiers, ASI-06 origin ceiling, memory-as-tools, AGENTS.md, HITL skill_manage (proposed 2026-11-03) |
 | **[adr/0003-postgres-checkpointer-session-ttl.md](adr/0003-postgres-checkpointer-session-ttl.md)** | ADR: short-term = Postgres checkpointer + retention TTL |
 | **[adr/0004-hybrid-memory-not-neo4j-only.md](adr/0004-hybrid-memory-not-neo4j-only.md)** | ADR: Postgres medium + bi-temporal Neo4j; reject Neo4j-only Cortex |
 | **[adr/0005-content-document-response-shapes.md](adr/0005-content-document-response-shapes.md)** | ADR: единый `ContentDocument` + ось `response_shape`; reject per-scenario схем |
 | **[adr/0006-canvas-server-authoritative-documents.md](adr/0006-canvas-server-authoritative-documents.md)** | ADR: Canvas = server-authoritative `ContentDocument`; reject Yjs CRDT |
 | **[adr/0007-vision-image-parts.md](adr/0007-vision-image-parts.md)** | ADR: vision как `ImagePart` сообщения; OCR остаётся; алиас `vision-tier`, без fallback |
+| **[adr/0008-memory-origin-trust-ceiling.md](adr/0008-memory-origin-trust-ceiling.md)** | ADR: origin/trust ceiling на medium (ASI-06); proposed до soak CMD1 (2026-11-03) |
 | **[../.cursor/plans/canvas-vision-phase-7.md](../.cursor/plans/canvas-vision-phase-7.md)** | План Phase 7: Canvas закрыт решением, vision заблокирован открытыми вопросами (2026-10-25) |
 | **[../.cursor/plans/response-shapes.md](../.cursor/plans/response-shapes.md)** | План: ось формы ответа, `ShapeRecipePolicy`, волны 1–4 (актуально на 2026-10-19) |
 | **[grounding-mvp-deferrals.md](grounding-mvp-deferrals.md)** | Adaptive Grounding MVP: осознанные deferrals + критерий возврата + staging A/B gate (2026-10-14) |
@@ -33,6 +35,9 @@
 | **[audit/e2e-bug-report.md](audit/e2e-bug-report.md)** | Живой E2E UI-аудит памяти (Playwright): сценарии, баги, приоритеты, план исправления (2026-10-21) |
 | **[architecture/streaming.md](architecture/streaming.md)** | SSE-контракт `/intents/process/stream`: события, TTFT, fast path (актуально на 2026-10-09) |
 | **[embedded-assistant.md](embedded-assistant.md)** | Embeddable-виджет `<palatium-assistant>`: контракт событий, темизация, доставка, §9 — интеграционный пакет и чек-лист приёмки для команды СЭД |
+| **[integration/INTEGRATION_CONTRACT.md](integration/INTEGRATION_CONTRACT.md)** | Draft-контракт Palatium ↔ Канцлер NEXT (endpoints/Permission/scope/auth) по сверке JavaEdms; на подтверждение команде СЭД (актуально на 2026-11-03) |
+| **[frontend/FRONTEND_AUDIT.md](frontend/FRONTEND_AUDIT.md)** | Аудит `web/` vs канон `web-embed-assistant`: Track I закрыт; ложные gap’ы (MF/WS→SSE/HITL-via-event) отведены (актуально на 2026-11-03) |
+| **[frontend/kimi-brand.md](frontend/kimi-brand.md)** | Kimi Brand Book (внешний SoT): логотип, цвет, типографика, UI; ссылка на [kimi.ai/resources/kimi-brand](https://www.kimi.ai/resources/kimi-brand) (актуально на 2026-11-06) |
 | **[../deploy/observability/README.md](../deploy/observability/README.md)** | Observability-стек: Prometheus / Grafana / Loki / Alertmanager + SLO |
 | **[../env/.env.example](../env/.env.example)** | Канон env + чеклист первого подъёма |
 

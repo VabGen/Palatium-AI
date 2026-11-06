@@ -29,7 +29,7 @@ from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutp
 from palatium_ai.domain.agents.supervisor import SupervisorInput, SupervisorOutput, SupervisorTaskResult
 from palatium_ai.domain.agents.text_ingestor import TextIngestorInput, TextIngestorOutput, TextIngestorTaskResult
 from palatium_ai.domain.content import ContentDocument
-from palatium_ai.domain.llm.models import ImagePart
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.memory.contextualizer import ContextualizerInput, ContextualizerOutput, ContextualizerTaskResult
 
 if TYPE_CHECKING:
@@ -237,6 +237,7 @@ def critic_to_agent_input(
             "continuation_kind": task_input.continuation_kind or "",
             "user_input_chars": str(task_input.user_input_chars),
             "worker_confidence": ("" if task_input.worker_confidence is None else str(task_input.worker_confidence)),
+            "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },
@@ -284,12 +285,14 @@ def formatter_to_agent_input(
     *,
     trace_id: str,
     thread_id: str,
+    document_parts: tuple[DocumentPart, ...] = (),
 ) -> AgentInput:
     """Build AgentInput for Formatter from graph node payload."""
     return AgentInput(
         task_id=task_id_to_uuid(task_input.task_id),
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
+        document_parts=document_parts,
         context={
             "context_packet_json": task_input.context_packet.model_dump_json(),
             "worker_summary": task_input.worker_summary or "",
@@ -419,17 +422,20 @@ def researcher_to_agent_input(
     user_id: str = "",
     org_id: str = "",
     image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
 ) -> AgentInput:
     """Build AgentInput for Researcher from graph node payload.
 
-    ``image_parts`` come from the turn's admission decision (ADR 0007), never from the
-    node: a worker is not allowed to decide that an upload may reach the model.
+    ``image_parts`` / ``document_parts`` come from the turn's admission decision
+    (ADR 0007 / W3a), never from the node: a worker is not allowed to decide that an
+    upload may reach the model.
     """
     return AgentInput(
         task_id=task_id_to_uuid(task_input.task_id),
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
         image_parts=image_parts,
+        document_parts=document_parts,
         context={
             "context_packet_json": task_input.context_packet.model_dump_json(),
             "prior_context": task_input.prior_context or "",
@@ -593,6 +599,7 @@ def analyst_to_agent_input(
     trace_id: str,
     thread_id: str,
     image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
 ) -> AgentInput:
     """Build AgentInput for Analyst from graph node payload (same admission as Researcher)."""
     return AgentInput(
@@ -600,6 +607,7 @@ def analyst_to_agent_input(
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
         image_parts=image_parts,
+        document_parts=document_parts,
         context={
             "context_packet_json": task_input.context_packet.model_dump_json(),
             "revision_feedback": task_input.revision_feedback or "",

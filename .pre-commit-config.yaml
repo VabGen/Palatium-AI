@@ -51,6 +51,14 @@ repos:
         language: system
         pass_filenames: false
 
+      # CMD4: product procedural lock (warn-only until soak; --strict later).
+      - id: check-skills-lock
+        name: product skills-lock (CMD4)
+        entry: uv run --no-project python scripts/check_skills_lock.py
+        language: system
+        pass_filenames: false
+        files: ^skills/procedural/
+
       - id: check-import-layers
         name: import layers (000-architecture)
         entry: uv run --no-project python scripts/check_import_layers.py

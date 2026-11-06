@@ -12,8 +12,9 @@ alwaysApply: true
 ## Канонический набор инструментов (закрытый перечень)
 
 `search_knowledge`, `search_memory`, `save_memory`, `forget_memory`,
-`extract_transcript_memories`, `ingest_document`, `graph_query`,
-`skill_reference`, `web_fallback`, `read_attachment`
+`extract_transcript_memories`, `explain_belief`, `memory_audit`,
+`memory_verify`, `ingest_document`, `graph_query`,
+`skill_reference`, `skill_manage`, `web_fallback`, `read_attachment`
 
 Новый инструмент = правка этого перечня + отдельное обсуждение, не ad-hoc регистрация.
 Канонический набор мутаций памяти из 060 покрыт: `save_memory` / `forget_memory` /
@@ -79,8 +80,9 @@ class PlatformToolPin(BaseModel, frozen=True):
    Legacy-метод `execute()` бросает `ToolNotAllowedError` и остался только для
    обратной совместимости: production-код (Researcher) зовёт `try_execute`.
 4. Audit-события на каждый вызов чувствительных инструментов:
-   `save_memory`, `forget_memory`, `extract_transcript_memories`, `ingest_document`,
-   `web_fallback` (что вызывалось, кем, task — без payload-содержимого).
+ `save_memory`, `forget_memory`, `extract_transcript_memories`, `memory_verify`,
+ `skill_manage`, `ingest_document`, `web_fallback` (что вызывалось, кем, task —
+ без payload-содержимого).
 5. Выход инструмента проходит secret scanner (020); записи с `contains_pii=true`
    из памяти (060) отдаются агенту только в замаскированном виде, если
    `permission` сценария не разрешает явный доступ (HITL).

@@ -8,7 +8,7 @@ import time
 
 from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, get_turn_sse_bridge
 from palatium_ai.core.observability.metrics import agent_metrics
-from palatium_ai.domain.content import ContentBlock
+from palatium_ai.domain.content import ContentBlock, ContentDocument
 from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
 
 # Chunk size for progressive pending UI; prefer newline boundaries.
@@ -108,6 +108,27 @@ def emit_document_block(*, index: int, block: ContentBlock) -> None:
         bridge.sse_first_block_recorded = True
         agent_metrics.record_sse_first_block(time.perf_counter() - bridge.started_at)
     _mark_visible(bridge)
+
+
+def emit_content_document(document: ContentDocument) -> None:
+    """Paint a finished ``ContentDocument`` on the bound turn SSE bridge.
+
+    Under ``structured_incremental`` the preview is the same typed title + blocks the
+    final ``BlockRenderer`` consumes (0-LLM paths: mechanical restructure, cache,
+    worker-owned, deterministic failure copy) — never a markdown draft that would be
+    replaced on ``result`` (wave 2 / ``layout_shift_count == 0``). Legacy stays
+    ``answer_delta`` from ``plain_text``.
+    """
+    bridge = get_turn_sse_bridge()
+    if bridge is None:
+        return
+    if bridge.structured_preview_active():
+        if document.title:
+            emit_document_title(document.title)
+        for index, block in enumerate(document.blocks):
+            emit_document_block(index=index, block=block)
+        return
+    emit_answer_deltas(document.plain_text())
 
 
 def _queue_frames(bridge: TurnSseBridge, text: str, *, replace: bool) -> None:

@@ -29,6 +29,10 @@ class CriticInput(BaseModel):
     continuation_kind: str | None = None
     user_input_chars: int = Field(default=0, ge=0)
     worker_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: Recalled medium/scratchpad hints for this turn (060). Allowed PII sources for
+    #: constitution checks and judge evidence — without them, a name recall looks
+    #: like an invented leak (055).
+    memory_hints: tuple[str, ...] = ()
 
 
 class CriticOutput(BaseModel):

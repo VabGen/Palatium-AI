@@ -47,7 +47,7 @@ def test_promotion_policy_requires_access_and_importance() -> None:
 
 
 def test_preference_promotes_without_access_bumps() -> None:
-    """Identity prefs are durable on write — Neo4j must not wait for reconsolidation."""
+    """Verified identity prefs are durable on write — Neo4j must not wait for reconsolidation."""
     thresholds = PromotionThresholds(min_access_frequency=3, min_importance=0.7)
     pref = PromotionCandidate(
         namespace=("user", "u1"),
@@ -58,11 +58,14 @@ def test_preference_promotes_without_access_bumps() -> None:
         access_frequency=0,
         user_id="u1",
         confidence=0.95,
+        trust="verified",
     )
     assert PromotionPolicy.required_access_frequency("preference", thresholds=thresholds) == 0
     assert PromotionPolicy.should_promote(pref, thresholds=thresholds) is True
-    fact_same = pref.model_copy(update={"kind": "fact"})
+    fact_same = pref.model_copy(update={"kind": "fact", "trust": "verified"})
     assert PromotionPolicy.should_promote(fact_same, thresholds=thresholds) is False
+    inferred_pref = pref.model_copy(update={"trust": "inferred"})
+    assert PromotionPolicy.should_promote(inferred_pref, thresholds=thresholds) is False
 
 
 def test_promotion_policy_rejects_blank_text() -> None:
@@ -127,6 +130,8 @@ async def test_promotion_batch_upserts_preference_without_bumps() -> None:
             "kind": "preference",
             "confidence": 0.95,
             "importance": 0.9,
+            "origin": "user_hitl",
+            "trust": "verified",
         },
     )
 
@@ -163,7 +168,14 @@ async def test_two_promoters_do_not_write_the_same_candidate_twice() -> None:
     await port.put(
         namespace=ns,
         key="pref-name",
-        value={"text": "User's name is Gennady", "kind": "preference", "confidence": 0.95, "importance": 0.9},
+        value={
+            "text": "User's name is Gennady",
+            "kind": "preference",
+            "confidence": 0.95,
+            "importance": 0.9,
+            "origin": "user_hitl",
+            "trust": "verified",
+        },
     )
     first = MemoryPromotionService(memory=port, graph_write=graph)
     second = MemoryPromotionService(memory=port, graph_write=graph)
@@ -219,14 +231,32 @@ async def test_rewritten_content_becomes_a_promotion_candidate_again() -> None:
     graph = InMemoryGraphWritePort()
     ns = user_namespace("alice")
     await port.put(
-        namespace=ns, key="db-port", value={"text": "port is 5432", "kind": "preference", "confidence": 0.9, "importance": 0.9}
+        namespace=ns,
+        key="db-port",
+        value={
+            "text": "port is 5432",
+            "kind": "preference",
+            "confidence": 0.9,
+            "importance": 0.9,
+            "origin": "user_hitl",
+            "trust": "verified",
+        },
     )
     service = MemoryPromotionService(memory=port, graph_write=graph)
     assert await service.run_batch(user_id="alice", limit=8) == 1
     assert await service.run_batch(user_id="alice", limit=8) == 0
 
     await port.put(
-        namespace=ns, key="db-port", value={"text": "port is 5433", "kind": "preference", "confidence": 0.9, "importance": 0.9}
+        namespace=ns,
+        key="db-port",
+        value={
+            "text": "port is 5433",
+            "kind": "preference",
+            "confidence": 0.9,
+            "importance": 0.9,
+            "origin": "user_hitl",
+            "trust": "verified",
+        },
     )
 
     assert await service.run_batch(user_id="alice", limit=8) == 1

@@ -130,6 +130,7 @@ def build_critic_input(
         continuation_kind=selectors.resolved_continuation_kind(state),
         user_input_chars=len(selectors.resolved_user_text(state)),
         worker_confidence=selectors.resolved_worker_confidence(state),
+        memory_hints=selectors.memory_hints(state),
     )
 
 

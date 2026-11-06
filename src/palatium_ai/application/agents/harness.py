@@ -27,6 +27,7 @@ from palatium_ai.core.security.secret_scanner import (
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.errors import EmptyLLMCompletionError, StructuredOutputUnsupportedError
+from palatium_ai.domain.content.citations import CitationRef
 from palatium_ai.domain.llm.models import (
     ChatMessage,
     LLMCompletion,
@@ -37,6 +38,7 @@ from palatium_ai.domain.llm.models import (
 from palatium_ai.domain.llm.structured_output import assert_json_schema_model
 from palatium_ai.domain.memory.compact import CompactRequest
 from palatium_ai.domain.policies.llm_timeout import compute_llm_timeout_seconds
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -78,14 +80,32 @@ def _resolve_call_timeout_seconds(
     return resolved
 
 
+def _record_prompt_assembly_tiers(messages: list[ChatMessage]) -> None:
+    """Count which PromptAssembly system tiers actually hit the provider (CMD2)."""
+    recorded = False
+    for message in messages:
+        if message.role != "system":
+            continue
+        content = (message.content or "").lstrip()
+        if content.startswith("## Stable"):
+            agent_metrics.record_prompt_cache_hint(tier="stable")
+            recorded = True
+        elif content.startswith("## Context"):
+            agent_metrics.record_prompt_cache_hint(tier="context")
+            recorded = True
+        elif content.startswith("## Volatile"):
+            agent_metrics.record_prompt_cache_hint(tier="volatile")
+            recorded = True
+    if not recorded and messages and messages[0].role == "system" and messages[0].cache_control == "ephemeral":
+        # Legacy single system prompt (no assemble headers) still counts as stable.
+        agent_metrics.record_prompt_cache_hint(tier="stable")
+
+
 def _with_system_prompt_cache(messages: list[ChatMessage]) -> list[ChatMessage]:
-    """Mark the leading system message for provider prompt/prefix cache (P0.3)."""
-    if not messages:
-        return messages
-    first = messages[0]
-    if first.role != "system" or first.cache_control is not None:
-        return messages
-    return [first.model_copy(update={"cache_control": "ephemeral"}), *messages[1:]]
+    """Mark the leading stable system message for provider prompt/prefix cache (CMD2)."""
+    cached = PromptAssemblyPolicy.apply_cache_hints(messages)
+    _record_prompt_assembly_tiers(cached)
+    return cached
 
 
 async def _accumulate_stream_deltas(
@@ -100,6 +120,7 @@ async def _accumulate_stream_deltas(
     usage = LLMUsage()
     cost_usd: float | None = None
     model = initial_model
+    citations: list[CitationRef] = []
     async for delta in deltas:
         if delta.content:
             pieces.append(delta.content)
@@ -115,12 +136,15 @@ async def _accumulate_stream_deltas(
             cost_usd = delta.cost_usd
         if delta.model:
             model = delta.model
+        if delta.citations:
+            citations.extend(delta.citations)
     return LLMCompletion(
         content="".join(pieces),
         model=model,
         usage=usage,
         finish_reason=finish_reason,
         cost_usd=cost_usd,
+        citations=tuple(citations),
     )
 
 
@@ -251,6 +275,10 @@ class Harness:
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
             cost_usd=cost_usd,
+        )
+        agent_metrics.record_prompt_cache_tokens(
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
         )
         turn_tokens = get_turn_token_collector()
         if turn_tokens is not None:

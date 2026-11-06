@@ -59,8 +59,10 @@ _RECIPES: Final[dict[str, ShapeRecipe]] = {
         block_requirements=("heading",),
     ),
     "plan": ShapeRecipe(
+        # Process answers must use StepsBlock so BlockRenderer draws one timeline —
+        # an ordered list is parallel/sequence prose and drifts into mixed numbering.
         shape="plan",
-        block_requirements=("steps", "list"),
+        block_requirements=("steps",),
     ),
     "prose": ShapeRecipe(
         shape="prose",
@@ -110,6 +112,10 @@ class ShapeRecipePolicy:
     @classmethod
     def validate(cls, document: ContentDocument, recipe: ShapeRecipe) -> ShapeVerdict:
         """Check block composition; never raises and never mutates the document."""
+        # Plan has its own reason codes (steps vs ordered-list drift) — do not collapse
+        # an ordered list into the generic ``plan_block_missing`` before that check.
+        if recipe.shape == "plan":
+            return _verdict(recipe.shape, _check_plan(document))
         if not _has_required_block(document, recipe):
             return _verdict(recipe.shape, _missing_reason(recipe))
         reason = _specific_check(document, recipe)
@@ -151,19 +157,18 @@ def _check_comparison_table(document: ContentDocument, recipe: ShapeRecipe) -> s
 
 def _check_plan(document: ContentDocument) -> str:
     items = 0
-    has_list = False
+    ordered_list_only = False
     for block in document.blocks:
         if block.type == "steps":
             items = max(items, len(block.items))
-        elif block.type == "list":
-            has_list = True
-            if block.style == "ordered":
-                items = max(items, len(block.items))
+        elif block.type == "list" and block.style == "ordered":
+            ordered_list_only = True
     if items >= _MIN_PLAN_ITEMS:
         return "ok"
     if items:
         return "plan_too_short"
-    return "plan_not_ordered" if has_list else "plan_block_missing"
+    # Ordered list is no longer an accepted plan surface — metric reason stays stable.
+    return "plan_not_ordered" if ordered_list_only else "plan_block_missing"
 
 
 def _has_paragraph(document: ContentDocument) -> bool:

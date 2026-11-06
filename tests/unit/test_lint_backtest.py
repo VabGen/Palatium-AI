@@ -62,8 +62,17 @@ def _doc(*blocks: ContentBlock, kind: DocumentKind = "report") -> ContentDocumen
     )
 
 
-def _corpus(module: ModuleType, documents: Sequence[ContentDocument]) -> object:
-    return module.Corpus(documents=tuple(documents), skipped=0)
+def _corpus(
+    module: ModuleType,
+    documents: Sequence[ContentDocument],
+    *,
+    shapes: Sequence[str | None] | None = None,
+) -> object:
+    shape_list = list(shapes) if shapes is not None else [None] * len(documents)
+    entries = tuple(
+        module.CorpusEntry(document=document, response_shape=shape) for document, shape in zip(documents, shape_list, strict=True)
+    )
+    return module.Corpus(entries=entries, skipped=0)
 
 
 def _write_jsonl(path: Path, payloads: Sequence[str]) -> Path:
@@ -71,8 +80,14 @@ def _write_jsonl(path: Path, payloads: Sequence[str]) -> Path:
     return path
 
 
-def _payload(document: ContentDocument) -> str:
-    return json.dumps({"schema": "assistant_turn_v1", "document": document.model_dump(mode="json")})
+def _payload(document: ContentDocument, *, response_shape: str | None = None) -> str:
+    body: dict[str, object] = {
+        "schema": "assistant_turn_v1",
+        "document": document.model_dump(mode="json"),
+    }
+    if response_shape is not None:
+        body["response_shape"] = response_shape
+    return json.dumps(body)
 
 
 def test_golden_set_is_a_measurement_not_a_gesture() -> None:
@@ -124,7 +139,7 @@ def test_findings_count_repeats_while_documents_hit_do_not() -> None:
 
 
 def test_kind_breakdown_uses_the_persisted_axis() -> None:
-    """``meta.kind`` is persisted; the intent's ``response_shape`` is not, so no join."""
+    """``meta.kind`` is always on the document; shape is a separate payload axis."""
     module = _load_module()
     documents = [
         _doc(ParagraphBlock(text="## Итоги"), kind="report"),
@@ -136,6 +151,24 @@ def test_kind_breakdown_uses_the_persisted_axis() -> None:
 
     residue = next(rule for rule in result.rules if rule.rule_id == "markdown_residue")
     assert dict(residue.by_kind) == {"analysis": 2, "report": 1}
+    assert dict(residue.by_shape) == {"unset": 3}
+
+
+def test_shape_breakdown_uses_persisted_response_shape() -> None:
+    """Wave 4: Intent ``response_shape`` on the payload joins findings by form."""
+    module = _load_module()
+    documents = [
+        _doc(ParagraphBlock(text="## Итоги"), kind="report"),
+        _doc(ParagraphBlock(text="## Итоги"), kind="report"),
+        _doc(ParagraphBlock(text="## Итоги"), kind="report"),
+    ]
+
+    result = module.run_backtest(
+        _corpus(module, documents, shapes=("plan", "plan", "comparison_table")),
+    )
+
+    residue = next(rule for rule in result.rules if rule.rule_id == "markdown_residue")
+    assert dict(residue.by_shape) == {"plan": 2, "comparison_table": 1}
 
 
 def test_high_share_trigger_is_strictly_greater_than_the_threshold() -> None:
@@ -156,12 +189,17 @@ def test_loader_counts_what_it_could_not_validate(tmp_path: Path) -> None:
     module = _load_module()
     path = _write_jsonl(
         tmp_path / "turns.jsonl",
-        [_payload(_doc(ParagraphBlock(text="Текст."))), "{}", "{not json"],
+        [
+            _payload(_doc(ParagraphBlock(text="Текст.")), response_shape="prose"),
+            "{}",
+            "{not json",
+        ],
     )
 
     corpus = module.load_corpus(path)
 
     assert len(corpus.documents) == 1
+    assert corpus.entries[0].response_shape == "prose"
     assert corpus.skipped == 2
 
 

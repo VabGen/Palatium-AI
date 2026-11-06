@@ -18,6 +18,7 @@ from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError, VisionUnsupportedError
 from palatium_ai.domain.llm.models import (
     ChatMessage,
+    DocumentPart,
     ImagePart,
     LLMCompletion,
     LLMResponseFormat,
@@ -25,7 +26,10 @@ from palatium_ai.domain.llm.models import (
     LLMUsage,
 )
 from palatium_ai.domain.llm.structured_output import response_model_for_schema, strict_json_schema
-from palatium_ai.infrastructure.llm.citation_mapping import citations_from_response
+from palatium_ai.infrastructure.llm.citation_mapping import (
+    citations_from_response,
+    citations_from_stream_chunk,
+)
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
 from palatium_ai.infrastructure.llm.shared_transport import shared_client_session
 
@@ -103,6 +107,8 @@ def _to_litellm_messages(
     out: list[dict[str, object]] = []
     for message in messages:
         images = [_image_url_part(part, resolved) for part in message.image_parts]
+        documents = [_document_text_part(part) for part in message.document_parts]
+        media = [*documents, *images]
         if message.cache_control is not None and message.role == "system":
             out.append(
                 {
@@ -116,11 +122,11 @@ def _to_litellm_messages(
                     ],
                 }
             )
-        elif images:
+        elif media:
             out.append(
                 {
                     "role": message.role,
-                    "content": [{"type": "text", "text": message.content}, *images],
+                    "content": [{"type": "text", "text": message.content}, *media],
                 }
             )
         else:
@@ -138,6 +144,21 @@ def _image_url_part(part: ImagePart, resolved: dict[UUID, str]) -> dict[str, obj
     return {"type": "image_url", "image_url": {"url": url}}
 
 
+def _document_text_part(part: DocumentPart) -> dict[str, object]:
+    """Anthropic-compatible citeable document block (LiteLLM passthrough).
+
+    ``title`` is the citation chip label; ``citations.enabled`` asks the provider to
+    emit source anchors against this body (W3a). Body is plain text already admitted
+    as ``safe_text`` — never the fence wrapper.
+    """
+    return {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": part.text},
+        "title": part.title,
+        "citations": {"enabled": True},
+    }
+
+
 def _data_url(data: bytes, *, mime_type: str) -> str:
     """Inline data URL: no second upload round-trip and no attacker-controlled URL."""
     encoded = base64.b64encode(data).decode("ascii")
@@ -151,20 +172,42 @@ def _parse_usage(usage_obj: object | None) -> LLMUsage:
         prompt = usage_obj.get("prompt_tokens", 0)
         completion = usage_obj.get("completion_tokens", 0)
         total = usage_obj.get("total_tokens", 0)
+        details = usage_obj.get("prompt_tokens_details")
+        cache_read = usage_obj.get("cache_read_input_tokens", 0)
+        cache_write = usage_obj.get("cache_creation_input_tokens", 0)
     else:
         prompt = getattr(usage_obj, "prompt_tokens", 0)
         completion = getattr(usage_obj, "completion_tokens", 0)
         total = getattr(usage_obj, "total_tokens", 0)
+        details = getattr(usage_obj, "prompt_tokens_details", None)
+        cache_read = getattr(usage_obj, "cache_read_input_tokens", 0)
+        cache_write = getattr(usage_obj, "cache_creation_input_tokens", 0)
     prompt_tokens = prompt if isinstance(prompt, int) else 0
     completion_tokens = completion if isinstance(completion, int) else 0
     total_tokens = total if isinstance(total, int) else 0
     if total_tokens <= 0:
         total_tokens = prompt_tokens + completion_tokens
+    cache_read_tokens = _coerce_nonneg_int(cache_read)
+    cache_write_tokens = _coerce_nonneg_int(cache_write)
+    # OpenAI-compatible: prompt_tokens_details.cached_tokens
+    if cache_read_tokens == 0 and details is not None:
+        if isinstance(details, dict):
+            cache_read_tokens = _coerce_nonneg_int(details.get("cached_tokens", 0))
+        else:
+            cache_read_tokens = _coerce_nonneg_int(getattr(details, "cached_tokens", 0))
     return LLMUsage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
     )
+
+
+def _coerce_nonneg_int(raw: object) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 0
+    return max(0, raw)
 
 
 def _coerce_cost_usd(raw: object) -> float | None:
@@ -275,6 +318,7 @@ def _parse_stream_delta(chunk: object) -> LLMStreamDelta:
         usage=usage,
         cost_usd=_parse_response_cost(chunk),
         model=model,
+        citations=citations_from_stream_chunk(chunk),
     )
 
 

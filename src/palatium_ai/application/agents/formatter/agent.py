@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import ValidationError
 
 from palatium_ai.application.agents.formatter.answer_delta import (
+    emit_content_document,
     emit_document_block,
     emit_document_title,
     emit_structured_answer_delta,
@@ -60,10 +61,11 @@ from palatium_ai.domain.content.citations import CitationRef, normalize_citation
 from palatium_ai.domain.content.lint import ContentLint
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.json_codec import LLMJSONError
-from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
+from palatium_ai.domain.llm.models import LLMCompletion
 from palatium_ai.domain.llm.response_parser import compact_validation_error
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
-from palatium_ai.domain.policies.shape import ShapeRecipePolicy
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
+from palatium_ai.domain.policies.shape import ShapeRecipe, ShapeRecipePolicy
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -116,10 +118,12 @@ class FormatterAgent(BaseAgent):
         *,
         mode: FormatterMode = "legacy",
         rollout_pct: int = 100,
+        shape_precheck: bool = False,
     ) -> None:
         super().__init__(harness, config)
         self._mode: FormatterMode = mode
         self._rollout_pct: int = rollout_pct
+        self._shape_precheck: bool = shape_precheck
 
     @property
     def config(self) -> AgentConfig:
@@ -143,6 +147,7 @@ class FormatterAgent(BaseAgent):
             "underspecification_kind",
             "revision_feedback",
             "response_locale",
+            "project_agents_md",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -265,24 +270,48 @@ class FormatterAgent(BaseAgent):
     async def _run_schema_first(self, input: AgentInput, task_input: FormatterInput) -> AgentOutput:
         """Provider-enforced ContentDocument json_schema; legacy Markdown is the fallback.
 
-        Streamed, not buffered: the provider emits the JSON incrementally and every
-        block that closes is painted immediately (``structured_incremental``). The
-        final validated document is a superset of the painted prose, so it never
-        replaces it — that is the difference between this contract and a blocking
-        ``json_schema`` call followed by a full-document swap (055).
+        Default path streams: every closed block paints immediately
+        (``structured_incremental``). With ``FORMATTER_SHAPE_PRECHECK`` and an
+        explicit ``response_shape``, generation is buffered instead — mismatch may
+        regenerate once **before** the first ``block_delta`` (response-shapes §8).
         """
+        recipe = ShapeRecipePolicy.resolve(
+            shape=task_input.context_packet.response_shape,
+            task_kind=task_input.context_packet.task_kind,
+        )
+        if self._shape_precheck and recipe is not None:
+            return await self._run_schema_first_prechecked(input, task_input, recipe=recipe)
+        return await self._run_schema_first_streaming(input, task_input)
+
+    def _schema_first_messages(
+        self, input: AgentInput, task_input: FormatterInput
+    ) -> tuple[list[object], dict[str, object], str, int]:
+        """Shared prompt assembly for schema_first stream and precheck paths."""
         user_payload = build_formatter_user_payload(task_input)
         user_message = build_formatter_user_message(user_payload)
-        messages: list[ChatMessage] = [
-            ChatMessage(role="system", content=FORMATTER_SCHEMA_PROMPT),
-            ChatMessage(role="user", content=user_message),
-        ]
+        messages = list(
+            PromptAssemblyPolicy.assemble(
+                PromptAssemblyParts(
+                    system_identity=FORMATTER_SCHEMA_PROMPT,
+                    project_agents_md=input.context.get("project_agents_md", ""),
+                    user_content=user_message,
+                    document_parts=input.document_parts,
+                )
+            ).messages
+        )
         style_hint = user_payload.get("style_hint")
         max_tokens = formatter_max_tokens(
             user_message,
             style_hint=str(style_hint) if isinstance(style_hint, str) else None,
             final_text_len=len(str(user_payload.get("final_text") or "")),
         )
+        return messages, user_payload, user_message, max_tokens
+
+    async def _run_schema_first_streaming(
+        self, input: AgentInput, task_input: FormatterInput
+    ) -> AgentOutput:
+        """Paint closed blocks as the provider streams JSON (layout_shift=0)."""
+        messages, user_payload, user_message, max_tokens = self._schema_first_messages(input, task_input)
         scanner = PartialDocumentScanner()
         painted_prose = False
 
@@ -293,7 +322,7 @@ class FormatterAgent(BaseAgent):
         try:
             completion = await self._harness.call_llm_stream(
                 self._config,
-                messages,
+                messages,  # type: ignore[arg-type]
                 response_format="json_schema",
                 response_model=ContentDocument,
                 max_tokens=max_tokens,
@@ -305,17 +334,12 @@ class FormatterAgent(BaseAgent):
                 task_id=input.task_id,
                 untrusted_context=task_input.context_packet.untrusted_context,
             )
-            # The provider streams raw text: fences, prose around the payload, minor
-            # JSON defects and a missing ``meta`` are decoder concerns, not turn
-            # failures. Same contract as the legacy JSON path (055).
             document = parse_formatter_document(completion.content)
         except StructuredOutputUnsupportedError:
             logger.warning("formatter.schema_first.unsupported", task_id=str(input.task_id))
             agent_metrics.record_formatter_schema(path="schema_first", outcome="unsupported")
             return await self._run_legacy(input, task_input)
         except (ValidationError, LLMJSONError) as exc:
-            # A model-side defect: the legacy Markdown contract can still produce the
-            # document, so it is a retry path — not the transport-failure path below.
             logger.warning(
                 "formatter.schema_first.invalid_json",
                 task_id=str(input.task_id),
@@ -324,7 +348,6 @@ class FormatterAgent(BaseAgent):
             agent_metrics.record_formatter_schema(path="schema_first", outcome="invalid")
             return await self._run_legacy(input, task_input)
         except Exception:
-            # Provider/timeout failure: same graceful deterministic fallback as legacy.
             logger.exception("formatter schema_first generation failed", task_id=str(input.task_id))
             agent_metrics.record_error(self._config.role, "schema_first_llm_stage_failure")
             return failure_or_fallback(
@@ -347,7 +370,9 @@ class FormatterAgent(BaseAgent):
         if citations:
             # Attached after validation, never emitted by the model: blocks are already
             # painted, and meta does not change layout (W1 invariant).
-            document = document.model_copy(update={"meta": document.meta.model_copy(update={"citations": citations})})
+            document = document.model_copy(
+                update={"meta": document.meta.model_copy(update={"citations": citations})}
+            )
         agent_metrics.record_formatter_schema(path="schema_first", outcome="valid")
         logger.info(
             "formatter.llm_path",
@@ -367,14 +392,154 @@ class FormatterAgent(BaseAgent):
             output=document,
         )
 
+    async def _run_schema_first_prechecked(
+        self,
+        input: AgentInput,
+        task_input: FormatterInput,
+        *,
+        recipe: ShapeRecipe,
+    ) -> AgentOutput:
+        """Buffer → validate shape → optional one regenerate → emit (no mid-stream paint)."""
+        messages, user_payload, user_message, max_tokens = self._schema_first_messages(input, task_input)
+
+        first = await self._generate_schema_document_buffered(
+            input=input,
+            task_input=task_input,
+            messages=messages,
+            user_payload=user_payload,
+            max_tokens=max_tokens,
+        )
+        if isinstance(first, AgentOutput):
+            return first
+        document, citations = first
+        document = self._attach_schema_citations(document, citations, task_input=task_input)
+
+        verdict = ShapeRecipePolicy.validate(document, recipe)
+        if verdict.satisfied:
+            agent_metrics.record_response_shape(shape=verdict.shape, outcome="precheck_ok")
+        else:
+            agent_metrics.record_response_shape(shape=verdict.shape, outcome="precheck_mismatch")
+            logger.info(
+                "formatter.response_shape.precheck_regenerate",
+                task_id=str(input.task_id),
+                shape=verdict.shape,
+                reason=verdict.reason,
+            )
+            second = await self._generate_schema_document_buffered(
+                input=input,
+                task_input=task_input,
+                messages=messages,
+                user_payload=user_payload,
+                max_tokens=max_tokens,
+            )
+            if isinstance(second, AgentOutput):
+                # Legacy/fallback already painted — do not emit the mismatched first doc.
+                return second
+            document, citations = second
+            document = self._attach_schema_citations(document, citations, task_input=task_input)
+            agent_metrics.record_response_shape(shape=recipe.shape, outcome="precheck_regenerated")
+
+        emit_content_document(document)
+        agent_metrics.record_formatter_schema(path="schema_first", outcome="valid")
+        logger.info(
+            "formatter.llm_path",
+            formatter_mode="schema_first_precheck",
+            task_id=str(input.task_id),
+            max_tokens=max_tokens,
+            final_text_chars=len(str(user_payload.get("final_text") or "")),
+            user_payload_chars=len(user_message),
+            style_hint=user_payload.get("style_hint"),
+            **formatter_attachment_stats(task_input, user_payload),
+        )
+        status: Literal["success", "partial"] = "partial" if task_input.requires_review else "success"
+        return AgentOutput(
+            task_id=input.task_id,
+            status=status,
+            confidence=document.meta.confidence,
+            output=document,
+        )
+
+    def _attach_schema_citations(
+        self,
+        document: ContentDocument,
+        citations: tuple[CitationRef, ...],
+        *,
+        task_input: FormatterInput,
+    ) -> ContentDocument:
+        aligned = align_formatter_meta(document, task_input)
+        if not citations:
+            return aligned
+        return aligned.model_copy(
+            update={"meta": aligned.meta.model_copy(update={"citations": citations})}
+        )
+
+    async def _generate_schema_document_buffered(
+        self,
+        *,
+        input: AgentInput,
+        task_input: FormatterInput,
+        messages: list[object],
+        user_payload: dict[str, object],
+        max_tokens: int,
+    ) -> tuple[ContentDocument, tuple[CitationRef, ...]] | AgentOutput:
+        """One non-streaming schema_first generation; fallbacks return AgentOutput."""
+        try:
+            completion = await self._harness.call_llm(
+                self._config,
+                messages,  # type: ignore[arg-type]
+                response_format="json_schema",
+                response_model=ContentDocument,
+                max_tokens=max_tokens,
+            )
+            citations = self._resolve_citations(
+                completion,
+                task_id=input.task_id,
+                untrusted_context=task_input.context_packet.untrusted_context,
+            )
+            document = parse_formatter_document(completion.content)
+        except StructuredOutputUnsupportedError:
+            logger.warning("formatter.schema_first.unsupported", task_id=str(input.task_id))
+            agent_metrics.record_formatter_schema(path="schema_first", outcome="unsupported")
+            return await self._run_legacy(input, task_input)
+        except (ValidationError, LLMJSONError) as exc:
+            logger.warning(
+                "formatter.schema_first.invalid_json",
+                task_id=str(input.task_id),
+                error=compact_validation_error(exc),
+            )
+            agent_metrics.record_formatter_schema(path="schema_first", outcome="invalid")
+            return await self._run_legacy(input, task_input)
+        except Exception:
+            logger.exception("formatter schema_first generation failed", task_id=str(input.task_id))
+            agent_metrics.record_error(self._config.role, "schema_first_llm_stage_failure")
+            return failure_or_fallback(
+                input=input,
+                task_input=task_input,
+                user_payload=user_payload,
+                max_tokens=max_tokens,
+                agent_role=self._config.role,
+            )
+
+        if not document.blocks and str(user_payload.get("final_text") or "").strip():
+            logger.warning("formatter.schema_first.empty_blocks", task_id=str(input.task_id))
+            agent_metrics.record_formatter_schema(path="schema_first", outcome="empty_blocks")
+            return await self._run_legacy(input, task_input)
+        return document, citations
+
     async def _run_legacy(self, input: AgentInput, task_input: FormatterInput) -> AgentOutput:
         """GFM Markdown stream → parse → align meta → optional locale repair."""
         user_payload = build_formatter_user_payload(task_input)
         user_message = build_formatter_user_message(user_payload)
-        messages: list[ChatMessage] = [
-            ChatMessage(role="system", content=FORMATTER_SYSTEM_PROMPT),
-            ChatMessage(role="user", content=user_message),
-        ]
+        messages = list(
+            PromptAssemblyPolicy.assemble(
+                PromptAssemblyParts(
+                    system_identity=FORMATTER_SYSTEM_PROMPT,
+                    project_agents_md=input.context.get("project_agents_md", ""),
+                    user_content=user_message,
+                    document_parts=input.document_parts,
+                )
+            ).messages
+        )
         style_hint = user_payload.get("style_hint")
         final_text_len = len(str(user_payload.get("final_text") or ""))
         max_tokens = formatter_max_tokens(
@@ -384,7 +549,7 @@ class FormatterAgent(BaseAgent):
         )
 
         try:
-            document = await generate_document(
+            document, completion = await generate_document(
                 harness=self._harness,
                 config=self._config,
                 messages=messages,
@@ -404,6 +569,15 @@ class FormatterAgent(BaseAgent):
                 max_tokens=max_tokens,
                 agent_role=self._config.role,
             )
+            citations = self._resolve_citations(
+                completion,
+                task_id=input.task_id,
+                untrusted_context=task_input.context_packet.untrusted_context,
+            )
+            if citations:
+                document = document.model_copy(
+                    update={"meta": document.meta.model_copy(update={"citations": citations})}
+                )
         except PARSE_ERRORS as parse_exc:
             # Repair exhausted. Worker draft may still render deterministically.
             # Prefer graceful degradation over empty document + review flag.

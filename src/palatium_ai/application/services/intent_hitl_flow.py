@@ -427,12 +427,18 @@ class IntentHitlFlow:
         # persisted payload and the caller, so live and hydrated turns never disagree.
         revision = turn_revision(formatted, final_state)
         if self._dialog_turn_store is not None:
+            from palatium_ai.application.orchestration import selectors as graph_selectors
+
             await self._dialog_turn_store.append_turn(
                 thread_id=thread_id,
                 role="assistant",
                 content=assistant_turn_content(formatted),
                 task_id=task_id,
-                payload=assistant_turn_payload(formatted, revision=revision),
+                payload=assistant_turn_payload(
+                    formatted,
+                    revision=revision,
+                    response_shape=str(graph_selectors.resolved_response_shape(final_state)),
+                ),
             )
         await self._graph_runner.refresh_scratchpad(thread_id=thread_id)
         pinned_locale = formatted.output.locale if formatted.output is not None else "und"
@@ -556,6 +562,7 @@ class IntentHitlFlow:
             cast("Literal['low', 'medium', 'high']", risk_tier) if risk_tier in {"low", "medium", "high"} else "medium"
         )
         try:
+            locale = await self._session_response_locale(thread_id=thread_id)
             card = await self._hitl_service.create_tool_approval_card(
                 thread_id=thread_id,
                 task_id=task_id,
@@ -567,6 +574,7 @@ class IntentHitlFlow:
                 owner_user_id=user_id,
                 org_id=org_id,
                 ttl_seconds=ttl_seconds,
+                locale=locale,
             )
         except HitlInvalidActionError as exc:
             logger.warning(
@@ -601,15 +609,20 @@ class IntentHitlFlow:
                 hitl_cards=(),
                 error=str(exc),
             )
-        locale = await self._session_response_locale(thread_id=thread_id)
+        from palatium_ai.domain.hitl.copy import HitlCopyPolicy
+
+        paused = HitlCopyPolicy.tool_paused(
+            locale=locale,
+            server_name=server_name,
+            tool_name=tool_name,
+            side_effect=side_effect,
+        )
         document = ContentDocument(
             locale=locale,
-            title="Tool approval required",
+            title=paused.title,
             blocks=(
-                HeadingBlock(level=2, text="Human approval required before tool call", icon="shield"),
-                ParagraphBlock(
-                    text=(f"Paused before MCP `{server_name}.{tool_name}` (side_effect={side_effect}). Choose Allow or Deny.")
-                ),
+                HeadingBlock(level=2, text=paused.heading, icon="shield"),
+                ParagraphBlock(text=paused.body),
             ),
             meta=DocumentMeta(confidence=0.0, requires_review=True, source_refs=()),
         )

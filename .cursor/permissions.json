@@ -71,6 +71,8 @@
   "mcpAllowlist": [
     "*:search_knowledge",
     "*:search_memory",
+    "*:explain_belief",
+    "*:memory_audit",
     "*:graph_query",
     "*:skill_reference",
     "*:web_fallback",

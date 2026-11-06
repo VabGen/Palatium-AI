@@ -1,77 +1,29 @@
 #!/usr/bin/env bash
-# beforeMCPExecution — Zero Trust guard по закрытому перечню MCP-инструментов (070).
-#
-# stdin JSON: { tool_name, server_name, params, hook_event_name, ... }
+# beforeMCPExecution — тонкая обёртка над mcp-rbac-guard.py (быстрый hot-path).
+# Логика SoT — в .py; bash только выбирает интерпретатор (timeout хука = 10с).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/audit-chain.sh
-source "$SCRIPT_DIR/lib/audit-chain.sh"
+GUARD_PY="$SCRIPT_DIR/mcp-rbac-guard.py"
 
-if ! require_jq; then
-  # failClosed=true для этого хука в hooks.json — без jq мы не можем ни
-  # распарсить payload, ни собрать корректный ответ через jq. Печатаем
-  # deny вручную (printf, без jq) и НЕ пытаемся писать в audit-chain —
-  # audit_append_event сама откажет тем же require_jq.
-  printf '{"permission":"deny","agentMessage":"mcp-rbac-guard: jq не найден в PATH, guard не может проверить вызов — fail-closed (020).","userMessage":"Вызов MCP-инструмента заблокирован: guard безопасности недоступен."}'
-  exit 0
-fi
-
-INPUT="$(cat)"
-TOOL_NAME="$(echo "$INPUT" | jq -r '.tool_name // ""')"
-SERVER_NAME="$(echo "$INPUT" | jq -r '.server_name // ""')"
-
-# Источник истины — 070-mcp-tools.mdc. Меняешь перечень там — меняешь и здесь,
-# в одном PR (055: баг в контракте чинится в контракте, не патчем на узле).
-READ_TOOLS=(
-  "search_knowledge"
-  "search_memory"
-  "graph_query"
-  "skill_reference"
-  "web_fallback"
-  "read_attachment"
-)
-
-# Мутации/побочные эффекты — требуют HITL (020: interrupt()+Command(resume=...)
-# на уровне графа; этот хук — вторая, независимая линия защиты на уровне MCP-вызова).
-ASK_TOOLS=(
-  "save_memory"
-  "forget_memory"
-  "extract_transcript_memories"
-  "ingest_document"
-)
-
-_in_list() {
-  local needle="$1"; shift
-  local item
-  for item in "$@"; do
-    [[ "$needle" == "$item" ]] && return 0
-  done
-  return 1
+_run_py() {
+  if command -v python >/dev/null 2>&1; then
+    python "$GUARD_PY"
+    return $?
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 "$GUARD_PY"
+    return $?
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    uv run --no-project python "$GUARD_PY"
+    return $?
+  fi
+  return 127
 }
 
-if _in_list "$TOOL_NAME" "${READ_TOOLS[@]}"; then
-  jq -n '{ permission: "allow" }'
-  exit 0
+if ! _run_py; then
+  printf '{"permission":"deny","agentMessage":"mcp-rbac-guard: python/uv недоступен — fail-closed (020).","userMessage":"Вызов MCP-инструмента заблокирован: guard безопасности недоступен."}'
 fi
-
-if _in_list "$TOOL_NAME" "${ASK_TOOLS[@]}"; then
-  audit_append_event "mcp_tool_ask" "tool_name" "$TOOL_NAME" "server_name" "$SERVER_NAME" || true
-  jq -n --arg tool "$TOOL_NAME" '{
-    permission: "ask",
-    agentMessage: ("Инструмент " + $tool + " требует HITL-подтверждения по политике платформы (020)."),
-    userMessage: ("Агент запрашивает выполнение критичного инструмента: " + $tool)
-  }'
-  exit 0
-fi
-
-# Не в закрытом перечне 070 — deny by default (Zero Trust), не allow.
-# Ловит: опечатку в имени, инструмент, добавленный в MCP-сервер мимо
-# ревью, попытку сервера подменить/добавить tool (070: "перечень закрытый").
-audit_append_event "mcp_tool_denied_unknown" "tool_name" "$TOOL_NAME" "server_name" "$SERVER_NAME" || true
-jq -n --arg tool "$TOOL_NAME" --arg server "$SERVER_NAME" '{
-  permission: "deny",
-  agentMessage: ("Инструмент " + $tool + " (сервер " + $server + ") отсутствует в закрытом перечне 070-mcp-tools.mdc — deny by default."),
-  userMessage: ("Заблокирован вызов неизвестного инструмента: " + $tool)
-}'
+exit 0

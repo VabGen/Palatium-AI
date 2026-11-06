@@ -176,7 +176,7 @@ test.describe('клавиатура и фокус внутри Shadow DOM', () =
     // состояние с подсказками появляется только после гидратации истории
     // (`sessions/turns`). Без ожидания обход стартует раньше вставки этих
     // кнопок и проскакивает их — тест падал на порядке, а не на доступности.
-    await expect(page.locator('.suggestion')).toHaveCount(2);
+    await expect(page.locator('.suggestion')).toHaveCount(3);
 
     // Стартовая точка задаётся явно. Браузер запоминает «место, где остановился
     // Tab» на момент загрузки, а виджет к тому времени ещё дорисовывается, —
@@ -184,20 +184,17 @@ test.describe('клавиатура и фокус внутри Shadow DOM', () =
     // контроле страницы-хоста заодно проверяет главное: последовательность не
     // обрывается на границе Shadow DOM, а продолжается внутри виджета.
     await page.locator('#btn-expand').focus();
-    const visited = await tabInto(page, 7);
+    const visited = await tabInto(page, 6);
 
-    // Порядок = порядок в разметке: шапка → подсказки → блок ввода
-    // (панель памяти → project KB → скрепка → поле ввода).
-    // `.send-btn` в списке нет: пустой ввод делает кнопку disabled, а такие
-    // элементы в обход не попадают.
+    // Composer v2: шапка → pill-starters → один `+` (attach/project/memory в меню).
+    // `.send-btn` нет: пустой ввод → disabled. Скрепка снаружи убрана.
     expect(visited.map(item => `${item.tag}.${item.className.split(' ')[0]}`)).toEqual([
       'button.toolbar-btn',
       'button.toolbar-btn',
       'button.suggestion',
       'button.suggestion',
-      'button.memory-toggle',
-      'input.attachment-project-input',
-      'button.attach-btn',
+      'button.suggestion',
+      'button.tools-btn',
     ]);
 
     // Индикатор фокуса обязателен для каждого шага, а не только «в среднем»:
@@ -228,6 +225,35 @@ test.describe('клавиатура и фокус внутри Shadow DOM', () =
       if (active) next.push(active);
     }
     expect(next[0]?.className).toContain('send-btn');
+  });
+});
+
+test.describe('Artifacts pane', () => {
+  test('достойный документ открывается в панели; Esc закрывает', async ({ page }) => {
+    const server = defaultApi();
+    server.reply('intents.process.stream', {
+      json: formatterResult({ output: answerDocument() }),
+    });
+    await stubSessionSocket(page);
+    await server.install(page);
+    await openWidget(page);
+
+    await page.locator('.composer-textarea').fill('Составь план');
+    await page.getByRole('button', { name: 'Отправить сообщение' }).click();
+
+    const pane = page.getByRole('complementary', { name: ru['artifact.paneLabel'] });
+    await expect(pane).toBeVisible();
+    await expect(page.locator('.msg.assistant .artifact-anchor')).toBeVisible();
+    await expect(pane.locator('.doc')).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(pane).toHaveCount(0);
+
+    await page.locator('.artifact-anchor').click();
+    await expect(page.getByRole('complementary', { name: ru['artifact.paneLabel'] })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: ru['artifact.close'] })
+    ).toBeFocused();
   });
 });
 
@@ -274,7 +300,7 @@ test.describe('канал озвучивания стрима (W2)', () => {
 
     await page.locator('.composer-textarea').fill('Составь ответ');
     await page.getByRole('button', { name: 'Отправить сообщение' }).click();
-    await expect(page.locator('.msg.assistant .doc')).toBeVisible();
+    await expect(page.locator('.artifact-pane .doc')).toBeVisible();
 
     // Канал смонтирован с первого рендера и не переключает aria-live: два слота.
     const channel = page.locator('.live-announcer');

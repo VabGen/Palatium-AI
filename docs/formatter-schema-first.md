@@ -19,6 +19,7 @@
 |---|---|
 | `FORMATTER_MODE` | `legacy` (kill switch) или `schema_first` (целевой контракт) |
 | `FORMATTER_ROLLOUT_PCT` | покрытие `schema_first`: `0` off, `1..99` sticky-canary, `100` полный cutover |
+| `FORMATTER_SHAPE_PRECHECK` | эксперимент (default `false`): при явной `response_shape` буфер schema_first → `ShapeRecipePolicy` → ≤1 regenerate **до** первого `block_delta`, затем `emit_content_document`. Пост-стрим repair запрещён (response-shapes §8). Outcomes: `precheck_ok` / `precheck_mismatch` / `precheck_regenerated` |
 
 `FORMATTER_MODE=schema_first` **сам по себе не переключает всех**: при `PCT=0` работает
 legacy и пишется warning `formatter.rollout.zero_coverage`. Так одиночная правка
@@ -30,11 +31,34 @@ legacy и пишется warning `formatter.rollout.zero_coverage`. Так од�
 
 ## Canary на staging
 
-`env/.env.staging(.example)`: `FORMATTER_MODE=schema_first`, `FORMATTER_ROLLOUT_PCT=5`.
-Рампа без деплоя: `5 → 25 → 50 → 100`.
+`env/.env.staging(.example)`: `FORMATTER_MODE=schema_first`, `FORMATTER_ROLLOUT_PCT=100`
+(волна 4, 2026-11-03). Рампа: `5 → 25 → 50 → 100`. Удаление кода `legacy` — только
+после зелёных гейтов ≥24 ч (ниже); до этого `MODE=legacy` / `PCT=0` остаются kill-switch.
 
 **Rollback — один ключ:** `FORMATTER_ROLLOUT_PCT=0` (оставить `MODE=schema_first`, чтобы
 вернуть рампу одной правкой). Полный откат: `FORMATTER_MODE=legacy`.
+
+**Гейт перед `PCT=100` / kill `legacy` (wave 4):** за окно ≥ 24 ч на staging одновременно:
+
+| Сигнал | Порог |
+|---|---|
+| `palatium_sse_layout_shift_total{contract="structured_incremental"}` | `== 0` |
+| schema validity rate (`schema_first` valid / valid+invalid) | `≥ 0.995` |
+| `palatium_response_shape_total{outcome="mismatch"}` / requested | не растёт vs 25%-когорта |
+| `outcome=~"mechanical_.*"` | растёт на `response_formatting` / explicit shape (0-LLM путь жив) |
+
+```promql
+# layout shift must stay flat on the structured contract
+sum(increase(palatium_sse_layout_shift_total{contract="structured_incremental"}[24h]))
+
+# mechanical share among shape outcomes (wave 3/4)
+sum(rate(palatium_response_shape_total{outcome=~"mechanical_.*"}[24h]))
+/
+sum(rate(palatium_response_shape_total{outcome=~"satisfied|mismatch|mechanical_.*"}[24h]))
+```
+
+Новые значения `ResponseShape` **не** добавляются на этом шаге — только при
+систематическом `mismatch` с доказанной потребностью (`.cursor/plans/response-shapes.md` §5).
 
 ## Метрики сравнения (Прометей, единый реестр 040)
 
@@ -160,9 +184,9 @@ uv run python scripts/backtest_lint.py --turns $env:TEMP\assistant_turns.jsonl
 только на golden-наборе, и там он равен нулю — это unit-гейт
 (`tests/unit/test_lint_backtest.py`), а доля на корпусе — отчёт для ревью (086).
 
-Разбивка отчёта идёт по `meta.kind` — единственной персистируемой оси ответа.
-`response_shape` принадлежит Intent'у и в payload не сохраняется, поэтому джойнить
-нечем: добавление её в payload — отдельная задача, а не молчаливая подмена оси.
+Разбивка отчёта — по `meta.kind` (ось документа) и по `response_shape` (ось Intent,
+пишется в `assistant_turn_payload` с wave 4). Старые ходы без поля попадают в
+`by_shape.unset`; ось kind не подменяется формой.
 
 Правило с долей выше порога — кандидат на `warning`. Решение принимает человек:
 корреляция с `palatium_judge_score` автоматически не считается (086 — ручную проверку
@@ -319,6 +343,8 @@ histogram_quantile(0.95, sum by (le) (rate(palatium_sse_first_block_seconds_buck
 ## Границы
 
 - Удаление legacy (`markdown_parser.py`, `icon_sanitizer.py`, repair-слой, Markdown-промпты) —
-  **Фаза 4**, после 99%+ `schema_first`. До этого legacy остаётся fallback'ом и не расширяется.
+  **Фаза 4 / wave 4**, только после `FORMATTER_ROLLOUT_PCT=100` **и** зелёных гейтов
+  canary выше (`layout_shift=0`, schema ≥ 0.995, mismatch не растёт). До этого legacy
+  остаётся fallback'ом / kill-switch и не расширяется.
 - `strict: true` держится на нормализации схемы в `domain/llm/structured_output.py`
   (`strict_json_schema`): без неё провайдер игнорирует дефолтные поля (например, `blocks`).

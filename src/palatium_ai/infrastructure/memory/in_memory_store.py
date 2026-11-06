@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.domain.memory.pii import mask_memory_value, memory_contains_pii
 from palatium_ai.domain.memory.promotion import DEFAULT_PROMOTE_CLAIM_SECONDS, PromotionCandidate
+from palatium_ai.domain.memory.types import resolve_memory_trust
 from palatium_ai.infrastructure.memory.user_scope import resolve_user_id
 
 
@@ -22,6 +23,7 @@ class _AccessMeta:
     last_accessed: datetime | None = None
     promoted_at: datetime | None = None
     promote_claimed_at: datetime | None = None
+    created_at: datetime | None = None
 
 
 class InMemoryMemoryPort:
@@ -42,6 +44,8 @@ class InMemoryMemoryPort:
             slot = (namespace, key)
             previous = self._items.get(slot)
             meta = self._meta.setdefault(slot, _AccessMeta())
+            if meta.created_at is None:
+                meta.created_at = datetime.now(UTC)
             if previous is not None and _promoted_content(previous) != _promoted_content(value):
                 meta.promoted_at = None
                 meta.promote_claimed_at = None
@@ -53,7 +57,8 @@ class InMemoryMemoryPort:
             item = self._items.get((namespace, key))
             if item is None:
                 return None
-            return mask_memory_value(dict(item), contains_pii=memory_contains_pii(item))
+            enriched = mask_memory_value(dict(item), contains_pii=memory_contains_pii(item))
+            return _enrich_entry(enriched, entry_key=key, meta=self._meta.get((namespace, key)))
 
     async def search(
         self,
@@ -75,11 +80,39 @@ class InMemoryMemoryPort:
                 score = overlap * (0.5 + 0.5 * confidence)
                 if score > 0 or not tokens:
                     enriched = mask_memory_value(dict(value), contains_pii=memory_contains_pii(value))
+                    enriched = _enrich_entry(
+                        enriched,
+                        entry_key=entry_key,
+                        meta=self._meta.get((ns, entry_key)),
+                    )
                     enriched["_score"] = round(score, 4)
-                    enriched["_entry_key"] = entry_key
                     scored.append((score, enriched))
             scored.sort(key=lambda item: item[0], reverse=True)
             return [item for _, item in scored[: max(1, limit)]]
+
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        """List entries in a namespace (newest first)."""
+        safe_limit = max(1, min(limit, 128))
+        async with self._lock:
+            rows: list[tuple[datetime, dict[str, object]]] = []
+            for (ns, entry_key), value in self._items.items():
+                if ns != namespace:
+                    continue
+                meta = self._meta.get((ns, entry_key))
+                if meta is not None and meta.created_at is not None:
+                    created = meta.created_at
+                else:
+                    created = datetime.min.replace(tzinfo=UTC)
+                enriched = mask_memory_value(dict(value), contains_pii=memory_contains_pii(value))
+                enriched = _enrich_entry(enriched, entry_key=entry_key, meta=meta)
+                rows.append((created, enriched))
+            rows.sort(key=lambda item: item[0], reverse=True)
+            return [item for _, item in rows[:safe_limit]]
 
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         """Remove one item from namespace/key."""
@@ -98,6 +131,29 @@ class InMemoryMemoryPort:
             meta.access_frequency += 1
             meta.last_accessed = datetime.now(UTC)
             return meta.access_frequency
+
+    async def list_corroboration_entries(
+        self,
+        *,
+        user_id: str,
+        limit: int = 256,
+    ) -> list[tuple[tuple[str, ...], str, dict[str, object]]]:
+        """Active rows for one owner (newest first) — ADR 0008 corroboration snapshot."""
+        uid = user_id.strip()
+        if not uid:
+            return []
+        safe_limit = max(1, min(int(limit), 512))
+        async with self._lock:
+            rows: list[tuple[datetime, tuple[str, ...], str, dict[str, object]]] = []
+            for (namespace, entry_key), value in self._items.items():
+                owner = resolve_user_id(namespace, value)
+                if owner != uid:
+                    continue
+                meta = self._meta.get((namespace, entry_key))
+                created = meta.created_at if meta is not None and meta.created_at is not None else datetime.min.replace(tzinfo=UTC)
+                rows.append((created, namespace, entry_key, dict(value)))
+            rows.sort(key=lambda item: item[0], reverse=True)
+            return [(ns, key, val) for _, ns, key, val in rows[:safe_limit]]
 
     async def list_promotion_candidates(
         self,
@@ -147,6 +203,7 @@ class InMemoryMemoryPort:
                         contains_pii=bool(value.get("contains_pii", False)),
                         last_accessed=meta.last_accessed,
                         promoted_at=meta.promoted_at,
+                        trust=resolve_memory_trust(value),
                     )
                 )
                 if len(out) >= safe_limit:
@@ -195,6 +252,21 @@ class InMemoryMemoryPort:
             meta.promoted_at = datetime.now(UTC)
             meta.promote_claimed_at = None
             return True
+
+
+def _enrich_entry(
+    value: dict[str, object],
+    *,
+    entry_key: str,
+    meta: _AccessMeta | None,
+) -> dict[str, object]:
+    """Attach entry_key / created_at metadata for explain_belief / audit (CMD3)."""
+    enriched = dict(value)
+    if entry_key:
+        enriched["_entry_key"] = entry_key
+    if meta is not None and meta.created_at is not None:
+        enriched["_created_at"] = meta.created_at.isoformat()
+    return enriched
 
 
 def _promoted_content(value: dict[str, object]) -> tuple[str, str]:

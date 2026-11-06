@@ -11,13 +11,17 @@ from __future__ import annotations
 
 from mcp_servers.mcp_stub_runtime import build_http_app, create_stub_mcp, register_pinned_tool
 from palatium_ai.domain.mcp.platform_schemas import (
+    PLATFORM_EXPLAIN_BELIEF_SCHEMA,
     PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA,
     PLATFORM_FORGET_MEMORY_SCHEMA,
     PLATFORM_GRAPH_QUERY_SCHEMA,
     PLATFORM_INGEST_DOCUMENT_SCHEMA,
+    PLATFORM_MEMORY_AUDIT_SCHEMA,
+    PLATFORM_MEMORY_VERIFY_SCHEMA,
     PLATFORM_SAVE_MEMORY_SCHEMA,
     PLATFORM_SEARCH_KNOWLEDGE_SCHEMA,
     PLATFORM_SEARCH_MEMORY_SCHEMA,
+    PLATFORM_SKILL_MANAGE_SCHEMA,
     PLATFORM_SKILL_REFERENCE_SCHEMA,
     PLATFORM_WEB_FALLBACK_SCHEMA,
 )
@@ -138,6 +142,58 @@ def extract_transcript_memories(
     )
 
 
+def explain_belief(
+    user_id: str,
+    namespace_kind: str,
+    scope_id: str,
+    entry_key: str,
+    org_id: str = "",
+) -> dict[str, object]:
+    return _refuse_execution(
+        user_id=user_id,
+        namespace_kind=namespace_kind,
+        scope_id=scope_id,
+        entry_key=entry_key,
+        org_id=org_id,
+    )
+
+
+def memory_audit(
+    user_id: str,
+    thread_id: str = "",
+    org_id: str = "",
+    trust_filter: str = "low",
+    origin_filter: str = "",
+    limit: str = "32",
+) -> dict[str, object]:
+    return _refuse_execution(
+        user_id=user_id,
+        thread_id=thread_id,
+        org_id=org_id,
+        trust_filter=trust_filter,
+        origin_filter=origin_filter,
+        limit=limit,
+    )
+
+
+def memory_verify(
+    user_id: str,
+    namespace_kind: str,
+    scope_id: str,
+    entry_key: str,
+    verdict: str,
+    org_id: str = "",
+) -> dict[str, object]:
+    return _refuse_execution(
+        user_id=user_id,
+        namespace_kind=namespace_kind,
+        scope_id=scope_id,
+        entry_key=entry_key,
+        verdict=verdict,
+        org_id=org_id,
+    )
+
+
 def graph_query(
     user_id: str,
     cypher: str,
@@ -156,6 +212,20 @@ def graph_query(
 
 def skill_reference(name: str) -> dict[str, object]:
     return _refuse_execution(name=name)
+
+
+def skill_manage(
+    action: str,
+    skill_name: str,
+    content: str = "",
+    description: str = "",
+) -> dict[str, object]:
+    return _refuse_execution(
+        action=action,
+        skill_name=skill_name,
+        content=content,
+        description=description,
+    )
 
 
 def web_fallback(user_id: str, query: str, max_results: str = "5") -> dict[str, object]:
@@ -218,6 +288,30 @@ register_pinned_tool(
 )
 register_pinned_tool(
     mcp,
+    fn=explain_belief,
+    name="explain_belief",
+    description="Explain provenance of one memory entry (origin, trust, created_at, source).",
+    input_schema=PLATFORM_EXPLAIN_BELIEF_SCHEMA,
+    read_only=True,
+)
+register_pinned_tool(
+    mcp,
+    fn=memory_audit,
+    name="memory_audit",
+    description="Owner-scoped listing of low-trust / inferred memory entries (read).",
+    input_schema=PLATFORM_MEMORY_AUDIT_SCHEMA,
+    read_only=True,
+)
+register_pinned_tool(
+    mcp,
+    fn=memory_verify,
+    name="memory_verify",
+    description="Confirm or reject memory trust (confirmed→verified, rejected→quarantined; HITL).",
+    input_schema=PLATFORM_MEMORY_VERIFY_SCHEMA,
+    read_only=False,
+)
+register_pinned_tool(
+    mcp,
     fn=graph_query,
     name="graph_query",
     description=("Read-only parameterized Cypher against the knowledge graph ($params only; bi-temporal MemoryFact via $as_of)."),
@@ -231,6 +325,16 @@ register_pinned_tool(
     description=("Load procedural skill reference.md (or SKILL body) by catalog name (read)."),
     input_schema=PLATFORM_SKILL_REFERENCE_SCHEMA,
     read_only=True,
+)
+register_pinned_tool(
+    mcp,
+    fn=skill_manage,
+    name="skill_manage",
+    description=(
+        "Create/update/delete product procedural skill (write; HITL; ALLOW_SELF_AUTHORED_SKILLS flag; lint + product lock)."
+    ),
+    input_schema=PLATFORM_SKILL_MANAGE_SCHEMA,
+    read_only=False,
 )
 register_pinned_tool(
     mcp,

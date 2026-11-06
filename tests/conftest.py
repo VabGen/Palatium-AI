@@ -118,6 +118,8 @@ def make_platform_mcp_registry(
     memory_port: object | None = None,
     knowledge_port: object | None = None,
     consolidation: object | None = None,
+    skill_catalog: object | None = None,
+    skills_self_authored_enabled: bool = False,
 ) -> PlatformKnowledgeMcpRegistry:
     from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
     from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
@@ -127,6 +129,8 @@ def make_platform_mcp_registry(
         knowledge_port=knowledge_port or InMemoryKnowledgePort(),  # type: ignore[arg-type]
         memory_port=memory_port or InMemoryMemoryPort(),  # type: ignore[arg-type]
         consolidation=consolidation,  # type: ignore[arg-type]
+        skill_catalog=skill_catalog,  # type: ignore[arg-type]
+        skills_self_authored_enabled=skills_self_authored_enabled,
     )
     return PlatformKnowledgeMcpRegistry(handler)
 

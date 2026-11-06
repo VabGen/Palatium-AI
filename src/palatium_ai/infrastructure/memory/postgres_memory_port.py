@@ -23,7 +23,7 @@ from palatium_ai.core.types.retrieval import DEFAULT_RRF_K, HybridFusion
 from palatium_ai.domain.memory.pii import mask_memory_value
 from palatium_ai.domain.memory.promotion import DEFAULT_PROMOTE_CLAIM_SECONDS, PromotionCandidate
 from palatium_ai.domain.memory.scoring import merge_hybrid_memory_hits, rank_by_search_importance
-from palatium_ai.domain.memory.types import MemoryType
+from palatium_ai.domain.memory.types import MemoryType, resolve_memory_trust
 from palatium_ai.domain.policies.retention import DEFAULT_RETENTION_WINDOWS, RetentionPolicy, RetentionWindows
 from palatium_ai.infrastructure.database.models.memory_entry import MemoryEntryORM
 from palatium_ai.infrastructure.database.rls import set_rls_user_scope
@@ -149,13 +149,17 @@ class PostgresMemoryPort:
         memory_type = normalize_memory_type(value)
         importance = max(0.0, min(1.0, coerce_float(value.get("importance", value.get("confidence", 0.0)))))
         contains_pii = bool(value.get("contains_pii", False))
+        trust = resolve_memory_trust(value)
         written_at = datetime.now(UTC)
         expires_at = RetentionPolicy.memory_expires_at(
             memory_type=memory_type,
             contains_pii=contains_pii,
             created_at=written_at,
             windows=self._windows,
+            trust=trust,
         )
+        # Inferred + PII: re-save must not push the deadline out (ASI-06 O3 / 060.8).
+        short_retention_clock = contains_pii or trust == "inferred"
         embedding: list[float] | None = None
         if self._embeddings is not None and search_blob.strip():
             vectors = await self._embeddings.embed([search_blob])
@@ -203,9 +207,13 @@ class PostgresMemoryPort:
                     "importance": excluded.importance,
                     "contains_pii": pii_after_write,
                     "embedding": excluded.embedding,
-                    "expires_at": case(
-                        (pii_after_write, func.least(MemoryEntryORM.expires_at, excluded.expires_at)),
-                        else_=excluded.expires_at,
+                    "expires_at": (
+                        func.least(MemoryEntryORM.expires_at, excluded.expires_at)
+                        if short_retention_clock
+                        else case(
+                            (pii_after_write, func.least(MemoryEntryORM.expires_at, excluded.expires_at)),
+                            else_=excluded.expires_at,
+                        )
                     ),
                     # F5: new content is not promoted yet, even when the row was promoted
                     # before; the claim is dropped too, or a stale claim would block the
@@ -241,7 +249,33 @@ class PostgresMemoryPort:
             row = result.scalar_one_or_none()
             if row is None:
                 return None
-            return mask_memory_value(dict(row.value), contains_pii=row.contains_pii)
+            return _payload_from_row(row, score=0.0)
+
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        """List active entries in a namespace (newest first; owner-scoped via RLS)."""
+        user_id = resolve_user_id(namespace)
+        ns = encode_namespace(namespace)
+        safe_limit = max(1, min(limit, 128))
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, user_id)
+            result = await session.execute(
+                select(MemoryEntryORM)
+                .where(
+                    MemoryEntryORM.user_id == user_id,
+                    MemoryEntryORM.namespace == ns,
+                    _active_memory_clause(now=now),
+                )
+                .order_by(MemoryEntryORM.created_at.desc())
+                .limit(safe_limit)
+            )
+            rows = result.scalars().all()
+            return [_payload_from_row(row, score=0.0) for row in rows]
 
     async def search(
         self,
@@ -396,9 +430,45 @@ class PostgresMemoryPort:
                     contains_pii=contains_pii,
                     last_accessed=row.last_accessed,
                     promoted_at=row.promoted_at,
+                    trust=resolve_memory_trust(value_dict),
                 )
             )
         return candidates
+
+    async def list_corroboration_entries(
+        self,
+        *,
+        user_id: str,
+        limit: int = 256,
+    ) -> list[tuple[tuple[str, ...], str, dict[str, object]]]:
+        """Active rows for one RLS owner (newest first) — batch trust upgrades (ADR 0008).
+
+        Returns ``(namespace, entry_key, value)`` triples for
+        :meth:`MemoryCorroborationService.entries_from_items`. Cross-namespace
+        peers are filtered inside ``propose_trust_upgrades``.
+        """
+        uid = user_id.strip()
+        if not uid:
+            return []
+        safe_limit = max(1, min(int(limit), 512))
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, uid)
+            result = await session.execute(
+                select(MemoryEntryORM)
+                .where(
+                    MemoryEntryORM.user_id == uid,
+                    _active_memory_clause(now=now),
+                )
+                .order_by(MemoryEntryORM.created_at.desc())
+                .limit(safe_limit)
+            )
+            rows = list(result.scalars().all())
+        out: list[tuple[tuple[str, ...], str, dict[str, object]]] = []
+        for row in rows:
+            value = row.value if isinstance(row.value, dict) else {}
+            out.append((decode_namespace(row.namespace), row.entry_key, dict(value)))
+        return out
 
     async def claim_promotion(
         self,

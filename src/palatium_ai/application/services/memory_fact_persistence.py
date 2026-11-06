@@ -21,7 +21,11 @@ from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text
 from palatium_ai.domain.agents.memory_keeper import MemoryFactCandidate
-from palatium_ai.domain.memory.types import MemoryType
+from palatium_ai.domain.memory.types import (
+    MEMORY_ORIGIN_KEY,
+    MEMORY_TRUST_KEY,
+    MemoryType,
+)
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
@@ -109,6 +113,9 @@ class MemoryFactPersistenceService:
             "user_id": job.user_id,
             "org_id": job.org_id,
             "contains_pii": pii_flag,
+            # Sleep-time extract: inferred until corroboration / HITL (ADR 0008).
+            MEMORY_ORIGIN_KEY: "extract",
+            MEMORY_TRUST_KEY: "inferred",
         }
         outcome = await call_mcp_tool(
             MCPToolCallParams(

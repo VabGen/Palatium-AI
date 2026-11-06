@@ -53,6 +53,10 @@ alwaysApply: false
 | `palatium_memory_promote_errors_total` | `error_type` |
 | `palatium_memory_promote_blocked_pii_total` | — (не ошибка: PII-supersede ждёт человека; F3) |
 | `palatium_memory_recall_source_total` | `source` (`scratchpad` / `medium` / `graph` / `skipped_policy` / `empty`) |
+| `palatium_memory_trust_upgrade_total` | `reason` (`verified_overlap` / `peer_extract` / `hitl_verify` / …; ADR 0008) |
+| `palatium_memory_origin_ceiling_total` | `action` (`demoted` / `excluded` / `promote_blocked`) |
+| `palatium_prompt_cache_hint_total` | `tier` (`stable` / `context` / `volatile` / `skipped`; CMD2) |
+| `palatium_prompt_cache_tokens_total` | `direction` (`read` = provider cache hit tokens, `write` = cache create; CMD2) |
 | `palatium_attachment_sticky_total` | `action` (sticky entry / rehydrate / clear) |
 | `palatium_context_tokens_used` | `agent_type` |
 | `palatium_attachment_parse_total` | `extraction_source`, `media_kind` |

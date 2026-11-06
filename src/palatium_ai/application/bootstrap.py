@@ -22,9 +22,11 @@ from palatium_ai.application.services.kill_switch import KillSwitchService
 from palatium_ai.application.services.memory_extract_hitl_service import MemoryExtractHitlService
 from palatium_ai.application.services.memory_forget_service import MemoryForgetService
 from palatium_ai.application.services.memory_save_service import MemorySaveService
+from palatium_ai.application.services.memory_verify_service import MemoryVerifyService
 from palatium_ai.application.services.retention import retention_windows_from_settings
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.application.services.session_timeline_service import SessionTimelineService
+from palatium_ai.application.services.skill_manage_service import SkillManageService
 from palatium_ai.application.services.vision_images import VisionImageService
 from palatium_ai.application.wiring import (
     AttachmentPorts,
@@ -117,6 +119,8 @@ class AppResources:
     document_ingest_service: DocumentIngestService | None = None
     memory_save_service: MemorySaveService | None = None
     memory_forget_service: MemoryForgetService | None = None
+    memory_verify_service: MemoryVerifyService | None = None
+    skill_manage_service: SkillManageService | None = None
     memory_extract_hitl_service: MemoryExtractHitlService | None = None
     checkpointer_handle: CheckpointerHandle | None = None
     background_tasks: tuple[asyncio.Task[None], ...] = field(default_factory=tuple)
@@ -272,6 +276,7 @@ def _wire_platform_handler(
     web_search_port: WebSearchPort,
     skill_catalog: object | None = None,
     attachment_read: object | None = None,
+    skills_self_authored_enabled: bool = False,
 ) -> None:
     """Wire the platform handler."""
     # Track B: platform is always-on Host-local capability (no MCP_SERVERS URL required).
@@ -286,6 +291,7 @@ def _wire_platform_handler(
             web_search_port=web_search_port,
             skill_catalog=skill_catalog,  # type: ignore[arg-type]  # object|None → Protocol (017)
             attachment_read=attachment_read,  # type: ignore[arg-type]  # object|None → Protocol (017)
+            skills_self_authored_enabled=skills_self_authored_enabled,
         ),
     )
     logger.info("Platform MCP: local knowledge+memory+graph+web+skills+attachments handler registered")
@@ -418,6 +424,8 @@ async def startup(settings: Settings) -> AppResources:
         document_ingest_service,
         memory_save_service,
         memory_forget_service,
+        memory_verify_service,
+        skill_catalog,
     ) = build_intent_service(
         settings,
         mcp_registry,
@@ -439,14 +447,9 @@ async def startup(settings: Settings) -> AppResources:
     if attachment_service is not None and document_ingest_service is not None:
         attachment_service.bind_document_ingest(document_ingest_service)
     hitl_service.bind_deny_resume(intent_service)
+    hitl_service.bind_session_service(session_service)
     graph_port = graph_ports.query
     web_search_port = build_web_search_port(settings)
-    from palatium_ai.infrastructure.skills.filesystem_skill_catalog import FilesystemSkillCatalog
-
-    skill_catalog = FilesystemSkillCatalog(
-        settings.skills.roots,
-        reference_max_chars=settings.skills.reference_max_chars,
-    )
     _wire_platform_handler(
         mcp_registry,
         knowledge_port,
@@ -457,6 +460,7 @@ async def startup(settings: Settings) -> AppResources:
         web_search_port=web_search_port,
         skill_catalog=skill_catalog,
         attachment_read=attachment_read_service,
+        skills_self_authored_enabled=settings.skills.allow_self_authored,
     )
     mcp_registry.assert_local_handlers_wired()
 
@@ -474,14 +478,24 @@ async def startup(settings: Settings) -> AppResources:
             redis_client=redis_client,
             mcp_tool_call_repository=mcp_tool_call_repository,
         )
+    skill_manage_service = SkillManageService(
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        enabled=settings.skills.allow_self_authored,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
     hitl_respond_facade = HitlRespondFacade(
         hitl_service=hitl_service,
         intent_service=intent_service,
         document_ingest_service=document_ingest_service,
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
+        memory_verify_service=memory_verify_service,
+        skill_manage_service=skill_manage_service,
         memory_consolidate_service=memory_extract_hitl_service,
         attachment_index_service=attachment_service,
+        session_service=session_service,
     )
 
     background_tasks.append(
@@ -525,6 +539,8 @@ async def startup(settings: Settings) -> AppResources:
         document_ingest_service=document_ingest_service,
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
+        memory_verify_service=memory_verify_service,
+        skill_manage_service=skill_manage_service,
         memory_extract_hitl_service=memory_extract_hitl_service,
         checkpointer_handle=checkpointer_handle,
         background_tasks=tuple(background_tasks),

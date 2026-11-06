@@ -1,13 +1,12 @@
 /**
- * Nested list rows carry their level as a text prefix (the content contract has no
- * level field). Printing the prefix made the user see two markers — "• · Подпункт".
+ * Nested list rows: prefer ``ListItem.level``; legacy ``· `` prefix still decoded.
  */
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BlockRenderer } from '../../src/components/BlockRenderer';
-import type { ContentDocument } from '../../src/types/contentDocument';
+import type { ContentDocument, ListItem } from '../../src/types/contentDocument';
 
-function docWithNestedList(): ContentDocument {
+function docWithNestedList(items: ListItem[]): ContentDocument {
   return {
     schema_version: 1,
     locale: 'ru-RU',
@@ -16,7 +15,7 @@ function docWithNestedList(): ContentDocument {
       {
         type: 'list',
         style: 'unordered',
-        items: [{ text: 'Пункт' }, { text: '· Подпункт' }],
+        items,
       },
     ],
     actions: [],
@@ -31,7 +30,9 @@ function docWithNestedList(): ContentDocument {
 
 describe('nested list rendering', () => {
   it('decodes the nesting prefix instead of printing it', () => {
-    const { container } = render(<BlockRenderer document={docWithNestedList()} />);
+    const { container } = render(
+      <BlockRenderer document={docWithNestedList([{ text: 'Пункт' }, { text: '· Подпункт' }])} />
+    );
 
     const rows = container.querySelectorAll('.block-list li');
     expect(rows).toHaveLength(2);
@@ -39,5 +40,15 @@ describe('nested list rendering', () => {
     expect(rows[1].textContent).toBe('Подпункт');
     expect(rows[1].classList.contains('nested')).toBe(true);
     expect(container.textContent).not.toContain('·');
+  });
+
+  it('uses typed level without a text prefix', () => {
+    const { container } = render(
+      <BlockRenderer
+        document={docWithNestedList([{ text: 'Пункт' }, { text: 'Подпункт', level: 1 }])}
+      />
+    );
+    const nested = container.querySelector('.block-list-item.nested.level-1');
+    expect(nested?.textContent).toBe('Подпункт');
   });
 });

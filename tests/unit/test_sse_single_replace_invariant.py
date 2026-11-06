@@ -233,6 +233,55 @@ def test_structured_block_frames_are_typed_sanitized_and_append_only() -> None:
     assert bridge.sse_ttft_recorded is True
 
 
+def test_emit_content_document_paints_typed_blocks_under_structured() -> None:
+    """0-LLM finished documents must not fall back to markdown answer_delta."""
+    from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
+    from palatium_ai.domain.content import ContentDocument, DocumentMeta, StepsBlock, StepItem
+
+    document = ContentDocument(
+        locale="ru-RU",
+        title="План",
+        blocks=(
+            StepsBlock(
+                items=(
+                    StepItem(title="A", body="1"),
+                    StepItem(title="B", body="2"),
+                )
+            ),
+        ),
+        meta=DocumentMeta(confidence=0.9, kind="guide"),
+    )
+    bridge = TurnSseBridge(stream_contract="structured_incremental")
+    spy = _LayoutShiftSpy()
+    with turn_sse_bridge(bridge), patch("palatium_ai.application.agents.formatter.answer_delta.agent_metrics", spy):
+        emit_content_document(document)
+        frames = _drain(bridge)
+
+    assert [frame["event"] for frame in frames] == ["document_title", "block_delta"]
+    assert frames[0]["title"] == "План"
+    assert frames[1]["block"]["type"] == "steps"
+    assert all("replace" not in frame for frame in frames)
+    assert spy.records == []
+
+
+def test_emit_content_document_falls_back_to_prose_under_legacy() -> None:
+    from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
+    from palatium_ai.domain.content import ContentDocument, DocumentMeta, ParagraphBlock
+
+    document = ContentDocument(
+        locale="ru-RU",
+        blocks=(ParagraphBlock(text="Готовый абзац."),),
+        meta=DocumentMeta(confidence=0.9, kind="report"),
+    )
+    bridge = TurnSseBridge(stream_contract="legacy_markdown")
+    with turn_sse_bridge(bridge):
+        emit_content_document(document)
+        frames = _drain(bridge)
+
+    assert frames[0]["event"] == "answer_delta"
+    assert frames[0]["delta"] == "Готовый абзац."
+
+
 def test_stream_contract_follows_the_formatter_two_key_rollout() -> None:
     from palatium_ai.application.services.intent_service import IntentService
 

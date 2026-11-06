@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from palatium_ai.domain.llm.models import ImagePart
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 
 
 class AgentInput(BaseModel):
@@ -30,6 +30,9 @@ class AgentInput(BaseModel):
     #: from the one the adapter validates (050). Empty default keeps every pre-existing
     #: caller (graph bridges, eval cassettes, unit agents) valid without a shim (010).
     image_parts: tuple[ImagePart, ...] = ()
+    #: Citeable text attachments admitted once at turn entry (W3a). Budgeted ``safe_text``
+    #: bodies travel here so LiteLLM can emit Anthropic document blocks with citations.
+    document_parts: tuple[DocumentPart, ...] = ()
 
 
 class AgentOutput(BaseModel):

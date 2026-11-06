@@ -3,7 +3,9 @@
 Спецификация решения «структурированный ответ для любого сценария». Норму не
 дублирует: контракт UI-документа — `domain/content/content_document.py`, стриминг —
 `.cursor/plans/structured-streaming.md`, архитектурное основание — ADR 0005.
-Статус: волна 1 (ось + политика) — реализована; волны 2–4 — открыты.
+Статус: волны 1–3 + P1/P1.1/P1.2 — сделаны; волна 4 — staging **PCT=100**;
+typed progressive paragraph + HITL session locale; удаление кода `legacy` — после
+зелёных гейтов ≥24 ч.
 
 ## 1. Проблема
 
@@ -104,8 +106,13 @@ markdown-превью (layout shift). Предложение «своя Pydantic
 | 1 | Ось `ResponseShape` end-to-end, `ShapeRecipePolicy`, промпт-секции, метрика, unit-тесты | сделано |
 | 2 | `partial_document` (типизированные блоки в SSE), `BlockRenderer` как единственный превью, метрика `palatium_sse_layout_shift_total{contract="structured_incremental"}=0` | сделано |
 | 2b | repair формы один раз — **отложен**: после `block_delta` он заменяет уже показанные блоки (см. §8) | открыто |
-| 3 | `response_formatting` + `transformation=restructure`: переиспользование сохранённого `ContentDocument` (0 LLM там, где преобразование механическое), style presets | открыто |
-| 4 | Расширение рецептов (новые формы только при доказанной потребности), удаление legacy-пути | открыто |
+| 3 | `response_formatting` + `transformation=restructure`: переиспользование сохранённого `ContentDocument` (0 LLM там, где преобразование механическое); chrome = `PresentationIconPolicy` (TokenIcon) | сделано (2026-11-03) |
+| 4 | Расширение рецептов (новые формы только при `mismatch` с доказанной потребностью); kill `legacy` только после зелёных `layout_shift=0` + schema metrics на staging; metric outcomes `mechanical_*` | staging **PCT=100**; provisional open-paragraph `block_delta` + client upsert; stream `source_refs`; off-graph HITL locale из session; удаление кода legacy — после гейтов ≥24 ч; новых shape не добавляем |
+| P1 global UX (2026-11-03) | Любой сценарий: `plan`→только `steps`; `ListItem.level`; `PresentationIconPolicy`→TokenIcon; HITL copy по locale; промпт/парсер steps без `:` | сделано |
+| P1.1 progressive disclosure | Длинные ответы: хвост H2-секций в `<details>` (`BlockRenderer`); MCP HITL locale из session | сделано |
+| P1.2 inline cites | ``[n]`` остаются в prose → cite chips → `#source-ref-n`; align promotes emphasized ordered→steps | сделано |
+| W3a citeable docs (2026-11-03) | `DocumentPart` admission → PromptAssembly → LiteLLM `document` + stream/response citation mapping → Formatter `_resolve_citations` / `meta.citations` (schema_first + legacy) | сделано |
+| Shape precheck experiment | `FORMATTER_SHAPE_PRECHECK`: buffer schema_first + explicit shape → validate → ≤1 regenerate → `emit_content_document` (до первого `block_delta`); outcomes `precheck_*` | сделано (flag default off; wired in `.env*` as `false`) |
 
 ## 6. DoD волны 1
 
@@ -140,3 +147,4 @@ markdown-превью (layout shift). Предложение «своя Pydantic
   метрикой: если статистика покажет, что причина систематически в модели, повторная
   генерация должна выбираться **до** первой отрисовки (отдельный эксперимент/флаг),
   а не после. Детерминированная перекомпоновка блоков отклонена по той же причине.
+  Реализовано: `FORMATTER_SHAPE_PRECHECK` (default `false`) — см. волну Shape precheck.

@@ -381,19 +381,22 @@ def _collect_kv_items(
 
 
 def _try_parse_steps(lines: list[str], index: int) -> tuple[StepsBlock | None, int]:
-    """Detect 2+ consecutive ``N. **Title:** body`` items as one process timeline."""
+    """Detect 2+ consecutive ``N. **Title:** body`` items as one process timeline.
+
+    Separator after the bold title is optional: ``1. **Бульон** сварить…`` is already
+    a step. Requiring ``:`` previously split one process into StepsBlock + ordered list.
+    """
     items: list[StepItem] = []
     i = index
     while i < len(lines):
         match = _STEPS_ITEM.match(lines[i])
         if match is None:
             break
-        title, had_inline_sep = _split_label_separator(match.group("title"))
-        if not had_inline_sep and match.group("sep") is None:
-            break
+        title, _had_inline_sep = _split_label_separator(match.group("title"))
         body = match.group("body").strip()
-        if title and body:
-            items.append(StepItem(title=title[:200], body=body[:2000]))
+        if not title or not body:
+            break
+        items.append(StepItem(title=title[:200], body=body[:2000]))
         i += 1
     if len(items) >= 2:
         return StepsBlock(type="steps", items=tuple(items)), i - index
@@ -436,7 +439,37 @@ def _normalize_blocks(blocks: tuple[ContentBlock, ...]) -> tuple[ContentBlock, .
     if not blocks:
         return blocks
     merged_icons = _merge_orphan_icons(blocks)
-    return _merge_adjacent_ordered_lists(merged_icons)
+    joined = _merge_adjacent_ordered_lists(merged_icons)
+    return _promote_emphasized_ordered_lists(joined)
+
+
+def _promote_emphasized_ordered_lists(blocks: tuple[ContentBlock, ...]) -> tuple[ContentBlock, ...]:
+    """Ordered list whose every row has ``emphasis`` = process → ``StepsBlock``.
+
+    Global for any scenario: process timelines must hit ``BlockRenderer`` steps chrome,
+    not mixed ``1.`` markers. Parallel points without emphasis stay as lists.
+    """
+    if not blocks:
+        return blocks
+    out: list[ContentBlock] = []
+    for block in blocks:
+        if (
+            isinstance(block, ListBlock)
+            and block.style == "ordered"
+            and len(block.items) >= 2
+            and all((item.emphasis or "").strip() for item in block.items)
+        ):
+            steps = tuple(
+                StepItem(
+                    title=(item.emphasis or item.text)[:200],
+                    body=(item.text if (item.emphasis or "").strip() else item.text)[:2000] or " ",
+                )
+                for item in block.items
+            )
+            out.append(StepsBlock(type="steps", items=steps))
+            continue
+        out.append(block)
+    return tuple(out)
 
 
 def _is_icon_only_block(block: ContentBlock) -> bool:

@@ -67,9 +67,13 @@ _ARTICLES: tuple[Article, ...] = (
     Article(
         id="no_pii_echo_without_permission",
         statement=(
-            "Personal data may appear in the answer only if it was present in this turn's "
-            "inputs (user text or supplied evidence). Do not produce an email, phone, "
-            "account number, card number or passport from anywhere else."
+            "Contact and identity-document values (email, phone, IBAN, tax id, card, "
+            "passport) may appear only if present in this turn's inputs: user text, "
+            "supplied evidence, or memory_hints. Do not invent those identifiers. "
+            "Recalling a name or preference the user already stated (memory_hints / "
+            "prior dialog) when they ask about themselves is allowed and is not a "
+            "violation of this article. This article is enforced by the platform "
+            "scanner — do not flag first names alone."
         ),
     ),
     Article(

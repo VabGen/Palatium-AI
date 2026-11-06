@@ -2,15 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent } from 'react';
 import toast from 'react-hot-toast';
 import {
+  ArrowUp,
   ChevronDown,
+  Circle,
   Copy,
   Download,
   FileText,
+  Folder,
   LoaderCircle,
   Paperclip,
+  Plus,
   RotateCw,
-  SendHorizontal,
-  Sparkles,
   ThumbsDown,
   ThumbsUp,
   X,
@@ -43,6 +45,8 @@ import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
 import { markFirstVisualStart, measureFirstVisual } from '../lib/firstVisual';
 import { pendingPhaseForNode } from '../lib/pendingOrb';
 import { useStreamAnnouncer } from '../lib/useStreamAnnouncer';
+import { artifactPreviewText, isArtifactWorthy } from '../lib/artifactDocument';
+import { ArtifactPane } from './ArtifactPane';
 import { CitationSources } from './CitationSources';
 import { LiveAnnouncer } from './LiveAnnouncer';
 import { StreamMarkdownPreview } from './StreamMarkdownPreview';
@@ -249,7 +253,12 @@ export function ChatShell() {
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [projectId, setProjectId] = useState('');
   const [connectors, setConnectors] = useState<AttachmentConnectorSource[]>([]);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [artifactMessageId, setArtifactMessageId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
   /** Progressive SSE preview — always GFM via StreamMarkdownPreview (Path C). */
   const [streamPreview, setStreamPreview] = useState('');
   /**
@@ -268,6 +277,8 @@ export function ChatShell() {
   const [streamBlocks, setStreamBlocks] = useState<Array<{ index: number; block: ContentBlock }>>(
     []
   );
+  /** Attachment filenames for the in-flight turn — cite chips before ``result``. */
+  const [streamSourceRefs, setStreamSourceRefs] = useState<string[]>([]);
   /** Preserves bubble height across preview → BlockRenderer to avoid layout jump. */
   const [streamBubbleMinHeight, setStreamBubbleMinHeight] = useState<number | undefined>();
   const messageEndRef = useRef<HTMLDivElement>(null);
@@ -297,12 +308,21 @@ export function ChatShell() {
     setStreamPreview('');
     setStreamTitle(null);
     setStreamBlocks([]);
+    setStreamSourceRefs([]);
   }, []);
 
-  /** Append-only typed frame; a duplicate index (retry/replay) must not paint twice. */
+  /**
+   * Upsert typed frame by index: open paragraphs grow in place; a closed block
+   * replaces the provisional one (streamObject superset — no remount flicker).
+   */
   const appendStreamBlock = useCallback((index: number, block: ContentBlock) => {
     setStreamBlocks(prev => {
-      if (prev.some(item => item.index === index)) return prev;
+      const at = prev.findIndex(item => item.index === index);
+      if (at >= 0) {
+        const next = prev.slice();
+        next[at] = { index, block };
+        return next;
+      }
       return [...prev, { index, block }].sort((a, b) => a.index - b.index);
     });
   }, []);
@@ -323,9 +343,13 @@ export function ChatShell() {
       title: streamTitle,
       blocks: streamBlocks.map(item => item.block),
       actions: [],
-      meta: { confidence: 1, requires_review: false, source_refs: [] },
+      meta: {
+        confidence: 1,
+        requires_review: false,
+        source_refs: streamSourceRefs,
+      },
     };
-  }, [streamBlocks, streamTitle]);
+  }, [streamBlocks, streamTitle, streamSourceRefs]);
 
   const lockStreamBubbleHeight = useCallback(() => {
     const el = streamBubbleRef.current;
@@ -343,6 +367,42 @@ export function ChatShell() {
         cancelAnimationFrame(streamPreviewRafRef.current);
       }
     };
+  }, []);
+
+  useEffect(() => {
+    if (!plusMenuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const root = plusMenuRef.current;
+      if (root && !root.contains(event.target as Node)) {
+        setPlusMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPlusMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [plusMenuOpen]);
+
+  useEffect(() => {
+    if (!artifactMessageId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setArtifactMessageId(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [artifactMessageId]);
+
+  const openArtifactIfWorthy = useCallback((message: AssistantChatMessage) => {
+    const pendingHitl = (message.hitlCards ?? []).some(card => card.status === 'pending');
+    if (pendingHitl) return;
+    if (message.document && isArtifactWorthy(message.document)) {
+      setArtifactMessageId(message.id);
+    }
   }, []);
 
   const uploading = attachments.some(
@@ -620,7 +680,19 @@ export function ChatShell() {
             error: undefined,
           });
         }
-        if (!cancelled) setMessages(restored);
+        if (!cancelled) {
+          setMessages(restored);
+          const lastWorthy = [...restored]
+            .reverse()
+            .find(
+              (msg): msg is AssistantChatMessage =>
+                msg.role === 'assistant' &&
+                Boolean(msg.document) &&
+                !(msg.hitlCards ?? []).some(card => card.status === 'pending') &&
+                isArtifactWorthy(msg.document as ContentDocument)
+            );
+          setArtifactMessageId(lastWorthy?.id ?? null);
+        }
       } catch (err) {
         console.warn('Session hydrate failed:', err);
       } finally {
@@ -636,39 +708,49 @@ export function ChatShell() {
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, busy]);
 
-  const handleHitlResolved = useCallback((messageId: string, event: HitlResolvedEvent) => {
-    const { card, resumed, revision } = event;
-    setMessages(prev =>
-      prev.map(msg => {
-        if (msg.id !== messageId || msg.role !== 'assistant') return msg;
-        const hitlCards = (msg.hitlCards ?? [])
-          .map(existing => (existing.card_id === card.card_id ? card : existing))
-          .filter(existing => existing.status === 'pending');
-        if (resumed?.output) {
-          return {
-            ...msg,
-            document: resumed.output,
-            // The resume envelope carries the diff for the answer that replaced this
-            // one; without it (a plain choice resume) no marks apply.
-            revision: revision ?? null,
-            hitlCards,
-            _pendingReview: false,
-            _requiresReview: resumed.requires_review,
-            status: resumed.status,
-            error: resumed.error ?? undefined,
-          };
-        }
-        return {
-          ...msg,
-          hitlCards,
-          _pendingReview: hitlCards.length > 0 ? false : msg._pendingReview,
-        };
-      })
-    );
-    if (resumed?.output) {
-      toast.success(t('toast.resuming'));
-    }
-  }, []);
+  const handleHitlResolved = useCallback(
+    (messageId: string, event: HitlResolvedEvent) => {
+      const { card, resumed, revision } = event;
+      let nextAssistant: AssistantChatMessage | null = null;
+      setMessages(prev =>
+        prev.map(msg => {
+          if (msg.id !== messageId || msg.role !== 'assistant') return msg;
+          const hitlCards = (msg.hitlCards ?? [])
+            .map(existing => (existing.card_id === card.card_id ? card : existing))
+            .filter(existing => existing.status === 'pending');
+          const updated: AssistantChatMessage = resumed?.output
+            ? {
+                ...msg,
+                document: resumed.output,
+                // The resume envelope carries the diff for the answer that replaced this
+                // one; without it (a plain choice resume) no marks apply.
+                revision: revision ?? null,
+                hitlCards,
+                _pendingReview: false,
+                _requiresReview: resumed.requires_review,
+                status: resumed.status,
+                error: resumed.error ?? undefined,
+              }
+            : {
+                ...msg,
+                hitlCards,
+                _pendingReview: hitlCards.length > 0 ? false : msg._pendingReview,
+              };
+          if (hitlCards.length === 0) {
+            nextAssistant = updated;
+          }
+          return updated;
+        })
+      );
+      if (nextAssistant) {
+        openArtifactIfWorthy(nextAssistant);
+      }
+      if (resumed?.output) {
+        toast.success(t('toast.resuming'));
+      }
+    },
+    [openArtifactIfWorthy]
+  );
 
   const handleMemoryCardCreated = useCallback(
     (card: HITLCardView, label: string) => {
@@ -720,6 +802,7 @@ export function ChatShell() {
     setInput('');
     setBusy(true);
     clearStreamPreview();
+    setStreamSourceRefs(attachmentNames);
     a11y.reset();
     setPendingNode(null);
     clearStreamBubbleHeight();
@@ -792,6 +875,7 @@ export function ChatShell() {
       setMessages(prev =>
         prev.map(msg => (msg.id === assistantId && msg.role === 'assistant' ? assistant : msg))
       );
+      openArtifactIfWorthy(assistant);
       clearStreamPreview();
       // Один агрегированный финал вместо лавины: «ответ готов» (+ предупреждение
       // о проверке, если оно есть), заголовок — только если кадром не пришёл.
@@ -861,6 +945,7 @@ export function ChatShell() {
       );
       setBusy(true);
       clearStreamPreview();
+      setStreamSourceRefs(userMsg.attachmentNames ?? []);
       a11y.reset();
       setPendingNode(null);
       clearStreamBubbleHeight();
@@ -918,6 +1003,7 @@ export function ChatShell() {
         setMessages(prev =>
           prev.map(msg => (msg.id === messageId && msg.role === 'assistant' ? assistant : msg))
         );
+        openArtifactIfWorthy(assistant);
         clearStreamPreview();
         a11y.announceReady(result);
         streamingAssistantIdRef.current = null;
@@ -1029,6 +1115,7 @@ export function ChatShell() {
     startNewThreadInRuntime();
     setMessages([]);
     setAttachments([]);
+    setArtifactMessageId(null);
     setHydrated(false);
     a11y.reset();
   }, [a11y]);
@@ -1043,29 +1130,47 @@ export function ChatShell() {
   // Screen readers announce only at warn/over thresholds, not on every keystroke.
   const counterLive: 'polite' | 'off' = overLimit || nearLimit ? 'polite' : 'off';
 
+  const artifactMessage =
+    artifactMessageId === null
+      ? null
+      : messages.find(
+          (msg): msg is AssistantChatMessage =>
+            msg.id === artifactMessageId && msg.role === 'assistant' && Boolean(msg.document)
+        );
+
   return (
-    <div className="shell" part="shell">
+    <div
+      className={`shell${artifactMessage ? ' is-artifact-open' : ''}`}
+      part="shell"
+    >
       <header className="shell-header" part="header">
         <div className="brand">
-          <Sparkles size={18} className="brand-mark" />
-          <div>
-            <h1>{t('app.title')}</h1>
-            <p>{t('app.tagline')}</p>
-            {devMode && <span className="dev-badge">🔧 {t('badge.dev')}</span>}
-            {wsConnected && <span className="dev-badge">{t('badge.ws')}</span>}
-            {hostStatus === 'standalone' && (
-              <span className="dev-badge">{t('badge.standalone')}</span>
-            )}
-          </div>
+          <span className="brand-mark-wrap" aria-hidden="true">
+            <svg className="brand-mark" width="15" height="15" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 2.5L14.2 9.1L21 12L14.2 14.9L12 21.5L9.8 14.9L3 12L9.8 9.1L12 2.5Z"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinejoin="round"
+              />
+              <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+            </svg>
+          </span>
+          <h1>{t('app.title')}</h1>
+          {devMode && <span className="dev-badge">🔧 {t('badge.dev')}</span>}
+          {devMode && wsConnected && <span className="dev-badge">{t('badge.ws')}</span>}
+          {devMode && hostStatus === 'standalone' && (
+            <span className="dev-badge">{t('badge.standalone')}</span>
+          )}
         </div>
         <div className="header-actions">
           <button type="button" className="toolbar-btn" onClick={handleNewThread}>
             {t('header.newChat')}
           </button>
-          <span className="thread-pill">{threadId.slice(0, 18)}…</span>
+          {devMode && <span className="thread-pill">{threadId.slice(0, 18)}…</span>}
           <button
             type="button"
-            className="toolbar-btn"
+            className="toolbar-btn toolbar-btn--icon"
             part="close"
             onClick={() => setPanelOpen(false)}
             aria-label={t('header.collapse')}
@@ -1083,6 +1188,7 @@ export function ChatShell() {
         `aria-live="off"` обязателен: иначе polite-регион озвучивает каждый
         `block_delta`, а прогресс идёт отдельным каналом (см. `LiveAnnouncer`).
       */}
+      <div className="shell-main">
       <div
         className="transcript"
         part="transcript"
@@ -1092,25 +1198,28 @@ export function ChatShell() {
       >
         {hydrated && messages.length === 0 && (
           <div className="empty">
-            {userName && (
-              <p className="empty-greeting">{t('empty.greeting', { name: userName })}</p>
-            )}
-            <h2>{t('empty.title')}</h2>
-            <p>{t('empty.body')}</p>
-            <p className="empty-hint">
-              {t('empty.attachmentsHint', { size: MAX_ATTACHMENT_LABEL })}
-            </p>
-            <div className="suggestions">
-              {[t('empty.suggestion.0'), t('empty.suggestion.1')].map(hint => (
-                <button
-                  key={hint}
-                  type="button"
-                  className="suggestion"
-                  onClick={() => setInput(hint)}
-                >
-                  {hint}
-                </button>
-              ))}
+            <div className="empty-stage">
+              {userName && (
+                <p className="empty-greeting">{t('empty.greeting', { name: userName })}</p>
+              )}
+              <h2>{t('empty.title')}</h2>
+            </div>
+            <div className="suggestions" role="group" aria-label={t('empty.suggestionsLabel')}>
+              {[t('empty.suggestion.0'), t('empty.suggestion.1'), t('empty.suggestion.2')].map(
+                hint => (
+                  <button
+                    key={hint}
+                    type="button"
+                    className="suggestion"
+                    onClick={() => {
+                      setInput(hint);
+                      composerInputRef.current?.focus();
+                    }}
+                  >
+                    {hint}
+                  </button>
+                )
+              )}
             </div>
           </div>
         )}
@@ -1150,6 +1259,13 @@ export function ChatShell() {
           // Провайдерские якоря точнее чипов из `source_refs`: если они есть, показываем
           // их (с цитатами), иначе — прежний список имён файлов.
           const citationAnchors = message.document?.meta.citations ?? [];
+          const documentIsArtifact =
+            Boolean(message.document) && isArtifactWorthy(message.document as ContentDocument);
+          const artifactPreview = documentIsArtifact
+            ? artifactPreviewText(message.document as ContentDocument)
+            : '';
+          const artifactTitle =
+            message.document?.title?.trim() || (documentIsArtifact ? t('artifact.untitled') : '');
 
           const isStreamingBubble =
             Boolean(message._streaming) ||
@@ -1202,6 +1318,25 @@ export function ChatShell() {
                         orgId={orgId}
                         onResolved={event => handleHitlResolved(message.id, event)}
                       />
+                    ) : message.document && documentIsArtifact ? (
+                      <>
+                        <button
+                          type="button"
+                          className={`artifact-anchor${
+                            artifactMessageId === message.id ? ' is-active' : ''
+                          }`}
+                          onClick={() => setArtifactMessageId(message.id)}
+                          aria-label={t('artifact.anchorLabel', { title: artifactTitle })}
+                        >
+                          <span className="artifact-anchor-title">{artifactTitle}</span>
+                          {artifactPreview ? (
+                            <span className="artifact-anchor-preview">{artifactPreview}</span>
+                          ) : null}
+                          <span className="artifact-anchor-open">{t('artifact.open')}</span>
+                        </button>
+                        {showDevGap && <p className="hitl-dev-gap">{t('msg.devGap')}</p>}
+                        {message.error && <p className="msg-error">{message.error}</p>}
+                      </>
                     ) : message.document ? (
                       <>
                         <RevisionNote revision={message.revision} />
@@ -1214,8 +1349,15 @@ export function ChatShell() {
                           />
                         ) : sourceChips.length > 0 ? (
                           <ul className="source-ref-chips" aria-label={t('attach.sources')}>
-                            {sourceChips.map(ref => (
-                              <li key={ref} className="source-ref-chip">
+                            {sourceChips.map((ref, index) => (
+                              <li
+                                key={ref}
+                                id={`source-ref-${index + 1}`}
+                                className="source-ref-chip"
+                              >
+                                <span className="source-ref-index" aria-hidden>
+                                  {index + 1}
+                                </span>
                                 {ref}
                               </li>
                             ))}
@@ -1301,6 +1443,38 @@ export function ChatShell() {
         })}
         <div ref={messageEndRef} />
       </div>
+      {artifactMessage?.document ? (
+        <ArtifactPane
+          document={artifactMessage.document}
+          revision={artifactMessage.revision}
+          messageId={artifactMessage.id}
+          userId={userId}
+          orgId={orgId}
+          busy={busy}
+          feedbackLike={artifactMessage._feedbackLike}
+          feedbackDislike={artifactMessage._feedbackDislike}
+          feedbackSending={artifactMessage._feedbackSending}
+          regenerating={artifactMessage._regenerating}
+          onClose={() => setArtifactMessageId(null)}
+          onLike={() => handleFeedback(artifactMessage.id, 'like')}
+          onDislike={() => handleFeedback(artifactMessage.id, 'dislike')}
+          onCopy={() => copyMessageContent(artifactMessage)}
+          onExportPdf={() => {
+            if (!artifactMessage.document) return;
+            void downloadDocumentPdf(
+              artifactMessage.document,
+              threadId,
+              userId,
+              orgId
+            ).catch((err: unknown) => {
+              toast.error(t('toast.pdfFailed'));
+              console.error(err);
+            });
+          }}
+          onRegenerate={() => regenerateResponse(artifactMessage.id)}
+        />
+      ) : null}
+      </div>
 
       {/* Канал озвучивания живёт ВНЕ ленты: `aria-live="off"` на ленте гасит
           объявления от изменений документа, но не должен гасить прогресс. */}
@@ -1320,45 +1494,66 @@ export function ChatShell() {
           addFiles(Array.from(e.dataTransfer.files));
         }}
       >
-        <MemoryActions
-          threadId={threadId}
-          userId={userId}
-          orgId={orgId}
-          disabled={busy}
-          onCardCreated={handleMemoryCardCreated}
-        />
-        <label className="attachment-project">
-          <span className="attachment-project-label">{t('attach.projectId')}</span>
-          <input
-            type="text"
-            className="attachment-project-input"
-            value={projectId}
-            maxLength={64}
-            disabled={busy || uploading}
-            placeholder={t('attach.projectIdHint')}
-            onChange={e => setProjectId(e.target.value)}
-            aria-label={t('attach.projectId')}
-          />
-        </label>
-        {connectors.length > 0 && (
-          <div className="attachment-connectors" aria-label={t('attach.connectors')}>
-            <span className="attachment-connectors-label">{t('attach.connectors')}</span>
-            <ul className="attachment-connectors-list">
-              {connectors.map(source => (
-                <li
-                  key={source.id}
-                  className={`attachment-connector${source.available ? ' is-available' : ' is-unavailable'}`}
-                  title={source.reason || source.label}
-                >
-                  <span className="attachment-connector-label">{source.label}</span>
-                  <span className="attachment-connector-state">
-                    {source.available
-                      ? t('attach.connectorReady')
-                      : t('attach.connectorUnavailable')}
-                  </span>
-                </li>
-              ))}
-            </ul>
+        {(toolsOpen ||
+          projectOpen ||
+          Boolean(projectId.trim()) ||
+          connectors.length > 0) && (
+          <div
+            id="composer-tools-panel"
+            className={`composer-context${toolsOpen || projectOpen ? ' is-open' : ''}`}
+          >
+            {(projectOpen || Boolean(projectId.trim())) && (
+              <label className="attachment-project">
+                <Folder size={13} aria-hidden />
+                <span className="attachment-project-label">{t('composer.menu.project')}</span>
+                <input
+                  type="text"
+                  className="attachment-project-input"
+                  value={projectId}
+                  maxLength={64}
+                  disabled={busy || uploading}
+                  placeholder={t('attach.projectIdHint')}
+                  onChange={e => setProjectId(e.target.value)}
+                  aria-label={t('attach.projectId')}
+                />
+              </label>
+            )}
+            {toolsOpen && (
+              <span className="composer-context-chip" aria-hidden="true">
+                <Circle size={13} />
+                {t('composer.menu.memory')}
+              </span>
+            )}
+            {toolsOpen && (
+              <MemoryActions
+                threadId={threadId}
+                userId={userId}
+                orgId={orgId}
+                disabled={busy}
+                onCardCreated={handleMemoryCardCreated}
+              />
+            )}
+            {toolsOpen && connectors.length > 0 && (
+              <div className="attachment-connectors" aria-label={t('attach.connectors')}>
+                <span className="attachment-connectors-label">{t('attach.connectors')}</span>
+                <ul className="attachment-connectors-list">
+                  {connectors.map(source => (
+                    <li
+                      key={source.id}
+                      className={`attachment-connector${source.available ? ' is-available' : ' is-unavailable'}`}
+                      title={source.reason || source.label}
+                    >
+                      <span className="attachment-connector-label">{source.label}</span>
+                      <span className="attachment-connector-state">
+                        {source.available
+                          ? t('attach.connectorReady')
+                          : t('attach.connectorUnavailable')}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
         {attachments.length > 0 && (
@@ -1535,70 +1730,123 @@ export function ChatShell() {
             ))}
           </ul>
         )}
-        <form
-          className="composer"
-          onSubmit={e => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            hidden
-            accept={ATTACHMENT_ACCEPT}
-            onChange={e => {
-              addFiles(Array.from(e.target.files ?? []));
-              // Reset so picking the same file twice still fires a change event.
-              e.target.value = '';
+        <div className="composer-dock" ref={plusMenuRef}>
+          {plusMenuOpen && (
+            <div
+              id="composer-plus-menu"
+              className="composer-plus-menu"
+              role="menu"
+              aria-label={t('composer.tools')}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="composer-plus-item"
+                disabled={busy}
+                onClick={() => {
+                  setPlusMenuOpen(false);
+                  fileInputRef.current?.click();
+                }}
+              >
+                <Paperclip size={15} strokeWidth={1.75} aria-hidden />
+                <span>{t('composer.attach')}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="composer-plus-item"
+                disabled={busy}
+                onClick={() => {
+                  setPlusMenuOpen(false);
+                  setProjectOpen(true);
+                }}
+              >
+                <Folder size={15} strokeWidth={1.75} aria-hidden />
+                <span>{t('composer.menu.project')}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="composer-plus-item"
+                disabled={busy}
+                onClick={() => {
+                  setPlusMenuOpen(false);
+                  setToolsOpen(true);
+                }}
+              >
+                <Circle size={15} strokeWidth={1.75} aria-hidden />
+                <span>{t('composer.menu.memory')}</span>
+              </button>
+            </div>
+          )}
+          <form
+            className="composer"
+            onSubmit={e => {
+              e.preventDefault();
+              void send();
             }}
-          />
-          <button
-            type="button"
-            className="attach-btn"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={busy}
-            aria-label={t('composer.attach')}
-            title={t('composer.attachTitle', { size: MAX_ATTACHMENT_LABEL })}
           >
-            <Paperclip size={18} />
-          </button>
-          <textarea
-            ref={composerInputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onPaste={handleComposerPaste}
-            placeholder={t('composer.placeholder')}
-            rows={2}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void send();
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              accept={ATTACHMENT_ACCEPT}
+              onChange={e => {
+                addFiles(Array.from(e.target.files ?? []));
+                // Reset so picking the same file twice still fires a change event.
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              className={`tools-btn${plusMenuOpen ? ' is-active' : ''}`}
+              aria-expanded={plusMenuOpen}
+              aria-haspopup="menu"
+              aria-controls="composer-plus-menu"
+              disabled={busy}
+              onClick={() => setPlusMenuOpen(prev => !prev)}
+              aria-label={t('composer.tools')}
+              title={t('composer.attachTitle', { size: MAX_ATTACHMENT_LABEL })}
+            >
+              <Plus size={18} strokeWidth={1.75} aria-hidden />
+            </button>
+            <textarea
+              ref={composerInputRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onPaste={handleComposerPaste}
+              placeholder={t('composer.placeholder')}
+              rows={2}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              aria-describedby="composer-counter"
+              className={
+                overLimit ? 'composer-textarea composer-textarea--over' : 'composer-textarea'
               }
-            }}
-            aria-describedby="composer-counter"
-            className={
-              overLimit ? 'composer-textarea composer-textarea--over' : 'composer-textarea'
-            }
-          />
-          <button
-            type="submit"
-            disabled={!canSend}
-            className={`send-btn ${busy ? 'sending' : ''}`}
-            aria-label={t('composer.send')}
-            title={
-              overLimit
-                ? t('composer.overLimitTitle', {
-                    used: formatNumber(inputLength),
-                    limit: formatNumber(INTENT_TEXT_LIMIT),
-                  })
-                : undefined
-            }
-          >
-            {busy ? <LoaderCircle className="spin" size={18} /> : <SendHorizontal size={18} />}
-          </button>
-        </form>
+            />
+            <button
+              type="submit"
+              disabled={!canSend}
+              className={`send-btn ${busy ? 'sending' : ''}`}
+              aria-label={t('composer.send')}
+              title={
+                overLimit
+                  ? t('composer.overLimitTitle', {
+                      used: formatNumber(inputLength),
+                      limit: formatNumber(INTENT_TEXT_LIMIT),
+                    })
+                  : undefined
+              }
+            >
+              {busy ? <LoaderCircle className="spin" size={18} /> : <ArrowUp size={18} />}
+            </button>
+          </form>
+        </div>
 
         {/* Счётчик символов: показывается всегда, когда есть ввод или близко к лимиту */}
         {(inputLength > 0 || nearLimit || overLimit) && (

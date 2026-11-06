@@ -18,7 +18,6 @@ import re
 from dataclasses import dataclass, field
 
 from palatium_ai.domain.content.content_document import (
-    NESTED_ITEM_PREFIX,
     CodeBlock,
     ContentBlock,
     HeadingBlock,
@@ -329,15 +328,19 @@ def _indent_width(raw: str) -> int:
 
 
 def _flatten_nested_bullet(item: ListItem, indent: int) -> ListItem:
-    """Flatten an indented sub-bullet into the parent list (no nested list contract).
+    """Map GFM indent onto ``ListItem.level`` (single list block, typed nesting).
 
-    ``ListBlock`` has no nesting level, so a nested item used to lose its hierarchy
-    silently and read as a sibling. A visible marker keeps the sub-point readable
-    without inventing a second list shape (055).
+    Deeper than ``LIST_LEVEL_MAX`` collapses to the ceiling — no tree of ListBlocks
+    (055: one composition contract).
     """
-    if indent < 2 or item.text.startswith(NESTED_ITEM_PREFIX):
+    from palatium_ai.domain.content.content_document import LIST_LEVEL_MAX, normalize_list_item_nesting
+
+    text, level = normalize_list_item_nesting(item.text, item.level)
+    if indent >= 2:
+        level = min(LIST_LEVEL_MAX, max(level, 1 if indent < 4 else 2))
+    if text == item.text and level == item.level:
         return item
-    return item.model_copy(update={"text": f"{NESTED_ITEM_PREFIX}{item.text}"})
+    return item.model_copy(update={"text": text, "level": level})
 
 
 def _list_item_from_groups(emphasis_raw: str | None, body_raw: str | None) -> ListItem | None:

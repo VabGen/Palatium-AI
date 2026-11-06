@@ -123,11 +123,9 @@ No token = no icon. Never invent names outside the list.
 _LISTS_RULE = """
 ## LISTS AND SECTIONS
 - Section titles → ATX headings (`##` / `###`), not numbered list markers.
-- Unordered points → `-` bullets.
-- Ordered `1.` lists ONLY for a real sequence of steps; keep one continuous list
-  (do not restart every section at `1.`).
-- Parallel items (components, options) are bullets, never a numbered process.
-- Do not put a literal number in the item text — the UI already numbers ordered lists.
+- Parallel points → `-` bullets; a user-run process → Steps form below (never a
+  plain ordered list; never restart `1.` under each heading).
+- Nested sub-points → indent 2+ spaces (UI `level`); no literal numbers in item text.
 """
 
 _STRUCTURED_BLOCKS_RULE = """
@@ -136,7 +134,7 @@ _STRUCTURED_BLOCKS_RULE = """
 - Formula: `$$E = mc^2$$` on its own line (LaTeX, no code fence).
 - Key-value panel: 2+ consecutive bullets opening with a short bold term and a colon:
   - **Срок:** 10 рабочих дней
-- Steps: 2+ consecutive numbered items opening with a short bold title:
+- Steps: 2+ consecutive numbered items with bold title + body (one continuous list):
   1. **Подготовка:** собрать документы
 - Table: a GFM pipe table with a header separator row.
 Only when the content needs it (comparison, process) — never on short prose.
@@ -207,14 +205,15 @@ Write the user-facing answer: clean GitHub Flavored Markdown.
 - choice / confirm from format_hints → short framing + the matching HITL tag(s)
 
 ## RESPONSE SHAPE (input field response_shape; overrides style_hint structure)
-- auto → choose the structure yourself (default).
+- auto → structure from content (comparison→table, process→steps, analysis→
+  headings+callouts, short reply→prose); never all-paragraph dumps.
 - comparison_table → ONE GFM pipe table with an attribute column plus one column per
   compared item (at least 2 item columns) and at least 2 data rows, plus at most one
   sentence for the takeaway. A comparison is always a table: bullets carry
   recommendations, not compared attributes.
 - document_analysis → `##` sections with substantive paragraphs; risks as
   `> [!WARNING]` callouts; recommendations as bullets only when the source supports them.
-- plan → numbered steps (at least 2 actionable items), one continuous list.
+- plan → Steps form only (≥2 bold-title items, one list; never ordered list).
 - prose → paragraphs only: no headings, tables, lists or step structure.
 Locale and faithfulness rules always win over the shape.
 """
@@ -301,22 +300,18 @@ Emit the snippet exactly as the user must read it: raw quotes `"` / `'` stay raw
 never HTML entities (`&quot;`, `&apos;`, `&#39;`, `&amp;`). The JSON encoding of the
 value already handles escaping (`\"`); HTML escaping corrupts the code on screen.
 
-### list.style
-- "ordered" ONLY for a genuine sequence (install → configure → test).
-- "unordered" for parallel points, people, parameters, options, recommendations.
-- Parallel items (components) → ordered `list`, NOT `steps`; `steps` is a
-  process run in order and its `status` is real progress from the input —
-  omit it otherwise (no default "pending").
-Numbering is implicit — never write literal "1." / "2." into item text.
+### list.style / steps
+- Process in order → one `steps` block (title+body). `status` only for real progress
+  (omit otherwise). Parallel points → unordered `list` (`level` 0–2, no text prefix).
+- Never use ordered `list` for a plan. Numbering is implicit — no "1." in item text.
 
 ### heading vs list item
 - 2+ sentences on one topic → HeadingBlock (+ ParagraphBlock).
 - A single short line (name, parameter, point) → ListItem.
 
 ### icon (IconToken | None)
-- Set icon ONLY when meta.kind ∈ {analysis, recommendation, guide, report}.
-- For letter / memo / response / faq → icon = null.
-- Icons on top-level headings only, never on list items.
+- Lead heading icon when meta.kind ∈ {analysis, recommendation, guide, report};
+  letter / memo / response / faq → null. Callouts may match tone; no emoji / invented names.
 
 ## FAITHFULNESS & LOCALE
 - Never invent facts: use only final_text / attached_files / user_facts / dialog_history.
@@ -347,8 +342,7 @@ Numbering is implicit — never write literal "1." / "2." into item text.
   recommendations, not compared attributes.
 - document_analysis → `heading` sections, each followed by a substantive `paragraph`;
   risks as `callout` (tone warning/danger); recommendations as `list` only when supported.
-- plan → one `steps` block (preferred) or an ordered `list` with at least 2 actionable
-  items; never a plan as plain paragraphs.
+- plan → one `steps` block (≥2 items); never ordered `list` / plain paragraphs.
 - prose → `paragraph` blocks only: no headings, tables or step structures.
 Locale and faithfulness rules always win over the shape.
 """

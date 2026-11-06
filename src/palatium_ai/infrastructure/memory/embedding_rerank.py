@@ -88,6 +88,18 @@ class EmbeddingRerankMemoryPort:
         """Delegate delete to inner port."""
         return await self._inner.forget(namespace=namespace, key=key)
 
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        """Forward list when inner supports audit listing."""
+        listing = getattr(self._inner, "list_entries", None)
+        if listing is None:
+            return []
+        return list(await listing(namespace=namespace, limit=limit))
+
     async def bump_access(self, *, namespace: tuple[str, ...], key: str) -> int:
         """Forward access bump when inner supports promote tracking."""
         bump = getattr(self._inner, "bump_access", None)

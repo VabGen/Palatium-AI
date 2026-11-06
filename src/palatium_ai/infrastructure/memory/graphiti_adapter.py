@@ -213,6 +213,16 @@ class GraphitiMemoryPort:
         _ = namespace, key
         return False
 
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        """Graphiti adapter has no keyed listing (CMD3 audit requires postgres/in-memory)."""
+        _ = namespace, limit
+        return []
+
     async def aclose(self) -> None:
         """Close transport resources."""
         await self._transport.aclose()

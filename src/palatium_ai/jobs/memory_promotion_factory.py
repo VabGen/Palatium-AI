@@ -43,6 +43,7 @@ def build_memory_promotion_service(
         ),
         xmemory_decouple=settings.memory.xmemory_decouple,
         bayesian_trust=settings.memory.bayesian_trust,
+        origin_ceiling=settings.memory.origin_ceiling,
     )
 
 
@@ -67,6 +68,25 @@ async def list_promotion_owner_ids(
         return [str(user_id) for user_id in result.scalars().all() if user_id]
 
 
+async def list_corroboration_owner_ids(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    limit: int = _MAX_OWNER_IDS,
+) -> list[str]:
+    """Enumerate RLS owners with active ``trust=inferred`` rows (ADR 0008).
+
+    Promote discovery alone misses inferred-only tenants that still need
+    peer-extract / overlap upgrades before they become promotable.
+    """
+    safe_limit = max(1, min(int(limit), _MAX_OWNER_IDS))
+    async with session_factory() as session:
+        result = await session.execute(
+            text("SELECT memory.corroboration_owner_ids(:limit)"),
+            {"limit": safe_limit},
+        )
+        return [str(user_id) for user_id in result.scalars().all() if user_id]
+
+
 async def resolve_promotion_user_ids(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -83,4 +103,24 @@ async def resolve_promotion_user_ids(
                 min_importance=min_importance,
             )
         )
+    return list(dict.fromkeys(resolved))
+
+
+async def resolve_consolidation_user_ids(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    explicit: Sequence[str],
+    all_users: bool,
+    min_importance: float,
+    include_corroboration_owners: bool,
+) -> list[str]:
+    """Owners for sleep consolidate: promote candidates ∪ inferred owners when needed."""
+    resolved = await resolve_promotion_user_ids(
+        session_factory,
+        explicit=explicit,
+        all_users=all_users,
+        min_importance=min_importance,
+    )
+    if all_users and include_corroboration_owners:
+        resolved.extend(await list_corroboration_owner_ids(session_factory))
     return list(dict.fromkeys(resolved))

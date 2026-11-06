@@ -3,6 +3,7 @@
 from .content_document import (
     ICON_NAME_SET,
     ICON_NAMES,
+    LIST_LEVEL_MAX,
     NESTED_ITEM_PREFIX,
     ActionKind,
     ActionSpec,
@@ -29,6 +30,8 @@ from .content_document import (
     TableBlock,
     VerbosityBudget,
     WidgetBlock,
+    normalize_document_list_nesting,
+    normalize_list_item_nesting,
     parse_content_document,
     validate_content_block,
 )
@@ -38,6 +41,7 @@ from .revision import DocumentRevision, block_content_hash, document_content_has
 __all__ = [
     "ICON_NAMES",
     "ICON_NAME_SET",
+    "LIST_LEVEL_MAX",
     "NESTED_ITEM_PREFIX",
     "ActionKind",
     "ActionSpec",
@@ -69,6 +73,8 @@ __all__ = [
     "count_ordered_markers",
     "document_content_hash",
     "document_revision",
+    "normalize_document_list_nesting",
+    "normalize_list_item_nesting",
     "parse_content_document",
     "prose_to_blocks",
     "validate_content_block",

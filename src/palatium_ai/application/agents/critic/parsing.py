@@ -11,12 +11,26 @@ decoded there instead of failing the review (055).
 
 from __future__ import annotations
 
+import json
+
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.critic import CriticInput, CriticOutput
 
 
 def confidence_from_scores(output: CriticOutput) -> float:
     return min(max((output.accuracy_score / 10 + output.safety_score / 10) / 2, 0.0), 1.0)
+
+
+def _decode_memory_hints(raw: str | None) -> tuple[str, ...]:
+    if not raw or not raw.strip():
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(str(hint) for hint in parsed if str(hint).strip())
 
 
 def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
@@ -54,4 +68,5 @@ def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
         continuation_kind=continuation,
         user_input_chars=user_input_chars,
         worker_confidence=worker_confidence,
+        memory_hints=_decode_memory_hints(input_context.get("memory_hints_json")),
     )

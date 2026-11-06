@@ -12,7 +12,7 @@ from palatium_ai.domain.agents.execution import ExecutionStrategy
 from palatium_ai.domain.agents.intent import IntentTaskResult, TaskKind
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult, WorkerRoute
 from palatium_ai.domain.attachments.context import AttachmentContextBlock, AttachmentTurnContext
-from palatium_ai.domain.llm.models import ImagePart
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
@@ -154,6 +154,11 @@ def turn_image_parts(state: AgentGraphState) -> tuple[ImagePart, ...]:
     entry, so the researcher and the analyst can never see a different set (ADR 0007).
     """
     return tuple(state.get("image_parts") or ())
+
+
+def turn_document_parts(state: AgentGraphState) -> tuple[DocumentPart, ...]:
+    """Citeable text attachments admitted for this turn (W3a); empty when none."""
+    return tuple(state.get("document_parts") or ())
 
 
 def has_attachment_context(state: AgentGraphState) -> bool:

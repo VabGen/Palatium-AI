@@ -172,9 +172,15 @@ export const STATE_MATRIX: readonly WidgetState[] = [
     api: [{ key: 'intents.process.stream', replies: [{ json: formatterResult() }] }],
     drive: async page => ask(page, 'Составь письмо'),
     checks: [
-      { kind: 'visible', selector: '.msg.assistant .block-paragraph' },
-      { kind: 'visible', selector: '.msg.assistant .kv-row' },
-      { kind: 'attr', selector: '.msg-actions button', name: 'aria-label', value: 'Ответ полезен' },
+      { kind: 'visible', selector: '.msg.assistant .artifact-anchor' },
+      { kind: 'visible', selector: '.artifact-pane .block-paragraph' },
+      { kind: 'visible', selector: '.artifact-pane .kv-row' },
+      {
+        kind: 'attr',
+        selector: '.artifact-pane .msg-actions button',
+        name: 'aria-label',
+        value: 'Ответ полезен',
+      },
       { kind: 'hidden', selector: '.thinking-indicator' },
       { kind: 'noEnglish' },
     ],
@@ -252,10 +258,10 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       await page.getByRole('button', { name: 'Отправить step-up' }).click();
     },
     checks: [
-      // После резолва карточка уходит из транскрипта, а документ остаётся видимым.
+      // После резолва карточка уходит; достойный документ открывается в Artifacts.
       { kind: 'hidden', selector: '.hitl-card' },
       { kind: 'hidden', selector: '.hitl-step-up-form' },
-      { kind: 'visible', selector: '.msg.assistant .block-paragraph' },
+      { kind: 'visible', selector: '.artifact-pane .block-paragraph' },
       { kind: 'noEnglish' },
     ],
   },
@@ -297,7 +303,8 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       },
     ],
     drive: async page => {
-      await page.getByRole('button', { name: 'Память' }).click();
+      await page.getByRole('button', { name: 'Инструменты композера' }).click();
+      await page.getByRole('menuitem', { name: 'Память' }).click();
       await page.locator('.memory-input').fill('pref-lang');
       await page.locator('.memory-textarea').fill('Общается по-русски');
       await page.getByRole('button', { name: 'Запросить сохранение' }).click();
@@ -329,7 +336,8 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       },
     ],
     drive: async page => {
-      await page.getByRole('button', { name: 'Память' }).click();
+      await page.getByRole('button', { name: 'Инструменты композера' }).click();
+      await page.getByRole('menuitem', { name: 'Память' }).click();
       await page.getByRole('tab', { name: 'Забыть' }).click();
       // Поле ровно одно — ключ записи: текст для забывания не нужен.
       await page.locator('.memory-input').fill('pref-lang');
@@ -363,7 +371,8 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       },
     ],
     drive: async page => {
-      await page.getByRole('button', { name: 'Память' }).click();
+      await page.getByRole('button', { name: 'Инструменты композера' }).click();
+      await page.getByRole('menuitem', { name: 'Память' }).click();
       await page.getByRole('tab', { name: 'Извлечь' }).click();
       await page.getByRole('button', { name: 'Запросить извлечение' }).click();
     },

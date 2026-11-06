@@ -40,3 +40,5 @@ class PromotionCandidate(BaseModel):
     contains_pii: bool = False
     last_accessed: datetime | None = None
     promoted_at: datetime | None = None
+    #: ADR 0008 staged trust (resolved at list time; default inferred = fail-closed).
+    trust: str = Field(default="inferred", max_length=32)

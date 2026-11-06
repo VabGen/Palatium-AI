@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.memory_write_service import MemoryWriteService
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.domain.ports.context_compact import DialogSummarizerPort
+    from palatium_ai.domain.ports.project_context import ProjectContextPort
     from palatium_ai.domain.skills.port import SkillCatalogPort
 
 logger = get_logger(__name__)
@@ -45,6 +46,7 @@ class ContextBuilder:
         summarizer: DialogSummarizerPort | None = None,
         skill_catalog: SkillCatalogPort | None = None,
         skill_catalog_max_chars: int = _DEFAULT_SKILL_CATALOG_MAX_CHARS,
+        project_context: ProjectContextPort | None = None,
     ) -> None:
         self._dialog_store = dialog_store
         self._memory_port = memory_port
@@ -52,6 +54,7 @@ class ContextBuilder:
         self._summarizer = summarizer
         self._skill_catalog = skill_catalog
         self._skill_catalog_max_chars = max(200, int(skill_catalog_max_chars))
+        self._project_context = project_context
 
     async def build(
         self,
@@ -248,6 +251,11 @@ class ContextBuilder:
             if self._skill_catalog is None:
                 return "(no procedural skills)"
             return self._skill_catalog.format_catalog(max_chars=self._skill_catalog_max_chars)
+        if key == "project_agents_md":
+            # Missing AGENTS.md or unwired loader → empty stable section (CMD2); never KeyError.
+            if self._project_context is None:
+                return ""
+            return self._project_context.load_agents_md()
         msg = f"Unknown or unavailable context key: {key}"
         raise KeyError(msg)
 

@@ -44,6 +44,8 @@ export type ListItem = {
   text: string;
   icon?: IconToken | null;
   emphasis?: string | null;
+  /** Nesting depth (0 = root). Absent on legacy payloads — treat as 0. */
+  level?: number;
 };
 
 export type ListBlock = {

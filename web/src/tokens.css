@@ -2,33 +2,36 @@
  * Токены дизайн-системы — единственный источник значений.
  *
  * `:root` — приложение (документ), `:host` — виджет внутри Shadow DOM.
- * Внутри shadow tree `:root` не матчится, поэтому токены обязаны быть на `:host`,
- * иначе виджет в СЭД останется без переменных (страница-хост их не определяет).
+ * Хост может переопределить любой токен: `palatium-assistant { --accent: … }`.
  *
- * Хост может переопределить любой токен снаружи: `palatium-assistant { --accent: … }` —
- * правила внешнего документа имеют приоритет над `:host`.
+ * Calm 2026 (ChatGPT/Claude): тихий canvas, content-first, floating composer.
+ * Brand teal — без purple/cream/glow-theatre.
  */
 :root,
 :host {
   color-scheme: dark;
-  --bg: #0b0d10;
-  --bg-elevated: #12161c;
-  --bg-soft: #181e27;
-  --stroke: #2a3340;
-  --text: #e8edf4;
-  --text-muted: #93a0b4;
+  --bg: #0a0b0d;
+  --bg-elevated: #14181f;
+  --bg-soft: #1c222b;
+  --bg-composer: color-mix(in srgb, #171c24 90%, transparent);
+  --stroke: color-mix(in srgb, #ffffff 9%, transparent);
+  --stroke-strong: color-mix(in srgb, #ffffff 14%, transparent);
+  --text: #f2f4f7;
+  --text-muted: #93a0b0;
   --accent: #3dbea0;
   --accent-soft: rgba(61, 190, 160, 0.14);
   --danger: #f07178;
   --warning: #e6b450;
   --success: #7fd99a;
   --info: #6cb6ff;
-  --user-bg: #1c2430;
+  --user-bg: color-mix(in srgb, var(--accent) 11%, #1a222d);
   --shadow: 0 0 0 1px var(--stroke);
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 26%), 0 0 0 1px var(--stroke);
+  --shadow-float:
+    0 1px 0 rgb(255 255 255 / 4%) inset, 0 12px 40px rgb(0 0 0 / 42%), 0 0 0 1px var(--stroke-strong);
+  --shadow-launcher: 0 12px 40px rgb(0 0 0 / 48%), 0 0 0 1px var(--stroke-strong);
   /*
-   * Системный стек (план 2.6): Google Fonts не подключаем — виджет не должен
-   * ходить во внешнюю сеть. `Inter` остаётся первым: если хост его загрузил
-   * сам (СЭД), типографика подхватится без наших запросов.
+   * Системный стек (план 2.6): Google Fonts не подключаем.
    */
   --font-sans:
     'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
@@ -36,49 +39,43 @@
   --font-display: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --radius: 14px;
+  --radius-msg: 18px;
+  --radius-composer: 28px;
+  --radius-pill: 999px;
+  --space-transcript: 20px;
+  --shell-max: 42rem;
 
-  /* Motion: единая шкала длительностей и кривых (план 2.7).
-     `ease-out` для появления/исчезновения, `ease-in-out` для перемещения,
-     `ease-drawer` для панелей. `ease-in` на UI запрещён — старт кажется вялым. */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --duration-press: 120ms;
   --duration-fast: 150ms;
   --duration-base: 200ms;
-  --duration-slow: 300ms;
+  --duration-slow: 280ms;
   --duration-drawer: 400ms;
 }
 
-/*
- * Светлая тема — ТОЛЬКО явный opt-in, а не `prefers-color-scheme`.
- *
- * `prefers-color-scheme` описывает настройку ОС пользователя, а не тему
- * приложения-хоста. Виджет живёт внутри СЭД (светлый Bootstrap): при тёмной ОС
- * авто-переключение дало бы тёмный виджет в светлом интерфейсе. Правильный
- * сигнал — тема хоста, поэтому её объявляет сам хост:
- *
- *   document.documentElement.dataset.theme = 'light'   → приложение
- *   <palatium-assistant data-theme="light">            → виджет
- *
- * ⚠️ Палитра светлой темы требует визуальной проверки (гейт W8) — здесь она
- * задана расчётно, без скриншотной сверки.
- */
 :root[data-theme='light'],
 :host([data-theme='light']) {
   color-scheme: light;
-  --bg: #f6f7f9;
+  --bg: #f5f6f8;
   --bg-elevated: #ffffff;
-  --bg-soft: #eef1f5;
-  --stroke: #d7dde5;
-  --text: #1a2029;
-  --text-muted: #5d6b7d;
-  --accent: #17866f;
-  --accent-soft: rgba(23, 134, 111, 0.1);
+  --bg-soft: #ebeef3;
+  --bg-composer: #ffffff;
+  --stroke: color-mix(in srgb, #0b1220 9%, transparent);
+  --stroke-strong: color-mix(in srgb, #0b1220 14%, transparent);
+  --text: #12171e;
+  --text-muted: #5c6674;
+  --accent: #0d7a64;
+  --accent-soft: rgba(13, 122, 100, 0.1);
   --danger: #c0392b;
   --warning: #a86a00;
   --success: #1f7a3f;
   --info: #1f6fd0;
-  --user-bg: #e7ecf3;
+  --user-bg: color-mix(in srgb, var(--accent) 7%, #e8eef4);
   --shadow: 0 0 0 1px var(--stroke);
+  --shadow-soft: 0 1px 2px rgb(15 23 42 / 5%), 0 0 0 1px var(--stroke);
+  --shadow-float:
+    0 1px 0 rgb(255 255 255 / 85%) inset, 0 14px 44px rgb(15 23 42 / 9%), 0 0 0 1px var(--stroke);
+  --shadow-launcher: 0 14px 36px rgb(15 23 42 / 12%), 0 0 0 1px var(--stroke);
 }

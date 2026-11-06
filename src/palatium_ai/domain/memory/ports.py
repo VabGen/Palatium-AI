@@ -56,6 +56,15 @@ class MemoryPort(Protocol):
         """Keyword/hybrid search within a namespace (budgeted)."""
         ...
 
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        """List entries in a namespace (newest first); used by memory_audit (070 CMD3)."""
+        ...
+
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         """Delete one memory item; returns True when a row was removed."""
         ...

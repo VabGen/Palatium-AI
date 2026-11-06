@@ -91,6 +91,11 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     # fallback): internal contract vocabulary the model mirrored from our payload/prompts
     # must not reach blocks, card labels or the persisted transcript (020, 055).
     document = InternalVocabularyPolicy.sanitize_document(document)
+    from palatium_ai.domain.content.content_document import normalize_document_list_nesting
+    from palatium_ai.domain.policies.presentation_icons import PresentationIconPolicy
+
+    # Nesting + TokenIcon chrome — global for every shape, after vocabulary scrub.
+    document = PresentationIconPolicy.enrich(normalize_document_list_nesting(document))
 
     confidence = clamp_confidence(document.meta.confidence)
     if task_input.requires_review:
@@ -112,10 +117,11 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     # Prefer LLM refs when present; always union attachment file citations (W2 G03).
     # Bare UUIDs / attachment:<uuid> are not user-facing — sanitize drops them.
     merged_refs = sanitize_source_refs((*document.meta.source_refs, *attachment_refs))
-    # Sources are structured data (footer chips); a ``[1]`` left in prose points at
-    # nothing clickable and paints as a bare artifact. Dangling numbers are kept for
-    # the ``dangling_citation`` lint rule — only resolvable markers are noise.
+    # Keep resolvable ``[n]`` in prose — BlockRenderer turns them into cite chips next
+    # to the claim (footer chips alone are not grounding). Dangling markers stay for
+    # ``dangling_citation`` lint. ABI gate retained so call sites stay explicit.
     document = strip_citation_markers(document, source_count=len(merged_refs))
+    document = _promote_emphasized_ordered_lists(document)
 
     return document.model_copy(
         update={
@@ -140,6 +146,20 @@ def clamp_confidence(value: float) -> float:
     if not math.isfinite(value):
         return 0.0
     return min(max(value, 0.0), 1.0)
+
+
+def _promote_emphasized_ordered_lists(document: ContentDocument) -> ContentDocument:
+    """Ordered list with per-row emphasis → StepsBlock (any scenario, schema_first too).
+
+    Parallel bullets without emphasis stay lists. Shared with mechanical restructure
+    so Markdown and json_schema paths cannot drift (050).
+    """
+    from palatium_ai.domain.policies.mechanical_restructure import MechanicalRestructurePolicy
+
+    promoted = MechanicalRestructurePolicy.promote_emphasized_ordered_lists(document.blocks)
+    if promoted is None:
+        return document
+    return document.model_copy(update={"blocks": promoted})
 
 
 def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object]:

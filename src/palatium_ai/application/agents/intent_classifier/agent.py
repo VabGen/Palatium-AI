@@ -17,7 +17,7 @@ from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.hitl.choice_resume import ChoiceResumePolicy
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -37,6 +37,7 @@ class IntentClassifierAgent(BaseAgent):
             "has_thread_files",
             "attachment_count",
             "attachment_kinds",
+            "project_agents_md",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -71,11 +72,11 @@ class IntentClassifierAgent(BaseAgent):
         has_thread_files = input.context.get("has_thread_files", "false").lower() == "true"
         attachment_count = _int_from_context(input.context.get("attachment_count"))
         attachment_kinds = tuple(kind for kind in (input.context.get("attachment_kinds") or "").split(",") if kind)
-        messages = [
-            ChatMessage(role="system", content=INTENT_CLASSIFIER_SYSTEM_PROMPT),
-            ChatMessage(
-                role="user",
-                content=json.dumps(
+        assembled = PromptAssemblyPolicy.assemble(
+            PromptAssemblyParts(
+                system_identity=INTENT_CLASSIFIER_SYSTEM_PROMPT,
+                project_agents_md=input.context.get("project_agents_md", ""),
+                user_content=json.dumps(
                     {
                         "text": input.instruction,
                         "continuation_kind": continuation_kind,
@@ -87,8 +88,9 @@ class IntentClassifierAgent(BaseAgent):
                     },
                     ensure_ascii=False,
                 ),
-            ),
-        ]
+            )
+        )
+        messages = list(assembled.messages)
         try:
             completion = await self._harness.call_llm(
                 self._config,

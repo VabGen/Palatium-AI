@@ -239,7 +239,11 @@ async def test_schema_first_survives_a_document_without_meta() -> None:
 
 @pytest.mark.asyncio()
 async def test_schema_first_drops_an_unknown_icon_instead_of_the_block() -> None:
-    """Icon names are a closed UI registry: an unknown one is chrome, not content."""
+    """Unknown icon names are chrome: coerce drops them, tone fill may restore a registry token.
+
+    ``PresentationIconPolicy`` assigns missing callout icons from ``tone`` after parse —
+    so the invariant is "document-check never survives", not "icon stays None".
+    """
     raw = json.loads(_document_json())
     raw["blocks"][0]["icon"] = "document-check"
     harness = _StubHarness([LLMCompletion(content=json.dumps(raw, ensure_ascii=False), model="test")])
@@ -250,7 +254,8 @@ async def test_schema_first_drops_an_unknown_icon_instead_of_the_block() -> None
     assert isinstance(output.output, ContentDocument)
     callout = output.output.blocks[0]
     assert isinstance(callout, CalloutBlock)
-    assert callout.icon is None
+    assert callout.icon != "document-check"
+    assert callout.icon == "success"  # tone default after unknown drop (PresentationIconPolicy)
     assert callout.body == "No errors."
     assert [call["response_format"] for call in harness.calls] == ["json_schema"]
 
@@ -623,6 +628,34 @@ async def test_provider_citations_are_counted_and_never_rewrite_the_answer() -> 
     assert output.output.meta.citations == (resolved,)
 
 
+@pytest.mark.asyncio()
+async def test_legacy_attaches_provider_citations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy Markdown path still surfaces W3a anchors when DocumentParts are cited."""
+    from palatium_ai.domain.content.citations import CitationRef
+
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.repair.markdown_to_content_document",
+        lambda _raw, _task: _fixed_document(),
+    )
+    citation = CitationRef(
+        source_ref="policy.pdf",
+        quote=None,
+        source_range=(0, 12),
+        anchor="char_location",
+    )
+    harness = _StubHarness(
+        [LLMCompletion(content="Done. No errors.", model="test", citations=(citation,))],
+    )
+    agent = FormatterAgent(harness, FORMATTER_CONFIG, mode="legacy", rollout_pct=0)  # type: ignore[arg-type]
+
+    output = await agent.run(_agent_input())
+
+    assert isinstance(output.output, ContentDocument)
+    assert output.output.meta.citations == (citation,)
+
+
 def test_citation_anchors_are_not_part_of_the_provider_schema() -> None:
     """W3b: the model must never be *asked* for anchors it cannot know.
 
@@ -654,3 +687,135 @@ def test_citation_anchors_are_serialised_for_the_client() -> None:
     assert payload["meta"]["citations"][0]["page"] == 2
     # An older/legacy payload without the field stays valid.
     assert document.meta.citations == ()
+
+
+def _context_packet_json_shaped(shape: str) -> str:
+    from palatium_ai.domain.agents.context_packet import ContextPacket
+    from palatium_ai.domain.mcp.models import ToolExecutionPlan
+
+    return ContextPacket(
+        task_id="t1",
+        user_text="make a plan",
+        task_kind="knowledge_request",
+        route="researcher",
+        route_plan="answer",
+        requires_mcp=False,
+        execution_plan=ToolExecutionPlan(strategy="reason_only", requires_tool_call=False, rationale="r"),
+        context_summary="s",
+        response_shape=shape,  # type: ignore[arg-type]
+    ).model_dump_json()
+
+
+def _plan_document_json() -> str:
+    from palatium_ai.domain.content import ContentDocument, DocumentMeta, StepItem, StepsBlock
+
+    document = ContentDocument(
+        locale="en-US",
+        title="Plan",
+        blocks=(
+            StepsBlock(
+                items=(
+                    StepItem(title="Gather inputs", body="Collect requirements"),
+                    StepItem(title="Draft", body="Write the outline"),
+                )
+            ),
+        ),
+        meta=DocumentMeta(confidence=0.92, kind="report", formality="neutral"),
+    )
+    return document.model_dump_json()
+
+
+def _prose_document_json() -> str:
+    from palatium_ai.domain.content import ContentDocument, DocumentMeta, ParagraphBlock
+
+    document = ContentDocument(
+        locale="en-US",
+        title="Prose",
+        blocks=(ParagraphBlock(text="Just a paragraph, not a plan."),),
+        meta=DocumentMeta(confidence=0.9, kind="report", formality="neutral"),
+    )
+    return document.model_dump_json()
+
+
+@pytest.mark.asyncio()
+async def test_shape_precheck_buffers_then_emits_without_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FORMATTER_SHAPE_PRECHECK uses call_llm (not stream) and paints once at the end."""
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.agent.emit_content_document",
+        lambda doc: emitted.append(doc.title or ""),
+    )
+    harness = _StubHarness([LLMCompletion(content=_plan_document_json(), model="test")])
+    agent = FormatterAgent(
+        harness,
+        FORMATTER_CONFIG,
+        mode="schema_first",
+        rollout_pct=100,
+        shape_precheck=True,
+    )  # type: ignore[arg-type]
+    agent_input = AgentInput(
+        task_id=UUID(int=1),
+        trace_id="t",
+        instruction="format",
+        context={
+            "context_packet_json": _context_packet_json_shaped("plan"),
+            "worker_summary": "Done.",
+        },
+    )
+
+    output = await agent.run(agent_input)
+
+    assert isinstance(output.output, ContentDocument)
+    assert output.output.title == "Plan"
+    assert emitted == ["Plan"]
+    # Buffered path: only call_llm, never the stream paint loop.
+    assert harness.calls == [{"response_format": "json_schema", "response_model": ContentDocument}]
+
+
+@pytest.mark.asyncio()
+async def test_shape_precheck_regenerates_once_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mismatch before paint → one regenerate; second document is what the UI sees."""
+    from palatium_ai.core.observability.metrics import agent_metrics
+
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.formatter.agent.emit_content_document",
+        lambda doc: emitted.append(doc.title or ""),
+    )
+    before_mismatch = agent_metrics.response_shape_count("plan", "precheck_mismatch")
+    before_regen = agent_metrics.response_shape_count("plan", "precheck_regenerated")
+    harness = _StubHarness(
+        [
+            LLMCompletion(content=_prose_document_json(), model="test"),
+            LLMCompletion(content=_plan_document_json(), model="test"),
+        ]
+    )
+    agent = FormatterAgent(
+        harness,
+        FORMATTER_CONFIG,
+        mode="schema_first",
+        rollout_pct=100,
+        shape_precheck=True,
+    )  # type: ignore[arg-type]
+    agent_input = AgentInput(
+        task_id=UUID(int=2),
+        trace_id="t",
+        instruction="format",
+        context={
+            "context_packet_json": _context_packet_json_shaped("plan"),
+            "worker_summary": "Done.",
+        },
+    )
+
+    output = await agent.run(agent_input)
+
+    assert isinstance(output.output, ContentDocument)
+    assert output.output.title == "Plan"
+    assert emitted == ["Plan"]
+    assert len(harness.calls) == 2
+    assert agent_metrics.response_shape_count("plan", "precheck_mismatch") == before_mismatch + 1
+    assert agent_metrics.response_shape_count("plan", "precheck_regenerated") == before_regen + 1
