@@ -10,9 +10,14 @@ Sanctioned skips:
 - *passthrough*: a short, already-plain answer whose deterministic emit is
   paragraphs only. There is nothing to compile — an LLM pass could only add
   structure the content does not have (a one-line joke turned into an icon list).
+- *shaped worker*: worker GFM already has headings/lists — deterministic render;
+  an LLM brand pass would replace the streamed draft with a thinner rewrite.
 - *verbatim*: Intent tagged ``verbatim_extraction`` — the worker body *is* the
   deliverable (file extract). Length / structure / locale must not force an LLM
   rewrite that replaces the already-streamed text.
+- *policy refusal*: deterministic user-facing copy from FileReference /
+  GroundingPolicy (W10 P0.3 / P1.3). Confidence is 0.0 by contract; an LLM rewrite
+  turns RU «файл не найден» into an English «please upload» (live att_not_found).
 
 The gate is on capabilities and worker answer shape, never on the user's wording
 (055).
@@ -51,10 +56,14 @@ class FormatterPassthroughSignals(BaseModel):
     underspecification_kind: str = "none"
     # Intent tagged extract/full-text — show worker body as-is (ignore length/structure).
     verbatim_requested: bool = False
+    # Worker GFM already has headings/lists — deterministic render, no brand rewrite.
+    preserve_shaped_worker: bool = False
+    # Worker body is a closed policy refusal (attachment unresolved / empty grounding).
+    policy_refusal: bool = False
 
 
 class FormatterFastPathPolicy:
-    """Pure domain policy: Formatter LLM unless a short plain or verbatim answer can pass through."""
+    """Pure domain policy: Formatter LLM unless a short plain or shaped worker answer can pass through."""
 
     @classmethod
     def decide(
@@ -78,11 +87,14 @@ class FormatterFastPathPolicy:
             max_chars=passthrough_max_chars,
         )
         if blocker is None:
-            reason = (
-                "passthrough_verbatim"
-                if passthrough is not None and passthrough.verbatim_requested
-                else "passthrough_plain_prose"
-            )
+            if passthrough is not None and passthrough.policy_refusal:
+                reason = "passthrough_policy_refusal"
+            elif passthrough is not None and passthrough.verbatim_requested:
+                reason = "passthrough_verbatim"
+            elif passthrough is not None and passthrough.preserve_shaped_worker:
+                reason = "passthrough_shaped_worker"
+            else:
+                reason = "passthrough_plain_prose"
             return FormatterFastPathDecision(skip_llm=True, reason=reason)
         return FormatterFastPathDecision(skip_llm=False, reason=blocker)
 
@@ -95,6 +107,9 @@ class FormatterFastPathPolicy:
     ) -> str | None:
         if passthrough is None or max_chars <= 0 or not source_content.strip():
             return "presentation_requires_formatter_llm"
+        # Policy refusals are the answer: ignore confidence / locale / length.
+        if passthrough.policy_refusal:
+            return None
         if not passthrough.worker_confident:
             return "worker_not_confident"
         hard_stops = (
@@ -107,7 +122,11 @@ class FormatterFastPathPolicy:
         hard = next((reason for failed, reason in hard_stops if failed), None)
         if hard is not None:
             return hard
-        if passthrough.verbatim_requested:
+        # Verbatim / already-shaped worker: length and structure must not force a
+        # second writer that replaces the streamed draft (040 layout_shift).
+        if passthrough.verbatim_requested or passthrough.preserve_shaped_worker:
+            if not passthrough.locale_matches and not passthrough.verbatim_requested:
+                return "locale_mismatch"
             return None
         soft_stops = (
             (passthrough.source_chars > max_chars, "source_exceeds_passthrough"),

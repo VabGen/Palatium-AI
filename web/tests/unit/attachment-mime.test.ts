@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveMimeType } from '../../src/lib/attachments';
+import {
+  attachmentChipMeta,
+  attachmentDisplayName,
+  resolveMimeType,
+} from '../../src/lib/attachments';
 
 function file(name: string, type: string): File {
   return new File(['x'], name, { type });
@@ -44,4 +48,16 @@ describe('resolveMimeType', () => {
       expect(resolveMimeType(file('scan.pdf', hostile))).toBe('application/pdf');
     }
   );
+});
+
+describe('composer file-card labels', () => {
+  it('strips the extension for the title line', () => {
+    expect(attachmentDisplayName('Договор оказания услуг.docx')).toBe('Договор оказания услуг');
+    expect(attachmentDisplayName('notes')).toBe('notes');
+  });
+
+  it('formats EXT + size like kimi meta', () => {
+    expect(attachmentChipMeta('scan.docx', 70 * 1024)).toBe('DOCX 70 KB');
+    expect(attachmentChipMeta('report.PDF', 119 * 1024)).toMatch(/^PDF /);
+  });
 });

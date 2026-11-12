@@ -39,6 +39,25 @@ SCHEMA_SHAPE_EXAMPLES: tuple[tuple[str, str], ...] = (
         '"meta":{"confidence":0.9,"kind":"response"}}',
     ),
     (
+        # Structure-only tender-style analysis (placeholder facts — never copy).
+        "document_analysis",
+        '{"locale":"ru-RU","blocks":['
+        '{"type":"heading","level":2,"text":"Заказчик","icon":"search"},'
+        '{"type":"kv","items":[{"label":"Назначение","value":"Поставка и внедрение"},'
+        '{"label":"Срок","value":"10 рабочих дней"}]},'
+        '{"type":"heading","level":2,"text":"Требования"},'
+        '{"type":"list","style":"unordered","items":['
+        '{"text":"Функционал","level":0},'
+        '{"text":"ЭЦП и маршруты","level":1},'
+        '{"text":"Журнал аудита","level":1}]},'
+        '{"type":"heading","level":2,"text":"Риски","icon":"warning"},'
+        '{"type":"callout","tone":"warning","body":"Срок сжатый относительно объёма."},'
+        '{"type":"heading","level":2,"text":"Рекомендации","icon":"check"},'
+        '{"type":"list","style":"unordered","items":['
+        '{"text":"Уточнить критерии приёмки"}]}'
+        '],"meta":{"confidence":0.9,"kind":"analysis"}}',
+    ),
+    (
         # Boundary: the source has no extractable text. Honest limitation, no invented
         # fact — and still exactly one valid document, never `blocks: []` (the contract
         # requires content whenever the turn has an answer).
@@ -67,6 +86,21 @@ MARKDOWN_SHAPE_EXAMPLES: tuple[tuple[str, str], ...] = (
     (
         "prose",
         "Отпуск согласован с 12 по 25 июля.\n\nЗамену оформим отдельным приказом.",
+    ),
+    (
+        "document_analysis",
+        '## <icon name="search"/> Заказчик\n'
+        "- **Назначение:** поставка и внедрение\n"
+        "- **Срок:** 10 рабочих дней\n\n"
+        "## Требования\n"
+        "- Функционал\n"
+        "  - ЭЦП и маршруты\n"
+        "  - Журнал аудита\n\n"
+        '## <icon name="warning"/> Риски\n\n'
+        "> [!WARNING]\n"
+        "> Срок сжатый относительно объёма.\n\n"
+        '## <icon name="check"/> Рекомендации\n'
+        "- Уточнить критерии приёмки",
     ),
     (
         "boundary_no_source_text",
@@ -109,15 +143,22 @@ Brevity never drops a limitation, a citation or a warning; shape rules above win
 """
 
 _ICONS_RULE = """
-## ICONS
+## ICONS (sparse — Big Tech laconic chrome)
 NEVER use emoji or unicode pictographs (📄 🎯 ✅ ⚠️ 📋 and similar are forbidden).
-When a block needs an icon, put exactly one token on the SAME line as the heading or
-first words of the paragraph — never on its own line and never followed by a blank line:
+Icons are rare semantic signals, not decoration. Prefer plain headings and bullets.
+When a heading needs a signal, put exactly one token on the SAME line as the title:
 # <icon name="NAME"/> Title
 Attribute MUST be `name`, not `x`. Example: <icon name="check"/>.
 NAME must be one of: {icon_enum}.
-Use sparingly for headings, callouts, and key paragraphs; list items optional.
-No token = no icon. Never invent names outside the list.
+Allow icons ONLY on:
+- the lead (first) section heading, OR
+- high-signal sections: risks → `warning` / `danger`; advice → `check` / `success`;
+  notices → `info`.
+Do NOT put icons on ordinary section titles (requirements, facts, background, lists
+of topics) and NEVER on list items, steps, paragraphs, or key-value rows — the UI
+already draws bullets / numbers / callout chrome.
+For social / short prose / letter / memo: no heading icons at all.
+Never invent names outside the list.
 """.format(icon_enum=", ".join(ICON_NAMES))
 
 _LISTS_RULE = """
@@ -132,12 +173,16 @@ _STRUCTURED_BLOCKS_RULE = """
 ## RICH STRUCTURED BLOCKS (parsed by the UI)
 - Divider: a line with `---` only.
 - Formula: `$$E = mc^2$$` on its own line (LaTeX, no code fence).
-- Key-value panel: 2+ consecutive bullets opening with a short bold term and a colon:
+- Key-value panel (metadata / passport / terms): 2+ consecutive bullets with a short
+  bold label and a colon — the UI turns these into a borderless label/value panel:
   - **Срок:** 10 рабочих дней
+  Prefer this over plain paragraphs for fields like purpose, party, deadline, budget.
+- Nested lists: indent sub-points 2+ spaces (UI level); root uses `-`, nested reads as en-dash.
 - Steps: 2+ consecutive numbered items with bold title + body (one continuous list):
   1. **Подготовка:** собрать документы
 - Table: a GFM pipe table with a header separator row.
-Only when the content needs it (comparison, process) — never on short prose.
+Use structured blocks whenever the content is comparison, process, or fielded metadata —
+never dump fielded facts as a wall of paragraphs.
 """
 
 _NO_META_RULE = """
@@ -149,6 +194,8 @@ _NO_META_RULE = """
   Instructions, not content.
 - Formatting words (`bold`, `italic`, `none`) are instructions, never labels:
   wrap the real words in `**…**` — the marker is applied, it is not a word.
+- ActionStyle words (`primary`, `secondary`, `danger`) are HITL chrome — never
+  list/kv/`emphasis` labels. Rank in the user's language, not English chrome.
 - Forbidden shapes: "Документ структурирован… как требует стиль …", "Согласно инструкции …".
 - If the user asks how you formatted something, answer plainly ("разделил на
   разделы с заголовками"), never with an identifier.
@@ -205,14 +252,21 @@ Write the user-facing answer: clean GitHub Flavored Markdown.
 - choice / confirm from format_hints → short framing + the matching HITL tag(s)
 
 ## RESPONSE SHAPE (input field response_shape; overrides style_hint structure)
-- auto → structure from content (comparison→table, process→steps, analysis→
-  headings+callouts, short reply→prose); never all-paragraph dumps.
+- auto → structure from content (comparison→table, process→steps, metadata fields→
+  key-value panel, analysis→headed sections+icons, short reply→prose);
+  never all-paragraph dumps.
 - comparison_table → ONE GFM pipe table with an attribute column plus one column per
   compared item (at least 2 item columns) and at least 2 data rows, plus at most one
   sentence for the takeaway. A comparison is always a table: bullets carry
   recommendations, not compared attributes.
-- document_analysis → `##` sections with substantive paragraphs; risks as
-  `> [!WARNING]` callouts; recommendations as bullets only when the source supports them.
+- document_analysis → ≥2 `##` sections each with a distinct `<icon name="…"/>`;
+  passport / terms / deadlines as key-value bold-label bullets (not prose);
+  catalogues / compositions as unordered bullets (`- **Title** body`), never
+  numbered process steps; requirements as nested lists; risks as `> [!WARNING]`;
+  advice (when supported) closes with `<icon name="check"/>` heading + checklist
+  bullets (checks/dots — not `1. **…**` step chrome) — never a paragraph dump.
+- inventory → ONE unordered bullet list (≥2 items). Prefer `- **Title** body` or
+  plain `- item`; never numbered steps, never a dump of sibling paragraphs.
 - plan → Steps form only (≥2 bold-title items, one list; never ordered list).
 - prose → paragraphs only: no headings, tables, lists or step structure.
 Locale and faithfulness rules always win over the shape.
@@ -236,6 +290,7 @@ Locale and faithfulness rules always win over the shape.
 - JSON output (no ContentDocument JSON)
 - Wrapping the whole response in ```markdown```
 - HTML entities inside code fences (`&quot;`, `&#39;`, `&amp;`) — write `"` and `'`
+- Minified one-line code fences — keep real line breaks so source stays readable
 - Image URLs (no CDN, no Icons8)
 - Decorative ordered lists / restarting every section at `1.`
 - Inventing facts not in final_text / attached_files / user_facts / dialog_history
@@ -295,23 +350,36 @@ User message is XML with <formatter_input>{JSON}</formatter_input>:
 Supported types: heading, paragraph, list, table, callout, code, formula,
 kv, steps, chart, divider, widget.
 
-### code.content — verbatim source
+### code.content — verbatim readable source
 Emit the snippet exactly as the user must read it: raw quotes `"` / `'` stay raw,
 never HTML entities (`&quot;`, `&apos;`, `&#39;`, `&amp;`). The JSON encoding of the
 value already handles escaping (`\"`); HTML escaping corrupts the code on screen.
+Keep real line breaks inside `content` (encode as JSON `\\n`) — indentation and
+structure stay human-readable. Never minify Python/HTML/JS into a single scrolling
+line. Section headings above a code fence use icon `document` (not `chart`).
 
 ### list.style / steps
-- Process in order → one `steps` block (title+body). `status` only for real progress
-  (omit otherwise). Parallel points → unordered `list` (`level` 0–2, no text prefix).
+- Process / plan in order → one `steps` block (title+body). `status` only for real
+  progress (omit otherwise). Parallel points, catalogues, compositions,
+  component inventories → unordered `list` with optional `emphasis` (title) + body
+  (`level` 0–2, no text prefix) — never `steps` / ordered list for a catalogue.
+- Advice / checklist → unordered `list` with `icon`=`check` on items (or dots).
 - Never use ordered `list` for a plan. Numbering is implicit — no "1." in item text.
+  Reserve numbered step chrome for true sequential processes only.
 
 ### heading vs list item
 - 2+ sentences on one topic → HeadingBlock (+ ParagraphBlock).
 - A single short line (name, parameter, point) → ListItem.
 
 ### icon (IconToken | None)
-- Lead heading icon when meta.kind ∈ {analysis, recommendation, guide, report};
-  letter / memo / response / faq → null. Callouts may match tone; no emoji / invented names.
+- analysis / recommendation / guide / report: EVERY HeadingBlock gets a distinct
+  semantic icon (never one token on every H2). Advice → `check`; risks →
+  `warning`; else closest allow-list token. letter / memo / response / faq → null.
+  Callouts may match tone; no emoji / invented names.
+
+### list.items[].emphasis
+- Optional short lead label in response_locale. Never ActionStyle
+  (`primary`/`secondary`/`danger`) or format keywords (`bold`/`italic`/`none`).
 
 ## FAITHFULNESS & LOCALE
 - Never invent facts: use only final_text / attached_files / user_facts / dialog_history.
@@ -335,13 +403,20 @@ value already handles escaping (`\"`); HTML escaping corrupts the code on screen
   (clickable ActionSpec, never a text menu).
 
 ## RESPONSE SHAPE (input field response_shape; overrides style_hint structure)
-- auto → choose the block composition yourself (default).
+- auto → choose composition (comparison→table, process→steps, metadata fields→kv,
+  analysis→headed sections+icons, short reply→prose); never all-paragraph dumps.
 - comparison_table → ONE `table` block with an attribute column plus one column per
   compared item (at least 2 item columns) and at least 2 rows, plus at most one short
   `paragraph` for the takeaway. A comparison is always a table: `list` blocks carry
   recommendations, not compared attributes.
-- document_analysis → `heading` sections, each followed by a substantive `paragraph`;
-  risks as `callout` (tone warning/danger); recommendations as `list` only when supported.
+- document_analysis → ≥2 `heading` sections each with a distinct semantic `icon`;
+  passport / terms / deadlines as `kv`; catalogues / compositions as unordered
+  `list` with `emphasis` (never `steps`); requirements as nested `list` (`level`);
+  risks as `callout` (warning/danger); advice (when supported) closes with
+  `heading`(`icon`=`check`) + unordered checklist (`icon`=`check` on items) —
+  never one paragraph dump and never number-badge chrome for inventories.
+- inventory → ONE unordered `list` (≥2 items); never `steps`, never sibling
+  `paragraph` dumps that should have been bullets.
 - plan → one `steps` block (≥2 items); never ordered `list` / plain paragraphs.
 - prose → `paragraph` blocks only: no headings, tables or step structures.
 Locale and faithfulness rules always win over the shape.

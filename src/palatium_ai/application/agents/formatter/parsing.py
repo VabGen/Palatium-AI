@@ -64,6 +64,11 @@ def parse_formatter_document(raw_content: str) -> ContentDocument:
     payload, dropped_icons = coerce_icon_fields(_DOCUMENT_CODEC.loads(raw_content))
     if dropped_icons:
         logger.warning("formatter.icons.dropped", count=dropped_icons)
+    from palatium_ai.application.agents.formatter.layout_coercion import coerce_layout_fields
+
+    payload, layout_fixes = coerce_layout_fields(payload)
+    if layout_fixes:
+        logger.info("formatter.layout.coerced", count=layout_fixes)
     return parse_llm_payload(
         payload,
         ContentDocument,
@@ -121,9 +126,12 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     # to the claim (footer chips alone are not grounding). Dangling markers stay for
     # ``dangling_citation`` lint. ABI gate retained so call sites stay explicit.
     document = strip_citation_markers(document, source_count=len(merged_refs))
-    document = _promote_emphasized_ordered_lists(document)
+    # Passport label-bullets → kv first; then inventory Steps → unordered bullets/checks
+    # so demoted catalogues are not re-folded into kv panels (dots stay dots).
+    document = _promote_label_lists_to_kv(document)
+    document = _align_list_vs_steps_chrome(document, task_input)
 
-    return document.model_copy(
+    aligned = document.model_copy(
         update={
             "locale": locale,
             "meta": document.meta.model_copy(
@@ -139,6 +147,14 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
             ),
         }
     )
+    # Medium recall into a fresh thread must not be framed as dialog-window context
+    # (W10.1 P0.2). Pure post-process — no prompt change.
+    from palatium_ai.domain.policies.attribution import AttributionPolicy
+
+    return AttributionPolicy.rewrite_false_current_session(
+        aligned,
+        memory_hints=task_input.memory_hints,
+    )
 
 
 def clamp_confidence(value: float) -> float:
@@ -148,15 +164,38 @@ def clamp_confidence(value: float) -> float:
     return min(max(value, 0.0), 1.0)
 
 
-def _promote_emphasized_ordered_lists(document: ContentDocument) -> ContentDocument:
-    """Ordered list with per-row emphasis → StepsBlock (any scenario, schema_first too).
+def _align_list_vs_steps_chrome(document: ContentDocument, task_input: FormatterInput) -> ContentDocument:
+    """Inventories → bullets/checks; real processes → StepsBlock (shape/kind axis).
 
-    Parallel bullets without emphasis stay lists. Shared with mechanical restructure
-    so Markdown and json_schema paths cannot drift (050).
+    Under document_analysis (and auto+analysis) status-less steps are catalogues —
+    demote them and do not promote emphasized ordered lists into number badges.
+    Plan / process answers still promote (shared MechanicalRestructurePolicy, 050).
     """
     from palatium_ai.domain.policies.mechanical_restructure import MechanicalRestructurePolicy
+    from palatium_ai.domain.policies.shape import ShapeRecipePolicy
+
+    shape = task_input.context_packet.response_shape
+    if MechanicalRestructurePolicy.inventories_use_list_markers(shape=shape, kind=document.meta.kind):
+        demoted = MechanicalRestructurePolicy.demote_inventory_steps(document.blocks)
+        if demoted is not None:
+            document = document.model_copy(update={"blocks": demoted})
+        if ShapeRecipePolicy.coerce(shape) == "inventory":
+            listed = MechanicalRestructurePolicy.promote_parallel_paragraphs_to_list(document.blocks)
+            if listed is not None:
+                return document.model_copy(update={"blocks": listed})
+        return document
 
     promoted = MechanicalRestructurePolicy.promote_emphasized_ordered_lists(document.blocks)
+    if promoted is None:
+        return document
+    return document.model_copy(update={"blocks": promoted})
+
+
+def _promote_label_lists_to_kv(document: ContentDocument) -> ContentDocument:
+    """Unordered label/value bullets → KeyValueBlock (Kimi metadata panels)."""
+    from palatium_ai.domain.policies.mechanical_restructure import MechanicalRestructurePolicy
+
+    promoted = MechanicalRestructurePolicy.promote_label_lists_to_kv(document.blocks)
     if promoted is None:
         return document
     return document.model_copy(update={"blocks": promoted})
@@ -190,8 +229,11 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
             FORMATTER_SOURCE_MAX_CHARS,
         )
     social_synthesis = _needs_social_synthesis(task_kind=task_kind, source=source)
-    # Empty final_text signals "compose a reply"; never echo the user's phatic line.
-    final_text = "" if social_synthesis else source or mechanical_cleanup(user_text)
+    # Empty final_text signals "compose a reply". NEVER fall back to user_text:
+    # when the worker failed/empty that made Formatter echo the ask as the answer
+    # (live chat 2026-11-11; same class as social echo — 055). Stimulus stays in
+    # ``user_text`` below when ``source`` is empty.
+    final_text = "" if social_synthesis else source
 
     from palatium_ai.domain.policies.formatter_memory_merge import FormatterMemoryMergePolicy
 
@@ -295,20 +337,28 @@ def resolve_style_hint(task_input: FormatterInput) -> FormatterStyleHint:
         return "document_generation"
     if CONTENT_GENERATION_CAPABILITY in caps:
         return "content_generation"
-    if _preserve_worker_shape(source):
+    if preserve_worker_shape(source):
         return "plain_text"
     return "brand_sections_icons"
 
 
-def _preserve_worker_shape(source: str) -> bool:
-    """True when the worker body already has a shape Formatter must not brand-restructure."""
+def preserve_worker_shape(source: str) -> bool:
+    """True when the worker body already has a shape Formatter must not brand-restructure.
+
+    Structured GFM (headings / lists / fences) is preserved at any length: a brand
+    LLM pass would rewrite an already-streamed draft and flash a thinner answer
+    (040 layout_shift / single-writer). Length only gates multi-paragraph plain
+    prose, where an icon-section compile can still help dense walls of text.
+    """
     if not source:
         return False
     para_count = plain_paragraph_count(source)
     if para_count == 1:
         return True
-    # Long multi-paragraph or already-structured deliverable: keep shape, skip icon sections.
-    return len(source) >= SUBSTANTIVE_USER_PAYLOAD_CHARS and (para_count is None or para_count >= 2)
+    # Headings, lists, fences — the worker shape *is* the deliverable.
+    if para_count is None:
+        return True
+    return len(source) >= SUBSTANTIVE_USER_PAYLOAD_CHARS and para_count >= 2
 
 
 def _needs_social_synthesis(*, task_kind: str, source: str) -> bool:

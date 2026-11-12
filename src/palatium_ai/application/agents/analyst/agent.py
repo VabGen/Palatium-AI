@@ -37,6 +37,12 @@ class AnalystAgent(BaseAgent):
     def get_available_tools(self) -> list[str]:
         return list(self._config.allowed_tools)
 
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based draft gate — reject empty or mistyped analyst payloads."""
+        if not isinstance(output.output, AnalystOutput):
+            return False
+        return bool(output.output.summary.strip())
+
     @traceable(name="analyst.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")

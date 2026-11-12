@@ -28,6 +28,13 @@ class DialogTurnStore(Protocol):
         """Load last-K turns for a thread (oldest → newest)."""
         ...
 
+    async def truncate_keeping(self, *, thread_id: str, keep: int) -> int:
+        """Keep the first ``keep`` turns (by seq); delete the rest. Returns deleted count.
+
+        ``keep=0`` clears the transcript. Used by user Edit (Big Tech rewind).
+        """
+        ...
+
 
 class MemoryPort(Protocol):
     """Cross-thread long-term memory (user/org namespaces). Sleep-time writes here."""

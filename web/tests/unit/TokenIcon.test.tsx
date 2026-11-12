@@ -12,6 +12,13 @@ describe('TokenIcon', () => {
     expect(container.querySelector('svg')).not.toBeNull();
   });
 
+  it('exposes token-icon class and size var for first-line centering', () => {
+    const { container } = render(<TokenIcon token="search" size={18} />);
+    const icon = container.querySelector('.token-icon');
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveStyle({ '--token-icon-size': '18px' });
+  });
+
   it('falls back and warns for unknown names', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { container } = render(<TokenIcon token="not_a_real_icon" turnId="turn-1" />);
@@ -30,7 +37,7 @@ describe('TokenIcon', () => {
 
 /**
  * Regression: `raw in TOKEN_MAP` walked the prototype chain, so a stream payload of
- * `token="constructor"` resolved to `Object` and `<Object />` crashed the tree.
+ * `token="constructor"` resolved to `Object` and crashed the tree.
  * Own-property lookup keeps an untrusted name on the fallback path.
  */
 describe('TokenIcon prototype-chain safety', () => {
@@ -78,22 +85,13 @@ describe('TokenIcon prototype-chain safety', () => {
 });
 
 /**
- * Animation policy (documented next to `LOTTIE_BY_TOKEN`): scenario/status tokens
- * animate, content tokens stay static — a moving clock on every calendar row is noise.
+ * Animation policy: tone callouts may Lottie; action/content tokens stay on
+ * official Kimi glyphs (CSS pulse only when animated).
  */
 describe('TokenIcon animation policy', () => {
-  const SCENARIO_TOKENS = [
-    'info',
-    'success',
-    'warning',
-    'danger',
-    'check',
-    'x',
-    'clock',
-    'shield',
-  ] as const;
+  const LOTTIE_TOKENS = ['info', 'success', 'warning', 'danger'] as const;
 
-  const CONTENT_TOKENS = [
+  const GLYPH_ONLY_TOKENS = [
     'calendar',
     'mail',
     'search',
@@ -104,15 +102,19 @@ describe('TokenIcon animation policy', () => {
     'link',
     'edit',
     'settings',
+    'check',
+    'x',
+    'clock',
+    'shield',
   ] as const;
 
-  for (const token of SCENARIO_TOKENS) {
+  for (const token of LOTTIE_TOKENS) {
     it(`animated ${token} → lottie`, () => {
       const { container } = render(<TokenIcon token={token} animated />);
       expect(container.firstElementChild?.classList.contains('token-lottie')).toBe(true);
     });
 
-    it(`static ${token} → lucide svg`, () => {
+    it(`static ${token} → kimi glyph svg`, () => {
       const { container } = render(<TokenIcon token={token} />);
       const svg = container.querySelector('svg');
       expect(svg).not.toBeNull();
@@ -120,8 +122,8 @@ describe('TokenIcon animation policy', () => {
     });
   }
 
-  for (const token of CONTENT_TOKENS) {
-    it(`animated ${token} stays static lucide (icon-animated class only)`, () => {
+  for (const token of GLYPH_ONLY_TOKENS) {
+    it(`animated ${token} stays kimi glyph (icon-animated class only)`, () => {
       const { container } = render(<TokenIcon token={token} animated />);
       expect(container.querySelector('.token-lottie')).toBeNull();
       expect(container.querySelector('svg')?.getAttribute('class') ?? '').toContain(

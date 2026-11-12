@@ -27,12 +27,12 @@ const ALLOWED = ['p', 'strong', 'em', 'del', 'code', 'a', 'br'] as const;
 const CITE_RE = /\[(\d{1,2})\](?!\()/g;
 
 type Segment =
-  | { kind: 'text'; value: string }
-  | { kind: 'cite'; n: number; label: string };
+  | { kind: 'text'; value: string; start: number }
+  | { kind: 'cite'; n: number; label: string; start: number };
 
 function splitCites(text: string, sourceRefs: readonly string[]): Segment[] {
   if (!text || sourceRefs.length === 0) {
-    return text ? [{ kind: 'text', value: text }] : [];
+    return text ? [{ kind: 'text', value: text, start: 0 }] : [];
   }
   const parts: Segment[] = [];
   let last = 0;
@@ -40,17 +40,22 @@ function splitCites(text: string, sourceRefs: readonly string[]): Segment[] {
     const n = Number(match[1]);
     const index = match.index ?? 0;
     if (index > last) {
-      parts.push({ kind: 'text', value: text.slice(last, index) });
+      parts.push({ kind: 'text', value: text.slice(last, index), start: last });
     }
     if (n >= 1 && n <= sourceRefs.length) {
-      parts.push({ kind: 'cite', n, label: sourceRefs[n - 1] ?? String(n) });
+      parts.push({
+        kind: 'cite',
+        n,
+        label: sourceRefs[n - 1] ?? String(n),
+        start: index,
+      });
     } else {
-      parts.push({ kind: 'text', value: match[0] });
+      parts.push({ kind: 'text', value: match[0], start: index });
     }
     last = index + match[0].length;
   }
   if (last < text.length) {
-    parts.push({ kind: 'text', value: text.slice(last) });
+    parts.push({ kind: 'text', value: text.slice(last), start: last });
   }
   return parts;
 }
@@ -77,13 +82,13 @@ export const InlineMarkdown = memo(function InlineMarkdown({ text, sourceRefs = 
   }
   return (
     <>
-      {segments.map((segment, index) => {
+      {segments.map(segment => {
         if (segment.kind === 'text') {
-          return <MarkdownBit key={`t-${index}`} text={segment.value} />;
+          return <MarkdownBit key={`t-${segment.start}`} text={segment.value} />;
         }
         return (
           <a
-            key={`c-${index}-${segment.n}`}
+            key={`c-${segment.start}-${segment.n}`}
             className="cite-marker"
             href={`#source-ref-${segment.n}`}
             title={segment.label}

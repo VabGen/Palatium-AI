@@ -112,6 +112,13 @@ def resolve_output(task: dict[str, Any], output: dict[str, Any]) -> dict[str, An
 def matches_expect(expect: dict[str, Any], output: dict[str, Any]) -> tuple[bool, str]:
     for key, expected in expect.items():
         actual = output.get(key)
+        # W5.2 tool selection: order-insensitive set equality for tool_calls lists.
+        if key == "tool_calls":
+            actual_set = {str(item) for item in (actual or [])}
+            expected_set = {str(item) for item in (expected or [])}
+            if actual_set != expected_set:
+                return False, f"tool_calls: expected {sorted(expected_set)!r}, got {sorted(actual_set)!r}"
+            continue
         if actual != expected:
             return False, f"{key}: expected {expected!r}, got {actual!r}"
     return True, "expectations met"

@@ -129,6 +129,23 @@ def test_social_greeting_does_not_echo_user_as_final_text() -> None:
     assert payload["task_kind"] == "social_conversation"
 
 
+def test_knowledge_empty_worker_does_not_echo_user_as_final_text() -> None:
+    """Regression (2026-11-11): failed researcher must not make Formatter echo the ask."""
+    ask = "сколько планет в солнечной системе?"
+    task = FormatterInput(
+        task_id="t1",
+        context_packet=_packet(
+            user_text=ask,
+            task_kind="knowledge_request",
+            route="researcher",
+        ),
+        worker_summary="",
+    )
+    payload = build_formatter_user_payload(task)
+    assert payload["final_text"] == ""
+    assert payload["user_text"] == ask
+
+
 def test_social_with_worker_draft_presents_worker() -> None:
     """If a draft already exists, social still formats that prose (no empty strip)."""
     task = FormatterInput(

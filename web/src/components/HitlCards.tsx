@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react';
-import { ListChecks, ShieldAlert } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { fetchHitlStepUpChallenge, respondHitlCard } from '../api/client';
 import { formatHitlError } from '../lib/hitl';
 import { formatDateTime, formatNumber, t } from '../i18n';
+import { AttachmentFileIcon, attachmentFileKind } from '../icons/fileTypeIcons';
+import {
+  GlyphExclamation,
+  GlyphSafe,
+  GlyphTodo,
+} from '../icons/kimiTokenGlyphs';
 import { TokenIcon } from '../icons/TokenIcon';
 import { iconForActionKind } from '../icons/semanticIcons';
 import type {
@@ -11,6 +16,20 @@ import type {
   HITLCardView,
   HitlStepUpChallenge,
 } from '../types/contentDocument';
+import type { MessageKey } from '../i18n/messages';
+
+const HITL_STATUS_KEYS = {
+  pending: 'hitl.status.pending',
+  resolved: 'hitl.status.resolved',
+  expired: 'hitl.status.expired',
+  escalated: 'hitl.status.escalated',
+  auto_rejected: 'hitl.status.auto_rejected',
+  dead_letter: 'hitl.status.dead_letter',
+} as const satisfies Record<HITLCardView['status'], MessageKey>;
+
+function hitlStatusLabel(status: HITLCardView['status']): string {
+  return t(HITL_STATUS_KEYS[status]);
+}
 
 /** Result of resolving one card: who was resolved, and the turn it produced (if any). */
 export type HitlResolvedEvent = {
@@ -95,8 +114,22 @@ function HitlCard({
   const isChoice = local.purpose === 'user_choice';
   const isTool = local.purpose === 'mcp_tool_approval';
   const isReview = local.purpose === 'quality_review';
-  const Mark = isChoice ? ListChecks : ShieldAlert;
+  // Official Kimi filled glyphs (widget icon system) — not Lucide stroke chrome.
+  const Mark = isChoice ? GlyphTodo : isTool ? GlyphSafe : GlyphExclamation;
   const mayNeedStepUp = isTool;
+
+  function optionLeading(option: HITLCardView['options'][number]): ReactNode {
+    const explicit = option.icon ?? iconForActionKind(option.kind);
+    if (explicit) {
+      return <TokenIcon token={explicit} size={16} />;
+    }
+    if (isChoice && /\.\w{2,5}$/i.test(option.label.trim())) {
+      return (
+        <AttachmentFileIcon kind={attachmentFileKind(option.label.trim())} size={20} />
+      );
+    }
+    return null;
+  }
 
   useEffect(() => {
     if (!stepUpPending?.challenge.authorize_url) return;
@@ -202,7 +235,7 @@ function HitlCard({
       aria-live="polite"
     >
       <header className="hitl-header">
-        <Mark size={18} className="hitl-mark icon-animated" />
+        <Mark size={18} className="hitl-mark" />
         <div>
           <p className="hitl-kicker">
             {isChoice
@@ -219,7 +252,11 @@ function HitlCard({
       </header>
 
       <div className="hitl-meta">
-        {!isChoice && (
+        {/*
+          Choice cards are a product question, not an ops dashboard — hide risk/status.
+          Tool/review keep expiry; risk only when it informs the irreversible decision.
+        */}
+        {(isTool || isReview) && (
           <span>
             {t('hitl.riskLabel')}{' '}
             <span style={{ color: riskColor }}>
@@ -231,7 +268,9 @@ function HitlCard({
           </span>
         )}
         <span>{t('hitl.expires', { time: formatDateTime(local.expires_at) })}</span>
-        <span className="hitl-status">{local.status}</span>
+        {(isTool || isReview) && (
+          <span className="hitl-status">{hitlStatusLabel(local.status)}</span>
+        )}
       </div>
 
       {stepUpPending ? (
@@ -311,11 +350,7 @@ function HitlCard({
               disabled={busyAction !== null}
               onClick={() => void choose(option.action_id, option.action_token)}
             >
-              <TokenIcon
-                token={option.icon ?? iconForActionKind(option.kind)}
-                size={16}
-                animated={option.style === 'primary'}
-              />
+              {optionLeading(option)}
               <span>
                 {busyAction === option.action_id
                   ? mayNeedStepUp

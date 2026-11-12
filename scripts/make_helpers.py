@@ -174,7 +174,7 @@ _HEALTH_ENDPOINTS: tuple[tuple[str, str], ...] = (
 def _reachable(url: str, timeout: float = 5.0) -> bool:
     """True for any 2xx; a refused socket is a FAIL, not an exception."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout) as response:
             return 200 <= int(response.status) < 300
     except Exception:  # noqa: BLE001  # a probe reports an unreachable endpoint, it never raises
         return False
@@ -207,14 +207,14 @@ def _litellm_request(path: str, key: str, payload: dict[str, object] | None = No
     """
     url = f"{_LITELLM_BASE_URL}{path}"
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(  # noqa: S310 - fixed loopback URL, no user input
+    request = urllib.request.Request(
         url,
         data=data,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="GET" if data is None else "POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=120) as response:
             return int(response.status), json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         # `HTTPError` is a `tempfile._TemporaryFileWrapper` subclass: the body lives in a

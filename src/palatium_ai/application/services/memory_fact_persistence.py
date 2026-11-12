@@ -159,7 +159,7 @@ def _resolve_fact_scope(*, fact: MemoryFactCandidate, job: MemoryExtractJob) -> 
     """Map fact kind to MCP namespace_kind + scope_id (same routing as consolidation worker)."""
     if job.user_id and fact.kind == "preference":
         return "user", job.user_id.strip()
-    if job.org_id and fact.kind == "entity":
+    if job.org_id and fact.kind == "incident":
         return "org", job.org_id.strip()
     return "thread", job.thread_id.strip()
 

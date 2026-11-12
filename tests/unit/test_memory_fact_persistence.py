@@ -77,14 +77,14 @@ async def test_persist_facts_uses_save_memory_mcp() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_persist_facts_maps_entity_to_org_namespace() -> None:
+async def test_persist_facts_maps_incident_to_org_namespace() -> None:
     port = InMemoryMemoryPort()
     registry = make_platform_mcp_registry(memory_port=port)
     service = MemoryFactPersistenceService(registry)
     job = MemoryExtractJob(thread_id="thread-2", task_id="task-2", user_id="user-2", org_id="org-x")
     fact = MemoryFactCandidate(
         text="Acme billing contact is Petrov",
-        kind="entity",
+        kind="incident",
         confidence=0.85,
         key_hint="acme-billing",
     )
@@ -92,7 +92,7 @@ async def test_persist_facts_maps_entity_to_org_namespace() -> None:
     assert stored == 1
     hits = await port.search(namespace=org_namespace("org-x"), query="Petrov", limit=4)
     assert hits
-    assert hits[0]["kind"] == "entity"
+    assert hits[0]["kind"] == "incident"
 
 
 @pytest.mark.asyncio()

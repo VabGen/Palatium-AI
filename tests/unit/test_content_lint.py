@@ -17,11 +17,17 @@ from palatium_ai.domain.content import (
 from palatium_ai.domain.content.lint import ContentLint
 
 
-def _doc(*blocks: ContentBlock, source_refs: tuple[str, ...] = ()) -> ContentDocument:
+def _doc(
+    *blocks: ContentBlock,
+    source_refs: tuple[str, ...] = (),
+    kind: str = "response",
+) -> ContentDocument:
+    # Default kind is ``response`` here so density lints (analysis/report/guide)
+    # do not fire on generic residue/citation fixtures.
     return ContentDocument(
         locale="ru-RU",
         blocks=blocks,
-        meta=DocumentMeta(confidence=0.9, source_refs=source_refs),
+        meta=DocumentMeta(confidence=0.9, source_refs=source_refs, kind=kind),  # type: ignore[arg-type]
     )
 
 
@@ -150,3 +156,48 @@ def test_report_counts_errors_separately_from_warnings() -> None:
 
     assert report.error_count == 2
     assert len(report.findings) == 3  # residue ×2 + duplicate prose
+
+
+def test_sparse_analysis_without_kv_or_nested_list() -> None:
+    document = ContentDocument(
+        locale="ru-RU",
+        blocks=(
+            HeadingBlock(text="A", icon="search"),
+            ParagraphBlock(text="Раздел A."),
+            HeadingBlock(text="B", icon="search"),
+            ParagraphBlock(text="Раздел B."),
+            HeadingBlock(text="C", icon="search"),
+            ParagraphBlock(text="Раздел C."),
+        ),
+        meta=DocumentMeta(confidence=0.9, kind="analysis"),
+    )
+    findings = ContentLint.run(document).findings
+    assert any(f.rule_id == "sparse_analysis_structure" for f in findings)
+
+
+def test_missing_section_icons_on_analysis() -> None:
+    document = ContentDocument(
+        locale="ru-RU",
+        blocks=(
+            HeadingBlock(text="A"),
+            ParagraphBlock(text="Тело."),
+        ),
+        meta=DocumentMeta(confidence=0.9, kind="analysis"),
+    )
+    findings = ContentLint.run(document).findings
+    assert any(f.rule_id == "missing_section_icons" for f in findings)
+
+
+def test_missing_section_icons_allows_plain_later_headings() -> None:
+    document = ContentDocument(
+        locale="ru-RU",
+        blocks=(
+            HeadingBlock(text="Обзор", icon="search"),
+            ParagraphBlock(text="Введение."),
+            HeadingBlock(text="Факты"),
+            ParagraphBlock(text="Детали."),
+        ),
+        meta=DocumentMeta(confidence=0.9, kind="analysis"),
+    )
+    findings = ContentLint.run(document).findings
+    assert all(f.rule_id != "missing_section_icons" for f in findings)

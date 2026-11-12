@@ -35,14 +35,14 @@ def _request_json(
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(  # noqa: S310
+    req = urllib.request.Request(
         _http_url(url),
         data=data,
         headers=headers,
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
             if not isinstance(payload, dict):
                 raise RuntimeError(f"unexpected JSON type: {type(payload)}")

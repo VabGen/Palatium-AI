@@ -66,6 +66,12 @@ async def run_llm_research(
     if grounding_degraded:
         system = f"{RESEARCHER_SYSTEM_PROMPT}\n{RESEARCHER_UNGROUNDED_SYSTEM_NOTE}"
     memory_block = "\n".join(f"- {hint}" for hint in task_input.memory_hints[:4] if str(hint).strip())
+    dialog_block = ""
+    if task_input.dialog_window is not None:
+        # as_prompt_block applies DialogCorrectionPolicy (P1.1 supersede strip).
+        dialog_block = task_input.dialog_window.as_prompt_block(max_chars=6_000)
+        if dialog_block == "(no prior turns)":
+            dialog_block = ""
     user_content = json.dumps(
         {
             "user_text": task_input.context_packet.user_text,
@@ -90,6 +96,7 @@ async def run_llm_research(
             project_agents_md=project_agents_md,
             skill_catalog=skill_catalog,
             memory_block=memory_block,
+            dialog_block=dialog_block,
             thread_meta=f"thread_id={context.thread_id}",
             user_content=user_content,
             image_parts=image_parts,
@@ -101,6 +108,7 @@ async def run_llm_research(
     llm_config = researcher_llm_config(
         config,
         strategy=task_input.context_packet.execution_plan.strategy,
+        composer_mode=task_input.context_packet.composer_mode,
     )
     try:
         completion = await harness.call_llm(

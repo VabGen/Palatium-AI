@@ -145,12 +145,24 @@ class AttachmentContentMissingError(AttachmentError):
         super().__init__(f"derived content missing for attachment {attachment_id}")
 
 
+class AttachmentIntegrityError(AttachmentError):
+    """Stored blob bytes no longer match the sealed ``content_sha256`` (020).
+
+    Fail-closed: do not serve or re-parse a tampered object.
+    """
+
+    def __init__(self, attachment_id: UUID) -> None:
+        self.attachment_id = attachment_id
+        super().__init__(f"attachment {attachment_id} failed content integrity check")
+
+
 __all__ = [
     "AttachmentChunkedUploadError",
     "AttachmentConnectorUnavailableError",
     "AttachmentContentMissingError",
     "AttachmentError",
     "AttachmentIntakeRejectedError",
+    "AttachmentIntegrityError",
     "AttachmentModeMismatchError",
     "AttachmentNotFoundError",
     "AttachmentNotUsableError",

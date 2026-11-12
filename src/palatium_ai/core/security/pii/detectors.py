@@ -72,10 +72,10 @@ class Detector:
         profiles: frozenset[PiiProfile],
         validate: Callable[[str], bool] | None = None,
     ) -> None:
-        self._kind = kind
-        self._pattern = pattern
-        self._profiles = profiles
-        self._validate = validate
+        self._kind: PiiKind = kind
+        self._pattern: re.Pattern[str] = pattern
+        self._profiles: frozenset[PiiProfile] = profiles
+        self._validate: Callable[[str], bool] | None = validate
 
     @property
     def kind(self) -> PiiKind:

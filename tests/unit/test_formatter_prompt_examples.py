@@ -27,12 +27,12 @@ from palatium_ai.domain.content import ContentDocument, StepsBlock, TableBlock
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
 
 #: Prompt-size ceilings in ``count_tokens`` estimates (~4 chars/token): schema path
-#: 1471 → 1771 (W6 few-shot) → 1866 (W7 length budget), legacy path 1740 → 1877 → 1972,
-#: measured 2026-10-24. A ceiling is the decision point: growth past it is a new PR.
-_SCHEMA_PROMPT_TOKEN_CEILING = 1900
-_LEGACY_PROMPT_TOKEN_CEILING = 2000
+#: 1471 → 1771 (W6) → 1866 (W7) → ~2100 (kimi-answer-formatting document_analysis
+#: few-shot, 2026-11-11); legacy similarly. Ceiling = measured + small buffer.
+_SCHEMA_PROMPT_TOKEN_CEILING = 2500
+_LEGACY_PROMPT_TOKEN_CEILING = 2600
 #: Examples are illustrative, not the bulk of the instructions.
-_EXAMPLES_SHARE_CEILING = 0.25
+_EXAMPLES_SHARE_CEILING = 0.30
 
 _SCHEMA_BY_LABEL = dict(SCHEMA_SHAPE_EXAMPLES)
 _MARKDOWN_BY_LABEL = dict(MARKDOWN_SHAPE_EXAMPLES)
@@ -123,6 +123,10 @@ def test_boundary_example_states_the_limitation_instead_of_inventing_facts() -> 
         ("comparison_table", ["table", "paragraph"]),
         ("plan", ["steps"]),
         ("prose", ["paragraph", "paragraph"]),
+        (
+            "document_analysis",
+            ["heading", "kv", "heading", "list", "heading", "callout", "heading", "list"],
+        ),
         ("boundary_no_source_text", ["paragraph"]),
     ),
 )
@@ -131,6 +135,24 @@ def test_markdown_example_parses_to_the_shape_it_teaches(label: str, expected: l
     document = markdown_to_content_document(_MARKDOWN_BY_LABEL[label], _formatter_input())
 
     assert [block.type for block in document.blocks] == expected
+
+
+def test_document_analysis_schema_example_is_dense() -> None:
+    """Structure-dense, icon-sparse: lead + signal headings only (Big Tech laconic)."""
+    document = _document("document_analysis")
+    types = [block.type for block in document.blocks]
+    assert types.count("heading") >= 2
+    assert "kv" in types
+    assert "list" in types
+    assert "callout" in types
+    headings = [block for block in document.blocks if block.type == "heading"]
+    by_text = {block.text: getattr(block, "icon", None) for block in headings}
+    assert by_text.get("Заказчик") == "search"
+    assert by_text.get("Требования") is None
+    assert by_text.get("Риски") == "warning"
+    assert by_text.get("Рекомендации") == "check"
+    lists = [block for block in document.blocks if block.type == "list"]
+    assert all(item.icon is None for block in lists for item in block.items)
 
 
 @pytest.mark.parametrize("label", [label for label, _ in MARKDOWN_SHAPE_EXAMPLES])

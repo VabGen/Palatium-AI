@@ -267,3 +267,27 @@ async def test_recall_keeps_inferred_user_fact_thread_scoped() -> None:
         limit=4,
     )
     assert not any("5433" in hit.text for hit in bundle.hits)
+
+
+@pytest.mark.asyncio()
+async def test_recall_drops_unrelated_explicit_user_fact() -> None:
+    """W10 §5: HITL-approved user fact still needs lexical overlap with the ask."""
+    port = InMemoryMemoryPort()
+    await port.put(
+        namespace=user_namespace("user-4"),
+        key="budget",
+        value={
+            "text": "бюджет проекта BGT-42 — 4.2 млн",
+            "kind": "fact",
+            "confidence": 1.0,
+            MEMORY_EXPLICIT_WRITE_KEY: True,
+        },
+    )
+    bundle = await recall_for_thread(
+        port,
+        thread_id="thread-znt",
+        user_id="user-4",
+        query="как настроить SSH-ключ для GitHub",
+        limit=4,
+    )
+    assert not any("BGT-42" in hit.text for hit in bundle.hits)

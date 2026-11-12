@@ -127,9 +127,12 @@ class _ParseState:
     def flush_fence(self) -> None:
         if not self.in_fence:
             return
-        content = "\n".join(self.fence_lines).strip() or " "
-        lang = (self.fence_lang or "text")[:40] or "text"
-        self.blocks.append(CodeBlock(type="code", language=lang, content=content[:50_000]))
+        # Empty / whitespace-only fences are dropped — CodeBlock rejects blank
+        # content after strip (W10.1 P0.1a); padding with " " was a silent schema lie.
+        content = "\n".join(self.fence_lines).strip()
+        if content:
+            lang = (self.fence_lang or "text")[:40] or "text"
+            self.blocks.append(CodeBlock(type="code", language=lang, content=content[:50_000]))
         self.in_fence = False
         self.fence_lang = "text"
         self.fence_lines = []

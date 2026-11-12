@@ -29,13 +29,41 @@ describe('isArtifactWorthy', () => {
     expect(isArtifactWorthy(doc())).toBe(false);
   });
 
-  it('accepts multi-block documents', () => {
+  it('rejects short multi-paragraph social without dense payload', () => {
+    expect(
+      isArtifactWorthy(
+        doc({
+          blocks: [
+            { type: 'paragraph', text: 'Привет! У меня всё отлично.' },
+            { type: 'paragraph', text: 'А как ваши дела?' },
+          ],
+        })
+      )
+    ).toBe(false);
+  });
+
+  it('accepts dense kv even as a second block', () => {
     expect(
       isArtifactWorthy(
         doc({
           blocks: [
             { type: 'paragraph', text: 'Введение' },
             { type: 'kv', items: [{ label: 'Статус', value: 'Ок' }] },
+          ],
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('accepts multi-section answers by heading count', () => {
+    expect(
+      isArtifactWorthy(
+        doc({
+          blocks: [
+            { type: 'heading', level: 2, text: 'Шаг 1' },
+            { type: 'paragraph', text: 'Бульон.' },
+            { type: 'heading', level: 2, text: 'Шаг 2' },
+            { type: 'paragraph', text: 'Зажарка.' },
           ],
         })
       )
@@ -71,15 +99,27 @@ describe('isArtifactWorthy', () => {
       )
     ).toBe(true);
   });
+
+  it('ignores internal from-memory stamp as sole source_ref', () => {
+    expect(
+      isArtifactWorthy(
+        doc({
+          meta: {
+            confidence: 1,
+            requires_review: false,
+            source_refs: ['from memory'],
+            interaction: 'none',
+          },
+        })
+      )
+    ).toBe(false);
+  });
 });
 
 describe('artifactPreviewText', () => {
   it('returns the first paragraph truncated', () => {
     const long = 'Слово '.repeat(40).trim();
-    const preview = artifactPreviewText(
-      doc({ blocks: [{ type: 'paragraph', text: long }] }),
-      40
-    );
+    const preview = artifactPreviewText(doc({ blocks: [{ type: 'paragraph', text: long }] }), 40);
     expect(preview.endsWith('…')).toBe(true);
     expect(preview.length).toBeLessThanOrEqual(40);
   });

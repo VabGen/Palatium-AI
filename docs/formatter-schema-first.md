@@ -71,6 +71,7 @@ sum(rate(palatium_response_shape_total{outcome=~"satisfied|mismatch|mechanical_.
 |---|---|
 | `palatium_formatter_schema_total{path,outcome}` | `path`: `schema_first` / `legacy_markdown`; `outcome`: `valid`, `invalid`, `empty_blocks`, `unsupported`, `fallback` |
 | `palatium_formatter_partial_block_total{outcome}` | стриминговые блоки, не ставшие типизированным кадром: `unparsable` (сканер/протокол), `invalid` (контракт `ContentBlock`) |
+| `palatium_formatter_icon_coverage` | доля heading с иконкой после `PresentationIconPolicy` enrich (0..1; kimi-answer-formatting) |
 | `palatium_agent_errors_total{error_type}` | `schema_first_llm_stage_failure`, `llm_stage_failure` — транспорт/таймаут |
 | `palatium_content_lint_findings_total{rule,severity}` | дефекты, валидные по схеме, но неверные для пользователя |
 | `palatium_citation_resolution_total{anchor,outcome}` | якоря провайдера: знаменатель — всё, что он прислал (W3a) |

@@ -34,10 +34,10 @@ def setup_observability(settings: Settings) -> None:
         settings.formatter.formatter_mode,
         settings.formatter.formatter_rollout_pct,
     )
+    log = structlog.get_logger(__name__)
     if settings.observability.otel_capture_raw_query:
         # ``app.environment`` is a validated Literal, so "development" is the only
         # non-production value to compare against — no further normalisation needed.
-        log = structlog.get_logger(__name__)
         if settings.app.environment == "development":
             log.warning("otel.capture_raw_query.enabled", environment=settings.app.environment)
         else:
@@ -45,6 +45,15 @@ def setup_observability(settings: Settings) -> None:
                 "otel.capture_raw_query.misconfigured",
                 environment=settings.app.environment,
                 message="OTEL_CAPTURE_RAW_QUERY must stay false outside development",
+            )
+    if settings.observability.llm_prompt_archive_enabled:
+        if settings.app.environment == "development":
+            log.warning("llm.prompt_archive.enabled", environment=settings.app.environment)
+        else:
+            log.warning(
+                "llm.prompt_archive.misconfigured",
+                environment=settings.app.environment,
+                message="LLM_PROMPT_ARCHIVE_ENABLED must stay false outside development",
             )
 
 

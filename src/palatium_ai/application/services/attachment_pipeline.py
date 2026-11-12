@@ -11,7 +11,7 @@ what to write, which keeps the security decision testable without a database.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import TYPE_CHECKING
 
@@ -30,6 +30,7 @@ from palatium_ai.domain.attachments.content import (
     AttachmentContentMetadata,
     AttachmentScanSummary,
 )
+from palatium_ai.domain.attachments.integrity import content_sha256_hex, verify_attachment_bytes
 from palatium_ai.domain.attachments.pii_policy import (
     AttachmentPiiPolicyMode,
     apply_attachment_pii_policy,
@@ -87,6 +88,8 @@ class AttachmentPipelineOutcome:
     content: AttachmentContent | None = None
     #: Magic-byte MIME when sniff succeeded; may replace a lying client declaration.
     detected_mime_type: str | None = None
+    #: SHA-256 of the bytes just read from ``blob_key`` (None when object missing).
+    content_sha256: str | None = None
 
     @property
     def admitted(self) -> bool:
@@ -173,6 +176,12 @@ class AttachmentPipeline:
         if isinstance(stored, AttachmentPipelineOutcome):
             return stored
         data, size_bytes = stored
+        digest = content_sha256_hex(data)
+        # Reingest / second complete: refuse if the sealed blob was swapped (020).
+        verify_attachment_bytes(attachment, data)
+
+        def _seal(outcome: AttachmentPipelineOutcome) -> AttachmentPipelineOutcome:
+            return replace(outcome, content_sha256=digest)
 
         sniffed = sniff_media_type(data)
         mime_decision = AttachmentIntakePolicy.content_matches_declared(
@@ -188,19 +197,21 @@ class AttachmentPipeline:
                 detected=sniffed or "",
                 rejection_reason=mime_decision.reason,
             )
-            return AttachmentPipelineOutcome(
-                status="rejected",
-                rejection_reason=mime_decision.reason or "mime_mismatch",
-                stored_size_bytes=size_bytes,
-                error="uploaded content does not match the declared media type",
-                detected_mime_type=sniffed if sniffed and sniffed != "text/*" else None,
+            return _seal(
+                AttachmentPipelineOutcome(
+                    status="rejected",
+                    rejection_reason=mime_decision.reason or "mime_mismatch",
+                    stored_size_bytes=size_bytes,
+                    error="uploaded content does not match the declared media type",
+                    detected_mime_type=sniffed if sniffed and sniffed != "text/*" else None,
+                )
             )
         # Concrete binary sniff wins; text/* keeps the declared subtype (csv/md/plain).
         effective_mime = sniffed if sniffed and sniffed != "text/*" else attachment.mime_type
 
         verdict = await self._scanner.scan(data, filename=attachment.filename)
         if not verdict.admitted:
-            return _scan_refusal(verdict, size_bytes=size_bytes)
+            return _seal(_scan_refusal(verdict, size_bytes=size_bytes))
 
         active = _active_content_refusal(
             attachment=attachment,
@@ -209,18 +220,20 @@ class AttachmentPipeline:
             size_bytes=size_bytes,
         )
         if active is not None:
-            return active
+            return _seal(active)
 
         parsed = await self._parse(data, attachment, mime_type=effective_mime)
         if isinstance(parsed, AttachmentPipelineOutcome):
-            return parsed
+            return _seal(parsed)
 
-        return self._admit_extracted(
-            attachment=attachment,
-            parsed=parsed,
-            effective_mime=effective_mime,
-            size_bytes=size_bytes,
-            force_mask_injection=force_mask_injection,
+        return _seal(
+            self._admit_extracted(
+                attachment=attachment,
+                parsed=parsed,
+                effective_mime=effective_mime,
+                size_bytes=size_bytes,
+                force_mask_injection=force_mask_injection,
+            )
         )
 
     def _admit_extracted(

@@ -1,0 +1,106 @@
+{
+  "cases": [
+    {
+      "id": "sem-formatter-01",
+      "agent": "formatter",
+      "scenario": "title_case_hello",
+      "input": { "user_text": "Format a short title that includes the word Hello and World." },
+      "expected": { "must_contain": ["Hello", "World"], "must_not_contain": ["lorem ipsum"] },
+      "tags": ["formatter", "semantic"]
+    },
+    {
+      "id": "sem-formatter-02",
+      "agent": "formatter",
+      "scenario": "bullet_three",
+      "input": { "user_text": "List exactly these three items as bullets: Alpha, Beta, Gamma." },
+      "expected": {
+        "must_contain": ["Alpha", "Beta", "Gamma"],
+        "must_not_contain": ["Delta"],
+        "structure": { "require_list": true, "max_paragraph_words": 80 }
+      },
+      "tags": ["formatter", "semantic"]
+    },
+    {
+      "id": "sem-formatter-03",
+      "agent": "formatter",
+      "scenario": "code_fence_py",
+      "input": { "user_text": "Show a Python hello world in a fenced code block using print." },
+      "expected": {
+        "must_contain": ["print", "Hello"],
+        "must_not_contain": ["System.out"],
+        "structure": { "require_code_fence": true }
+      },
+      "tags": ["formatter", "semantic"]
+    },
+    {
+      "id": "sem-formatter-04",
+      "agent": "formatter",
+      "scenario": "heading_summary",
+      "input": { "user_text": "Write a markdown heading titled Summary and one sentence under it about latency." },
+      "expected": {
+        "must_contain": ["Summary", "latency"],
+        "must_not_contain": ["throughput only"],
+        "structure": { "require_heading": true }
+      },
+      "tags": ["formatter", "semantic"]
+    },
+    {
+      "id": "sem-formatter-05",
+      "agent": "formatter",
+      "scenario": "preserve_ticket",
+      "input": { "user_text": "Format a status note that includes ticket ID TCK-4421." },
+      "expected": { "must_contain": ["TCK-4421"], "must_not_contain": ["TCK-0000"] },
+      "tags": ["formatter", "semantic"]
+    },
+    {
+      "id": "sem-formatter-06",
+      "agent": "formatter",
+      "scenario": "compare_two",
+      "input": { "user_text": "Compare Redis and Valkey in two short bullets naming both." },
+      "expected": {
+        "must_contain": ["Redis", "Valkey"],
+        "must_not_contain": ["MongoDB"],
+        "structure": { "require_list": true }
+      },
+      "tags": ["formatter", "semantic"]
+    },
+    {
+      "id": "sem-formatter-07",
+      "agent": "formatter",
+      "scenario": "steps_numbered",
+      "input": { "user_text": "Give a 3-step numbered instruction to restart a service named gateway." },
+      "expected": {
+        "must_contain": ["gateway"],
+        "must_not_contain": ["delete production"],
+        "structure": { "require_list": true }
+      },
+      "tags": ["formatter", "semantic"]
+    },
+    {
+      "id": "sem-formatter-08",
+      "agent": "formatter",
+      "scenario": "explain_cache",
+      "input": { "user_text": "Explain what a cache hit means in one short paragraph mentioning cache." },
+      "expected": { "must_contain": ["cache"], "must_not_contain": ["disk wipe"] },
+      "needs_judge": true,
+      "grader": "rule_then_judge",
+      "tags": ["formatter", "semantic", "judge"]
+    },
+    {
+      "id": "sem-formatter-09",
+      "agent": "formatter",
+      "scenario": "locale_ru_marker",
+      "input": { "user_text": "Ответь кратко по-русски и упомяни слово Палатиум." },
+      "expected": { "must_contain": ["Палатиум"], "must_not_contain": ["lorem"] },
+      "tags": ["formatter", "semantic"]
+    },
+    {
+      "id": "sem-formatter-10",
+      "agent": "formatter",
+      "scenario": "no_hallucinated_sla",
+      "input": { "user_text": "Summarize that the SLA target is 99.9% availability." },
+      "expected": { "must_contain": ["99.9"], "must_not_contain": ["99.999"] },
+      "tags": ["formatter", "semantic"]
+    }
+  ]
+}

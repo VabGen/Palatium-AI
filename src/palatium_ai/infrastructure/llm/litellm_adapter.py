@@ -92,22 +92,69 @@ def _raise_if_unsupported(exc: Exception, *, response_format: LLMResponseFormat 
         raise StructuredOutputUnsupportedError(redact_text(str(exc))) from exc
 
 
+def _content_as_text(content: object) -> str:
+    """Flatten OpenAI-style content (str | multipart) to plain text for merges."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [str(part.get("text") or "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+        return "\n\n".join(p for p in parts if p)
+    return str(content or "")
+
+
+def _coalesce_leading_system_messages(
+    messages: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Merge consecutive leading ``system`` messages into one.
+
+    CMD2 assembly emits stable/context/volatile as separate system turns for
+    Anthropic-style prefix cache. OpenAI-compatible corporate gateways (Qwen)
+    reject any system message that is not index 0 with
+    «System message must be at the beginning» — collapsing the leading run keeps
+    the tier text while satisfying that contract.
+    """
+    if len(messages) < 2:
+        return messages
+    leading: list[dict[str, object]] = []
+    idx = 0
+    while idx < len(messages) and messages[idx].get("role") == "system":
+        leading.append(messages[idx])
+        idx += 1
+    if len(leading) <= 1:
+        return messages
+    merged_text = "\n\n".join(text for text in (_content_as_text(m.get("content")) for m in leading) if text.strip())
+    # Drop structured cache_control: coalesced body is for OpenAI-compat endpoints
+    # that already rejected multi-system; Anthropic cache is irrelevant there.
+    return [{"role": "system", "content": merged_text}, *messages[idx:]]
+
+
+def _supports_native_document_blocks(provider: str) -> bool:
+    """Anthropic document content blocks; OpenAI-compat gateways reject ``type=document``."""
+    return provider.strip().lower() == "anthropic"
+
+
 def _to_litellm_messages(
     messages: list[ChatMessage],
     *,
     image_urls: dict[UUID, str] | None = None,
+    provider: str = "",
 ) -> list[dict[str, object]]:
     """Map domain messages; attach Anthropic-style cache_control on system prefixes.
 
     ``image_urls`` carries already-resolved data URLs for the turn's image parts. A
     part without a resolved URL is a hard error, never a silently text-only message:
     the model would answer "the picture is empty" and sound certain about it (ADR 0007).
+
+    Document parts stay native Anthropic citeable blocks only when ``provider`` is
+    anthropic; otherwise they become plain ``text`` parts so OpenAI-compatible
+    gateways (gateway / qwen / openai) do not 400 on ``type=document``.
     """
     resolved = image_urls or {}
+    native_docs = _supports_native_document_blocks(provider)
     out: list[dict[str, object]] = []
     for message in messages:
         images = [_image_url_part(part, resolved) for part in message.image_parts]
-        documents = [_document_text_part(part) for part in message.document_parts]
+        documents = [_document_content_part(part, native_document=native_docs) for part in message.document_parts]
         media = [*documents, *images]
         if message.cache_control is not None and message.role == "system":
             out.append(
@@ -131,7 +178,7 @@ def _to_litellm_messages(
             )
         else:
             out.append({"role": message.role, "content": message.content})
-    return out
+    return _coalesce_leading_system_messages(out)
 
 
 def _image_url_part(part: ImagePart, resolved: dict[UUID, str]) -> dict[str, object]:
@@ -144,19 +191,23 @@ def _image_url_part(part: ImagePart, resolved: dict[UUID, str]) -> dict[str, obj
     return {"type": "image_url", "image_url": {"url": url}}
 
 
-def _document_text_part(part: DocumentPart) -> dict[str, object]:
-    """Anthropic-compatible citeable document block (LiteLLM passthrough).
+def _document_content_part(part: DocumentPart, *, native_document: bool) -> dict[str, object]:
+    """Map an admitted document body for the provider wire format.
 
-    ``title`` is the citation chip label; ``citations.enabled`` asks the provider to
-    emit source anchors against this body (W3a). Body is plain text already admitted
-    as ``safe_text`` — never the fence wrapper.
+    Anthropic: citeable ``document`` block (``title`` = citation chip; W3a).
+    OpenAI-compat: plain ``text`` part — corporate gateways reject ``type=document``.
+    Body is already admitted ``safe_text``, never the fence wrapper.
     """
-    return {
-        "type": "document",
-        "source": {"type": "text", "media_type": "text/plain", "data": part.text},
-        "title": part.title,
-        "citations": {"enabled": True},
-    }
+    if native_document:
+        return {
+            "type": "document",
+            "source": {"type": "text", "media_type": "text/plain", "data": part.text},
+            "title": part.title,
+            "citations": {"enabled": True},
+        }
+    title = (part.title or "").strip()
+    body = part.text
+    return {"type": "text", "text": f"[{title}]\n{body}" if title else body}
 
 
 def _data_url(data: bytes, *, mime_type: str) -> str:
@@ -432,7 +483,11 @@ class LiteLLMAdapter:
             response_model=response_model,
             timeout_seconds=timeout_seconds,
         )
-        params["messages"] = _to_litellm_messages(messages, image_urls=image_urls)
+        params["messages"] = _to_litellm_messages(
+            messages,
+            image_urls=image_urls,
+            provider=self._provider,
+        )
         logger.debug(
             "LLM request",
             provider=self._provider,
@@ -483,7 +538,11 @@ class LiteLLMAdapter:
         )
         # OpenAI-compatible: last chunk carries usage (and LiteLLM may attach cost).
         params["stream_options"] = {"include_usage": True}
-        params["messages"] = _to_litellm_messages(messages, image_urls=image_urls)
+        params["messages"] = _to_litellm_messages(
+            messages,
+            image_urls=image_urls,
+            provider=self._provider,
+        )
         started = perf_counter()
         first_token = True
         # stream=True as Literal selects CustomStreamWrapper; cast keeps async-for typed

@@ -20,7 +20,7 @@ from palatium_ai.domain.content.content_document import ContentDocument
 #: ``[12]`` not followed by ``(`` — a markdown link ``[1](url)`` is a real control.
 _MARKER_RE = re.compile(r"\[(\d{1,2})\](?!\()")
 
-__all__ = ["strip_citation_markers", "CITATION_MARKER_RE"]
+__all__ = ["CITATION_MARKER_RE", "strip_citation_markers"]
 
 #: Re-export for clients that want the same pattern as the server.
 CITATION_MARKER_RE = _MARKER_RE

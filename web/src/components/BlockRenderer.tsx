@@ -1,9 +1,11 @@
-import { memo, useMemo } from 'react';
+import { memo, useMemo, type ReactNode } from 'react';
 import { TokenIcon } from '../icons/TokenIcon';
+import { IconLightbulb } from '../icons/kimiStroke';
 import { iconForStepStatus, iconForTone } from '../icons/semanticIcons';
 import { InlineMarkdown } from './InlineMarkdown';
 import { WidgetEmbed } from './WidgetEmbed';
 import { t } from '../i18n';
+import { isRecommendationChrome } from '../lib/recommendations';
 import { changedBlockIndices } from '../lib/revision';
 import type {
   CalloutBlock,
@@ -31,53 +33,50 @@ type BlockRendererProps = {
   revision?: DocumentRevision | null;
 };
 
-/** Long answers: keep lead sections open; collapse later H2/H3 sections (any scenario). */
-const COLLAPSE_AFTER_SECTIONS = 2;
-const MIN_BLOCKS_FOR_COLLAPSE = 8;
+/**
+ * Long answers: render every section inline — kimi.ai never folds answer H2s
+ * into bordered boxes (live `/chat` shows all headings in flow).
+ * Exception: heading with IconToken ``check`` + body → cream tip card
+ * (typed chrome, not title phrase match — 055 / OpenAI·Anthropic·Kimi 2026).
+ */
 
-type DocSection = {
-  headingIndex: number | null;
-  bodyIndices: number[];
-};
+type DocSegment =
+  | { kind: 'single'; index: number }
+  | { kind: 'recommendations'; headingIndex: number; bodyIndices: readonly number[] };
 
-function groupDocSections(blocks: readonly ContentBlock[]): DocSection[] {
-  const sections: DocSection[] = [];
-  let current: DocSection = { headingIndex: null, bodyIndices: [] };
-  const push = () => {
-    if (current.headingIndex !== null || current.bodyIndices.length > 0) {
-      sections.push(current);
+function segmentDocumentBlocks(blocks: readonly ContentBlock[]): DocSegment[] {
+  const segments: DocSegment[] = [];
+  let index = 0;
+  while (index < blocks.length) {
+    const block = blocks[index];
+    if (block?.type === 'heading' && isRecommendationChrome(block.icon)) {
+      const headingIndex = index;
+      const bodyIndices: number[] = [];
+      index += 1;
+      while (index < blocks.length && blocks[index]?.type !== 'heading') {
+        bodyIndices.push(index);
+        index += 1;
+      }
+      segments.push({ kind: 'recommendations', headingIndex, bodyIndices });
+      continue;
     }
-  };
-  blocks.forEach((block, index) => {
-    if (block.type === 'heading' && block.level <= 2) {
-      push();
-      current = { headingIndex: index, bodyIndices: [] };
-      return;
-    }
-    current.bodyIndices.push(index);
-  });
-  push();
-  return sections;
+    segments.push({ kind: 'single', index });
+    index += 1;
+  }
+  return segments;
 }
 
 export const BlockRenderer = memo(({ document, revision }: BlockRendererProps) => {
   const changed = useMemo(() => changedBlockIndices(revision), [revision]);
-  const sections = useMemo(() => groupDocSections(document.blocks), [document.blocks]);
   const sourceRefs = document.meta.source_refs ?? [];
-  const collapseTail =
-    sections.length > COLLAPSE_AFTER_SECTIONS && document.blocks.length >= MIN_BLOCKS_FOR_COLLAPSE;
+  const segments = useMemo(() => segmentDocumentBlocks(document.blocks), [document.blocks]);
 
-  const renderIndexed = (index: number) => {
-    const block = document.blocks[index];
-    if (!block) return null;
-    const key = `${block.type}-${index}`;
-    if (!changed.has(index)) {
-      return <BlockView key={key} block={block} sourceRefs={sourceRefs} />;
-    }
+  const wrapChanged = (index: number, node: ReactNode) => {
+    if (!changed.has(index)) return node;
     return (
-      <div key={key} className="doc-block-changed" data-revision="changed">
+      <div className="doc-block-changed" data-revision="changed">
         <span className="sr-only">{t('revision.changedBlock')}</span>
-        <BlockView block={block} sourceRefs={sourceRefs} />
+        {node}
       </div>
     );
   };
@@ -90,35 +89,45 @@ export const BlockRenderer = memo(({ document, revision }: BlockRendererProps) =
         </header>
       )}
       <div className="doc-blocks">
-        {sections.map((section, sectionIndex) => {
-          const collapse =
-            collapseTail &&
-            sectionIndex >= COLLAPSE_AFTER_SECTIONS &&
-            section.headingIndex !== null;
-          const heading =
-            section.headingIndex !== null ? document.blocks[section.headingIndex] : null;
-          const body = section.bodyIndices.map(renderIndexed);
-          if (collapse && heading && heading.type === 'heading') {
+        {segments.map(segment => {
+          if (segment.kind === 'single') {
+            const block = document.blocks[segment.index];
+            if (!block) return null;
             return (
-              <details key={`section-${sectionIndex}`} className="doc-section is-collapsible">
-                <summary className="doc-section-summary">
-                  <HeadingView block={heading} sourceRefs={sourceRefs} />
-                </summary>
-                <div className="doc-section-body">{body}</div>
-              </details>
+              <div key={`${block.type}-${segment.index}`}>
+                {wrapChanged(segment.index, <BlockView block={block} sourceRefs={sourceRefs} />)}
+              </div>
             );
           }
+          const body = segment.bodyIndices.map(bodyIndex => {
+            const block = document.blocks[bodyIndex];
+            if (!block) return null;
+            return (
+              <div key={`${block.type}-${bodyIndex}`}>
+                {wrapChanged(bodyIndex, <BlockView block={block} sourceRefs={sourceRefs} />)}
+              </div>
+            );
+          });
           return (
-            <div key={`section-${sectionIndex}`} className="doc-section">
-              {section.headingIndex !== null ? renderIndexed(section.headingIndex) : null}
-              {body}
-            </div>
+            <RecommendationsCard key={`rec-${segment.headingIndex}`}>{body}</RecommendationsCard>
           );
         })}
       </div>
     </article>
   );
 });
+
+function RecommendationsCard({ children }: { children: ReactNode }) {
+  return (
+    <aside className="block-recommendations" aria-label={t('doc.recommendations')}>
+      <header className="block-recommendations__header">
+        <IconLightbulb size={18} aria-hidden className="block-recommendations__icon" />
+        <span className="block-recommendations__title">{t('doc.recommendations')}</span>
+      </header>
+      <div className="block-recommendations__body">{children}</div>
+    </aside>
+  );
+}
 
 type WithSources = { sourceRefs: readonly string[] };
 
@@ -198,9 +207,10 @@ const ListView = memo(({ block, sourceRefs }: { block: ListBlock } & WithSources
       {block.items.map((item, i) => {
         const { text, level } = listItemPresentation(item);
         const nestedClass = level > 0 ? ` nested level-${level}` : '';
+        const hasIcon = Boolean(item.icon);
         return (
-          <li key={i} className={`block-list-item${nestedClass}`}>
-            <TokenIcon token={item.icon} size={16} />
+          <li key={i} className={`block-list-item${nestedClass}${hasIcon ? ' has-token-icon' : ''}`}>
+            {hasIcon ? <TokenIcon token={item.icon} size={16} /> : null}
             <span>
               {item.emphasis && <strong>{item.emphasis}</strong>}
               {item.emphasis && ' — '}
@@ -240,26 +250,48 @@ const TableView = memo(({ block, sourceRefs }: { block: TableBlock } & WithSourc
   </div>
 ));
 
-const CalloutView = memo(({ block, sourceRefs }: { block: CalloutBlock } & WithSources) => (
-  <aside className={`block-callout tone-${block.tone}`}>
-    <TokenIcon token={block.icon ?? iconForTone(block.tone)} size={18} animated />
-    <div>
-      {block.title && (
-        <strong>
-          <InlineMarkdown text={block.title} sourceRefs={sourceRefs} />
-        </strong>
-      )}
-      <p>
-        <InlineMarkdown text={block.body} sourceRefs={sourceRefs} />
-      </p>
-    </div>
-  </aside>
-));
+const CalloutView = memo(({ block, sourceRefs }: { block: CalloutBlock } & WithSources) => {
+  if (isRecommendationChrome(block.icon)) {
+    return (
+      <aside className="block-recommendations" aria-label={t('doc.recommendations')}>
+        <header className="block-recommendations__header">
+          <IconLightbulb size={18} aria-hidden className="block-recommendations__icon" />
+          <span className="block-recommendations__title">{t('doc.recommendations')}</span>
+        </header>
+        <div className="block-recommendations__body">
+          <p className="block-recommendations__text">
+            <InlineMarkdown text={block.body} sourceRefs={sourceRefs} />
+          </p>
+        </div>
+      </aside>
+    );
+  }
+  return (
+    <aside className={`block-callout tone-${block.tone}`}>
+      <TokenIcon token={block.icon ?? iconForTone(block.tone)} size={18} animated />
+      <div>
+        {block.title && (
+          <strong>
+            <InlineMarkdown text={block.title} sourceRefs={sourceRefs} />
+          </strong>
+        )}
+        <p>
+          <InlineMarkdown text={block.body} sourceRefs={sourceRefs} />
+        </p>
+      </div>
+    </aside>
+  );
+});
 
 const CodeView = memo(({ block }: { block: CodeBlock }) => (
-  <pre className="block-code">
-    <code data-language={block.language}>{block.content}</code>
-  </pre>
+  <figure className="block-code">
+    <figcaption className="block-code__meta">
+      <span className="block-code__lang">{block.language}</span>
+    </figcaption>
+    <pre className="block-code__pre">
+      <code data-language={block.language}>{block.content}</code>
+    </pre>
+  </figure>
 ));
 
 const FormulaView = memo(({ block }: { block: FormulaBlock }) => (
@@ -273,8 +305,10 @@ const KeyValueView = memo(({ block, sourceRefs }: { block: KeyValueBlock } & Wit
     {block.items.map(item => (
       <div className="kv-row" key={`${item.label}-${item.value}`}>
         <dt>
-          <TokenIcon token={item.icon} size={14} />
-          <InlineMarkdown text={item.label} sourceRefs={sourceRefs} />
+          <TokenIcon token={item.icon} size={16} />
+          <span className="kv-row__label">
+            <InlineMarkdown text={item.label} sourceRefs={sourceRefs} />
+          </span>
         </dt>
         <dd>
           <InlineMarkdown text={item.value} sourceRefs={sourceRefs} />

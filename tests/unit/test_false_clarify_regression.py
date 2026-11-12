@@ -84,7 +84,86 @@ def test_gate_demotes_low_confidence_clarify_even_with_gap() -> None:
 @pytest.mark.parametrize("underspec", ("open_text", "discrete_choice"))
 def test_gate_keeps_confident_clarify_with_named_gap(underspec: str) -> None:
     raw = _intent(underspecification_kind=underspec, confidence=CLARIFY_MIN_CONFIDENCE)
-    assert ClarificationGatePolicy.apply(raw) == raw
+    # Thread evidence (prior) keeps a justified product-slot clarify.
+    assert ClarificationGatePolicy.apply(raw, has_prior_dialog=True, user_text="какой формат?") == raw
+
+
+def test_gate_demotes_ungrounded_entity_disambiguation_to_no_data_path() -> None:
+    """W10 3b: «Какой протокол у Зенита?» with empty thread must not mint a menu."""
+    raw = _intent(
+        underspecification_kind="discrete_choice",
+        requires_user_choice=True,
+        candidate_capabilities=("user_choice",),
+        confidence=0.95,
+        grounding="optional",
+    )
+    gated = ClarificationGatePolicy.apply(
+        raw,
+        has_prior_dialog=False,
+        has_attachment_context=False,
+        user_text="Какой протокол использует Зенит?",
+    )
+    assert gated.task_kind == "knowledge_request"
+    assert gated.requires_user_choice is False
+    assert gated.underspecification_kind == "none"
+    assert gated.grounding == "required"
+    assert gated.requires_mcp is True
+    assert "ungrounded_entity_disambiguation" in gated.reasoning
+
+
+@pytest.mark.parametrize("grounding", ("optional", "none"))
+def test_gate_bumps_fact_ask_on_empty_thread_to_required(grounding: str) -> None:
+    """Intent may skip clarify and answer inventively — still force retrieve→no-data."""
+    raw = _intent(
+        task_kind="knowledge_request",
+        underspecification_kind="none",
+        requires_user_choice=False,
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        grounding=grounding,  # type: ignore[arg-type]
+        requires_mcp=True,
+    )
+    gated = ClarificationGatePolicy.apply(
+        raw,
+        has_prior_dialog=False,
+        has_attachment_context=False,
+        user_text="Какой протокол использует Зенит?",
+    )
+    assert gated.task_kind == "knowledge_request"
+    assert gated.grounding == "required"
+    assert gated.requires_mcp is True
+    assert "empty_thread_fact" in gated.reasoning
+
+
+def test_gate_keeps_compose_optional_on_empty_thread() -> None:
+    raw = _intent(
+        task_kind="knowledge_request",
+        candidate_capabilities=("compose",),
+        grounding="none",
+        requires_mcp=False,
+    )
+    gated = ClarificationGatePolicy.apply(
+        raw,
+        has_prior_dialog=False,
+        user_text="расскажи анекдот?",
+    )
+    assert gated.grounding == "none"
+
+
+def test_gate_keeps_discrete_choice_when_prior_supplies_options() -> None:
+    raw = _intent(
+        underspecification_kind="discrete_choice",
+        requires_user_choice=True,
+        confidence=0.9,
+    )
+    assert (
+        ClarificationGatePolicy.apply(
+            raw,
+            has_prior_dialog=True,
+            user_text="Какой протокол использует Зенит?",
+        )
+        == raw
+    )
 
 
 def test_gate_ignores_non_clarify_kinds() -> None:

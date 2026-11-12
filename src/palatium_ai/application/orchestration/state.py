@@ -19,7 +19,7 @@ from palatium_ai.domain.memory.contextualizer import ContextualizerTaskResult
 from palatium_ai.domain.memory.recall import MemoryRecallBundle
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies import EffectiveRoutingIntent
-from palatium_ai.domain.policies.types import PresentationOwner
+from palatium_ai.domain.policies.types import ComposerMode, PresentationOwner
 
 
 class AgentGraphState(TypedDict, total=False):
@@ -81,3 +81,5 @@ class AgentGraphState(TypedDict, total=False):
     # Single writer for this turn (PresentationOwnershipPolicy); formatter = safe default.
     presentation_owner: PresentationOwner
     presentation_owner_reason: str
+    #: Explicit composer mode pills (Track P); applied in Continuity before routing.
+    composer_mode: ComposerMode

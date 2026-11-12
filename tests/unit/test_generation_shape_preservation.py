@@ -92,11 +92,27 @@ def _formatter_input(
         (("compose",), _STRUCTURED, "content_generation"),
         (("draft",), _JOKE, "document_generation"),
         ((), _JOKE, "plain_text"),
-        ((), _STRUCTURED, "brand_sections_icons"),
+        # Structured GFM must stay plain_text — brand LLM rewrite flashes a thinner answer.
+        ((), _STRUCTURED, "plain_text"),
     ),
 )
 def test_style_hint_preserves_generated_shape(caps: tuple[str, ...], worker: str, expected: str) -> None:
     assert resolve_style_hint(_formatter_input(worker=worker, caps=caps)) == expected
+
+
+def test_short_structured_worker_skips_formatter_llm() -> None:
+    """Regression: full draft then sparse rewrite on short list/heading answers."""
+    result = try_formatter_fast_path(
+        task_input=_formatter_input(worker=_STRUCTURED),
+        task_kind="knowledge_request",
+        selected_strategy="reason_only",
+        worker_confidence=0.9,
+    )
+    assert result is not None
+    assert result.output is not None
+    plain = result.output.plain_text()
+    assert "Риск" in plain
+    assert "продлить" in plain
 
 
 def test_style_hint_long_structured_stays_plain() -> None:
@@ -139,7 +155,10 @@ def test_passthrough_short_plain_answer_skips_llm() -> None:
     (
         ({"worker_confident": False}, "worker_not_confident"),
         ({"source_chars": FORMATTER_PASSTHROUGH_MAX_CHARS + 1}, "source_exceeds_passthrough"),
-        ({"source_is_plain_prose": False}, "source_has_structure"),
+        (
+            {"source_is_plain_prose": False, "preserve_shaped_worker": False},
+            "source_has_structure",
+        ),
         ({"locale_matches": False}, "locale_mismatch"),
         ({"requires_review": True}, "requires_review"),
         ({"revision_requested": True}, "revision_requested"),

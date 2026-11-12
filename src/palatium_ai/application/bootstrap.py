@@ -23,6 +23,7 @@ from palatium_ai.application.services.memory_extract_hitl_service import MemoryE
 from palatium_ai.application.services.memory_forget_service import MemoryForgetService
 from palatium_ai.application.services.memory_save_service import MemorySaveService
 from palatium_ai.application.services.memory_verify_service import MemoryVerifyService
+from palatium_ai.application.services.project_service import ProjectService
 from palatium_ai.application.services.retention import retention_windows_from_settings
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.application.services.session_timeline_service import SessionTimelineService
@@ -45,6 +46,7 @@ from palatium_ai.infrastructure.database.init_db import (
     ensure_database_and_schema,
 )
 from palatium_ai.infrastructure.database.message_feedback_repository import PostgresMessageFeedbackRepository
+from palatium_ai.infrastructure.database.project_repository import PostgresProjectRepository
 from palatium_ai.infrastructure.database.repositories import (
     McpToolCallRepository,
     SessionRepository,
@@ -137,6 +139,7 @@ class AppResources:
     attachment_service: AttachmentService | None = None
     vision_images: VisionImageService | None = None
     feedback_service: FeedbackService | None = None
+    project_service: ProjectService | None = None
 
     # Legacy aliases (prefer memory_extract*).
     @property
@@ -364,6 +367,10 @@ async def startup(settings: Settings) -> AppResources:
     session_repository = SessionRepository(session_factory)
     mcp_tool_call_repository = McpToolCallRepository(session_factory)
     session_service = SessionService(session_repository)
+    project_service = ProjectService(
+        PostgresProjectRepository(session_factory),
+        session_service=session_service,
+    )
     hitl_signing = _hitl_signing_secret(settings)
     hitl_service = build_hitl_service(
         redis_client=redis_client,
@@ -464,9 +471,17 @@ async def startup(settings: Settings) -> AppResources:
     )
     mcp_registry.assert_local_handlers_wired()
 
+    async def _clear_edit_checkpoints(*, thread_id: str) -> int:
+        from palatium_ai.infrastructure.retention.checkpointer_handler import (
+            clear_checkpoints_for_thread,
+        )
+
+        return await clear_checkpoints_for_thread(session_factory, thread_id=thread_id)
+
     session_timeline_service = SessionTimelineService(
         dialog_turn_store=dialog_turn_store,
         mcp_tool_call_repository=mcp_tool_call_repository,
+        clear_checkpoints=_clear_edit_checkpoints,
     )
     # Reuse the instances the graph's memory-mutation gate already stashed pendings in;
     # a second pair would mint cards whose task ids no service can resume (060).
@@ -555,6 +570,7 @@ async def startup(settings: Settings) -> AppResources:
         attachment_service=attachment_service,
         vision_images=vision_images,
         feedback_service=feedback_service,
+        project_service=project_service,
     )
 
 

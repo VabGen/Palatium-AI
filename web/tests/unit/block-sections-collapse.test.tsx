@@ -1,9 +1,12 @@
 /**
- * Long multi-section answers collapse tail H2 sections (progressive disclosure).
+ * kimi.ai parity: long multi-section answers render every H2 inline.
+ * The chat view never folds answer sections into bordered `<details>` boxes.
+ * Recommendation sections are the exception: cream tip card, not a collapsed details.
  */
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BlockRenderer } from '../../src/components/BlockRenderer';
+import { t } from '../../src/i18n';
 import type { ContentBlock, ContentDocument } from '../../src/types/contentDocument';
 
 function longAnalysisDoc(): ContentDocument {
@@ -14,7 +17,7 @@ function longAnalysisDoc(): ContentDocument {
     { type: 'paragraph', text: 'Абзац 2.' },
     { type: 'heading', level: 2, text: 'Риски' },
     { type: 'paragraph', text: 'Абзац 3.' },
-    { type: 'heading', level: 2, text: 'Рекомендации' },
+    { type: 'heading', level: 2, text: 'Рекомендации', icon: 'check' },
     { type: 'paragraph', text: 'Абзац 4.' },
     { type: 'list', style: 'unordered', items: [{ text: 'пункт' }] },
   ];
@@ -33,11 +36,18 @@ function longAnalysisDoc(): ContentDocument {
   };
 }
 
-describe('BlockRenderer section collapse', () => {
-  it('collapses sections after the first two when the document is long', () => {
+describe('BlockRenderer section flow', () => {
+  it('renders every section inline, with no collapsed boxes', () => {
     const { container } = render(<BlockRenderer document={longAnalysisDoc()} />);
-    const collapsible = container.querySelectorAll('details.doc-section.is-collapsible');
-    expect(collapsible.length).toBeGreaterThanOrEqual(1);
-    expect(collapsible[0].querySelector('summary')?.textContent).toContain('Риски');
+    expect(container.querySelectorAll('details.doc-section.is-collapsible')).toHaveLength(0);
+    const headings = [...container.querySelectorAll('.block-heading')].map(node =>
+      node.textContent?.trim()
+    );
+    expect(headings).toEqual(expect.arrayContaining(['Введение', 'Ключевые положения', 'Риски']));
+    expect(headings).not.toContain('Рекомендации');
+    expect(container.querySelector('.block-recommendations')).not.toBeNull();
+    expect(container.querySelector('.block-recommendations__title')?.textContent).toBe(
+      t('doc.recommendations')
+    );
   });
 });

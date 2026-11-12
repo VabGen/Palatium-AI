@@ -22,6 +22,23 @@ def test_review_copy_english_default() -> None:
     assert labels["approve"] == "Approve"
 
 
+def test_review_copy_und_locale_follows_cyrillic_prose() -> None:
+    """``und`` + Russian answer prose must not mint English quality-gate chrome."""
+    copy = HitlCopyPolicy.review(
+        locale="und",
+        confidence=0.5,
+        prose_hint="Обзор предоставленных документов",
+    )
+    assert copy.title == "Требуется проверка"
+    assert "уверенность" in copy.body
+    assert copy.options[0].label == "Подтвердить"
+
+
+def test_choice_fallback_title_und_cyrillic() -> None:
+    assert HitlCopyPolicy.choice_fallback_title(locale="und", prose_hint="Привет, Геннадий!") == "Выберите один вариант"
+    assert HitlCopyPolicy.choice_fallback_title(locale="en-US") == "Choose an option"
+
+
 def test_tool_approval_russian() -> None:
     copy = HitlCopyPolicy.tool_approval(
         locale="ru",

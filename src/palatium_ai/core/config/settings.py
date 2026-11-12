@@ -23,6 +23,7 @@ from .logging import LoggingConfig
 from .mcp import MCPConfig
 from .memory import MemoryConfig
 from .observability import ObservabilityConfig
+from .orchestration import OrchestrationConfig
 from .project_context import ProjectContextConfig
 from .retention import RetentionConfig
 from .security import SecurityConfig
@@ -52,6 +53,7 @@ class Settings(BaseConfig):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     project_context: ProjectContextConfig = Field(default_factory=ProjectContextConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     attachments: AttachmentConfig = Field(default_factory=AttachmentConfig)

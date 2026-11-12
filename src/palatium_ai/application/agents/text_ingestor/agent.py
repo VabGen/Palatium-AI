@@ -54,6 +54,14 @@ class TextIngestorAgent(BaseAgent):
     def get_available_tools(self) -> list[str]:
         return list(self._config.allowed_tools)
 
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based ingest gate — success without chunks is not deliverable."""
+        if not isinstance(output.output, TextIngestorOutput):
+            return False
+        if output.status != "success":
+            return True
+        return bool(output.output.chunks)
+
     @traceable(name="text_ingestor.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")

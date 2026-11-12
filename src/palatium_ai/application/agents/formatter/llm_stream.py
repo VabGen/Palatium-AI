@@ -34,8 +34,16 @@ async def call_formatter_llm(
     max_tokens: int,
     worker_summary: str = "",
     allow_worker_fallback: bool = True,
+    mute_stream: bool = False,
 ) -> tuple[LLMCompletion, str]:
-    """Stream GFM when an SSE bridge is bound; otherwise one-shot text completion."""
+    """Stream GFM when an SSE bridge is bound; otherwise one-shot text completion.
+
+    ``mute_stream`` buffers the completion without SSE deltas — used when a typed
+    ``block_delta`` preview is already on screen and a Markdown restart would snap.
+    """
+    if mute_stream:
+        return await complete(harness=harness, config=config, messages=messages, max_tokens=max_tokens)
+
     emitter = FormatterMarkdownEmitter.bind()
     if emitter is None:
         return await complete(harness=harness, config=config, messages=messages, max_tokens=max_tokens)

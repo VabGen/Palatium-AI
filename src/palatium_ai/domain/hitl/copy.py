@@ -42,6 +42,8 @@ class HitlToolPausedCopy:
 
 
 _RU_PREFIXES: Final[tuple[str, ...]] = ("ru", "be", "uk", "kk")
+#: Cyrillic block — used when locale is ``und``/empty but the answer prose is already RU.
+_CYRILLIC_RANGE: Final[tuple[int, int]] = (0x0400, 0x04FF)
 
 
 def _is_cyrillic_locale(locale: str | None) -> bool:
@@ -52,8 +54,33 @@ def _is_cyrillic_locale(locale: str | None) -> bool:
     return primary in _RU_PREFIXES
 
 
+def _prose_looks_cyrillic(*hints: str | None) -> bool:
+    """True when any hint carries Cyrillic letters (und locale still needs RU chrome)."""
+    for hint in hints:
+        text = (hint or "").strip()
+        if not text:
+            continue
+        for char in text:
+            code = ord(char)
+            if _CYRILLIC_RANGE[0] <= code <= _CYRILLIC_RANGE[1]:
+                return True
+    return False
+
+
+def _use_cyrillic_copy(locale: str | None, *prose_hints: str | None) -> bool:
+    """Locale wins; ``und``/empty falls back to prose script so RU answers never get EN HITL."""
+    if _is_cyrillic_locale(locale):
+        return True
+    raw = (locale or "").strip().lower().replace("_", "-")
+    primary = raw.split("-", 1)[0] if raw else ""
+    # Explicit Latin locales must stay English even if a proper noun has Cyrillic.
+    if primary and primary not in ("und", "zxx") and primary not in _RU_PREFIXES:
+        return False
+    return _prose_looks_cyrillic(*prose_hints)
+
+
 class HitlCopyPolicy:
-    """Pure copy factory keyed by reply locale."""
+    """Pure copy factory keyed by reply locale (+ prose fallback when locale is und)."""
 
     @classmethod
     def review(
@@ -62,9 +89,10 @@ class HitlCopyPolicy:
         locale: str | None,
         confidence: float,
         document_title: str | None = None,
+        prose_hint: str | None = None,
     ) -> HitlReviewCopy:
         title = (document_title or "").strip()
-        if _is_cyrillic_locale(locale):
+        if _use_cyrillic_copy(locale, title, prose_hint):
             return HitlReviewCopy(
                 title=title or "Требуется проверка",
                 body=(
@@ -93,9 +121,10 @@ class HitlCopyPolicy:
         tool_name: str,
         side_effect: str,
         argument_preview: str,
+        prose_hint: str | None = None,
     ) -> HitlToolApprovalCopy:
         preview = argument_preview.strip()[:500] or "(no arguments)"
-        if _is_cyrillic_locale(locale):
+        if _use_cyrillic_copy(locale, prose_hint, argument_preview):
             return HitlToolApprovalCopy(
                 title=f"Разрешить инструмент: {server_name}.{tool_name}",
                 body=(f"Побочный эффект={side_effect}. Инструмент не выполнится, пока вы не подтвердите. Аргументы: {preview}"),
@@ -115,8 +144,9 @@ class HitlCopyPolicy:
         server_name: str,
         tool_name: str,
         side_effect: str,
+        prose_hint: str | None = None,
     ) -> HitlToolPausedCopy:
-        if _is_cyrillic_locale(locale):
+        if _use_cyrillic_copy(locale, prose_hint):
             return HitlToolPausedCopy(
                 title="Требуется подтверждение инструмента",
                 heading="Нужно подтверждение перед вызовом",
@@ -130,6 +160,18 @@ class HitlCopyPolicy:
             heading="Human approval required before tool call",
             body=(f"Paused before MCP `{server_name}.{tool_name}` (side_effect={side_effect}). Choose Allow or Deny."),
         )
+
+    @classmethod
+    def choice_fallback_title(
+        cls,
+        *,
+        locale: str | None,
+        prose_hint: str | None = None,
+    ) -> str:
+        """Default user_choice title when the document has no title of its own."""
+        if _use_cyrillic_copy(locale, prose_hint):
+            return "Выберите один вариант"
+        return "Choose an option"
 
 
 def _review_options_ru() -> tuple[HITLOption, ...]:

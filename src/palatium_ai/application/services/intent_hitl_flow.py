@@ -415,20 +415,21 @@ class IntentHitlFlow:
                 )
             )
 
+        from palatium_ai.application.orchestration import selectors as graph_selectors
+
         formatted = await self.attach_hitl_cards(
             formatted,
             thread_id=thread_id,
             task_id=task_id,
             user_id=user_id,
             org_id=org_id,
+            response_shape=str(graph_selectors.resolved_response_shape(final_state)),
         )
         # W7b: a resumed turn that re-answers a rejected document is a revision; a plain
         # choice resume is a new document (RevisionPolicy). One computation feeds both the
         # persisted payload and the caller, so live and hydrated turns never disagree.
         revision = turn_revision(formatted, final_state)
         if self._dialog_turn_store is not None:
-            from palatium_ai.application.orchestration import selectors as graph_selectors
-
             await self._dialog_turn_store.append_turn(
                 thread_id=thread_id,
                 role="assistant",
@@ -689,6 +690,7 @@ class IntentHitlFlow:
         dialog: DialogTurnWindow | None = None,
         file_reference: str = "none",
         execution_error: str | None = None,
+        response_shape: str | None = None,
     ) -> FormatterTaskResult:
         """Сервер создаёт HITL-карточки; LLM actions не являются источником истины.
 
@@ -734,6 +736,7 @@ class IntentHitlFlow:
             org_id=org_id,
             file_reference=file_reference,
             execution_error=execution_error,
+            hint_text=user_text or "",
         )
         if minted is not None:
             file_card, document = minted
@@ -746,6 +749,7 @@ class IntentHitlFlow:
             task_kind=task_kind,
             requires_user_choice=requires_user_choice,
             has_turn_attachments=has_turn_attachments,
+            response_shape=response_shape,
         )
 
         if (
@@ -787,6 +791,7 @@ class IntentHitlFlow:
                     task_kind=task_kind,
                     requires_user_choice=True,
                     has_turn_attachments=has_turn_attachments,
+                    response_shape=response_shape,
                 )
 
         logger.info(
@@ -837,15 +842,20 @@ class IntentHitlFlow:
             choice = await self._hitl_service.create_choice_card(
                 thread_id=thread_id,
                 task_id=task_id,
-                title=document.title or "Choose an option",
+                title=(document.title or "").strip(),
                 body=None,
                 actions=plan.choice_actions,
                 owner_user_id=user_id,
                 org_id=org_id,
+                locale=document.locale,
+                prose_hint=document.plain_text(limit=400),
             )
             cards.append(choice)
 
-        if plan.mint_quality_review:
+        # W10.1 P2 (choice A): a file-choice clarification must preempt the quality
+        # review card. Showing both at once made users confirm a draft before picking
+        # the file the draft was about (020 — one interactive decision per turn).
+        if plan.mint_quality_review and file_card is None:
             cards.append(
                 await self._hitl_service.create_review_card(
                     thread_id=thread_id,
@@ -874,12 +884,17 @@ class IntentHitlFlow:
         org_id: str | None,
         file_reference: str,
         execution_error: str | None,
+        hint_text: str = "",
     ) -> tuple[HITLCardView, ContentDocument] | None:
         """Upgrade an ambiguous re-read refusal into a card of the thread's files.
 
         Only a turn that *was* a thread-file re-read (``file_reference=thread_file``)
         and failed with ``attachment_reference_unresolved`` qualifies: the worker has
         already refused to guess, so the card asks the user instead (020, 055).
+
+        ``hint_text`` is the user's ask: without it a name-subset ambiguous
+        (``several_names_in_turn_text``) re-resolves as ``several_thread_files`` and
+        the card wrongly lists every upload (W10.1 P0.3).
         """
         from palatium_ai.domain.agents.researcher import ATTACHMENT_REFERENCE_UNRESOLVED
         from palatium_ai.domain.hitl.option_synthesis import DiscreteChoiceSynthesisPolicy
@@ -889,7 +904,11 @@ class IntentHitlFlow:
         resolver = self._file_reference_resolver
         if resolver is None or not (user_id or "").strip():
             return None
-        resolution = await resolver.resolve(user_id=user_id or "", thread_id=thread_id)
+        resolution = await resolver.resolve(
+            user_id=user_id or "",
+            thread_id=thread_id,
+            hint_text=hint_text,
+        )
         if resolution.status != "ambiguous":
             # ``no_match`` means the ask named another document: offering this
             # thread's files would invite the wrong read (fail-closed, 020).
@@ -907,11 +926,13 @@ class IntentHitlFlow:
         card = await self._hitl_service.create_choice_card(
             thread_id=thread_id,
             task_id=task_id,
-            title=document.title or FileChoiceCardPolicy.card_title(),
+            title=(document.title or FileChoiceCardPolicy.card_title()).strip(),
             body=None,
             actions=actions,
             owner_user_id=user_id,
             org_id=org_id,
+            locale=document.locale,
+            prose_hint=document.plain_text(limit=400),
         )
         logger.info(
             "hitl.file_choice_card",

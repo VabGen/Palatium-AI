@@ -169,9 +169,11 @@ async def test_resolved_reference_reads_the_file_without_an_arguments_llm_call()
     assert call.arguments["attachment_id"] == str(_ATTACHMENT_ID)
     # Actor identity is bound from the agent context, never authored by the model (020).
     assert call.arguments["user_id"] == "actor-user"
-    # Deterministic arguments → the only LLM call is the synthesis step.
-    assert len(llm.calls) == 1
+    # Deterministic arguments + unwrapped body — no synthesis LLM (W10.2).
+    assert llm.calls == []
     assert "UNTRUSTED_TOOL_OUTPUT" not in output.output.summary
+    assert "read_attachment" not in output.output.summary
+    assert "Требования к системе" in output.output.summary
 
 
 @pytest.mark.asyncio()

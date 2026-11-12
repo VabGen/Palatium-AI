@@ -116,8 +116,12 @@ class HitlService:
         owner_user_id: str | None = None,
         org_id: str | None = None,
         ttl_seconds: int | None = None,
+        locale: str | None = None,
+        prose_hint: str | None = None,
     ) -> HITLCardView:
         """Mint a clickable multi-option card (user picks one alternative)."""
+        from palatium_ai.domain.hitl.copy import HitlCopyPolicy
+
         options_src = tuple(actions)
         if len(options_src) < 1:
             raise ValueError("create_choice_card requires at least one action")
@@ -140,12 +144,16 @@ class HitlService:
             for action in options_src
         )
         subject = HitlRiskPolicy.binding_subject(owner_user_id=owner, escalated=False)
+        resolved_title = (title or "").strip() or HitlCopyPolicy.choice_fallback_title(
+            locale=locale,
+            prose_hint=prose_hint or body,
+        )
         card = HITLCardView(
             card_id=card_id,
             thread_id=thread_id,
             task_id=task_id,
             purpose="user_choice",
-            title=(title or "Choose an option")[:300],
+            title=resolved_title[:300],
             body=body,
             options=self._stamp_options(
                 hitl_options,
@@ -206,6 +214,8 @@ class HitlService:
             locale=document.locale,
             confidence=confidence,
             document_title=document.title,
+            # ``und`` locale still needs RU chrome when the answer prose is Cyrillic.
+            prose_hint=document.plain_text(limit=400),
         )
         card = HITLCardView(
             card_id=card_id,

@@ -80,8 +80,6 @@ class ExecutionPlanner:
             task_input.task_kind,
             requires_mcp=task_input.requires_mcp,
         )
-        if task_input.requires_mcp:
-            return _mcp_unresolved_plan()
         adaptive_on = is_adaptive_grounding_enabled(user_id_var.get())
         if task_input.has_attachment_context:
             return _attachment_grounded_plan(
@@ -93,6 +91,12 @@ class ExecutionPlanner:
         ):
             return _prior_grounded_plan(
                 "Parallel research half: Continuity trusts dialog prior; answer without search_knowledge."
+            )
+        if task_input.requires_mcp:
+            return _unresolved_mcp_or_knowledge_plan(
+                grounding=task_input.grounding,
+                executable_kind=executable_kind,
+                parallel=True,
             )
         if adaptive_on and task_input.grounding == "none":
             return ToolExecutionPlan(
@@ -162,13 +166,15 @@ class ExecutionPlanner:
 
 
 def _file_reread_requested(task_input: ContextWeaverInput) -> bool:
-    """True when the turn re-reads a thread file and owns no fence of its own.
+    """True when Continuity set ``file_reference=thread_file`` (storage re-read).
 
-    A fresh upload wins the turn (the fence already carries its text), so the axis
-    alone never re-reads storage next to a new document (055). Coverage is a separate
-    decision — the caller applies the sticky rollout gate before dispatching.
+    Sticky SB2 rehydrate can set ``has_attachment_context`` from a *prior* fence
+    without a fresh upload; that used to suppress ``read_attachment`` and the
+    model answered «файл не приложен» after a successful unique-name re-read
+    (W10.2 att_partial_name). The thread_file axis is the SoT for storage reads:
+    Continuity already prefers a true this-turn fence over a stale re-read.
     """
-    return task_input.file_reference == "thread_file" and not task_input.has_attachment_context
+    return task_input.file_reference == "thread_file"
 
 
 def _file_reread_plan(*, plural: bool = False) -> ToolExecutionPlan:
@@ -258,7 +264,11 @@ def _knowledge_or_tool_plan(
     ):
         return _prior_grounded_plan("Continuity trusts dialog prior; answer from prior_context without search_knowledge.")
     if task_input.requires_mcp:
-        return _mcp_unresolved_plan()
+        return _unresolved_mcp_or_knowledge_plan(
+            grounding=task_input.grounding,
+            executable_kind=executable_kind,
+            parallel=False,
+        )
     caps = {c.strip().lower() for c in task_input.candidate_capabilities}
     if CONTENT_GENERATION_CAPABILITY in caps:
         # Creative text is generated, not retrieved: corpus hits would only pull the
@@ -305,6 +315,30 @@ def _mcp_unresolved_plan() -> ToolExecutionPlan:
             "requires_mcp=true but no MCP capability resolved; worker must fail closed instead of inventing tool results."
         ),
     )
+
+
+def _unresolved_mcp_or_knowledge_plan(
+    *,
+    grounding: str,
+    executable_kind: TaskKind,
+    parallel: bool,
+) -> ToolExecutionPlan:
+    """``requires_mcp`` without a domain binding.
+
+    ClarificationGate sets ``requires_mcp=True`` + ``grounding=required`` for empty-thread
+    fact asks so the turn must retrieve then refuse — not invent (W10 3b). The old
+    ``_mcp_unresolved_plan`` short-circuited to ``reason_only``, and Researcher fell through
+    to an unconstrained LLM answer. Platform ``search_knowledge`` is the evidence path
+    when no EDMS/analytics tool bound; empty hits → GroundingPolicy clarify.
+    """
+    if GroundingPolicy.coerce_mode(grounding) == "required":
+        prefix = "Parallel research half: " if parallel else ""
+        return _search_knowledge_plan(
+            f"{prefix}requires_mcp without domain binding; grounding=required → "
+            f"retrieve via platform.search_knowledge then refuse on empty "
+            f"(executable_kind={executable_kind})."
+        )
+    return _mcp_unresolved_plan()
 
 
 def _search_knowledge_plan(rationale: str) -> ToolExecutionPlan:

@@ -25,6 +25,10 @@ ADR — не бюрократия, а страховка от повторног
 - Один ADR = одно решение. Если их два — это два ADR.
 - Задним числом ADR **не переписывается**: решение меняется новым ADR со статусом
   `accepted`, а старый получает `superseded by NNNN`. История компромисса — часть ценности.
+- **Constitution / verify-промпты:** правка → `[constitution-update]` в PR + обновление
+  `constitution_sha256` / `verify_prompts_sha256` в [ADR-0010](0010-agents-audit-w1-w6-closure.md)
+  + прогон behavioral evals (W7.3). Тихий drift hash ловит
+  `test_w7_constitution_hash_matches_adr`.
 - Статусы: `proposed` → `accepted` | `rejected`, плюс `superseded by NNNN`.
 - Язык — русский; код, имена и пути — как в репозитории.
 
@@ -70,3 +74,7 @@ ADR — не бюрократия, а страховка от повторног
 | [0006](0006-canvas-server-authoritative-documents.md) | Canvas = server-authoritative `ContentDocument`; reject Yjs CRDT | accepted |
 | [0007](0007-vision-image-parts.md) | Vision как `ImagePart` сообщения, не base64 в тексте; OCR остаётся | accepted |
 | [0008](0008-memory-origin-trust-ceiling.md) | Origin ceiling + staged trust (ASI-06) на medium | proposed |
+| [0009](0009-langgraph-supervisor-workers.md) | LangGraph Supervisor→workers→Critic; reject Swarm/SDK rewrite | accepted |
+| [0010](0010-agents-audit-w1-w6-closure.md) | Audit W1–W6 closure: baselines, fail-soft PII, reserve triggers | accepted |
+| [0011](0011-observability-cost-contracts.md) | Observability, cost & contracts (W7–W8) | accepted |
+| [0012](0012-product-quality-evals.md) | Product-quality evals (W9): semantic / context / multi-turn / formatter | accepted |

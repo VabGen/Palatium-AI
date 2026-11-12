@@ -1,0 +1,48 @@
+'#NewChatAnimatedIcon-svg-rs-ew8n6j-p1{tr'       box=[224, 42] svg=18x18 vb=0 0 24 24 dx=-94.2 dy=0 shapes=0
+'[data-animation-icon-wrapper][data-anima'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#PlugIn2Timeline2Icon-svg-rs-th4qmy-p0{t'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#ScheduledTasksAnimatedIcon-svg-rs-s3vm2'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#K15BTimeline1Icon-enter-rs-z42a9l-mh2{t'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'[data-animation-icon-wrapper][data-anima'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'[data-animation-icon-layer][hidden]{disp'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#MoreAnimatedIcon-svg-rs-156gmjb-p0{tran'       box=[173, 36] svg=20x20 vb=0 0 24 24 dx=-76.4 dy=0 shapes=0
+'Customize Sidebar'                              box=[20, 20] svg=16x16 vb=0 0 1024 1024 dx=0 dy=0 shapes=0
+'#MicroscopeTimeline1Icon-enter-rs-zd41x3'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'.kimi-build-hammer { transform-box: view'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'[data-animation-icon-wrapper][data-anima'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#ExcelTimeline1Icon-enter-rs-vsk7dj-p0{t'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#ImageCreateTimeline1Icon-svg-rs-1rltuxn'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#LocalTimeline1Icon-enter-rs-1fm3wso-mh4'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#LocalTimeline1Icon-enter-rs-1fm3wso-mh4'       box=[209, 36] svg=0x0 vb=0 0 1024 1024 dx=127.6 dy=-573.6 shapes=0
+'#KimiCodeAnimatedIcon-enter-rs-1gfuhik-m'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#KimiCodeAnimatedIcon-enter-rs-1gfuhik-m'       box=[209, 36] svg=0x0 vb=0 0 1024 1024 dx=127.6 dy=-610.6 shapes=0
+'#KimiClawAnimatedIcon-svg-rs-cne1qw-p0{t'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'Add Claw'                                       box=[26, 26] svg=15x15 vb=0 0 1024 1024 dx=0 dy=0 shapes=0
+'#PlatformNewTimeline1Icon-svg-rs-1clakbw'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'#PlatformNewTimeline1Icon-svg-rs-1clakbw'       box=[209, 36] svg=0x0 vb=0 0 1024 1024 dx=127.6 dy=-684.6 shapes=0
+'Projects'                                       box=[79, 28] svg=14x14 vb=0 0 1024 1024 dx=24.4 dy=0 shapes=0
+'#NewProjectAnimatedIcon-svg-rs-bjn8zu-p1'       box=[209, 36] svg=18x18 vb=0 0 24 24 dx=-87.4 dy=0 shapes=0
+'Рабочий проект'                                 box=[209, 36] svg=18x18 vb=0 0 1024 1024 dx=87.4 dy=-1 shapes=1
+    d=
+'More'                                           box=[24, 24] svg=18x18 vb=0 0 1024 1024 dx=0 dy=0 shapes=1
+    d=
+'Chats'                                          box=[64, 28] svg=14x14 vb=0 0 1024 1024 dx=17.2 dy=0 shapes=0
+'More'                                           box=[22, 22] svg=17x17 vb=0 0 1024 1024 dx=0 dy=0 shapes=0
+'More'                                           box=[22, 22] svg=17x17 vb=0 0 1024 1024 dx=0 dy=0 shapes=0
+'More'                                           box=[22, 22] svg=17x17 vb=0 0 1024 1024 dx=0 dy=0 shapes=0
+'Invite to Earn'                                 box=[224, 56] svg=18x18 vb=0 0 24 24 dx=-93 dy=0 shapes=1
+    d=
+'Invite to Earn'                                 box=[224, 56] svg=18x18 vb=0 0 1024 1024 dx=93 dy=0 shapes=1
+    d=
+'Get App'                                        box=[44, 44] svg=18x18 vb=0 0 1024 1024 dx=0 dy=0 shapes=0
+'Expand sidebar'                                 box=[32, 32] svg=20x20 vb=0 0 24 24 dx=0 dy=1 shapes=0
+'Upload files or use more tools'                 box=[36, 36] svg=18x18 vb=0 0 1024 1024 dx=0 dy=0 shapes=0
+'Voice input'                                    box=[36, 36] svg=18x18 vb=0 0 1024 1024 dx=0 dy=0 shapes=0
+'Choose project'                                 box=[139, 36] svg=18x18 vb=0 0 1024 1024 dx=-50.7 dy=0 shapes=0
+'Use desktop app Limited-time offer'             box=[148, 36] svg=18x18 vb=0 0 1024 1024 dx=-55 dy=0 shapes=0
+'[data-animation-icon-layer][hidden]{disp'       box=[101, 36] svg=18x18 vb=0 0 24 24 dx=-30.6 dy=0 shapes=0
+'[data-animation-icon-wrapper][data-anima'       box=[81, 36] svg=18x18 vb=0 0 24 24 dx=-20.9 dy=0 shapes=0
+'#MicroscopeTimeline1Icon-enter-rs-zd41x3'       box=[137, 36] svg=18x18 vb=0 0 24 24 dx=-48.7 dy=0 shapes=0
+'.kimi-build-hammer { transform-box: view'       box=[77, 36] svg=18x18 vb=0 0 24 24 dx=-18.5 dy=0 shapes=0
+'[data-animation-icon-wrapper][data-anima'       box=[76, 36] svg=18x18 vb=0 0 24 24 dx=-18.2 dy=0 shapes=0
+'#ExcelTimeline1Icon-enter-rs-vsk7dj-p0{t'       box=[86, 36] svg=18x18 vb=0 0 24 24 dx=-23.3 dy=0 shapes=0

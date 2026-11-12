@@ -6,7 +6,8 @@ Agent-agnostic by construction (3.2 / OCP): the node roster arrives as `GraphAge
 (`agent_registry.py`), this module only compiles nodes and declares the topology.
 
 P0.1 latency: Intent classifies raw text first so Contextualizer receives task_kind and
-can skip LLM on social/capability; low-risk strategies skip Critic (see route_after_context).
+can skip LLM on social/capability. Critic edge skip is narrow (clarify / format_only+
+response_formatting); social format_only still enters Critic (see route_after_context).
 """
 
 from __future__ import annotations

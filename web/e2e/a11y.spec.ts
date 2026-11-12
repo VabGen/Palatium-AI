@@ -125,6 +125,19 @@ test.describe('axe (WCAG A/AA)', () => {
     await scan(page);
   });
 
+  test('Kimi zones ZONE_NAV / TOP / HERO / BODY / FOOTER размечены', async ({ page }) => {
+    const server = defaultApi();
+    await stubSessionSocket(page);
+    await server.install(page);
+    await openWidget(page);
+
+    for (const zone of ['ZONE_NAV', 'ZONE_TOP', 'ZONE_HERO', 'ZONE_BODY', 'ZONE_FOOTER'] as const) {
+      await expect(page.locator(`[data-zone="${zone}"]`)).toHaveCount(1);
+    }
+    await expect(page.locator('.composer-hero .empty-wordmark')).toBeVisible();
+    await scan(page);
+  });
+
   test('карточка HITL и панель памяти доступны с клавиатуры', async ({ page }) => {
     const server = defaultApi();
     server.reply('intents.process.stream', {
@@ -251,9 +264,7 @@ test.describe('Artifacts pane', () => {
 
     await page.locator('.artifact-anchor').click();
     await expect(page.getByRole('complementary', { name: ru['artifact.paneLabel'] })).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: ru['artifact.close'] })
-    ).toBeFocused();
+    await expect(page.getByRole('button', { name: ru['artifact.close'] })).toBeFocused();
   });
 });
 
@@ -347,16 +358,16 @@ test.describe('reduced motion', () => {
       };
       return {
         message: read('.msg.user'),
-        spinner: read('.send-btn .spin'),
+        // Busy chrome = stop affordance (not a decorative spin).
+        stopVisible: Boolean(root.querySelector('.send-btn.is-stop')),
       };
     });
 
     // Появление сообщения — движение: `fadeSlide` выключен, сдвига нет.
     expect(motion.message.animation).toBe('none');
     expect(motion.message.transform).toBe('none');
-    // Спиннер — НЕ движение, а сигнал «запрос выполняется»: он обязан остаться,
-    // иначе «работаю» становится неотличимо от «зависло».
-    expect(motion.spinner.animation).not.toBe('none');
+    // Сигнал «запрос выполняется» — кнопка Stop, не спиннер (parity kimi.ai).
+    expect(motion.stopVisible).toBe(true);
 
     // Орб ожидания при выключенном движении — статичная картинка, поэтому
     // подпись фазы перестаёт быть sr-only и показывается текстом: иначе

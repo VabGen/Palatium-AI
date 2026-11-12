@@ -44,14 +44,18 @@ async def test_thread_file_binds_direct_read_attachment() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_fresh_upload_owns_the_turn_over_a_thread_reference() -> None:
-    """A new fence already carries its own text; storage must not be re-read (055)."""
+async def test_sticky_fence_does_not_suppress_thread_file_reread() -> None:
+    """SB2 sticky can set has_attachment_context without a fresh upload (W10.2 att_partial).
+
+    Continuity's ``thread_file`` axis is SoT for storage re-read; sticky must not
+    divert the planner onto reason_only (055 — class fix, not phrase gate).
+    """
     bundle = await ExecutionPlanner(capability_index=None).build(_input(has_attachment_context=True))
 
     step = bundle.steps[0]
-    assert step.tool_name != "read_attachment"
-    assert step.strategy == "reason_only"
-    assert step.requires_tool_call is False
+    assert (step.server_name, step.tool_name) == ("platform", "read_attachment")
+    assert step.strategy == "direct_tool_call"
+    assert step.requires_tool_call is True
 
 
 @pytest.mark.asyncio()

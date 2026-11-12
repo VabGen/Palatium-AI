@@ -227,9 +227,12 @@ def test_turn_payload_persists_response_shape_when_provided() -> None:
     omit = assistant_turn_payload(_result(document))
     coerced = assistant_turn_payload(_result(document), response_shape="not-a-shape")
 
-    assert payload is not None and payload["response_shape"] == "plan"
-    assert omit is not None and "response_shape" not in omit
-    assert coerced is not None and coerced["response_shape"] == "auto"
+    assert payload is not None
+    assert payload["response_shape"] == "plan"
+    assert omit is not None
+    assert "response_shape" not in omit
+    assert coerced is not None
+    assert coerced["response_shape"] == "auto"
 
 
 def _state(

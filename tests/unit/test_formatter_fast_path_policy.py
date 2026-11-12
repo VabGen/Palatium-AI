@@ -55,3 +55,38 @@ def test_explicit_shape_requires_formatter_llm() -> None:
     )
     assert decision.skip_llm is False
     assert decision.reason == "shape_requested"
+
+
+def test_policy_refusal_passes_through_despite_zero_confidence() -> None:
+    """W10 att_not_found: RU FileReferencePolicy copy must not hit Formatter LLM."""
+    refusal = "Файл с именем «QX-77» не найден среди файлов этого диалога. Назовите его точнее или приложите файл."
+    decision = FormatterFastPathPolicy.decide(
+        source_content=refusal,
+        passthrough=FormatterPassthroughSignals(
+            source_chars=len(refusal),
+            worker_confident=False,
+            source_is_plain_prose=True,
+            locale_matches=True,
+            requires_review=True,
+            policy_refusal=True,
+        ),
+        passthrough_max_chars=200,
+    )
+    assert decision.skip_llm is True
+    assert decision.reason == "passthrough_policy_refusal"
+
+
+def test_policy_refusal_still_yields_to_user_choice_card() -> None:
+    refusal = "В этом диалоге несколько файлов: a.pdf, b.pdf. Уточните, какой именно нужно перечитать."
+    decision = FormatterFastPathPolicy.decide(
+        source_content=refusal,
+        requires_user_choice=True,
+        passthrough=FormatterPassthroughSignals(
+            source_chars=len(refusal),
+            worker_confident=False,
+            policy_refusal=True,
+        ),
+        passthrough_max_chars=200,
+    )
+    assert decision.skip_llm is False
+    assert decision.reason == "requires_user_choice"

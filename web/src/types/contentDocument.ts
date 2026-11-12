@@ -16,7 +16,25 @@ export type IconToken =
   | 'x'
   | 'link'
   | 'edit'
-  | 'settings';
+  | 'settings'
+  | 'folder'
+  | 'task'
+  | 'list'
+  | 'tag'
+  | 'bookmark'
+  | 'history'
+  | 'notification'
+  | 'upload'
+  | 'download'
+  | 'locate'
+  | 'histogram'
+  | 'question'
+  | 'translate'
+  | 'code'
+  | 'image'
+  | 'share'
+  | 'pin'
+  | 'completed';
 
 export type CalloutTone = 'info' | 'success' | 'warning' | 'danger';
 export type ListStyle = 'ordered' | 'unordered';
@@ -282,6 +300,27 @@ export type DialogTurnResponse = {
   task_id?: string | null;
   seq: number;
   created_at?: string | null;
+};
+
+/** Public session row from `GET /sessions` (P1b durable history). */
+export type SessionSummary = {
+  id: string;
+  thread_id: string;
+  user_id?: string | null;
+  status: string;
+  title?: string | null;
+  project_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Durable project folder from `GET /projects` (P2 Pin / Projects). */
+export type ProjectSummary = {
+  id: string;
+  user_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type HITLResolveResult = {

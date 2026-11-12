@@ -114,7 +114,7 @@ async def resolve_consolidation_user_ids(
     min_importance: float,
     include_corroboration_owners: bool,
 ) -> list[str]:
-    """Owners for sleep consolidate: promote candidates ∪ inferred owners when needed."""
+    """Owners for sleep consolidate: promote candidates or inferred owners when needed."""
     resolved = await resolve_promotion_user_ids(
         session_factory,
         explicit=explicit,

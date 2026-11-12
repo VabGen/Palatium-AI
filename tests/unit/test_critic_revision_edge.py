@@ -9,9 +9,11 @@ from palatium_ai.application.orchestration.nodes import (
     route_after_critic,
     route_after_quality_revision,
 )
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.types.graph_nodes import (
     NODE_ANALYST,
     NODE_CODER,
+    NODE_CONTEXT_ENRICHER_WEAVING,
     NODE_CRITIC,
     NODE_FORMATTER,
     NODE_QUALITY_REVISION,
@@ -49,7 +51,20 @@ def test_route_after_context_dispatches_coder_analyst() -> None:
         "palatium_ai.application.orchestration.nodes.OrchestrationSnapshot.from_state",
         side_effect=lambda _s: _snapshot("code_sandbox"),
     ):
+        before = agent_metrics.agent_handoff_count(
+            from_node=NODE_CONTEXT_ENRICHER_WEAVING,
+            to_node=NODE_CODER,
+            reason="code_sandbox",
+        )
         assert route_after_context(state) == NODE_CODER  # type: ignore[arg-type]
+        assert (
+            agent_metrics.agent_handoff_count(
+                from_node=NODE_CONTEXT_ENRICHER_WEAVING,
+                to_node=NODE_CODER,
+                reason="code_sandbox",
+            )
+            == before + 1
+        )
     with patch(
         "palatium_ai.application.orchestration.nodes.OrchestrationSnapshot.from_state",
         side_effect=lambda _s: _snapshot("data_analysis"),

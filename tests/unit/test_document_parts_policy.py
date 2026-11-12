@@ -47,9 +47,7 @@ def test_document_parts_skip_images_and_missing_text() -> None:
 
 
 def test_document_parts_title_matches_citation_chip() -> None:
-    parts = document_parts_from_blocks(
-        (_block(attachment_id=_ID_A, filename="report.pdf", body="Clause 1. Payment terms."),)
-    )
+    parts = document_parts_from_blocks((_block(attachment_id=_ID_A, filename="report.pdf", body="Clause 1. Payment terms."),))
     assert len(parts) == 1
     assert parts[0].title == "report.pdf"
     assert parts[0].attachment_id == _ID_A

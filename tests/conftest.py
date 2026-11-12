@@ -384,6 +384,15 @@ class FakeDialogTurnStore:
         items = self._turns.get(thread_id, [])[-limit:]
         return DialogTurnWindow(thread_id=thread_id, turns=tuple(items), limit=limit)
 
+    async def truncate_keeping(self, *, thread_id: str, keep: int) -> int:
+        items = self._turns.get(thread_id, [])
+        safe_keep = max(0, keep)
+        if safe_keep >= len(items):
+            return 0
+        deleted = len(items) - safe_keep
+        self._turns[thread_id] = items[:safe_keep]
+        return deleted
+
 
 class FakeMCPRegistry:
     """In-memory MCP registry for unit-tests."""

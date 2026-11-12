@@ -150,7 +150,9 @@ class InMemoryMemoryPort:
                 if owner != uid:
                     continue
                 meta = self._meta.get((namespace, entry_key))
-                created = meta.created_at if meta is not None and meta.created_at is not None else datetime.min.replace(tzinfo=UTC)
+                created = (
+                    meta.created_at if meta is not None and meta.created_at is not None else datetime.min.replace(tzinfo=UTC)
+                )
                 rows.append((created, namespace, entry_key, dict(value)))
             rows.sort(key=lambda item: item[0], reverse=True)
             return [(ns, key, val) for _, ns, key, val in rows[:safe_limit]]

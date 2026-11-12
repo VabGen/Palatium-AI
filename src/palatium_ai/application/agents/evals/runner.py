@@ -33,6 +33,8 @@ AGENT_PACKAGES: tuple[str, ...] = (
     "context_enricher",
     "supervisor",
     "researcher",
+    "coder",
+    "analyst",
     "memory_keeper",
     "critic",
     "formatter",
@@ -116,7 +118,13 @@ async def _resolve_task_output(
         return runtime_output, "runtime"
     cassette = raw_task.get("cassette")
     args_cassette = raw_task.get("args_cassette")
-    if (isinstance(cassette, str) and cassette.strip()) or (isinstance(args_cassette, str) and args_cassette.strip()):
+    phase = str(raw_task.get("phase") or "").strip().lower()
+    # Weaving evals are deterministic (ExecutionPlanner) and need no LLM cassette file.
+    if (
+        phase == "weaving"
+        or (isinstance(cassette, str) and cassette.strip())
+        or (isinstance(args_cassette, str) and args_cassette.strip())
+    ):
         return await run_cassette_task(agent, raw_task), "cassette"
     if raw_task.get("fixture_output"):
         fixture = raw_task.get("fixture_output")

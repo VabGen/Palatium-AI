@@ -78,6 +78,7 @@ from palatium_ai.core.types.graph_nodes import (
     NODE_QUALITY_REVISION as GRAPH_NODE_QUALITY_REVISION,
     NODE_RESEARCHER as GRAPH_NODE_RESEARCHER,
     NODE_SUPERVISOR as GRAPH_NODE_SUPERVISOR,
+    GraphNodeId,
 )
 from palatium_ai.domain.agents import FormatterTaskResult
 from palatium_ai.domain.agents.analyst import AnalystInput
@@ -99,7 +100,10 @@ from palatium_ai.domain.memory.recall import MemoryRecallBundle
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies import ContinuityPolicy, MemoryRecallPolicy
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
+from palatium_ai.domain.policies.composer_mode import ComposerModePolicy
+from palatium_ai.domain.policies.continuity import EffectiveRoutingIntent
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
+from palatium_ai.domain.policies.memory_recall import MemoryRecallDecision
 from palatium_ai.domain.policies.parallel_workers import ParallelWorkerPolicy
 from palatium_ai.domain.policies.types import TRANSFORMATION_DEFAULT
 
@@ -134,6 +138,93 @@ def _trace_id(state: AgentGraphState) -> str:
     return selectors.require_task_id(state)
 
 
+def _memory_hints_after_dialog_correction(
+    memory_hints: tuple[str, ...],
+    window: DialogTurnWindow | None,
+) -> tuple[str, ...]:
+    """Drop scratchpad/medium claims the dialog already corrected (W10 2b)."""
+    if window is None or not window.turns:
+        return memory_hints
+    from palatium_ai.domain.policies.dialog_correction import DialogCorrectionPolicy
+
+    return DialogCorrectionPolicy.filter_superseded_texts(memory_hints, window.turns)
+
+
+async def _apply_sticky_attachment_rehydrate(
+    *,
+    routing_intent: EffectiveRoutingIntent,
+    refers_to_prior: bool,
+    entry_has_attachments: bool,
+    entry_untrusted_context: str,
+    window: DialogTurnWindow,
+) -> str:
+    """SB2: rehydrate dialog-bound attachments after Continuity (not sticky poison)."""
+    rehydrate = AttachmentStickinessPolicy.decide_rehydrate(
+        continuation_kind=routing_intent.continuation_kind,
+        refers_to_prior=refers_to_prior,
+        has_turn_attachments=entry_has_attachments,
+        dialog=window,
+        prior_context=routing_intent.prior_context,
+        trust_prior_for_workers=routing_intent.trust_prior_for_workers,
+        grounding=routing_intent.grounding,
+        adaptive_grounding_enabled=is_adaptive_grounding_enabled(user_id_var.get()),
+        transformation=routing_intent.transformation,
+    )
+    agent_metrics.record_attachment_sticky(action=rehydrate.reason)
+    # Not `attachment.build_turn_context`: that name is the traced span of the actual
+    # service call, so reusing it here made one decision look like a duplicated read (P5).
+    logger.info(
+        "attachment.sticky_decision",
+        rehydrate_source=rehydrate.rehydrate_source,
+        rehydrate_reason=rehydrate.reason,
+        attachment_count=len(rehydrate.attachment_ids),
+    )
+    untrusted_context = entry_untrusted_context
+    attach_ctx = get_turn_attachment_context()
+    if rehydrate.clear_pending and attach_ctx is not None and attach_ctx.clear_pending is not None:
+        await attach_ctx.clear_pending()
+    if rehydrate.attachment_ids and attach_ctx is not None and attach_ctx.rehydrate is not None and not entry_has_attachments:
+        fenced = await attach_ctx.rehydrate(rehydrate.attachment_ids)
+        if fenced.strip():
+            untrusted_context = fenced
+            agent_metrics.record_attachment_sticky(action="rehydrate_applied")
+    return untrusted_context
+
+
+async def _recall_after_continuity_remap(
+    state: AgentGraphState,
+    *,
+    recall: MemoryRecallBundle | None,
+    intent_decision: MemoryRecallDecision,
+    routing_intent: EffectiveRoutingIntent,
+    effective_user_text: str,
+) -> MemoryRecallBundle | None:
+    """SB3: fill durable recall when Continuity remapped kind after Intent skipped/narrowed."""
+    routed_decision = MemoryRecallPolicy.decide(
+        task_kind=routing_intent.task_kind,
+        requires_mcp=routing_intent.requires_mcp,
+        transformation=routing_intent.transformation,
+    )
+    recall_after = recall
+    widened = routed_decision.kinds is None and intent_decision.kinds is not None
+    if routed_decision.allowed and (not intent_decision.allowed or widened):
+        return await _maybe_deferred_durable_recall(
+            state,
+            decision=routed_decision,
+            existing_override=recall,
+            query=effective_user_text,
+        )
+    if recall_after is not None and routed_decision.pin_kinds is not None:
+        # Continuity/Intent disagree on the transform axis: the earlier recall may
+        # carry task facts and pinned intents. A content transform reads prior text,
+        # so narrow the bundle instead of spending a second durable query (060/055).
+        return recall_after.restrict_kinds(
+            kinds=routed_decision.kinds,
+            pin_kinds=routed_decision.pin_kinds,
+        )
+    return recall_after
+
+
 @traceable(name=NODE_CONTEXT_ENRICHER_CONTINUATION)
 async def continuation_node(
     state: AgentGraphState,
@@ -149,6 +240,8 @@ async def continuation_node(
         )
         classification = state.get("classification")
         raw_intent = classification.output if classification is not None else None
+        # Track P: composer mode pills raise floors before Continuity remaps axes.
+        raw_intent = ComposerModePolicy.apply(raw_intent, state.get("composer_mode"))
         intent_task_kind = raw_intent.task_kind if raw_intent is not None else None
         intent_requires_mcp = bool(raw_intent.requires_mcp) if raw_intent is not None else False
         intent_transformation = raw_intent.transformation if raw_intent is not None else TRANSFORMATION_DEFAULT
@@ -161,7 +254,10 @@ async def continuation_node(
             state,
             decision=intent_decision,
         )
-        memory_hints = recall.hint_texts if recall is not None else ()
+        memory_hints = _memory_hints_after_dialog_correction(
+            recall.hint_texts if recall is not None else (),
+            window,
+        )
         budget = state.get("prompt_budget") or MemoryPromptBudget()
         intent_caps = tuple(raw_intent.candidate_capabilities) if raw_intent is not None else ()
         entry_untrusted_context = state.get("untrusted_context") or ""
@@ -201,43 +297,20 @@ async def continuation_node(
             user_text=raw_user if isinstance(raw_user, str) else None,
             thread_file_named=bool(state.get("thread_file_named")),
         )
-        # SB2: rehydrate dialog-bound attachments after Continuity (not sticky poison).
         # Prefer Continuity trust over raw Contextualizer refers_to_prior — recovery of
         # false new_topic sets trust without rewriting the frozen Contextualizer output.
-        untrusted_context = entry_untrusted_context
         rehydrate_refers = (
             routing_intent.trust_prior_for_workers
             if routing_intent.continuation_kind in {"answer", "format"}
             else bool(output.refers_to_prior if output is not None else False)
         )
-        rehydrate = AttachmentStickinessPolicy.decide_rehydrate(
-            continuation_kind=routing_intent.continuation_kind,
+        untrusted_context = await _apply_sticky_attachment_rehydrate(
+            routing_intent=routing_intent,
             refers_to_prior=rehydrate_refers,
-            has_turn_attachments=entry_has_attachments,
-            dialog=window,
-            prior_context=routing_intent.prior_context,
-            trust_prior_for_workers=routing_intent.trust_prior_for_workers,
-            grounding=routing_intent.grounding,
-            adaptive_grounding_enabled=is_adaptive_grounding_enabled(user_id_var.get()),
-            transformation=routing_intent.transformation,
+            entry_has_attachments=entry_has_attachments,
+            entry_untrusted_context=entry_untrusted_context,
+            window=window,
         )
-        agent_metrics.record_attachment_sticky(action=rehydrate.reason)
-        # Not `attachment.build_turn_context`: that name is the traced span of the actual
-        # service call, so reusing it here made one decision look like a duplicated read (P5).
-        logger.info(
-            "attachment.sticky_decision",
-            rehydrate_source=rehydrate.rehydrate_source,
-            rehydrate_reason=rehydrate.reason,
-            attachment_count=len(rehydrate.attachment_ids),
-        )
-        attach_ctx = get_turn_attachment_context()
-        if rehydrate.clear_pending and attach_ctx is not None and attach_ctx.clear_pending is not None:
-            await attach_ctx.clear_pending()
-        if rehydrate.attachment_ids and attach_ctx is not None and attach_ctx.rehydrate is not None and not entry_has_attachments:
-            fenced = await attach_ctx.rehydrate(rehydrate.attachment_ids)
-            if fenced.strip():
-                untrusted_context = fenced
-                agent_metrics.record_attachment_sticky(action="rehydrate_applied")
 
         raw_ask = (raw_user if isinstance(raw_user, str) else "").strip()
         effective_user_text = ContinuityPolicy.resolve_effective_user_text(
@@ -255,35 +328,21 @@ async def continuation_node(
                 raw_chars=len(raw_ask),
             )
             agent_metrics.record_error("context_enricher", "continuation_rewrite_dropped_ask")
-        # SB3: if Intent skipped (or narrowed) durable recall but Continuity remapped kind, fill now.
-        routed_decision = MemoryRecallPolicy.decide(
-            task_kind=routing_intent.task_kind,
-            requires_mcp=routing_intent.requires_mcp,
-            transformation=routing_intent.transformation,
+        recall_after = await _recall_after_continuity_remap(
+            state,
+            recall=recall,
+            intent_decision=intent_decision,
+            routing_intent=routing_intent,
+            effective_user_text=effective_user_text,
         )
-        recall_after = recall
-        widened = routed_decision.kinds is None and intent_decision.kinds is not None
-        if routed_decision.allowed and (not intent_decision.allowed or widened):
-            recall_after = await _maybe_deferred_durable_recall(
-                state,
-                decision=routed_decision,
-                existing_override=recall,
-                query=effective_user_text,
-            )
-        elif recall_after is not None and routed_decision.pin_kinds is not None:
-            # Continuity/Intent disagree on the transform axis: the earlier recall may
-            # carry task facts and pinned intents. A content transform reads prior text,
-            # so narrow the bundle instead of spending a second durable query (060/055).
-            recall_after = recall_after.restrict_kinds(
-                kinds=routed_decision.kinds,
-                pin_kinds=routed_decision.pin_kinds,
-            )
         update: AgentGraphState = {
             "contextualization": result,
             "effective_user_text": effective_user_text,
             "routing_intent": routing_intent,
             "untrusted_context": untrusted_context,
         }
+        if classification is not None and raw_intent is not None and classification.output is not raw_intent:
+            update["classification"] = classification.model_copy(update={"output": raw_intent})
         if recall_after is not None:
             update["memory_recall"] = recall_after
         return update, result
@@ -626,6 +685,35 @@ def _emit_worker_answer_deltas(state: AgentGraphState, result: object) -> None:
     emit_answer_deltas(summary)
 
 
+def _record_worker_execution(result: object) -> None:
+    """Emit worker_kind into metrics + logs (not object-only; ADR-0009)."""
+    from palatium_ai.domain.agents.researcher import ResearcherTaskResult
+
+    if not isinstance(result, ResearcherTaskResult):
+        return
+    agent_metrics.record_worker_execution(worker_kind=result.worker_kind, status=result.status)
+    logger.info(
+        "agent.worker.execution",
+        worker_kind=result.worker_kind,
+        worker_language=result.worker_language or None,
+        findings_count=len(result.worker_findings),
+        status=result.status,
+        confidence=result.confidence,
+    )
+
+
+def _record_handoff[ToNodeT: GraphNodeId](
+    *,
+    from_node: GraphNodeId,
+    to_node: ToNodeT,
+    reason: str,
+) -> ToNodeT:
+    """Count + log a coordinator edge; return ``to_node`` for LangGraph routers."""
+    agent_metrics.record_agent_handoff(from_node=from_node, to_node=to_node, reason=reason)
+    logger.info("agent.handoff", from_node=from_node, to_node=to_node, reason=reason)
+    return to_node
+
+
 @traceable(name=NODE_CRITIC)
 async def critic_node(
     state: AgentGraphState,
@@ -675,6 +763,7 @@ async def researcher_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
+        _record_worker_execution(result)
         _emit_worker_answer_deltas(state, result)
         update: dict[str, object] = {"execution": result}
         if result.cannot_answer_without_source:
@@ -710,6 +799,7 @@ async def coder_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
+        _record_worker_execution(result)
         _emit_worker_answer_deltas(state, result)
         return cast("AgentGraphState", {"execution": result}), result
 
@@ -730,6 +820,7 @@ async def analyst_node(
             trace_id=_trace_id(state),
             thread_id=snapshot.thread_id,
             image_parts=selectors.turn_image_parts(state),
+            document_parts=selectors.turn_document_parts(state),
         )
         agent_output = await harness.execute_with_guardrails(agent, agent_input)
         result = analyst_output_to_execution_result(
@@ -737,6 +828,7 @@ async def analyst_node(
             task_id=task_input.task_id,
             agent_role=agent.config.role,
         )
+        _record_worker_execution(result)
         _emit_worker_answer_deltas(state, result)
         return cast("AgentGraphState", {"execution": result}), result
 
@@ -763,12 +855,30 @@ async def parallel_workers_node(
     """Fan-out Researcher∥Analyst for multi-capability plans (P2.15)."""
 
     async def run() -> tuple[AgentGraphState, object]:
+        from palatium_ai.core.config import get_settings
+        from palatium_ai.domain.policies.subagent_caps import SubagentCapExceededError, SubagentCapPolicy, SubagentCaps
+
         snapshot = OrchestrationSnapshot.from_state(state)
         steps = selectors.execution_plan_steps(state)
         research_plan = _step_for_strategies(steps, RESEARCHER_STRATEGIES)
         analyst_plan = _step_for_strategies(steps, ANALYST_STRATEGIES)
         if research_plan is None or analyst_plan is None:
             raise ValueError("parallel_workers requires research and analyst steps in execution_bundle")
+
+        orch = get_settings().orchestration
+        caps = SubagentCapPolicy(
+            SubagentCaps(
+                max_parallel_subagents=orch.max_parallel_subagents,
+                max_total_subagents_per_run=orch.max_total_subagents_per_run,
+            )
+        )
+        try:
+            caps.assert_parallel(2)
+            already = int(state.get("revisions_count") or 0)
+            caps.assert_total(already_spawned=already, additional=2)
+        except SubagentCapExceededError as exc:
+            agent_metrics.record_subagent_cap_hit(cap=exc.cap)
+            raise
 
         base_packet = snapshot.context_packet(
             state,
@@ -822,6 +932,7 @@ async def parallel_workers_node(
 
         research_result, analyst_result = await asyncio.gather(_run_researcher(), _run_analyst())
         merged = merge_parallel_worker_results(research_result, analyst_result)  # type: ignore[arg-type]
+        _record_worker_execution(merged)
         _emit_worker_answer_deltas(state, merged)
         return cast("AgentGraphState", {"execution": merged}), merged
 
@@ -857,10 +968,7 @@ def _try_worker_owned_document(
     pass (legacy contract allows exactly one handover; structured preview paints
     its own blocks and is left silent).
     """
-    from palatium_ai.application.agents.formatter.answer_delta import (
-        emit_answer_deltas,
-        emit_content_document,
-    )
+    from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
     from palatium_ai.application.agents.formatter.worker_writer import render_worker_document
 
     decision = render_worker_document(
@@ -874,8 +982,9 @@ def _try_worker_owned_document(
             task_id=str(task_input.task_id),
             reason=decision.reason,
         )
-        if not _structured_preview_active():
-            emit_answer_deltas(task_input.worker_summary or "")
+        # Do not paint the worker draft here before an LLM rewrite: researcher
+        # already streamed it on worker-owned turns, and a second paint → replace
+        # is the "full answer then thinner answer" flash (040 layout_shift).
         return None
 
     document = decision.document
@@ -1148,44 +1257,96 @@ def route_after_context(
     state: AgentGraphState,
 ) -> Literal["researcher", "coder", "analyst", "parallel_workers", "critic", "formatter"]:
     if state.get("requires_clarification"):
-        return GRAPH_NODE_FORMATTER
+        return _record_handoff(
+            from_node=GRAPH_NODE_WEAVING,
+            to_node=GRAPH_NODE_FORMATTER,
+            reason="requires_clarification",
+        )
     snapshot = OrchestrationSnapshot.from_state(state)
     strategy = snapshot.selected_strategy
     # Clarify and true response_formatting skip Critic at the edge (CriticPolicy would
     # passthrough). Social also uses format_only (2026) — must go through Critic.
     if strategy == "clarify":
-        return GRAPH_NODE_FORMATTER
+        return _record_handoff(
+            from_node=GRAPH_NODE_WEAVING,
+            to_node=GRAPH_NODE_FORMATTER,
+            reason="strategy_clarify",
+        )
     if strategy == "format_only" and snapshot.task_kind == "response_formatting":
-        return GRAPH_NODE_FORMATTER
+        return _record_handoff(
+            from_node=GRAPH_NODE_WEAVING,
+            to_node=GRAPH_NODE_FORMATTER,
+            reason="format_only",
+        )
     steps = selectors.execution_plan_steps(state)
     if ParallelWorkerPolicy.decide_from_steps(steps).parallel:
-        return GRAPH_NODE_PARALLEL_WORKERS
+        return _record_handoff(
+            from_node=GRAPH_NODE_WEAVING,
+            to_node=GRAPH_NODE_PARALLEL_WORKERS,
+            reason="parallel_workers",
+        )
     if strategy in CODER_STRATEGIES:
-        return GRAPH_NODE_CODER
+        return _record_handoff(
+            from_node=GRAPH_NODE_WEAVING,
+            to_node=GRAPH_NODE_CODER,
+            reason=str(strategy),
+        )
     if strategy in ANALYST_STRATEGIES:
-        return GRAPH_NODE_ANALYST
+        return _record_handoff(
+            from_node=GRAPH_NODE_WEAVING,
+            to_node=GRAPH_NODE_ANALYST,
+            reason=str(strategy),
+        )
     if strategy in RESEARCHER_STRATEGIES or strategy in WORKER_STRATEGIES:
-        return GRAPH_NODE_RESEARCHER
-    return GRAPH_NODE_CRITIC
+        return _record_handoff(
+            from_node=GRAPH_NODE_WEAVING,
+            to_node=GRAPH_NODE_RESEARCHER,
+            reason=str(strategy),
+        )
+    return _record_handoff(
+        from_node=GRAPH_NODE_WEAVING,
+        to_node=GRAPH_NODE_CRITIC,
+        reason=str(strategy or "default_critic"),
+    )
 
 
 def route_after_critic(state: AgentGraphState) -> Literal["quality_revision", "formatter"]:
     """Critic → worker revision loop (bounded) or Formatter (HITL/finalize)."""
     # Required-empty clarification and terminal MCP empty/error cannot improve via revision.
     if state.get("requires_clarification"):
-        return GRAPH_NODE_FORMATTER
+        return _record_handoff(
+            from_node=GRAPH_NODE_CRITIC,
+            to_node=GRAPH_NODE_FORMATTER,
+            reason="requires_clarification",
+        )
     if _terminal_mcp_worker_failure(state):
-        return GRAPH_NODE_FORMATTER
+        return _record_handoff(
+            from_node=GRAPH_NODE_CRITIC,
+            to_node=GRAPH_NODE_FORMATTER,
+            reason="terminal_mcp_failure",
+        )
     critic = state.get("critic")
     if critic is not None and critic.requires_review:
         count = int(state.get("revisions_count") or 0)
         if count < max_quality_revisions():
             snapshot = OrchestrationSnapshot.from_state(state)
             if snapshot.selected_strategy in WORKER_STRATEGIES:
-                return GRAPH_NODE_QUALITY_REVISION
+                return _record_handoff(
+                    from_node=GRAPH_NODE_CRITIC,
+                    to_node=GRAPH_NODE_QUALITY_REVISION,
+                    reason="requires_review",
+                )
             if ParallelWorkerPolicy.decide_from_steps(selectors.execution_plan_steps(state)).parallel:
-                return GRAPH_NODE_QUALITY_REVISION
-    return GRAPH_NODE_FORMATTER
+                return _record_handoff(
+                    from_node=GRAPH_NODE_CRITIC,
+                    to_node=GRAPH_NODE_QUALITY_REVISION,
+                    reason="requires_review_parallel",
+                )
+    return _record_handoff(
+        from_node=GRAPH_NODE_CRITIC,
+        to_node=GRAPH_NODE_FORMATTER,
+        reason="finalize",
+    )
 
 
 def _terminal_mcp_worker_failure(state: AgentGraphState) -> bool:
@@ -1219,14 +1380,30 @@ def route_after_quality_revision(
     state: AgentGraphState,
 ) -> Literal["researcher", "coder", "analyst", "parallel_workers"]:
     if ParallelWorkerPolicy.decide_from_steps(selectors.execution_plan_steps(state)).parallel:
-        return GRAPH_NODE_PARALLEL_WORKERS
+        return _record_handoff(
+            from_node=GRAPH_NODE_QUALITY_REVISION,
+            to_node=GRAPH_NODE_PARALLEL_WORKERS,
+            reason="parallel_workers",
+        )
     snapshot = OrchestrationSnapshot.from_state(state)
     strategy = snapshot.selected_strategy
     if strategy in CODER_STRATEGIES:
-        return GRAPH_NODE_CODER
+        return _record_handoff(
+            from_node=GRAPH_NODE_QUALITY_REVISION,
+            to_node=GRAPH_NODE_CODER,
+            reason=str(strategy),
+        )
     if strategy in ANALYST_STRATEGIES:
-        return GRAPH_NODE_ANALYST
-    return GRAPH_NODE_RESEARCHER
+        return _record_handoff(
+            from_node=GRAPH_NODE_QUALITY_REVISION,
+            to_node=GRAPH_NODE_ANALYST,
+            reason=str(strategy),
+        )
+    return _record_handoff(
+        from_node=GRAPH_NODE_QUALITY_REVISION,
+        to_node=GRAPH_NODE_RESEARCHER,
+        reason=str(strategy or "researcher"),
+    )
 
 
 class TaskResultStub:

@@ -1,0 +1,58 @@
+{
+  "locale": "ru-RU",
+  "blocks": [
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "Заказчик",
+      "icon": "search"
+    },
+    {
+      "type": "kv",
+      "items": [
+        { "label": "Назначение", "value": "Поставка и внедрение СЭД" },
+        { "label": "Срок", "value": "10 рабочих дней" }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "Требования"
+    },
+    {
+      "type": "list",
+      "style": "unordered",
+      "items": [
+        { "text": "Функционал", "level": 0 },
+        { "text": "ЭЦП и маршруты", "level": 1 },
+        { "text": "Журнал аудита", "level": 1 }
+      ]
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "Риски",
+      "icon": "warning"
+    },
+    {
+      "type": "callout",
+      "tone": "warning",
+      "body": "Срок сжатый относительно объёма работ."
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "Рекомендации",
+      "icon": "check"
+    },
+    {
+      "type": "list",
+      "style": "ordered",
+      "items": [{ "text": "Уточнить критерии приёмки", "level": 0 }]
+    }
+  ],
+  "meta": {
+    "confidence": 0.9,
+    "kind": "analysis"
+  }
+}

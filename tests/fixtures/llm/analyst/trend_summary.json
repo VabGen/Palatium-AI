@@ -1,0 +1,11 @@
+{
+  "response": {
+    "summary": "Week-over-week sales rose 8% with strongest growth in the West region.",
+    "confidence": 0.9,
+    "findings": [
+      "WoW +8%",
+      "West region led growth",
+      "East was flat"
+    ]
+  }
+}

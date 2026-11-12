@@ -55,6 +55,10 @@ export default defineConfig({
               name: 'animations',
               test: /[/\\]node_modules[/\\]lottie-react([/\\]|$)/,
             },
+            {
+              name: 'marketplace',
+              test: /[/\\]src[/\\]components[/\\](PluginsPage|SkillsPage)\./,
+            },
           ],
         },
         entryFileNames: 'assets/[name]-[hash].js',
@@ -65,6 +69,6 @@ export default defineConfig({
     chunkSizeWarningLimit: 700,
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'lucide-react', 'lottie-react', 'thinking-orbs'],
+    include: ['react', 'react-dom', 'lucide-react', 'lottie-react'],
   },
 });

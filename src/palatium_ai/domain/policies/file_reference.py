@@ -68,7 +68,11 @@ class FileReferenceResolution(BaseModel):
     #: User-safe display name of the resolved file (never an internal id).
     filename: str = ""
     #: User-safe display names of the thread's files, for an honest refusal message.
+    #: For ``several_names_in_turn_text`` this is the *matched subset*, not every
+    #: thread file (W10.1 P0.3 — card must not offer unrelated uploads).
     candidates: tuple[str, ...] = ()
+    #: Filename the user asked for when resolution failed (``no_match``); empty otherwise.
+    requested_name: str = ""
     reason: str = Field(min_length=1, max_length=128)
 
 
@@ -106,9 +110,11 @@ class FileReferencePolicy:
             exact = [item for item in scoped if _normalize_name(item.filename) == requested]
             if len(exact) == 1:
                 return _resolved(exact[0], reason="explicit_filename")
+            display_requested = " ".join((filename or "").split())
             return FileReferenceResolution(
                 status="no_match" if not exact else "ambiguous",
-                candidates=names,
+                candidates=names if not exact else tuple(item.filename for item in exact),
+                requested_name=display_requested,
                 reason="explicit_filename_unmatched" if not exact else "explicit_filename_ambiguous",
             )
 
@@ -116,12 +122,23 @@ class FileReferencePolicy:
         if len(matched) == 1:
             return _resolved(matched[0], reason="name_in_turn_text")
         if len(matched) > 1:
-            return FileReferenceResolution(status="ambiguous", candidates=names, reason="several_names_in_turn_text")
+            matched_names = tuple(item.filename for item in matched)
+            return FileReferenceResolution(
+                status="ambiguous",
+                candidates=matched_names,
+                reason="several_names_in_turn_text",
+            )
 
         if _names_foreign_document(scoped, hint_text=hint_text):
             # The ask named a document the dialog does not hold: reading the dialog's
             # only file would answer about the wrong document (020 fail-closed).
-            return FileReferenceResolution(status="no_match", candidates=names, reason="names_foreign_document")
+            foreign = _first_foreign_document_token(scoped, hint_text=hint_text)
+            return FileReferenceResolution(
+                status="no_match",
+                candidates=names,
+                requested_name=foreign,
+                reason="names_foreign_document",
+            )
 
         if len(scoped) == 1:
             return _resolved(scoped[0], reason="single_thread_file")
@@ -161,6 +178,22 @@ class FileReferencePolicy:
         return resolution.status == "resolved" and resolution.reason in _NAMED_REFERENCE_REASONS
 
     @staticmethod
+    def promotes_thread_file_reread(resolution: FileReferenceResolution) -> bool:
+        """True when code evidence says this ask targets a thread file (W10.1 P0.3).
+
+        Broader than ``is_named_reference``: a unique name still promotes, but so does
+        a name that matches several thread files (card over that subset) and a named
+        miss (``requested_name`` set → refusal, not knowledge search). Bare
+        ``several_thread_files`` / ``single_thread_file`` stay Intent-driven so an
+        unrelated ask cannot drag dialog uploads into the answer (055).
+        """
+        if FileReferencePolicy.is_named_reference(resolution):
+            return True
+        if resolution.status == "ambiguous" and resolution.reason == "several_names_in_turn_text":
+            return True
+        return resolution.status == "no_match" and bool((resolution.requested_name or "").strip())
+
+    @staticmethod
     def refusal_message(resolution: FileReferenceResolution) -> str:
         """User-facing explanation for a non-resolved reference (020, 055).
 
@@ -183,6 +216,11 @@ class FileReferencePolicy:
             return "В этом диалоге несколько подходящих файлов. Уточните, какой именно нужно перечитать."
         if resolution.status == "no_match":
             names = _format_names(resolution.candidates)
+            asked = " ".join((resolution.requested_name or "").split())
+            if asked and names:
+                return f"Файл с именем «{asked}» не найден; доступны: {names}. Назовите файл, который нужно перечитать."
+            if asked:
+                return f"Файл с именем «{asked}» не найден среди файлов этого диалога. Назовите его точнее или приложите файл."
             if names:
                 return (
                     f"Не удалось сопоставить запрос с файлами этого диалога ({names}). Назовите файл, который нужно перечитать."
@@ -212,18 +250,27 @@ class FileReferencePolicy:
         if not haystack:
             return []
         haystack_words = _name_words(haystack)
-        matched: list[FileRefCandidate] = []
+        # Strong evidence (full name / stem / multi-word run) outranks a shared
+        # leading title token («Скан» among siblings). Otherwise a precise ask for
+        # «Скан 1_Приложение.pdf» would also match «Скан 2_…» via the prefix and
+        # collapse into a false ambiguous card (W10.1 P0.3).
+        strong: list[FileRefCandidate] = []
+        weak: list[FileRefCandidate] = []
         for item in candidates:
             name = _normalize_name(item.filename)
             if not name:
                 continue
-            if _occurs_as_bounded_token(haystack, name):
-                matched.append(item)
-                continue
             stem = _normalize_name(_strip_extension(item.filename))
-            if _stem_token_matches(haystack, stem) or _name_run_matches(haystack_words, stem):
-                matched.append(item)
-        return matched
+            if (
+                _occurs_as_bounded_token(haystack, name)
+                or _stem_token_matches(haystack, stem)
+                or _name_run_matches(haystack_words, stem)
+            ):
+                strong.append(item)
+                continue
+            if _leading_title_token_matches(haystack, stem):
+                weak.append(item)
+        return strong or weak
 
 
 def _resolved(candidate: FileRefCandidate, *, reason: str) -> FileReferenceResolution:
@@ -250,6 +297,23 @@ def _stem_token_matches(haystack: str, stem: str) -> bool:
     (``обращением``) stays unbounded and does not match (055).
     """
     return len(stem) >= _MIN_NAME_MATCH_CHARS and _occurs_as_bounded_token(haystack, stem)
+
+
+def _leading_title_token_matches(haystack: str, stem: str) -> bool:
+    """True when the ask names the leading title word of the file (``Скан`` → ``Скан 1_…``).
+
+    Interior title words (``рынку`` inside ``Отчет по рынку``) are *not* evidence —
+    that would turn ordinary prose into a false document reference (055). Only the
+    first alphabetic token of the stem counts; uniqueness still gates resolution, so
+    a shared prefix (``Скан`` among siblings) yields ``ambiguous`` over that subset.
+    """
+    words = _name_words(stem)
+    if not words:
+        return False
+    lead = words[0]
+    if lead.isdigit() or len(lead) < _MIN_NAME_MATCH_CHARS:
+        return False
+    return _occurs_as_bounded_token(haystack, lead)
 
 
 def _name_run_matches(haystack_words: Sequence[str], stem: str) -> bool:
@@ -321,7 +385,12 @@ def _occurs_as_bounded_token(haystack: str, needle: str) -> bool:
 
 
 def _names_foreign_document(candidates: Sequence[FileRefCandidate], *, hint_text: str) -> bool:
-    """True when the text names a document the dialog does not hold.
+    """True when the text names a document the dialog does not hold."""
+    return bool(_first_foreign_document_token(candidates, hint_text=hint_text))
+
+
+def _first_foreign_document_token(candidates: Sequence[FileRefCandidate], *, hint_text: str) -> str:
+    """First ``name.ext`` token in the ask that matches no candidate (empty if none).
 
     Structural test, not a phrase list: a token carrying a supported document
     extension (registry owned by ``domain.attachments.policies``) that matches no
@@ -330,7 +399,7 @@ def _names_foreign_document(candidates: Sequence[FileRefCandidate], *, hint_text
     """
     haystack = _normalize_text(hint_text[:_HINT_SCAN_CHARS])
     if not haystack:
-        return False
+        return ""
     names = {_normalize_name(item.filename) for item in candidates}
     extensions = supported_document_extensions()
     for token in haystack.split():
@@ -340,8 +409,8 @@ def _names_foreign_document(candidates: Sequence[FileRefCandidate], *, hint_text
             continue
         if _token_identifies_candidate(cleaned, names):
             continue
-        return True
-    return False
+        return cleaned
+    return ""
 
 
 def _token_identifies_candidate(token: str, names: set[str]) -> bool:

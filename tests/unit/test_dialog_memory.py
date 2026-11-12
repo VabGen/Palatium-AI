@@ -39,6 +39,15 @@ class _FakeDialogTurnStore:
         items = self._turns.get(thread_id, [])[-limit:]
         return DialogTurnWindow(thread_id=thread_id, turns=tuple(items), limit=limit)
 
+    async def truncate_keeping(self, *, thread_id: str, keep: int) -> int:
+        items = self._turns.get(thread_id, [])
+        safe_keep = max(0, keep)
+        if safe_keep >= len(items):
+            return 0
+        deleted = len(items) - safe_keep
+        self._turns[thread_id] = items[:safe_keep]
+        return deleted
+
 
 @pytest.mark.asyncio()
 async def test_fake_dialog_store_orders_turns() -> None:
@@ -82,6 +91,21 @@ def test_as_prompt_block_pins_identity_absent_from_trimmed_window() -> None:
     )
     assert "user: привет меня зовут геннадий а тебя как?" in block
     assert block.index("геннадий") < block.index("какой сегодня план")
+
+
+@pytest.mark.asyncio()
+async def test_fake_dialog_store_truncate_keeping_rewinds_edit() -> None:
+    store = _FakeDialogTurnStore()
+    await store.append_turn(thread_id="t", role="user", content="q1")
+    await store.append_turn(thread_id="t", role="assistant", content="a1")
+    await store.append_turn(thread_id="t", role="user", content="q2")
+    await store.append_turn(thread_id="t", role="assistant", content="a2")
+    deleted = await store.truncate_keeping(thread_id="t", keep=2)
+    assert deleted == 2
+    window = await store.list_recent_turns(thread_id="t", limit=10)
+    assert [turn.content for turn in window.turns] == ["q1", "a1"]
+    assert await store.truncate_keeping(thread_id="t", keep=2) == 0
+    assert await store.truncate_keeping(thread_id="t", keep=0) == 2
 
 
 def test_as_prompt_block_skips_pin_already_in_window() -> None:

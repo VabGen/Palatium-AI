@@ -186,12 +186,71 @@ class EmptySection:
         return findings
 
 
+#: Kinds expected to carry dense section chrome (kimi-answer-formatting F2).
+_DENSE_KINDS = frozenset({"analysis", "report", "guide"})
+_MIN_DENSE_HEADINGS = 3
+
+
+class SparseAnalysisStructure:
+    """Long analysis/report/guide without kv or nested list — flat wall of sections."""
+
+    rule_id: ClassVar[LintRuleId] = "sparse_analysis_structure"
+    severity: ClassVar[LintSeverity] = "warning"
+
+    def check(
+        self,
+        document: ContentDocument,
+        prose: tuple[tuple[int, str], ...],
+    ) -> list[LintFinding]:
+        if document.meta.kind not in _DENSE_KINDS:
+            return []
+        headings = sum(1 for block in document.blocks if isinstance(block, HeadingBlock))
+        if headings < _MIN_DENSE_HEADINGS:
+            return []
+        has_kv = any(isinstance(block, KeyValueBlock) for block in document.blocks)
+        has_nested = any(
+            isinstance(block, ListBlock) and any(item.level > 0 for item in block.items) for block in document.blocks
+        )
+        if has_kv or has_nested:
+            return []
+        return [LintFinding(rule_id=self.rule_id, severity=self.severity, block_index=None)]
+
+
+class MissingSectionIcons:
+    """Dense kinds need a lead heading icon; later H2 may stay plain (sparse chrome)."""
+
+    rule_id: ClassVar[LintRuleId] = "missing_section_icons"
+    severity: ClassVar[LintSeverity] = "warning"
+
+    def check(
+        self,
+        document: ContentDocument,
+        prose: tuple[tuple[int, str], ...],
+    ) -> list[LintFinding]:
+        if document.meta.kind not in _DENSE_KINDS:
+            return []
+        for index, block in enumerate(document.blocks):
+            if isinstance(block, HeadingBlock):
+                if block.icon is None:
+                    return [
+                        LintFinding(
+                            rule_id=self.rule_id,
+                            severity=self.severity,
+                            block_index=index,
+                        )
+                    ]
+                return []
+        return []
+
+
 RULES: tuple[Rule, ...] = (
     InternalMarkerLeak(),
     DanglingCitation(),
     DuplicateProse(),
     MarkdownResidue(),
     EmptySection(),
+    SparseAnalysisStructure(),
+    MissingSectionIcons(),
 )
 
 
@@ -253,6 +312,8 @@ __all__ = [
     "EmptySection",
     "InternalMarkerLeak",
     "MarkdownResidue",
+    "MissingSectionIcons",
     "Rule",
+    "SparseAnalysisStructure",
     "prose_items",
 ]

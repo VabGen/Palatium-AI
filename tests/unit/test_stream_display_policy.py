@@ -104,7 +104,8 @@ def test_open_paragraph_prose_arrives_before_the_block_closes(chunk_size: int) -
     assert text.startswith("".join(frame.text for frame in partial))
     # Typed provisional ParagraphBlock so BlockRenderer upserts without markdown fallback.
     assert all(isinstance(frame.block, ParagraphBlock) for frame in partial)
-    assert partial[-1].block is not None and text.startswith(partial[-1].block.text)
+    assert partial[-1].block is not None
+    assert text.startswith(partial[-1].block.text)
 
 
 @pytest.mark.parametrize("chunk_size", (1, 2, 5, 11))

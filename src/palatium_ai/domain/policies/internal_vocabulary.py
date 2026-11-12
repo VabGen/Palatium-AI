@@ -121,9 +121,13 @@ _SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.;:!?)\]])")
 FORMATTING_KEYWORDS: frozenset[str] = frozenset(
     {"bold", "italic", "underline", "strikethrough", "strong", "emphasis", "monospace", "bolditalic"}
 )
+#: ``ActionStyle`` literals from ``content_document`` — chrome for HITL buttons, never
+#: user-facing list labels. Models leak them into ``ListItem.emphasis`` as "primary /
+#: secondary" ranking chrome (legal-grounds screenshots); strip in the emphasis slot only.
+_ACTION_STYLE_LEAKS: frozenset[str] = frozenset({"primary", "secondary", "danger"})
 #: ``none`` is a style *value* ("no emphasis"). Ambiguous in prose ("none of the
 #: files"), so it may only be dropped where it is structurally an emphasis label.
-_EMPHASIS_STYLE_VALUES: frozenset[str] = FORMATTING_KEYWORDS | {"none"}
+_EMPHASIS_STYLE_VALUES: frozenset[str] = FORMATTING_KEYWORDS | _ACTION_STYLE_LEAKS | {"none"}
 _STYLE_KEYWORD_ALTERNATION = "|".join(sorted((re.escape(word) for word in _EMPHASIS_STYLE_VALUES), key=len, reverse=True))
 #: A style keyword in **label position** — separator inside (`**bold:**`) or after
 #: (`**bold** —`) the bold run. A style name inside a sentence is left alone: only

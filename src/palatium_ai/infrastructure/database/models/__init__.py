@@ -10,6 +10,7 @@ from .memory_entry import MemoryEntryORM
 from .memory_extract_job import MemoryExtractJobORM
 from .memory_item import MemoryItemORM
 from .message_feedback import MessageFeedbackORM
+from .project import ProjectORM
 from .session import SessionORM
 
 __all__ = [
@@ -22,5 +23,6 @@ __all__ = [
     "MemoryExtractJobORM",
     "MemoryItemORM",
     "MessageFeedbackORM",
+    "ProjectORM",
     "SessionORM",
 ]

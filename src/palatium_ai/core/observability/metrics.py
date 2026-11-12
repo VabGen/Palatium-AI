@@ -92,6 +92,28 @@ try:  # pragma: no cover - optional dependency
         "Estimated LLM cost in USD.",
         ["model", "direction"],
     )
+    # W7.2 first-class cost surface (dual-write alongside legacy agent_* series).
+    _palatium_llm_tokens_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_llm_tokens_total",
+        "LLM tokens by agent/model/direction (input|output).",
+        ["agent", "model", "direction"],
+    )
+    _palatium_llm_cost_usd_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_llm_cost_usd_total",
+        "Estimated LLM cost in USD by agent/model.",
+        ["agent", "model"],
+    )
+    _palatium_subagent_cap_hits_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_subagent_cap_hits_total",
+        "Subagent concurrency cap hits (max_parallel|max_total).",
+        ["cap"],
+    )
+    _palatium_subagent_context_ratio: _PromHistogram | _NoopMetric = _PromHistogram(
+        "palatium_subagent_context_ratio",
+        "Child AgentInput size / parent context size (W7.1 freshness).",
+        ["parent_role", "child_role"],
+        buckets=(0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0),
+    )
     _palatium_llm_cost_missing_total: _PromCounter | _NoopMetric = _PromCounter(
         "palatium_llm_cost_missing_total",
         "LLM completions with tokens but no resolvable USD cost (gateway absent).",
@@ -106,6 +128,26 @@ try:  # pragma: no cover - optional dependency
         "palatium_rbac_denied_total",
         "RBAC tool denials total.",
         ["agent_type", "tool_name"],
+    )
+    _palatium_tool_calls_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_tool_calls_total",
+        "ToolExecutor invocations after RBAC (success/error/denied).",
+        ["agent_type", "tool_name", "outcome"],
+    )
+    _palatium_tool_call_duration_seconds: _PromHistogram | _NoopMetric = _PromHistogram(
+        "palatium_tool_call_duration_seconds",
+        "ToolExecutor handler duration in seconds (RBAC-allowed calls only).",
+        ["agent_type", "tool_name", "outcome"],
+    )
+    _palatium_agent_handoffs_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_agent_handoffs_total",
+        "LangGraph conditional edge handoffs (coordinator routing).",
+        ["from_node", "to_node", "reason"],
+    )
+    _palatium_worker_execution_total: _PromCounter | _NoopMetric = _PromCounter(
+        "palatium_worker_execution_total",
+        "Worker execution slot outcomes by origin kind.",
+        ["worker_kind", "status"],
     )
     _palatium_circuit_breaker_state: _PromGauge | _NoopMetric = _PromGauge(
         "palatium_circuit_breaker_state",
@@ -380,6 +422,13 @@ try:  # pragma: no cover - optional dependency
         "Streamed ContentDocument blocks that never became a typed frame.",
         ["outcome"],
     )
+    # Fraction of HeadingBlock slots with an IconToken after PresentationIconPolicy
+    # enrich (kimi-answer-formatting F5). Observed per finished document; 1.0 is dense.
+    _palatium_formatter_icon_coverage: _PromHistogram | _NoopMetric = _PromHistogram(
+        "palatium_formatter_icon_coverage",
+        "Share of headings carrying an icon after enrich (0..1).",
+        buckets=(0.0, 0.25, 0.5, 0.75, 1.0),
+    )
     # Denominator = every citation the provider emitted; numerator = outcome
     # "resolved". "unanchored" means the model attributed text it never wrote — a
     # grounding signal, not a rendering detail (040, W3a).
@@ -409,9 +458,17 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_turn_hop_budget_exceeded_total = _NoopMetric()
     _palatium_agent_token_usage_total = _NoopMetric()
     _palatium_agent_cost_usd_total = _NoopMetric()
+    _palatium_llm_tokens_total = _NoopMetric()
+    _palatium_llm_cost_usd_total = _NoopMetric()
+    _palatium_subagent_cap_hits_total = _NoopMetric()
+    _palatium_subagent_context_ratio = _NoopMetric()
     _palatium_llm_cost_missing_total = _NoopMetric()
     _palatium_llm_fallback_total = _NoopMetric()
     _palatium_rbac_denied_total = _NoopMetric()
+    _palatium_tool_calls_total = _NoopMetric()
+    _palatium_tool_call_duration_seconds = _NoopMetric()
+    _palatium_agent_handoffs_total = _NoopMetric()
+    _palatium_worker_execution_total = _NoopMetric()
     _palatium_circuit_breaker_state = _NoopMetric()
     _palatium_memory_query_duration_seconds = _NoopMetric()
     _palatium_memory_entry_size_bytes = _NoopMetric()
@@ -466,6 +523,7 @@ except ImportError:  # pragma: no cover - fallback
     _palatium_citation_highlight_total = _NoopMetric()
     _palatium_formatter_schema_total = _NoopMetric()
     _palatium_formatter_partial_block_total = _NoopMetric()
+    _palatium_formatter_icon_coverage = _NoopMetric()
 
 
 @dataclass
@@ -483,11 +541,33 @@ class AgentMetrics:
     _response_shapes: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _schema_outcomes: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _partial_blocks: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
+    _icon_coverage_samples: list[float] = field(default_factory=list, repr=False)
     _citation_outcomes: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _highlight_outcomes: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _judge_scores: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _judge_failures: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _rbac_denies: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
+    _agent_handoffs: dict[tuple[str, str, str], int] = field(
+        default_factory=lambda: defaultdict(int),
+        repr=False,
+    )
+    _worker_executions: dict[tuple[str, str], int] = field(
+        default_factory=lambda: defaultdict(int),
+        repr=False,
+    )
+    _llm_tokens: dict[tuple[str, str, str], int] = field(
+        default_factory=lambda: defaultdict(int),
+        repr=False,
+    )
+    _llm_cost_usd: dict[tuple[str, str], float] = field(
+        default_factory=lambda: defaultdict(float),
+        repr=False,
+    )
+    _subagent_cap_hits: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
+    _subagent_context_ratios: dict[tuple[str, str], list[float]] = field(
+        default_factory=lambda: defaultdict(list),
+        repr=False,
+    )
     _context_tokens: dict[str, int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _secret_redactions: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
     _pii_detections: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int), repr=False)
@@ -536,6 +616,77 @@ class AgentMetrics:
         with self._lock:
             self._rbac_denies[(safe_type, safe_tool)] += 1
         _palatium_rbac_denied_total.labels(agent_type=safe_type, tool_name=safe_tool).inc()
+        self.record_tool_call(agent_type=safe_type, tool_name=safe_tool, outcome="denied")
+
+    def record_tool_call(
+        self,
+        *,
+        agent_type: str,
+        tool_name: str,
+        outcome: str,
+        duration_seconds: float | None = None,
+    ) -> None:
+        """Count ToolExecutor outcomes; observe duration for allowed handler runs."""
+        safe_type = (agent_type or "unknown").strip()[:64] or "unknown"
+        safe_tool = (tool_name or "unknown").strip()[:128] or "unknown"
+        safe_outcome = outcome if outcome in {"success", "error", "denied"} else "error"
+        _palatium_tool_calls_total.labels(
+            agent_type=safe_type,
+            tool_name=safe_tool,
+            outcome=safe_outcome,
+        ).inc()
+        if duration_seconds is not None and safe_outcome != "denied":
+            safe_duration = max(0.0, float(duration_seconds))
+            _palatium_tool_call_duration_seconds.labels(
+                agent_type=safe_type,
+                tool_name=safe_tool,
+                outcome=safe_outcome,
+            ).observe(safe_duration)
+
+    def record_agent_handoff(self, *, from_node: str, to_node: str, reason: str) -> None:
+        """Count coordinator edge decisions (040 handoff observability)."""
+        from palatium_ai.core.types.agent_observability import coerce_handoff_reason
+
+        safe_from = (from_node or "unknown").strip()[:64] or "unknown"
+        safe_to = (to_node or "unknown").strip()[:64] or "unknown"
+        safe_reason = coerce_handoff_reason(reason)
+        with self._lock:
+            self._agent_handoffs[(safe_from, safe_to, safe_reason)] += 1
+        _palatium_agent_handoffs_total.labels(
+            from_node=safe_from,
+            to_node=safe_to,
+            reason=safe_reason,
+        ).inc()
+
+    def record_worker_execution(self, *, worker_kind: str, status: str) -> None:
+        """Surface ``worker_kind`` from the execution slot into metrics (not object-only)."""
+        from palatium_ai.core.types.agent_observability import coerce_worker_status
+
+        safe_kind = (worker_kind or "unknown").strip()[:32] or "unknown"
+        safe_status = coerce_worker_status(status)
+        with self._lock:
+            self._worker_executions[(safe_kind, safe_status)] += 1
+        _palatium_worker_execution_total.labels(worker_kind=safe_kind, status=safe_status).inc()
+
+    def agent_handoff_count(self, *, from_node: str, to_node: str, reason: str) -> int:
+        with self._lock:
+            return self._agent_handoffs[(from_node, to_node, reason)]
+
+    def worker_execution_count(self, *, worker_kind: str, status: str) -> int:
+        with self._lock:
+            return self._worker_executions[(worker_kind, status)]
+
+    def handoff_total(self) -> int:
+        with self._lock:
+            return sum(self._agent_handoffs.values())
+
+    def recorded_handoff_reasons(self) -> set[str]:
+        with self._lock:
+            return {reason for (_, _, reason) in self._agent_handoffs}
+
+    def recorded_worker_statuses(self) -> set[str]:
+        with self._lock:
+            return {status for (_, status) in self._worker_executions}
 
     def rbac_denied_count(self, agent_type: str, tool_name: str) -> int:
         with self._lock:
@@ -678,6 +829,17 @@ class AgentMetrics:
         with self._lock:
             return self._partial_blocks[outcome]
 
+    def record_formatter_icon_coverage(self, *, with_icon: int, headings: int) -> None:
+        """Observe heading-icon density after enrich (0 when the answer has no headings)."""
+        ratio = 0.0 if headings <= 0 else min(max(with_icon / headings, 0.0), 1.0)
+        _palatium_formatter_icon_coverage.observe(ratio)
+        with self._lock:
+            self._icon_coverage_samples.append(ratio)
+
+    def formatter_icon_coverage_samples(self) -> tuple[float, ...]:
+        with self._lock:
+            return tuple(self._icon_coverage_samples)
+
     def record_citation_resolution(self, *, anchor: str, outcome: str) -> None:
         """Count one provider citation by anchor and resolution outcome (W3a).
 
@@ -736,20 +898,80 @@ class AgentMetrics:
         completion_tokens: int,
         cost_usd: float = 0.0,
     ) -> None:
+        safe_agent = (agent_type or "unknown").strip()[:64] or "unknown"
+        safe_model = (model or "unknown").strip()[:128] or "unknown"
         if prompt_tokens > 0:
             _palatium_agent_token_usage_total.labels(
-                model=model,
-                agent_type=agent_type,
+                model=safe_model,
+                agent_type=safe_agent,
                 direction="prompt",
             ).inc(prompt_tokens)
+            _palatium_llm_tokens_total.labels(
+                agent=safe_agent,
+                model=safe_model,
+                direction="input",
+            ).inc(prompt_tokens)
+            with self._lock:
+                self._llm_tokens[(safe_agent, safe_model, "input")] += prompt_tokens
         if completion_tokens > 0:
             _palatium_agent_token_usage_total.labels(
-                model=model,
-                agent_type=agent_type,
+                model=safe_model,
+                agent_type=safe_agent,
                 direction="completion",
             ).inc(completion_tokens)
+            _palatium_llm_tokens_total.labels(
+                agent=safe_agent,
+                model=safe_model,
+                direction="output",
+            ).inc(completion_tokens)
+            with self._lock:
+                self._llm_tokens[(safe_agent, safe_model, "output")] += completion_tokens
         if cost_usd > 0.0:
-            _palatium_agent_cost_usd_total.labels(model=model, direction="llm").inc(cost_usd)
+            _palatium_agent_cost_usd_total.labels(model=safe_model, direction="llm").inc(cost_usd)
+            _palatium_llm_cost_usd_total.labels(agent=safe_agent, model=safe_model).inc(cost_usd)
+            with self._lock:
+                self._llm_cost_usd[(safe_agent, safe_model)] += cost_usd
+
+    def llm_token_count(self, *, agent: str, model: str, direction: str) -> int:
+        with self._lock:
+            return self._llm_tokens[(agent, model, direction)]
+
+    def llm_cost_usd(self, *, agent: str, model: str) -> float:
+        with self._lock:
+            return self._llm_cost_usd[(agent, model)]
+
+    def record_subagent_cap_hit(self, *, cap: str) -> None:
+        from palatium_ai.core.types.w78_observability import SUBAGENT_CAP_KINDS
+
+        safe = cap if cap in SUBAGENT_CAP_KINDS else "max_parallel"
+        with self._lock:
+            self._subagent_cap_hits[safe] += 1
+        _palatium_subagent_cap_hits_total.labels(cap=safe).inc()
+
+    def subagent_cap_hit_count(self, *, cap: str) -> int:
+        with self._lock:
+            return self._subagent_cap_hits[cap]
+
+    def record_subagent_context_ratio(
+        self,
+        *,
+        parent_role: str,
+        child_role: str,
+        ratio: float,
+    ) -> None:
+        safe_parent = (parent_role or "unknown").strip()[:64] or "unknown"
+        safe_child = (child_role or "unknown").strip()[:64] or "unknown"
+        value = max(0.0, float(ratio))
+        with self._lock:
+            self._subagent_context_ratios[(safe_parent, safe_child)].append(value)
+        _palatium_subagent_context_ratio.labels(
+            parent_role=safe_parent,
+            child_role=safe_child,
+        ).observe(value)
+
+    def subagent_context_ratios(self, *, parent_role: str, child_role: str) -> list[float]:
+        with self._lock:
+            return list(self._subagent_context_ratios[(parent_role, child_role)])
 
     def record_llm_cost_missing(self, *, reason: str) -> None:
         """Count completions where tokens > 0 but USD could not be resolved (040)."""
@@ -1020,6 +1242,10 @@ class AgentMetrics:
     def error_count(self, agent_type: str, error_type: str) -> int:
         with self._lock:
             return self._errors[(agent_type, error_type)]
+
+    def escalation_count(self, reason: str) -> int:
+        with self._lock:
+            return self._escalations[reason]
 
     def context_tokens_count(self, agent_type: str) -> int:
         with self._lock:

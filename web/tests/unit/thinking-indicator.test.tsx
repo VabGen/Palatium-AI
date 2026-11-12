@@ -3,6 +3,7 @@ import { useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it } from 'vitest';
 import { ThinkingIndicator } from '../../src/components/ThinkingIndicator';
+import { MessageRow } from '../../src/components/MessageList';
 import { t } from '../../src/i18n';
 import { resolveAppTheme, themeScope, useAppTheme } from '../../src/lib/theme';
 
@@ -13,9 +14,9 @@ function ThemeProbe() {
 }
 
 describe('theme scope', () => {
-  it('reads the light theme from data-theme only', () => {
+  it('defaults to light; dark only via data-theme=dark', () => {
     const scope = document.createElement('div');
-    expect(resolveAppTheme(scope)).toBe('dark');
+    expect(resolveAppTheme(scope)).toBe('light');
     scope.setAttribute('data-theme', 'light');
     expect(resolveAppTheme(scope)).toBe('light');
     scope.setAttribute('data-theme', 'dark');
@@ -43,17 +44,16 @@ describe('theme scope', () => {
     await act(async () => root.render(<ThemeProbe />));
     expect(shadow.querySelector('[data-testid="probe"]')).toHaveAttribute(
       'data-theme-name',
-      'dark'
+      'light'
     );
 
-    // Светлая тема виджета объявляется на shadow host'е (`:host([data-theme])`),
-    // а не в документе: обход предков библиотеки эту границу не переходит.
+    // Тёмная тема — явный opt-in на shadow host'е.
     await act(async () => {
-      host.setAttribute('data-theme', 'light');
+      host.setAttribute('data-theme', 'dark');
     });
     expect(shadow.querySelector('[data-testid="probe"]')).toHaveAttribute(
       'data-theme-name',
-      'light'
+      'dark'
     );
 
     await act(async () => root.unmount());
@@ -83,5 +83,16 @@ describe('ThinkingIndicator', () => {
     expect(document.querySelector('.thinking-indicator')?.textContent).toBe(
       t('msg.pending.composing')
     );
+  });
+
+  it('marks waiting rows without the dead fade-in class', () => {
+    const { container } = render(
+      <MessageRow role="assistant" waiting>
+        <ThinkingIndicator phase={{ state: 'working', label: 'msg.pending.thinking' }} />
+      </MessageRow>
+    );
+    expect(container.querySelector('.msg.is-waiting')).not.toBeNull();
+    expect(container.querySelector('.fade-in')).toBeNull();
+    expect(container.querySelector('.thinking-indicator')).not.toBeNull();
   });
 });

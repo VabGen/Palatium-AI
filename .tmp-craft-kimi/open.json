@@ -1,0 +1,1 @@
+{"error":{"category":"missing","code":"consent_required","details":{"tool":"web_site_open"},"message":"Open a website runs code or changes a device, so it needs your OK first.","remediation":"Approve it when asked, or allow it for this project in Settings.","retryable":false}}

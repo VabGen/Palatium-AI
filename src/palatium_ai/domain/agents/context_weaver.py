@@ -13,6 +13,7 @@ from palatium_ai.domain.policies.types import (
     GROUNDING_DEFAULT,
     RESPONSE_SHAPE_DEFAULT,
     AttachmentScope,
+    ComposerMode,
     FileReferenceKind,
     GroundingMode,
     ResponseShape,
@@ -49,6 +50,8 @@ class ContextWeaverInput(BaseModel):
     has_attachment_context: bool = False
     # Continuity trusts dialog prior for workers — prefer reason_only over search_knowledge.
     has_trusted_prior: bool = False
+    #: Explicit composer chrome (mode pills); carried into ContextPacket / researcher tier.
+    composer_mode: ComposerMode | None = None
 
 
 class ContextWeaverOutput(BaseModel):

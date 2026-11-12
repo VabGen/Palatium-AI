@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from palatium_ai.domain.content.content_document import (
+    NESTED_ITEM_PREFIX,
     ContentDocument,
     DocumentMeta,
     ListBlock,
     ListItem,
-    NESTED_ITEM_PREFIX,
     normalize_document_list_nesting,
     normalize_list_item_nesting,
 )

@@ -438,12 +438,16 @@ class ContinuityPolicy:
         response_shape: ResponseShape = RESPONSE_SHAPE_DEFAULT,
         file_reference: FileReferenceKind = FILE_REFERENCE_DEFAULT,
         clarify_underspec_default: bool = False,
+        has_prior_dialog: bool = False,
+        has_attachment_context: bool = False,
+        user_text: str = "",
     ) -> EffectiveRoutingIntent:
         """Apply UserChoiceIntentPolicy (sole choice-axis owner) then build routing intent."""
         if clarify_underspec_default and underspec == "none":
             clarified: UnderspecificationKind = "discrete_choice" if requires_user_choice else "open_text"
             underspec = clarified
 
+        prior_present = bool((prior_context or "").strip())
         normalized = ClarificationGatePolicy.apply(
             UserChoiceIntentPolicy.normalize(
                 IntentClassifierOutput(
@@ -458,7 +462,10 @@ class ContinuityPolicy:
                     confidence=max(0.0, min(1.0, confidence)),
                     reasoning=(reasoning or "continuity")[:2000],
                 )
-            )
+            ),
+            has_prior_dialog=has_prior_dialog or prior_present,
+            has_attachment_context=has_attachment_context,
+            user_text=user_text,
         )
         # Trusted-prior follow-ups suppress history-blind Intent review unless choice HITL.
         suppress = trust_prior_for_workers and not normalized.requires_user_choice
@@ -467,18 +474,28 @@ class ContinuityPolicy:
         # (same reasoning as expand/shorten/rewrite → knowledge_request, 055).
         task_kind = normalized.task_kind
         requires_mcp = normalized.requires_mcp
+        grounding = normalized.grounding
+        grounding_reason = normalized.grounding_reason
         if file_reference == "thread_file":
             if task_kind == "response_formatting":
                 task_kind = "knowledge_request"
             requires_mcp = True
+        elif trust_prior_for_workers and grounding == "required":
+            # Dialog prior *is* the evidence (correction / follow-up). Keeping
+            # grounding=required forced empty search_knowledge → «нет данных»
+            # over VEGA-9 in prior (W10 2b). Thread-file branch above stays required.
+            grounding = "optional"
+            grounding_reason = (f"{(grounding_reason or '').rstrip()}; continuity→optional (trusted dialog prior is evidence)")[
+                :500
+            ]
         return EffectiveRoutingIntent(
             task_kind=task_kind,
             requires_mcp=requires_mcp,
             requires_user_choice=normalized.requires_user_choice,
             underspecification_kind=normalized.underspecification_kind,
             candidate_capabilities=normalized.candidate_capabilities,
-            grounding=normalized.grounding,
-            grounding_reason=normalized.grounding_reason,
+            grounding=grounding,
+            grounding_reason=grounding_reason,
             transformation=normalized.transformation,
             response_shape=response_shape,
             file_reference=file_reference,
@@ -560,6 +577,8 @@ class ContinuityPolicy:
         if answered is not None:
             return answered
 
+        gate_prior = bool(assistant_prior and assistant_prior.strip()) or bool(dialog is not None and dialog.turns)
+        gate_user = (user_text or "").strip()
         if snap.kind == "clarify":
             return cls._finalize(
                 task_kind="clarification_needed",
@@ -578,6 +597,9 @@ class ContinuityPolicy:
                 response_shape=snap.response_shape,
                 file_reference=snap.file_reference,
                 clarify_underspec_default=True,
+                has_prior_dialog=gate_prior,
+                has_attachment_context=has_turn_attachments,
+                user_text=gate_user,
             )
 
         return cls._finalize(
@@ -596,6 +618,9 @@ class ContinuityPolicy:
             transformation=snap.transformation,
             response_shape=snap.response_shape,
             file_reference=snap.file_reference,
+            has_prior_dialog=gate_prior,
+            has_attachment_context=has_turn_attachments,
+            user_text=gate_user,
         )
 
     @classmethod

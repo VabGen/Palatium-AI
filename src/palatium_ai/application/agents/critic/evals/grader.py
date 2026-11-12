@@ -18,6 +18,15 @@ def _grade_resolved(expect: dict[str, Any], resolved: dict[str, Any]) -> GradeRe
             if not isinstance(actual, (int, float)) or actual < expected:
                 return failed(0.0, details=f"{field}: {actual!r} < min {expected!r}")
             continue
+        if key == "violations_contains":
+            actual_violations = {str(item) for item in (resolved.get("violations") or [])}
+            needed = {str(item) for item in (expected or [])}
+            if not needed.issubset(actual_violations):
+                return failed(
+                    0.0,
+                    details=f"violations_contains: need {sorted(needed)!r} in {sorted(actual_violations)!r}",
+                )
+            continue
         actual = resolved.get(key)
         if actual != expected:
             return failed(0.0, details=f"{key}: expected {expected!r}, got {actual!r}")

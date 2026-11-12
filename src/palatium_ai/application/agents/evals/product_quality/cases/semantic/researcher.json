@@ -1,0 +1,86 @@
+{
+  "cases": [
+    {
+      "id": "sem-researcher-01",
+      "agent": "researcher",
+      "scenario": "boiling_point_water",
+      "input": { "user_text": "At what Celsius temperature does pure water boil at standard atmospheric pressure?" },
+      "expected": { "must_contain": ["100"], "must_not_contain": ["212°C", "0°C only"] },
+      "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-02",
+      "agent": "researcher",
+      "scenario": "http_created",
+      "input": { "user_text": "Which HTTP status code means a resource was successfully created?" },
+      "expected": { "must_contain": ["201"], "must_not_contain": ["404", "500"] },
+      "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-03",
+      "agent": "researcher",
+      "scenario": "earth_satellites",
+      "input": { "user_text": "How many natural satellites does Earth have?" },
+      "expected": { "must_contain": ["Moon"], "must_not_contain": ["two moons", "Phobos", "Mars has"] },
+      "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-04",
+      "agent": "researcher",
+      "scenario": "sql_select",
+      "input": { "user_text": "Which SQL keyword retrieves rows from a table?" },
+      "expected": { "must_contain": ["SELECT"], "must_not_contain": ["DROP TABLE"] },
+      "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-05",
+      "agent": "researcher",
+      "scenario": "pythagoras",
+      "input": { "user_text": "In a right triangle with legs 3 and 4, what is the hypotenuse length?" },
+      "expected": { "must_contain": ["5"], "must_not_contain": ["7", "12"] },
+      "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-06",
+      "agent": "researcher",
+      "scenario": "json_null",
+      "input": { "user_text": "What JSON literal represents a null value?" },
+      "expected": { "must_contain": ["null"], "must_not_contain": ["undefined", "None"] },
+      "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-07",
+      "agent": "researcher",
+      "scenario": "rgb_red",
+      "input": { "user_text": "What are the RGB channel values for pure red?" },
+      "expected": { "must_contain": ["255", "0"], "must_not_contain": ["cyan"] },
+      "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-08",
+      "agent": "researcher",
+      "scenario": "tcp_handshake",
+      "input": { "user_text": "Name the three-way handshake messages used to establish a TCP connection." },
+      "expected": { "must_contain": ["SYN", "ACK"], "must_not_contain": ["UDP flood"] },
+      "needs_judge": true,
+      "grader": "rule_then_judge",
+      "tags": ["researcher", "semantic", "judge"]
+    },
+    {
+      "id": "sem-researcher-09",
+      "agent": "researcher",
+      "scenario": "utc_abbrev",
+      "input": { "user_text": "What does the time zone abbreviation UTC stand for?" },
+      "expected": { "must_contain": ["Coordinated Universal Time"], "must_not_contain": ["United Time Council"] },
+      "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-10",
+      "agent": "researcher",
+      "scenario": "http_get_safe",
+      "input": { "user_text": "Is HTTP GET considered a safe method? Answer yes or no and name the method." },
+      "expected": { "must_contain": ["yes", "GET"], "must_not_contain": ["POST is safe"] },
+      "tags": ["researcher", "semantic"]
+    }
+  ]
+}

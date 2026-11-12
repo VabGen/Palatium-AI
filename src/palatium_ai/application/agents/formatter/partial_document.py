@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from pydantic import TypeAdapter, ValidationError
 
 from palatium_ai.application.agents.formatter.icon_sanitizer import coerce_icon_fields
+from palatium_ai.application.agents.formatter.layout_coercion import coerce_layout_fields
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.content import ContentBlock, ParagraphBlock, validate_content_block
@@ -230,6 +231,9 @@ def _typed_block(node: object, index: int) -> ContentBlock | None:
     normalized, dropped_icons = coerce_icon_fields(node)
     if dropped_icons:
         logger.info("formatter.partial_parse.icons_dropped", index=index, count=dropped_icons)
+    normalized, layout_fixes = coerce_layout_fields(normalized)
+    if layout_fixes:
+        logger.info("formatter.partial_parse.layout_coerced", index=index, count=layout_fixes)
     try:
         block = _BLOCK_ADAPTER.validate_python(normalized)
         validate_content_block(block)

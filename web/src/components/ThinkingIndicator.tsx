@@ -5,23 +5,15 @@ import { type PendingPhase } from '../lib/pendingOrb';
 import { useAppTheme } from '../lib/theme';
 
 /**
- * Индикатор работы агента: только орб, без облака и подписи.
+ * Индикатор работы агента: canvas-орб [thinking-orbs](https://github.com/Jakubantalik/thinking-orbs).
  *
- * Это и есть «марка ассистента в момент работы» (ChatGPT / Claude / Gemini):
- * 64px — единственный размер, отрисованный и выверенный вручную. Орб стоит в
- * колонке будущего ответа, поэтому первый токен не сдвигает текст по
- * горизонтали: облако появляется на том же левом крае, аватар — в свободной
- * левой колонке.
+ * 64px — chat-avatar preset библиотеки (не scale от 40). Орб в колонке будущего
+ * ответа → без layout shift при первом токене. Фаза графа → `state` орба;
+ * русская подпись только через `role="status"` (084).
  *
- * Подпись не видна, но существует: `role="status"` объявляет СМЕНУ фазы
- * скринридеру (084 — состояние нельзя передавать только картинкой), а при
- * `prefers-reduced-motion` она же показывается текстом, потому что движение
- * там выключено и остаётся единственным сигналом «идёт работа».
- *
- * `theme` передаётся явно, а не `theme="auto"`. В библиотеке `auto` обходит
- * предков через `parentElement`, а границу Shadow DOM так не перейти; не найдя
- * `data-theme`, он падает на `prefers-color-scheme` — сигнал, который контракт
- * `tokens.css` отвергает (светлая тема — только явный opt-in хоста).
+ * `theme` явно (не `auto`): `auto` обходит предков через `parentElement` и не
+ * пересекает Shadow DOM → падает на `prefers-color-scheme`, чего `tokens.css`
+ * не принимает (тема только через `data-theme` хоста).
  */
 export function ThinkingIndicator({ phase }: { phase: PendingPhase }) {
   const anchorRef = useRef<HTMLSpanElement>(null);

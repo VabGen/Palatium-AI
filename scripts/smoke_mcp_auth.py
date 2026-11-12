@@ -35,14 +35,14 @@ def _request(
     body: bytes | None = None,
     timeout: float = 10.0,
 ) -> tuple[int, bytes]:
-    req = urllib.request.Request(  # noqa: S310
+    req = urllib.request.Request(
         _http_url(url),
         data=body,
         headers=headers or {},
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return int(resp.status), resp.read()
     except urllib.error.HTTPError as exc:
         return int(exc.code), exc.read()

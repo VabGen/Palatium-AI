@@ -1,6 +1,6 @@
 # src/palatium_ai/domain/memory/contextualizer.py
 
-"""Контракты Contextualizer — rewrite / anaphora перед IntentClassifier."""
+"""Контракты Contextualizer — rewrite / anaphora после Intent (Intent-first)."""
 
 from __future__ import annotations
 

@@ -1,23 +1,20 @@
 # src/palatium_ai/domain/content/code_text.py
 
-"""Fenced-code text kept verbatim: repair a provider's HTML-entity slip (055).
+r"""Fenced-code text kept verbatim: repair provider slips that hurt readability (055).
 
 The schema-first contract asks the provider for a ``ContentDocument`` JSON, and
-``CodeBlock.content`` is user-facing source code. Some providers HTML-escape the
-quotes inside that string (``{"name": "Alice"}`` → ``{&quot;name&quot;: …}``)
-because they treat the surrounding JSON/XML-ish payload as markup. The client
-renders code through a text node, so the entities reach the user literally —
-double-escaped in the DOM (E2E-05).
+``CodeBlock.content`` is user-facing source code. Two failure modes reach the
+client as an unreadable one-liner:
 
-This is a contract repair, not a phrase list: a code snippet is text, never HTML,
-so an entity-escaped fragment is unescaped exactly once at the typed-block
-boundary. Detection is structural — a snippet qualifies only when it carries
-quote entities **and** no raw double quote, which is the signature of a fully
-escaped fragment. Code that legitimately shows ``&quot;`` also contains the raw
-quotes of the string it sits in (``print("&quot;")``), so it is left untouched.
+1. HTML-escaped quotes (``{"name": "Alice"}`` → ``{&quot;name&quot;: …}``) —
+   the client renders a text node, so entities show literally (E2E-05).
+2. Collapsed newlines — the model minifies the snippet or double-escapes
+   ``\n`` inside the JSON string, so a multi-statement program scrolls
+   horizontally as a single line.
 
-Markup entities (``&lt;``/``&gt;``) are deliberately out of scope: an HTML snippet
-legitimately contains them, so unescaping would corrupt correct code.
+Repairs are structural (language + shape of the string), never phrase lists.
+Markup entities (``&lt;``/``&gt;``) stay out of scope: an HTML snippet may
+legitimately contain them.
 """
 
 from __future__ import annotations
@@ -37,6 +34,38 @@ _ANY_ENTITY = re.compile(r"&(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#\d{1,7}|#x[0-9a-fA-F]{
 #: Bounded: a provider may escape twice, but never intentionally three times.
 _MAX_UNESCAPE_ROUNDS = 2
 
+#: Literal backslash-n / backslash-t that survived double JSON escaping.
+_LITERAL_ESCAPES = re.compile(r"\\([ntr])")
+_ESCAPE_MAP = {"n": "\n", "t": "\t", "r": "\r"}
+
+#: Languages where ``><`` soft-breaks are safe (markup, not comparison operators).
+_MARKUP_LANGS = frozenset(
+    {
+        "html",
+        "htm",
+        "xml",
+        "svg",
+        "xhtml",
+        "vue",
+        "jsx",
+        "tsx",
+        "svelte",
+    }
+)
+
+#: ``def foo(...) -> T: body`` jammed on one line (annotation colons allowed).
+_PY_DEF_BODY = re.compile(
+    r"(?P<header>(?:async\s+)?def\b.+?\))\s*(?P<ret>->\s*[^:]+)?\s*:"
+    r"[ \t]+(?P<body>\S)",
+)
+#: ``class Foo(Bar): body`` without nested type colons in the header.
+_PY_CLASS_BODY = re.compile(
+    r"(?P<header>class\b[^:\n]+):[ \t]+(?P<body>\S)",
+)
+
+#: Minified statement glue — only when the whole snippet is still one line.
+_STMT_SEMI = re.compile(r";[ \t]+")
+
 
 def normalize_code_entities(content: str) -> str:
     """Undo provider HTML escaping in a code snippet; leave real entities alone."""
@@ -53,4 +82,68 @@ def normalize_code_entities(content: str) -> str:
     return result
 
 
-__all__ = ["normalize_code_entities"]
+def _expand_literal_escapes(content: str) -> str:
+    r"""Turn leftover ``\n`` / ``\t`` into real control chars when no newline exists.
+
+    Double-encoded JSON (``\\n`` → string ``\n``) is a common provider slip;
+    expanding only when the snippet has zero real newlines keeps authored
+    ``print("\n")`` demos intact — those still contain a real newline elsewhere
+    or are short enough that a single-line demo is intentional.
+    """
+    if "\n" in content or not _LITERAL_ESCAPES.search(content):
+        return content
+    return _LITERAL_ESCAPES.sub(lambda m: _ESCAPE_MAP[m.group(1)], content)
+
+
+def _soft_break_markup(content: str) -> str:
+    """Insert a newline between adjacent tags in a minified HTML/XML blob."""
+    if "\n" in content or "<" not in content:
+        return content
+    # ``><`` → ``>\n<``; keep attribute spaces inside a tag untouched.
+    return re.sub(r">\s*<", ">\n<", content)
+
+
+def _soft_break_python(content: str) -> str:
+    """Split a one-line ``def``/``class`` header from its body when jammed together."""
+    if "\n" in content or len(content) < 60:
+        return content
+    def_match = _PY_DEF_BODY.search(content)
+    if def_match is not None:
+        ret = def_match.group("ret")
+        header = def_match.group("header") + (f" {ret.strip()}" if ret else "") + ":"
+        return content[: def_match.start()] + f"{header}\n    {def_match.group('body')}" + content[def_match.end() :]
+    class_match = _PY_CLASS_BODY.search(content)
+    if class_match is None:
+        return content
+    return (
+        content[: class_match.start()]
+        + f"{class_match.group('header')}:\n    {class_match.group('body')}"
+        + content[class_match.end() :]
+    )
+
+
+def _soft_break_statements(content: str) -> str:
+    """Split ``a; b; c`` one-liners — never touch strings with real newlines."""
+    if "\n" in content or ";" not in content or len(content) < 60:
+        return content
+    # Skip if it looks like a for-loop header or only one semicolon in a short expr.
+    if content.count(";") < 1:
+        return content
+    return _STMT_SEMI.sub(";\n", content)
+
+
+def normalize_code_content(content: str, *, language: str = "text") -> str:
+    """Entity repair + restore readable line structure for collapsed snippets."""
+    result = normalize_code_entities(content)
+    result = _expand_literal_escapes(result)
+    lang = (language or "text").strip().lower()
+    if lang in _MARKUP_LANGS or (lang == "text" and result.lstrip().startswith("<!")):
+        result = _soft_break_markup(result)
+    if lang in {"python", "py", "python3"}:
+        result = _soft_break_python(result)
+    if lang in {"javascript", "js", "typescript", "ts", "java", "c", "cpp", "go", "rust"}:
+        result = _soft_break_statements(result)
+    return result
+
+
+__all__ = ["normalize_code_content", "normalize_code_entities"]

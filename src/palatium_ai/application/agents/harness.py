@@ -12,22 +12,26 @@ from typing import TYPE_CHECKING
 
 from palatium_ai.application.services.context_builder import ContextBuilder
 from palatium_ai.application.services.cost_budget import CostBudgetExceededError
+from palatium_ai.core.config import get_settings
 from palatium_ai.core.context.tokens import count_tokens
 from palatium_ai.core.exceptions import AgentExecutionError
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.logging.context import user_id_var
 from palatium_ai.core.observability.metrics import agent_metrics
+from palatium_ai.core.observability.redaction import hash8
 from palatium_ai.core.observability.tracing import add_gen_ai_attributes, traceable
 from palatium_ai.core.observability.turn_tokens import get_turn_token_collector
 from palatium_ai.core.resilience import CircuitOpenError
+from palatium_ai.core.resilience.retry import retry_async
 from palatium_ai.core.security.secret_scanner import (
     redact_text,
     secret_pattern_labels,
 )
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.llm.errors import EmptyLLMCompletionError, StructuredOutputUnsupportedError
+from palatium_ai.domain.agents.output_contracts import check_agent_output_schema
 from palatium_ai.domain.content.citations import CitationRef
+from palatium_ai.domain.llm.errors import EmptyLLMCompletionError, StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.models import (
     ChatMessage,
     LLMCompletion,
@@ -37,8 +41,14 @@ from palatium_ai.domain.llm.models import (
 )
 from palatium_ai.domain.llm.structured_output import assert_json_schema_model
 from palatium_ai.domain.memory.compact import CompactRequest
+from palatium_ai.domain.policies.llm_retry import default_llm_retry_policy, is_transient_llm_error
 from palatium_ai.domain.policies.llm_timeout import compute_llm_timeout_seconds
 from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyPolicy
+from palatium_ai.domain.policies.subagent_context import (
+    assert_fresh_handoff_context,
+    context_char_len,
+    context_ratio,
+)
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -54,6 +64,36 @@ DeltaCallback = Callable[[str], object]
 logger = get_logger(__name__)
 
 _DEFAULT_MAX_TOKENS = 2048
+_PROMPT_ARCHIVE_MAX_CHARS = 4_000
+
+
+def _maybe_archive_prompts(*, agent_role: str, messages: list[ChatMessage]) -> None:
+    """Opt-in redacted prompt archive for debug threads (dev-only setting, 020).
+
+    When ``LLM_PROMPT_ARCHIVE_ENABLED=False`` (prod default) this returns before any
+    redaction/join work and never emits ``harness.llm_prompt_archive`` — no prompt
+    body reaches Sentry/OTel via this path. No archive-only heavy imports.
+    """
+    try:
+        settings = get_settings()
+    except Exception:  # noqa: BLE001  # settings may be unavailable in unit stubs
+        return
+    if not settings.observability.llm_prompt_archive_enabled:
+        return
+    if settings.app.environment != "development":
+        return
+    parts: list[str] = []
+    for message in messages:
+        redacted = redact_text(message.content or "")
+        parts.append(f"{message.role}:{redacted}")
+    joined = "\n".join(parts)
+    logger.info(
+        "harness.llm_prompt_archive",
+        agent_role=agent_role,
+        prompt_hash=hash8(joined),
+        prompt_chars=len(joined),
+        prompt_preview=joined[:_PROMPT_ARCHIVE_MAX_CHARS],
+    )
 
 
 def _prompt_token_estimate(messages: list[ChatMessage]) -> int:
@@ -336,6 +376,72 @@ class Harness:
             cost_usd=cost_usd,
         )
 
+    async def _llm_generate_once(
+        self,
+        *,
+        llm: LLMPort,
+        config: AgentConfig,
+        messages: list[ChatMessage],
+        resolved_model: str | None,
+        response_format: LLMResponseFormat | None,
+        response_model: type[BaseModel] | None,
+        max_tokens: int | None,
+        attempt: int,
+        prompt_version: str,
+    ) -> LLMCompletion:
+        """One LLM attempt — empty completion raises into the retry loop (W8.3)."""
+        logger.debug(
+            "harness.llm_call",
+            agent=config.name,
+            agent_role=config.role,
+            model=resolved_model,
+            attempt=attempt,
+            max_retries=config.max_retries,
+            response_format=response_format or "text",
+            prompt_version=prompt_version,
+        )
+        if self._cost_budget is not None:
+            self._cost_budget.assert_turn_allows_call()
+        cached_messages = _with_system_prompt_cache(messages)
+        _maybe_archive_prompts(agent_role=config.role, messages=cached_messages)
+        call_timeout = _resolve_call_timeout_seconds(config, cached_messages, max_tokens=max_tokens)
+        completion = await asyncio.wait_for(
+            llm.generate(
+                cached_messages,
+                model=resolved_model,
+                temperature=config.temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                response_model=response_model,
+                timeout_seconds=call_timeout,
+            ),
+            timeout=call_timeout,
+        )
+        if not completion.content.strip() and not completion.citations:
+            agent_metrics.record_error(config.role, "llm_empty_response")
+            logger.warning(
+                "llm.empty_response",
+                agent=config.name,
+                agent_role=config.role,
+                model=resolved_model,
+                attempt=attempt,
+                max_retries=config.max_retries,
+                response_format=response_format or "text",
+                finish_reason=completion.finish_reason,
+                prompt_version=prompt_version,
+            )
+            raise EmptyLLMCompletionError(
+                model=completion.model or resolved_model or "",
+                finish_reason=completion.finish_reason,
+            )
+        cost_usd = self._record_llm_usage(
+            config=config,
+            completion=completion,
+            fallback_model=resolved_model or "",
+        )
+        await self._track_cost_if_needed(config=config, completion=completion, cost_usd=cost_usd)
+        return completion
+
     @traceable(name="harness.call_llm")
     async def call_llm(
         self,
@@ -346,104 +452,126 @@ class Harness:
         response_model: type[BaseModel] | None = None,
         max_tokens: int | None = None,
     ) -> LLMCompletion:
-        """LLM with retry/backoff, budget guard, token metrics (030)."""
+        """LLM with shared RetryPolicy backoff, budget guard, token metrics (030, W8.3)."""
         assert_json_schema_model(response_format, response_model)
         llm = self._resolve_llm(config)
-        last_error: Exception | None = None
         resolved_model = config.llm_model
+        prompt_version = _prompt_version_for_role(config.role)
+        policy = default_llm_retry_policy(max_attempts=config.max_retries)
+        attempt_box = {"n": 0}
 
         if self._cost_budget is not None:
             self._cost_budget.assert_turn_allows_call()
 
-        for attempt in range(config.max_retries):
-            logger.debug(
-                "harness.llm_call",
+        async def _once() -> LLMCompletion:
+            attempt_box["n"] += 1
+            return await self._llm_generate_once(
+                llm=llm,
+                config=config,
+                messages=messages,
+                resolved_model=resolved_model,
+                response_format=response_format,
+                response_model=response_model,
+                max_tokens=max_tokens,
+                attempt=attempt_box["n"],
+                prompt_version=prompt_version,
+            )
+
+        def _on_retry(state: object) -> None:
+            agent_metrics.record_error(config.role, "llm_attempt_failed")
+            outcome = getattr(state, "outcome", None)
+            error = outcome.exception() if outcome is not None and hasattr(outcome, "exception") else None
+            logger.warning(
+                "llm.attempt_failed",
                 agent=config.name,
                 agent_role=config.role,
                 model=resolved_model,
-                attempt=attempt + 1,
+                attempt=getattr(state, "attempt_number", attempt_box["n"]),
                 max_retries=config.max_retries,
-                response_format=response_format or "text",
+                error_type=type(error).__name__ if error is not None else None,
+                retrying=True,
+                prompt_version=prompt_version,
             )
-            try:
-                if self._cost_budget is not None:
-                    self._cost_budget.assert_turn_allows_call()
-                cached_messages = _with_system_prompt_cache(messages)
-                call_timeout = _resolve_call_timeout_seconds(config, cached_messages, max_tokens=max_tokens)
-                completion = await asyncio.wait_for(
-                    llm.generate(
-                        cached_messages,
-                        model=resolved_model,
-                        temperature=config.temperature,
-                        max_tokens=max_tokens,
-                        response_format=response_format,
-                        response_model=response_model,
-                        timeout_seconds=call_timeout,
-                    ),
-                    timeout=call_timeout,
-                )
-                # A 200 with empty content is a provider defect, not an answer: raising
-                # here keeps it inside the retry loop (a parse error later would not be
-                # retried) and skips billing for a call that produced nothing.
-                if not completion.content.strip() and not completion.citations:
-                    agent_metrics.record_error(config.role, "llm_empty_response")
-                    logger.warning(
-                        "llm.empty_response",
-                        agent=config.name,
-                        agent_role=config.role,
-                        model=resolved_model,
-                        attempt=attempt + 1,
-                        max_retries=config.max_retries,
-                        response_format=response_format or "text",
-                        finish_reason=completion.finish_reason,
-                    )
-                    raise EmptyLLMCompletionError(
-                        model=completion.model or resolved_model or "",
-                        finish_reason=completion.finish_reason,
-                    )
-                cost_usd = self._record_llm_usage(
-                    config=config,
-                    completion=completion,
-                    fallback_model=resolved_model or "",
-                )
-                await self._track_cost_if_needed(
-                    config=config,
-                    completion=completion,
-                    cost_usd=cost_usd,
-                )
-                return completion
-            except CostBudgetExceededError:
-                raise
-            except StructuredOutputUnsupportedError:
-                raise
-            except CircuitOpenError as exc:
-                # All provider breakers are open: every retry would just re-check the
-                # breaker and sleep, so fail immediately with the platform error type.
-                raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
-            except Exception as exc:  # noqa: BLE001  # retry loop captures any provider failure before raising (030)
-                last_error = exc
-                # A retried attempt is invisible otherwise: only the final outcome leaves
-                # the harness, so a 14 s hop cannot be told apart from a cold provider or
-                # a retried 5xx. Type only — the message may echo provider payload (020).
-                retrying = attempt < config.max_retries - 1
-                agent_metrics.record_error(config.role, "llm_attempt_failed")
-                logger.warning(
-                    "llm.attempt_failed",
-                    agent=config.name,
-                    agent_role=config.role,
-                    model=resolved_model,
-                    attempt=attempt + 1,
-                    max_retries=config.max_retries,
-                    error_type=type(exc).__name__,
-                    retrying=retrying,
-                )
-                if not retrying:
-                    break
-                await asyncio.sleep(2**attempt)
 
-        raise AgentExecutionError(
-            f"LLM call failed after {config.max_retries} attempts: {last_error}",
-        ) from last_error
+        try:
+            return await retry_async(
+                _once,
+                policy=policy,
+                is_retryable=_is_retryable_llm_call,
+                description=f"llm.{config.role}",
+                on_retry=_on_retry,
+            )
+        except CostBudgetExceededError, StructuredOutputUnsupportedError:
+            raise
+        except CircuitOpenError as exc:
+            raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
+        except Exception as exc:
+            if not isinstance(exc, AgentExecutionError):
+                agent_metrics.record_error(config.role, "llm_attempt_failed")
+            raise AgentExecutionError(
+                f"LLM call failed after {config.max_retries} attempts: {exc}",
+            ) from exc
+
+    async def _stream_once(
+        self,
+        *,
+        llm: LLMPort,
+        config: AgentConfig,
+        cached_messages: list[ChatMessage],
+        resolved_model: str | None,
+        response_format: LLMResponseFormat | None,
+        response_model: type[BaseModel] | None,
+        on_delta: DeltaCallback | None,
+        max_tokens: int | None,
+        call_timeout: float,
+        initial_model: str,
+    ) -> tuple[LLMCompletion, bool]:
+        """One stream attempt; returns (completion, forwarded_any_delta)."""
+        forwarded = False
+
+        def _guarded_on_delta(chunk: str, *, _cb: DeltaCallback | None = on_delta) -> object:
+            nonlocal forwarded
+            if chunk:
+                forwarded = True
+            if _cb is None:
+                return None
+            return _cb(chunk)
+
+        if self._cost_budget is not None:
+            self._cost_budget.assert_turn_allows_call()
+        completion = await asyncio.wait_for(
+            _accumulate_stream_deltas(
+                llm.generate_stream(
+                    cached_messages,
+                    model=resolved_model,
+                    temperature=config.temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    response_model=response_model,
+                    timeout_seconds=call_timeout,
+                ),
+                on_delta=_guarded_on_delta,
+                initial_model=initial_model,
+            ),
+            timeout=call_timeout,
+        )
+        if not completion.content.strip() and not completion.citations:
+            agent_metrics.record_error(config.role, "llm_empty_response")
+            raise EmptyLLMCompletionError(
+                model=completion.model or resolved_model or "",
+                finish_reason=completion.finish_reason,
+            )
+        cost_usd = self._record_llm_usage(
+            config=config,
+            completion=completion,
+            fallback_model=resolved_model or "",
+        )
+        await self._track_cost_if_needed(
+            config=config,
+            completion=completion,
+            cost_usd=cost_usd,
+        )
+        return completion, forwarded
 
     @traceable(name="harness.call_llm_stream")
     async def call_llm_stream(
@@ -456,7 +584,7 @@ class Harness:
         on_delta: DeltaCallback | None = None,
         max_tokens: int | None = None,
     ) -> LLMCompletion:
-        """Streaming LLM; accumulates content and optionally forwards deltas (W1.4)."""
+        """Streaming LLM with retries only before the first delta (no UI duplicates)."""
         assert_json_schema_model(response_format, response_model)
         llm = self._resolve_llm(config)
         resolved_model = config.llm_model
@@ -464,59 +592,88 @@ class Harness:
             self._cost_budget.assert_turn_allows_call()
 
         cached_messages = _with_system_prompt_cache(messages)
+        _maybe_archive_prompts(agent_role=config.role, messages=cached_messages)
         call_timeout = _resolve_call_timeout_seconds(config, cached_messages, max_tokens=max_tokens)
         initial_model = (resolved_model or "").strip() or "unknown"
-        try:
-            completion = await asyncio.wait_for(
-                _accumulate_stream_deltas(
-                    llm.generate_stream(
-                        cached_messages,
-                        model=resolved_model,
-                        temperature=config.temperature,
-                        max_tokens=max_tokens,
-                        response_format=response_format,
-                        response_model=response_model,
-                        timeout_seconds=call_timeout,
-                    ),
+        last_error: Exception | None = None
+
+        for attempt in range(config.max_retries):
+            forwarded = False
+            try:
+                completion, forwarded = await self._stream_once(
+                    llm=llm,
+                    config=config,
+                    cached_messages=cached_messages,
+                    resolved_model=resolved_model,
+                    response_format=response_format,
+                    response_model=response_model,
                     on_delta=on_delta,
+                    max_tokens=max_tokens,
+                    call_timeout=call_timeout,
                     initial_model=initial_model,
-                ),
-                timeout=call_timeout,
+                )
+                return completion
+            except CostBudgetExceededError:
+                raise
+            except StructuredOutputUnsupportedError:
+                raise
+            except CircuitOpenError as exc:
+                raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
+            except TimeoutError as exc:
+                last_error = AgentExecutionError(f"LLM stream timed out after {call_timeout:g}s")
+                last_error.__cause__ = exc
+            except Exception as exc:  # noqa: BLE001  # stream retry captures provider failure (030)
+                last_error = exc
+
+            retrying = attempt < config.max_retries - 1 and not forwarded
+            agent_metrics.record_error(config.role, "llm_stream_attempt_failed")
+            logger.warning(
+                "llm.stream_attempt_failed",
+                agent=config.name,
+                agent_role=config.role,
+                model=resolved_model,
+                attempt=attempt + 1,
+                max_retries=config.max_retries,
+                error_type=type(last_error).__name__ if last_error else "unknown",
+                retrying=retrying,
+                forwarded=forwarded,
             )
-        except TimeoutError as exc:
-            raise AgentExecutionError(
-                f"LLM stream timed out after {call_timeout:g}s",
-            ) from exc
-        except StructuredOutputUnsupportedError:
-            raise
-        except CircuitOpenError as exc:
-            raise AgentExecutionError(f"LLM provider circuit open: {exc}") from exc
+            if not retrying:
+                break
+            await asyncio.sleep(2**attempt)
 
-        cost_usd = self._record_llm_usage(
-            config=config,
-            completion=completion,
-            fallback_model=resolved_model or "",
+        if isinstance(last_error, AgentExecutionError):
+            raise last_error
+        raise AgentExecutionError(
+            f"LLM stream failed after {config.max_retries} attempts: {last_error}",
+        ) from last_error
+
+    def _reject_dirty_handoff(self, *, role: str, input: AgentInput) -> AgentOutput | None:
+        """W7.1 isolation gate — fail-closed on pollution / keys outside allow-list."""
+        parent_role = (input.context.get("_parent_role") or "").strip()
+        if not parent_role:
+            return None
+        dirty = assert_fresh_handoff_context(input.context)
+        if dirty:
+            agent_metrics.record_error(role, "DirtyParentContext")
+            return AgentOutput(
+                task_id=input.task_id,
+                status="failure",
+                confidence=0.0,
+                output=_empty_output_payload(input.task_id),
+                error_message=f"forbidden parent dump keys: {dirty}",
+            )
+        parent_chars = int(input.context.get("_parent_context_chars") or "0")
+        child_chars = context_char_len(input.context) + len(input.instruction)
+        agent_metrics.record_subagent_context_ratio(
+            parent_role=parent_role,
+            child_role=role,
+            ratio=context_ratio(child_chars=child_chars, parent_chars=parent_chars),
         )
-        await self._track_cost_if_needed(
-            config=config,
-            completion=completion,
-            cost_usd=cost_usd,
-        )
-        return completion
+        return None
 
-    @traceable(name="harness.execute_with_guardrails")
-    async def execute_with_guardrails(
-        self,
-        agent: BaseAgent,
-        input: AgentInput,
-    ) -> AgentOutput:
-        """Domain agent path: JIT context → secret redaction → run → verify → confidence gate."""
-        role = agent._config.role
-        agent_metrics.record_node_execution(role, "harness_execute")
-
-        # The instruction crosses the LLM boundary, not a durable write path: a
-        # credential-shaped token must never reach the model, but it must not brick
-        # the thread either — mask it and continue (020, redact_text contract).
+    async def _prepare_agent_input(self, agent: BaseAgent, input: AgentInput, *, role: str) -> AgentInput | AgentOutput:
+        """Redact + JIT context + compact; returns AgentOutput on context-build failure."""
         instruction = _redact_secret_fields(
             input.instruction,
             agent_type=role,
@@ -548,11 +705,64 @@ class Harness:
                     error_message=str(exc),
                 )
 
-        # Context assembled here is history/derived data, so it is masked rather than
-        # rejected; the second pass covers the compaction summary's own output (020).
         input = self._redact_context_secrets(input, agent_type=role, stage="assembled_context")
         input = await self._maybe_compact_context(agent, input)
-        input = self._redact_context_secrets(input, agent_type=role, stage="compacted_context")
+        return self._redact_context_secrets(input, agent_type=role, stage="compacted_context")
+
+    async def _verify_after_run(
+        self,
+        agent: BaseAgent,
+        output: AgentOutput,
+        *,
+        role: str,
+    ) -> tuple[AgentOutput, str]:
+        """Schema gate then agent.verify (W8.4 before LLM-judge)."""
+        mismatch = check_agent_output_schema(
+            role=role,
+            payload=output.output,
+            status=output.status,
+        )
+        if mismatch is not None:
+            output = output.model_copy(
+                update={
+                    "status": "failure",
+                    "error_message": f"schema_mismatch:{mismatch}",
+                    "confidence": 0.0,
+                }
+            )
+            agent_metrics.record_human_escalation(f"verify_failed_{role}")
+            return output, f"schema_mismatch:{mismatch}"
+
+        if not await agent.verify(output) and output.status == "success":
+            output = output.model_copy(update={"status": "partial"})
+            agent_metrics.record_human_escalation(f"verify_failed_{role}")
+            verify_result = "failed"
+        else:
+            verify_result = "passed"
+
+        if output.confidence < agent._config.confidence_threshold and output.status == "success":
+            output = output.model_copy(update={"status": "partial"})
+            agent_metrics.record_human_escalation(f"low_confidence_{role}")
+        return output, verify_result
+
+    @traceable(name="agent.run")
+    async def execute_with_guardrails(
+        self,
+        agent: BaseAgent,
+        input: AgentInput,
+    ) -> AgentOutput:
+        """Domain agent path: JIT context → secret redaction → run → schema → verify."""
+        role = agent._config.role
+        agent_metrics.record_node_execution(role, "harness_execute")
+
+        dirty = self._reject_dirty_handoff(role=role, input=input)
+        if dirty is not None:
+            return dirty
+
+        prepared = await self._prepare_agent_input(agent, input, role=role)
+        if isinstance(prepared, AgentOutput):
+            return prepared
+        input = prepared
 
         try:
             output = await asyncio.wait_for(
@@ -561,31 +771,30 @@ class Harness:
             )
         except TimeoutError:
             agent_metrics.record_error(role, "TimeoutError")
-            return AgentOutput(
+            output = AgentOutput(
                 task_id=input.task_id,
                 status="failure",
                 confidence=0.0,
                 output=_empty_output_payload(input.task_id),
                 error_message=f"Agent timed out after {agent._config.timeout_seconds}s",
             )
+            _stamp_agent_run_span(role=role, status=output.status, verify_result="error")
+            return output
         except Exception as exc:
             agent_metrics.record_error(role, type(exc).__name__)
             logger.exception("harness.run_failed", agent=role, task_id=str(input.task_id))
-            return AgentOutput(
+            output = AgentOutput(
                 task_id=input.task_id,
                 status="failure",
                 confidence=0.0,
                 output=_empty_output_payload(input.task_id),
                 error_message=str(exc),
             )
+            _stamp_agent_run_span(role=role, status=output.status, verify_result="error")
+            return output
 
-        if not await agent.verify(output) and output.status == "success":
-            output = output.model_copy(update={"status": "partial"})
-
-        if output.confidence < agent._config.confidence_threshold and output.status == "success":
-            output = output.model_copy(update={"status": "partial"})
-            agent_metrics.record_human_escalation(f"low_confidence_{role}")
-
+        output, verify_result = await self._verify_after_run(agent, output, role=role)
+        _stamp_agent_run_span(role=role, status=output.status, verify_result=verify_result)
         return output
 
     def _redact_context_secrets(
@@ -625,15 +834,19 @@ class Harness:
         return input.model_copy(update={"context": {**input.context, **redacted}})
 
     async def _maybe_compact_context(self, agent: BaseAgent, input: AgentInput) -> AgentInput:
-        """Compact dialog history at 80% tier budget; preserve goal/plan/last_results (065)."""
-        history = input.context.get("history")
-        if not isinstance(history, str) or not history.strip():
+        """Compact dialog at 80% tier budget; preserve goal/plan/last_results (065).
+
+        Graph agents carry dialog as ``dialog_window_json`` (DialogTurnWindow). Legacy
+        ``history`` plain text remains supported for non-graph callers.
+        """
+        dialog_key, dialog_text = _dialog_for_compact(input.context)
+        if dialog_text is None:
             return input
         thread_id = (input.context.get("_thread_id") or str(input.task_id)).strip()
         user_id = input.context.get("_user_id")
         result = await self._context_builder.compact(
             CompactRequest(
-                dialog=history,
+                dialog=dialog_text,
                 goal=input.context.get("goal", ""),
                 plan=input.context.get("plan", ""),
                 last_results=input.context.get("last_results", ""),
@@ -646,12 +859,66 @@ class Harness:
             return input
         updated = {
             **input.context,
-            "history": result.dialog,
             "goal": result.goal,
             "plan": result.plan,
             "last_results": result.last_results,
         }
+        if dialog_key == "dialog_window_json":
+            updated["dialog_window_json"] = _compacted_dialog_window_json(
+                thread_id=thread_id,
+                compacted_dialog=result.dialog,
+            )
+        else:
+            updated["history"] = result.dialog
         return input.model_copy(update={"context": updated})
+
+
+def _dialog_for_compact(context: dict[str, str]) -> tuple[str, str | None]:
+    """Pick the dialog key and flat text for ContextBuilder.compact."""
+    raw_window = context.get("dialog_window_json")
+    if isinstance(raw_window, str) and raw_window.strip():
+        flat = _flatten_dialog_window_json(raw_window)
+        if flat:
+            return "dialog_window_json", flat
+    history = context.get("history")
+    if isinstance(history, str) and history.strip():
+        return "history", history
+    return "history", None
+
+
+def _flatten_dialog_window_json(raw: str) -> str:
+    """Serialize a DialogTurnWindow JSON payload into role:content lines."""
+    from palatium_ai.domain.memory.turns import DialogTurnWindow
+
+    try:
+        window = DialogTurnWindow.model_validate_json(raw)
+    except Exception:  # noqa: BLE001  # malformed window → skip compact, do not brick the turn
+        return ""
+    lines = [f"{turn.role}: {turn.content}" for turn in window.turns if turn.content.strip()]
+    return "\n".join(lines)
+
+
+def _compacted_dialog_window_json(*, thread_id: str, compacted_dialog: str) -> str:
+    """Replace the window with a single system turn holding the compact summary."""
+    from uuid import uuid4
+
+    from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
+
+    text = compacted_dialog.strip() or "(compacted)"
+    window = DialogTurnWindow(
+        thread_id=thread_id,
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id=thread_id,
+                role="system",
+                content=text[:50_000],
+                seq=0,
+            ),
+        ),
+        limit=12,
+    )
+    return window.model_dump_json()
 
 
 def _empty_output_payload(task_id: object) -> BaseModel:
@@ -663,3 +930,51 @@ def _empty_output_payload(task_id: object) -> BaseModel:
         task_id: str = Field(default_factory=lambda: str(task_id))
 
     return _HarnessFailureOutput()
+
+
+def _is_retryable_llm_call(exc: BaseException) -> bool:
+    """Shared retry predicate — permanent / budget / circuit never retry (W8.3)."""
+    if isinstance(exc, (CostBudgetExceededError, StructuredOutputUnsupportedError, CircuitOpenError)):
+        return False
+    return is_transient_llm_error(exc)
+
+
+def _prompt_version_for_role(role: str) -> str:
+    """SHA-16 of the agent prompts.py (W8.7) — logged on every LLM call."""
+    from pathlib import Path
+
+    from palatium_ai.application.agents.evals.constitution_hash import prompt_file_version
+
+    agents_root = Path(__file__).resolve().parent
+    if role == "context_enricher":
+        candidates = (
+            agents_root / "context_enricher" / "continuation" / "prompts.py",
+            agents_root / "context_enricher" / "weaving" / "prompts.py",
+        )
+    else:
+        candidates = (agents_root / role / "prompts.py",)
+    for path in candidates:
+        if path.is_file():
+            return prompt_file_version(path)
+    return "unknown"
+
+
+def _stamp_agent_run_span(*, role: str, status: str, verify_result: str) -> None:
+    """Attach role/status/verify_result to the current ``agent.run`` span (W8.2)."""
+    try:
+        from opentelemetry import trace
+    except ImportError:  # pragma: no cover
+        return
+    span = trace.get_current_span()
+    if span is None or not span.is_recording():
+        return
+    set_attributes = getattr(span, "set_attributes", None)
+    if not callable(set_attributes):
+        return
+    set_attributes(
+        {
+            "agent.role": role,
+            "agent.status": status,
+            "agent.verify_result": verify_result,
+        }
+    )

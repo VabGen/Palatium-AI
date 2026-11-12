@@ -23,6 +23,8 @@ from palatium_ai.domain.attachments.errors import (
     AttachmentNotUsableError,
     AttachmentThreadRequiredError,
 )
+from palatium_ai.domain.policies.composer_mode import ComposerModePolicy
+from palatium_ai.domain.policies.types import ComposerMode
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal, principal_is_admin
@@ -42,6 +44,11 @@ class ClassifyIntentRequest(BaseModel):
         default=None,
         max_length=128,
         description="Ignored; tenant comes from the JWT principal only.",
+    )
+    #: Explicit composer chrome (Web Search / Deep Think / Agent). Optional floors.
+    composer_mode: ComposerMode | None = Field(
+        default=None,
+        description="UI mode pill: web_search | deep_think | agent.",
     )
 
 
@@ -76,6 +83,7 @@ async def classify_intent(body: ClassifyIntentRequest, request: Request) -> Inte
             org_id=principal.org_id,
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
+            composer_mode=ComposerModePolicy.coerce(body.composer_mode),
         )
     except (
         KillSwitchEngagedError,
@@ -99,6 +107,7 @@ async def process_intent(body: ClassifyIntentRequest, request: Request) -> Forma
             org_id=principal.org_id,
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
+            composer_mode=ComposerModePolicy.coerce(body.composer_mode),
         )
     except (
         KillSwitchEngagedError,
@@ -123,6 +132,7 @@ async def process_intent_stream(body: ClassifyIntentRequest, request: Request) -
             org_id=principal.org_id,
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
+            composer_mode=ComposerModePolicy.coerce(body.composer_mode),
         )
         emit_done = False
         try:

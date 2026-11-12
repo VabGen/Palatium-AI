@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.memory import DialogTurnWindow
 
 from .context_packet import ContextPacket
 from .contracts import TaskResult
+
+WorkerKind = Literal["researcher", "coder", "analyst"]
 
 # Stable failure when planned MCP args cannot be built/validated.
 RESEARCHER_TOOL_ARGS_INVALID = "researcher_tool_args_invalid"
@@ -54,9 +58,16 @@ class ResearcherOutput(BaseModel):
 
 
 class ResearcherTaskResult(TaskResult):
-    """TaskResult с типизированным output для Researcher."""
+    """TaskResult с типизированным output для Researcher.
+
+    Shared graph ``execution`` slot also holds coder/analyst drafts; ``worker_kind``
+    preserves the origin so Critic/Formatter can gate without inventing a second state field.
+    """
 
     output: ResearcherOutput | None = None
     grounding_satisfied: bool = False
     grounding_degraded: bool = False
     cannot_answer_without_source: bool = False
+    worker_kind: WorkerKind = "researcher"
+    worker_language: str = ""
+    worker_findings: tuple[str, ...] = ()

@@ -10,8 +10,7 @@
  * `role="note"` — не live-регион: заметка читается в порядке документа и не
  * перебивает канал озвучивания стрима (084, W2), который объявляет сам ответ.
  */
-import { Pencil } from 'lucide-react';
-
+import { IconPencil } from '../icons/kimiStroke';
 import { t } from '../i18n';
 import type { DocumentRevision } from '../types/contentDocument';
 
@@ -24,7 +23,7 @@ export function RevisionNote({ revision }: { revision?: DocumentRevision | null 
 
   return (
     <p className="revision-note" role="note">
-      <Pencil size={13} aria-hidden />
+      <IconPencil size={13} />
       <span className="revision-note-title">{t('revision.title')}</span>
       {changed > 0 && (
         <span className="revision-note-count">

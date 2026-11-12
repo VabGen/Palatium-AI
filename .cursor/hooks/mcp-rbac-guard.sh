@@ -16,6 +16,11 @@ _run_py() {
     python3 "$GUARD_PY"
     return $?
   fi
+  # Windows launcher (py.exe) when `python` is not on PATH.
+  if command -v py >/dev/null 2>&1; then
+    py -3 "$GUARD_PY"
+    return $?
+  fi
   if command -v uv >/dev/null 2>&1; then
     uv run --no-project python "$GUARD_PY"
     return $?

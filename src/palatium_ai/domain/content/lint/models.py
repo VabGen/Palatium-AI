@@ -22,6 +22,8 @@ LintRuleId = Literal[
     "duplicate_prose",
     "markdown_residue",
     "empty_section",
+    "sparse_analysis_structure",
+    "missing_section_icons",
 ]
 
 LintSeverity = Literal["error", "warning"]

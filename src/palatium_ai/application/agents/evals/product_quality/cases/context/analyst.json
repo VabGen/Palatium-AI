@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {
+      "id": "ctx-analyst-present-01",
+      "agent": "analyst",
+      "scenario": "present_orion_kpi",
+      "input": { "user_text": "What KPI target does client ORION-7 have in context?" },
+      "context": {
+        "memory": "Client ORION-7 KPI target is 12.4% conversion on funnel NEBULA-X."
+      },
+      "expected": {
+        "must_contain": ["12.4", "ORION-7", "NEBULA-X"],
+        "must_not_contain": ["18.0%", "ACME"]
+      },
+      "tags": ["analyst", "context", "present"]
+    },
+    {
+      "id": "ctx-analyst-absent-01",
+      "agent": "analyst",
+      "scenario": "absent_orion_kpi",
+      "input": { "user_text": "What is ORION-7 conversion KPI?" },
+      "context": { "memory": "Only payroll metrics for plant A are present." },
+      "expected": {
+        "must_contain": ["нет данных"],
+        "must_not_contain": ["12.4", "NEBULA-X"]
+      },
+      "tags": ["analyst", "context", "absent"]
+    }
+  ]
+}

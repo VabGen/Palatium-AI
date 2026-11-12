@@ -40,6 +40,8 @@ alwaysApply: false
 | `palatium_llm_cost_missing_total` | `reason` (`tier_alias` / `unpriced_model`) |
 | `palatium_llm_fallback_total` | `to_provider` |
 | `palatium_rbac_denied_total` | `agent_type`, `tool_name` |
+| `palatium_tool_calls_total` | `agent_type`, `tool_name`, `outcome` (`success`/`error`/`denied`) |
+| `palatium_tool_call_duration_seconds` | `agent_type`, `tool_name`, `outcome` (`success`/`error`) |
 | `palatium_hitl_card_replay_rejected_total` | — |
 | `palatium_circuit_breaker_state` | `target` (0=closed, 1=half_open, 2=open) |
 | `palatium_memory_recall_at_k` | `k` (offline eval / Pushgateway; не runtime hit-rate) |

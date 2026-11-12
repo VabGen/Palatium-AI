@@ -10,7 +10,7 @@
  */
 import { fireEvent, render, screen } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CitationSources } from '../../src/components/CitationSources';
 import { t } from '../../src/i18n';
@@ -141,6 +141,31 @@ describe('CitationSources', () => {
     expect(
       screen.getByRole('button', { name: /Показать в источнике|Show in source/ })
     ).toBeInTheDocument();
+  });
+
+  it('opens the PDF rail on a page-anchored citation when onOpenPdfPage is set', () => {
+    const onOpenPdfPage = vi.fn();
+    render(
+      <CitationSources
+        citations={[
+          citation({
+            source_id: '11111111-2222-3333-4444-555555555555',
+            page: 3,
+          }),
+        ]}
+        onOpenPdfPage={onOpenPdfPage}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Договор.pdf' }));
+    fireEvent.click(screen.getByRole('button', { name: /Показать в источнике|Show in source/ }));
+
+    expect(onOpenPdfPage).toHaveBeenCalledWith(
+      '11111111-2222-3333-4444-555555555555',
+      'Договор.pdf',
+      3
+    );
+    expect(screen.queryByRole('region', { name: t('cite.sourcePanel') })).not.toBeInTheDocument();
   });
 
   it('renders no source action for an unbound citation', () => {

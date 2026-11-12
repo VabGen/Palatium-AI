@@ -20,8 +20,8 @@ alwaysApply: true
   030-контракты ·
   035-обработка ошибок · 040-observability · 050-антипаттерны · 055-принципиальные
   фиксы · 060-память · 065-контекст · 070-MCP · 075-тесты · 080-производительность ·
-  082-доставка/DevOps · 084-качество фронтенда · 086-документация · 088-git-процесс ·
-  090-JavaEdms · **092-EDMS-MCP-adapter**.
+  082-доставка/DevOps · 084-качество фронтенда · **kimi-design** · 086-документация ·
+  088-git-процесс · 090-JavaEdms · **092-EDMS-MCP-adapter**.
   Этот файл — навигация; источники истины — указанные правила, дублей не создаём (050).
 - **План усиления правил:** `.cursor/plans/cursor-rules-hardening.md` — темы вводились
   волнами (W0–W6 закрыты 2026-09-30: от дрейфа индекса до spec-driven `005`).
@@ -73,11 +73,16 @@ alwaysApply: true
 - Фронтенд: React 19 + Vite + TypeScript (SPA, без SSR/RSC — гидратационные
   оговорки из apple-design/animate тут неприменимы). Стили — обычный CSS
   (`web/src/styles.css`), **Tailwind НЕ используется**. Пакет — `web/`.
-  Фронтенд-craft скиллы (анимация/UI-полировка Emil Kowalski) — индекс в
-  `.cursor/skills/web-craft/SKILL.md`. Качество фронта (TS strict, ESLint/Prettier,
-  Vitest+RTL+MSW, Playwright+axe, бюджет бандла) — правило **084**.
-  Гейты одной командой: `npm run verify` (`web/`), тот же агрегат в CI-джобе
-  `frontend`; unit/integration — `web/tests/`, E2E — `web/e2e/`.
+  Визуальная идентичность — **Kimi Brand Book** (правило `kimi-design.mdc`,
+  runtime `web/src/tokens.css`, оркестратор `.cursor/skills/kimi-design/`,
+  reference `.cursor/references/`, MCP `kimi-docs`, план
+  `.cursor/plans/kimi-full-redesign.md`). Product capabilities/showcases —
+  `docs/kimi-knowledge/` + `kimi-product-knowledge.mdc` (не Brand; fetch
+  `scripts/fetch_kimi_docs.py`). Полировка motion —
+  `.cursor/skills/web-craft/SKILL.md` (после токенов Kimi). Качество фронта
+  (TS strict, ESLint/Prettier, Vitest+RTL+MSW, Playwright+axe, бюджет бандла) —
+  правило **084**. Гейты одной командой: `npm run verify` (`web/`), тот же
+  агрегат в CI-джобе `frontend`; unit/integration — `web/tests/`, E2E — `web/e2e/`.
 - EDMS-интеграция: **с нуля** в новой структуре под `mcp_servers/edms/` (**092**).
   Reference-only: JavaEdms = SoT СЭД (**090**); `edms-ai-assistant/` = junior
   chat↔СЭД; `edms_mcp_server.py` = старый stub — всё только для подглядки, не

@@ -77,7 +77,7 @@ class DialogTurnWindow(BaseModel):
                 return content
         return None
 
-    def as_prompt_block(
+    def as_prompt_block(  # noqa: C901 — multi-axis turn formatting; split tracked separately
         self,
         *,
         max_chars: int = 12_000,
@@ -94,11 +94,27 @@ class DialogTurnWindow(BaseModel):
         """
         if not self.turns and not pinned_user_texts:
             return "(no prior turns)"
+        # W10 P1.1 / Big Tech: drop superseded claims before budgeting (055 policy).
+        from palatium_ai.domain.policies.dialog_correction import DialogCorrectionPolicy
+
+        turns = DialogCorrectionPolicy.redact_superseded(self.turns)
+        raw_pins = tuple(str(p).strip() for p in pinned_user_texts if str(p).strip())
+        # Scratchpad/medium pins must not re-introduce values the dialog corrected.
+        pinned_user_texts = DialogCorrectionPolicy.filter_superseded_texts(raw_pins, self.turns)
+        if not turns and not pinned_user_texts:
+            return "(no prior turns)"
+        # After a correction strip, forbid restating dropped entity values (W10 2b).
+        correction_guard = ""
+        if turns != self.turns or pinned_user_texts != raw_pins:
+            correction_guard = (
+                "(dialog_policy: prior assertions were superseded — "
+                "answer only with the latest corrected facts; do not name retracted values)\n"
+            )
         user_cap = user_turn_max_chars if user_turn_max_chars is not None else max(per_turn_max_chars, 8_000)
         selected: list[str] = []
         used = 0
         # Prefer recent turns when the window exceeds the char budget.
-        for turn in reversed(self.turns):
+        for turn in reversed(turns):
             body = turn.content
             turn_cap = user_cap if turn.role == "user" else per_turn_max_chars
             if len(body) > turn_cap:
@@ -135,4 +151,7 @@ class DialogTurnWindow(BaseModel):
                 selected = [*pins, *selected]
             elif not selected:
                 selected = pins[:1]
-        return "\n".join(selected) if selected else "(no prior turns)"
+        if not selected:
+            return "(no prior turns)"
+        body = "\n".join(selected)
+        return f"{correction_guard}{body}" if correction_guard else body

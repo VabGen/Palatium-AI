@@ -16,6 +16,7 @@ from .errors import (
     AttachmentContentMissingError,
     AttachmentError,
     AttachmentIntakeRejectedError,
+    AttachmentIntegrityError,
     AttachmentModeMismatchError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
@@ -30,6 +31,7 @@ from .indexing import (
     AttachmentProjectRef,
     AttachmentRestorePayload,
 )
+from .integrity import content_sha256_hex, verify_attachment_bytes
 from .models import Attachment
 from .parse_routing import (
     AUTO_ATTACH_CHARS,
@@ -90,6 +92,7 @@ __all__ = [
     "AttachmentIndexPayload",
     "AttachmentIntakePolicy",
     "AttachmentIntakeRejectedError",
+    "AttachmentIntegrityError",
     "AttachmentLimits",
     "AttachmentMode",
     "AttachmentModeMismatchError",
@@ -120,8 +123,10 @@ __all__ = [
     "TextFromChatDecision",
     "TextFromChatRoute",
     "choose_parse_strategy",
+    "content_sha256_hex",
     "extraction_source_to_extract_status",
     "extraction_source_to_ocr_engine",
     "route_text_from_chat",
     "text_layer_is_sufficient",
+    "verify_attachment_bytes",
 ]

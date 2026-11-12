@@ -116,7 +116,10 @@ def _try_mechanical_restructure(
         return None
 
     shape = task_input.context_packet.response_shape
-    eligible = task_input.transformation == "restructure" or task_kind == "response_formatting" or shape != RESPONSE_SHAPE_DEFAULT
+    # Mechanical path rearranges a *prior* answer (format / restructure). An explicit
+    # response_shape alone is not enough: knowledge_request + prose ("one sentence")
+    # must format *this* turn's worker_summary, not flatten the last social reply (055).
+    eligible = task_input.transformation == "restructure" or task_kind == "response_formatting"
     if not eligible:
         return None
 
@@ -175,19 +178,28 @@ def _passthrough_signals(
     task_kind: TaskKind | str | None,
     worker_confidence: float | None,
 ) -> FormatterPassthroughSignals:
+    from palatium_ai.application.agents.formatter.parsing import preserve_worker_shape
+
     cleaned = mechanical_cleanup(source).strip()
     caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
+    untrusted = contains_untrusted_tool_output(cleaned)
+    plain = bool(cleaned) and plain_paragraph_count(cleaned) is not None and not untrusted
     return FormatterPassthroughSignals(
         source_chars=len(cleaned),
         worker_confident=worker_confidence is not None and worker_confidence >= MIN_PIPELINE_CONFIDENCE,
-        source_is_plain_prose=(
-            bool(cleaned) and plain_paragraph_count(cleaned) is not None and not contains_untrusted_tool_output(cleaned)
-        ),
+        source_is_plain_prose=plain,
         locale_matches=ReplyLocalePolicy.prose_matches_locale(cleaned, task_input.response_locale),
         requires_review=task_input.requires_review,
         revision_requested=bool((task_input.revision_feedback or "").strip()),
         restructure_requested=task_kind == "response_formatting",
         shape_requested=task_input.context_packet.response_shape != "auto",
         underspecification_kind=task_input.underspecification_kind,
-        verbatim_requested=VERBATIM_EXTRACTION_CAPABILITY in caps,
+        # Intent extract tag OR sealed singular ``read_attachment`` body (W10 att_partial).
+        verbatim_requested=(
+            VERBATIM_EXTRACTION_CAPABILITY in caps or task_input.context_packet.execution_plan.strategy == "direct_tool_call"
+        ),
+        # Structured GFM already painted / ready — do not brand-rewrite via LLM.
+        # Untrusted envelopes stay on the LLM path (020) even when shape-preserving.
+        preserve_shaped_worker=bool(cleaned) and not untrusted and preserve_worker_shape(cleaned) and not plain,
+        policy_refusal=task_input.policy_refusal,
     )

@@ -68,6 +68,53 @@ async def test_grounding_required_retrieves_when_enabled(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio()
+async def test_requires_mcp_unresolved_with_required_grounding_retrieves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """W10 3b: ClarificationGate bumps requires_mcp + required; no domain MCP must not invent."""
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ENABLED", "true")
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ROLLOUT_PCT", "100")
+    from palatium_ai.core.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        bundle = await ExecutionPlanner(capability_index=None).build(
+            _input(
+                user_text="Какой протокол использует Зенит?",
+                grounding="required",
+                grounding_reason="empty_thread_fact_ask",
+                requires_mcp=True,
+            ),
+        )
+        assert bundle.selected_strategy == "retrieve_then_reason"
+        assert bundle.requires_tool_call is True
+        assert bundle.steps[0].tool_name == "search_knowledge"
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio()
+async def test_requires_mcp_unresolved_without_required_stays_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Domain MCP miss without required grounding keeps the pre-W10 fail-closed plan."""
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ENABLED", "true")
+    monkeypatch.setenv("ADAPTIVE_GROUNDING_ROLLOUT_PCT", "100")
+    from palatium_ai.core.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        bundle = await ExecutionPlanner(capability_index=None).build(
+            _input(grounding="optional", requires_mcp=True),
+        )
+        assert bundle.selected_strategy == "reason_only"
+        assert bundle.requires_tool_call is False
+        assert bundle.steps[0].tool_name is None
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio()
 async def test_grounding_required_overrides_trusted_prior(monkeypatch: pytest.MonkeyPatch) -> None:
     """Log bug: required + trusted prior → reason_only skipped MCP and echoed wrong OCR."""
     monkeypatch.setenv("ADAPTIVE_GROUNDING_ENABLED", "true")

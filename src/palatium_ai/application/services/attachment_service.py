@@ -533,6 +533,8 @@ class AttachmentService:
         }
         if outcome.detected_mime_type:
             row_update["mime_type"] = outcome.detected_mime_type
+        if outcome.content_sha256 is not None:
+            row_update["content_sha256"] = outcome.content_sha256
         updated = updated.model_copy(update=row_update)
         saved = await self._repository.save(updated)
         await self._audit(
@@ -1457,6 +1459,9 @@ class AttachmentService:
 
         attachment = await self._require(payload.attachment_id, user_id=payload.user_id)
         data = await self._blob_store.read_bytes(attachment.blob_key)
+        from palatium_ai.domain.attachments.integrity import verify_attachment_bytes
+
+        verify_attachment_bytes(attachment, data)
         from palatium_ai.domain.ports.attachment_analysis import AttachmentAnalysisRequest
 
         result = await self._analysis.analyze(

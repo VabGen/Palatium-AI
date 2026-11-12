@@ -65,6 +65,15 @@ class CriticAgent(BaseAgent):
     def get_available_tools(self) -> list[str]:
         return []
 
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based post-merge gate — violations must force requires_review."""
+        if not isinstance(output.output, CriticOutput):
+            return False
+        body = output.output
+        if not body.summary.strip():
+            return False
+        return not (body.violations and not body.requires_review)
+
     @traceable(name="critic.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")

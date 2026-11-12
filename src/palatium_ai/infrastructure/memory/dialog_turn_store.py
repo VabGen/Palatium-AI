@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from palatium_ai.domain.memory.turns import DialogRole, DialogTurn, DialogTurnWindow
 from palatium_ai.infrastructure.database.models.dialog_turn import DialogTurnORM
@@ -66,6 +66,26 @@ class PostgresDialogTurnStore:
                 turns=tuple(_to_domain(row) for row in rows),
                 limit=safe_limit,
             )
+
+    async def truncate_keeping(self, *, thread_id: str, keep: int) -> int:
+        """Keep the first ``keep`` turns by ascending seq; delete the rest."""
+        safe_keep = max(0, keep)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(DialogTurnORM.seq).where(DialogTurnORM.thread_id == thread_id).order_by(DialogTurnORM.seq.asc())
+            )
+            seqs = [int(row[0]) for row in result.all()]
+            if safe_keep >= len(seqs):
+                return 0
+            cutoff_seq = seqs[0] if safe_keep == 0 else seqs[safe_keep]
+            deleted = await session.execute(
+                delete(DialogTurnORM).where(
+                    DialogTurnORM.thread_id == thread_id,
+                    DialogTurnORM.seq >= cutoff_seq,
+                )
+            )
+            await session.commit()
+            return int(deleted.rowcount or 0)
 
     async def _resolve_session_id(self, session: AsyncSession, *, thread_id: str) -> object | None:
         result = await session.execute(select(SessionORM.id).where(SessionORM.thread_id == thread_id))

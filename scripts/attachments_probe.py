@@ -232,7 +232,7 @@ def _health_url(endpoint: str) -> str:
 def _http_ok(url: str, *, timeout: float = 5.0) -> tuple[bool, str]:
     """GET a URL and report whether it answered 2xx; never raises for a refused socket."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout) as response:
             return 200 <= int(response.status) < 300, f"HTTP {response.status}"
     except urllib.error.HTTPError as exc:
         return False, f"HTTP {exc.code}"

@@ -12,14 +12,19 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, JsonValue
 
 from palatium_ai.core.types.pagination import PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX
+from palatium_ai.domain.projects.errors import ProjectNotFoundError
 from palatium_ai.domain.sessions.context_privacy import (
     filter_client_context_patch,
     public_session_context,
 )
+from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.domain.sessions.models import SessionRecord
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal, principal_is_admin
-from palatium_ai.presentation.security.ownership import load_session_for_principal
+from palatium_ai.presentation.security.ownership import (
+    ensure_session_for_principal,
+    load_session_for_principal,
+)
 
 router = APIRouter()
 
@@ -32,9 +37,26 @@ class SessionResponse(BaseModel):
     user_id: str | None = None
     status: str
     title: str | None = None
+    project_id: str | None = None
     context: dict[str, JsonValue]
     created_at: datetime
     updated_at: datetime
+
+
+class SessionPatchRequest(BaseModel):
+    """Partial session update: pin/unpin, rename, or archive.
+
+    Fields are distinguished via ``model_fields_set`` so ``project_id: null``
+    still means unpin while an omitted ``project_id`` leaves the pin unchanged.
+    """
+
+    project_id: str | None = Field(default=None, max_length=128)
+    title: str | None = Field(default=None, max_length=255)
+    status: str | None = Field(default=None, min_length=1, max_length=32)
+
+
+# Back-compat alias for callers/tests that still import the pin-only name.
+PinSessionRequest = SessionPatchRequest
 
 
 class SessionListResponse(BaseModel):
@@ -76,6 +98,19 @@ class DialogTurnListResponse(BaseModel):
     count: int
 
 
+class TruncateTurnsRequest(BaseModel):
+    """Keep the first ``keep`` turns; delete the rest (user Edit rewind)."""
+
+    keep: int = Field(ge=0, le=500)
+
+
+class TruncateTurnsResponse(BaseModel):
+    """How many turns were removed."""
+
+    deleted: int = Field(ge=0)
+    keep: int = Field(ge=0)
+
+
 class McpToolCallResponse(BaseModel):
     """Public response model for persisted MCP tool calls."""
 
@@ -114,6 +149,7 @@ async def list_sessions(
     request: Request,
     limit: int = Query(default=PAGE_LIMIT_DEFAULT, ge=1, le=PAGE_LIMIT_MAX),
     offset: int = Query(default=0, ge=0),
+    project_id: str | None = Query(default=None, max_length=128),
 ) -> SessionListResponse:
     """List sessions owned by the caller. Admin may list all tenants."""
     principal = get_principal(request)
@@ -123,6 +159,7 @@ async def list_sessions(
         limit=limit,
         offset=offset,
         user_id=scope_user_id,
+        project_id=project_id,
     )
     return SessionListResponse(
         items=[_to_response(item) for item in sessions],
@@ -175,6 +212,64 @@ async def get_session(thread_id: str, request: Request) -> SessionResponse:
     return _to_response(session)
 
 
+@router.patch("/{thread_id}", response_model=SessionResponse)
+async def patch_session(  # noqa: C901 — patch field matrix; split tracked separately
+    thread_id: str,
+    body: SessionPatchRequest,
+    request: Request,
+) -> SessionResponse:
+    """Patch session fields (pin/unpin, rename, archive) — owner-scoped."""
+    principal = get_principal(request)
+    resources = get_app_resources(request.app)
+    fields = body.model_fields_set
+    if not fields:
+        raise HTTPException(status_code=400, detail="Empty patch")
+
+    session: SessionRecord | None = None
+    try:
+        await resources.session_service.assert_thread_access(
+            thread_id=thread_id,
+            user_id=principal.subject,
+            is_admin=principal_is_admin(request, principal),
+            allow_missing=False,
+        )
+        if "title" in fields:
+            if body.title is None or not body.title.strip():
+                raise HTTPException(status_code=400, detail="title must not be empty")
+            session = await resources.session_service.set_title(
+                thread_id=thread_id,
+                title=body.title,
+            )
+        if "status" in fields:
+            if body.status is None or body.status not in {"active", "archived"}:
+                raise HTTPException(status_code=400, detail="status must be active or archived")
+            session = await resources.session_service.set_status(
+                thread_id=thread_id,
+                status=body.status,
+            )
+        if "project_id" in fields:
+            service = resources.project_service
+            if service is None:
+                raise HTTPException(status_code=503, detail="Projects service unavailable")
+            session = await service.pin_session(
+                thread_id=thread_id,
+                user_id=principal.subject,
+                project_id=body.project_id,
+                is_admin=principal_is_admin(request, principal),
+            )
+    except SessionOwnershipError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if session is None:
+        raise HTTPException(status_code=400, detail="Empty patch")
+    return _to_response(session)
+
+
 @router.get("/{thread_id}/turns", response_model=DialogTurnListResponse)
 async def list_dialog_turns(
     thread_id: str,
@@ -214,6 +309,34 @@ async def list_dialog_turns(
         limit=limit,
         count=len(turns),
     )
+
+
+@router.post("/{thread_id}/turns/truncate", response_model=TruncateTurnsResponse)
+async def truncate_dialog_turns(
+    thread_id: str,
+    body: TruncateTurnsRequest,
+    request: Request,
+) -> TruncateTurnsResponse:
+    """Rewind transcript for user Edit — keep first ``keep`` turns, drop the rest.
+
+    Client-minted threads may have dialog turns before a durable session row
+    exists (same contract as attachment upload / HITL). Materialise the row
+    first so Edit does not 404 with ``Not Found`` / session missing.
+    """
+    principal = get_principal(request)
+    resources = get_app_resources(request.app)
+    await ensure_session_for_principal(
+        request=request,
+        principal=principal,
+        session_service=resources.session_service,
+        thread_id=thread_id,
+        last_operation="truncate_turns",
+    )
+    timeline = resources.session_timeline_service
+    if timeline is None:
+        raise HTTPException(status_code=503, detail="Timeline unavailable")
+    deleted = await timeline.truncate_dialog_turns(thread_id=thread_id, keep=body.keep)
+    return TruncateTurnsResponse(deleted=deleted, keep=body.keep)
 
 
 @router.get("/{thread_id}/mcp-tool-calls", response_model=McpToolCallListResponse)
@@ -342,6 +465,7 @@ def _to_response(session: SessionRecord) -> SessionResponse:
         user_id=session.user_id,
         status=session.status,
         title=session.title,
+        project_id=session.project_id,
         context=cast("dict[str, JsonValue]", public_session_context(session.context)),
         created_at=session.created_at,
         updated_at=session.updated_at,

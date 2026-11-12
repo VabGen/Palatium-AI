@@ -26,7 +26,7 @@ from palatium_ai.domain.policies.types import (
     TaskKind,
 )
 
-_VALID: Final[frozenset[str]] = frozenset({"auto", "comparison_table", "document_analysis", "plan", "prose"})
+_VALID: Final[frozenset[str]] = frozenset({"auto", "comparison_table", "document_analysis", "inventory", "plan", "prose"})
 #: Outcomes that have no substantive body — a shape would only create a false mismatch.
 _BODYLESS_KINDS: Final[frozenset[str]] = frozenset({"social_conversation", "clarification_needed"})
 
@@ -34,6 +34,8 @@ _BODYLESS_KINDS: Final[frozenset[str]] = frozenset({"social_conversation", "clar
 _MIN_COMPARISON_COLUMNS = 3
 _MIN_COMPARISON_ROWS = 2
 _MIN_PLAN_ITEMS = 2
+_MIN_ANALYSIS_HEADINGS = 2
+_MIN_INVENTORY_ITEMS = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +57,15 @@ _RECIPES: Final[dict[str, ShapeRecipe]] = {
         min_table_rows=_MIN_COMPARISON_ROWS,
     ),
     "document_analysis": ShapeRecipe(
+        # Dense Kimi-style analysis: ≥2 headings + structured body checked in
+        # ``_check_document_analysis`` (kv and/or list+callout).
         shape="document_analysis",
         block_requirements=("heading",),
+    ),
+    "inventory": ShapeRecipe(
+        # Unordered catalogue («перечисли N… только список») — ListBlock, not Steps.
+        shape="inventory",
+        block_requirements=("list",),
     ),
     "plan": ShapeRecipe(
         # Process answers must use StepsBlock so BlockRenderer draws one timeline —
@@ -74,7 +83,7 @@ _MISSING_REASON: Final[dict[str, str]] = {
     "table": "table_block_missing",
     "heading": "heading_block_missing",
     "steps": "plan_block_missing",
-    "list": "plan_block_missing",
+    "list": "list_block_missing",
     "paragraph": "paragraph_block_missing",
 }
 
@@ -139,9 +148,39 @@ def _specific_check(document: ContentDocument, recipe: ShapeRecipe) -> str:
         case "plan":
             return _check_plan(document)
         case "document_analysis":
-            return "ok" if _has_paragraph(document) else "paragraph_block_missing"
+            return _check_document_analysis(document)
+        case "inventory":
+            return _check_inventory(document)
         case _:
             return "ok"
+
+
+def _check_inventory(document: ContentDocument) -> str:
+    """Require ≥2 unordered list items (catalogue, not a numbered process)."""
+    items = 0
+    for block in document.blocks:
+        if block.type == "list" and block.style != "ordered":
+            items = max(items, len(block.items))
+    if items >= _MIN_INVENTORY_ITEMS:
+        return "ok"
+    if items:
+        return "inventory_too_short"
+    return "list_block_missing"
+
+
+def _check_document_analysis(document: ContentDocument) -> str:
+    """Require scannable hierarchy: ≥2 headings and structured body (kv or list+callout)."""
+    headings = sum(1 for block in document.blocks if block.type == "heading")
+    if headings < _MIN_ANALYSIS_HEADINGS:
+        return "analysis_too_few_headings"
+    has_kv = any(block.type == "kv" for block in document.blocks)
+    has_list = any(block.type == "list" for block in document.blocks)
+    has_callout = any(block.type == "callout" for block in document.blocks)
+    if has_kv or (has_list and has_callout):
+        return "ok"
+    if has_list:
+        return "analysis_structure_thin"
+    return "analysis_structure_missing"
 
 
 def _check_comparison_table(document: ContentDocument, recipe: ShapeRecipe) -> str:
@@ -169,10 +208,6 @@ def _check_plan(document: ContentDocument) -> str:
         return "plan_too_short"
     # Ordered list is no longer an accepted plan surface — metric reason stays stable.
     return "plan_not_ordered" if ordered_list_only else "plan_block_missing"
-
-
-def _has_paragraph(document: ContentDocument) -> bool:
-    return any(block.type == "paragraph" for block in document.blocks)
 
 
 def _verdict(shape: ResponseShape, reason: str) -> ShapeVerdict:

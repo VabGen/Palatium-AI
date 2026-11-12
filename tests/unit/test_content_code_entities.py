@@ -1,9 +1,8 @@
-"""Code text stays verbatim: a provider's HTML-escaped quotes are repaired (E2E-05).
+"""Code text stays verbatim and readable: entity + collapsed-newline repairs.
 
-The schema-first Formatter returns ``CodeBlock.content`` as source code. Some
-providers HTML-escape the quotes inside that string, so the user reads
-``{&quot;name&quot;: …}`` instead of ``{"name": …}``; the client renders a text
-node and never decodes entities. The repair is structural and idempotent.
+The schema-first Formatter returns ``CodeBlock.content`` as source code. Providers
+may HTML-escape quotes or minify multi-statement snippets onto one line; both
+reach the user as unreadable chrome. Repairs are structural and idempotent.
 """
 
 from __future__ import annotations
@@ -12,8 +11,14 @@ from palatium_ai.application.agents.formatter.markdown_parser import markdown_to
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import CodeBlock
-from palatium_ai.domain.content.code_text import normalize_code_entities
+from palatium_ai.domain.content.code_text import normalize_code_content, normalize_code_entities
+from palatium_ai.domain.content.content_document import (
+    ContentDocument,
+    DocumentMeta,
+    HeadingBlock,
+)
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
+from palatium_ai.domain.policies.presentation_icons import PresentationIconPolicy
 
 
 def _task() -> FormatterInput:
@@ -77,3 +82,52 @@ def test_gfm_fence_is_repaired_end_to_end() -> None:
     doc = markdown_to_content_document(md, _task())
     code = next(block for block in doc.blocks if isinstance(block, CodeBlock))
     assert code.content == 'json_string = \'{"name": "Alice"}\''
+
+
+def test_literal_backslash_n_expands_when_snippet_has_no_newline() -> None:
+    raw = "def f():\\n    return 1"
+    assert normalize_code_content(raw, language="python") == "def f():\n    return 1"
+
+
+def test_real_newlines_leave_literal_backslash_n_alone() -> None:
+    """A demo that prints ``\\n`` still has other real newlines — leave it."""
+    source = 'print("\\n")\nprint("ok")'
+    assert normalize_code_content(source, language="python") == source
+
+
+def test_minified_html_gets_soft_breaks() -> None:
+    raw = "<!DOCTYPE html><html><head><title>x</title></head><body><button>Go</button></body></html>"
+    out = normalize_code_content(raw, language="html")
+    assert "\n" in out
+    assert "<head>" in out
+    assert out.count("\n") >= 3
+
+
+def test_minified_python_def_splits_header_from_body() -> None:
+    raw = "def remove_duplicates_and_sort(numbers: list) -> list: '''функция принимает список'''\n"
+    # Already has a trailing newline from the literal — strip to one-line case.
+    raw = raw.rstrip("\n")
+    out = normalize_code_content(raw, language="python")
+    assert out.startswith("def remove_duplicates_and_sort(numbers: list) -> list:\n")
+    assert "'''функция" in out
+
+
+def test_already_formatted_python_is_untouched() -> None:
+    source = "def f(x: int) -> int:\n    return x\n"
+    assert normalize_code_content(source, language="python") == source
+
+
+def test_heading_before_code_gets_document_icon_not_chart() -> None:
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        blocks=(
+            HeadingBlock(level=2, text="Python: пример", icon="chart"),
+            CodeBlock(language="python", content="print(1)"),
+        ),
+        meta=DocumentMeta(confidence=0.9, kind="report"),
+    )
+    enriched = PresentationIconPolicy.enrich(doc)
+    heading = enriched.blocks[0]
+    assert isinstance(heading, HeadingBlock)
+    assert heading.icon == "document"

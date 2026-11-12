@@ -59,7 +59,7 @@ from palatium_ai.domain.memory.turns import attachment_ids_payload
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.policies.response_cache import ResponseCacheKeyPolicy
-from palatium_ai.domain.policies.types import StreamingContract
+from palatium_ai.domain.policies.types import ComposerMode, StreamingContract
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
 _DEFAULT_DIALOG_WINDOW = 12
@@ -327,6 +327,7 @@ class IntentService:
         *,
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
+        composer_mode: ComposerMode | None = None,
     ) -> IntentTaskResult:
         """Возвращает platform-level классификацию задачи."""
         resolved_task_id = task_id or str(uuid4())
@@ -365,6 +366,7 @@ class IntentService:
             tenant_key=_tenant_budget_key(user_id=user_id, org_id=org_id, thread_id=thread_id),
             untrusted_context=turn_attachments.fenced_text,
             attachment_context=turn_attachments,
+            composer_mode=composer_mode,
         )
         classification = final_state.get("classification")
         critic = final_state.get("critic")
@@ -505,6 +507,7 @@ class IntentService:
         *,
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
+        composer_mode: ComposerMode | None = None,
     ) -> FormatterTaskResult:
         """Возвращает финальный отформатированный ответ платформы."""
         turn = await self.finalize_turn(
@@ -515,6 +518,7 @@ class IntentService:
             org_id=org_id,
             is_admin=is_admin,
             attachment_ids=attachment_ids,
+            composer_mode=composer_mode,
         )
         return turn.result
 
@@ -528,6 +532,7 @@ class IntentService:
         *,
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
+        composer_mode: ComposerMode | None = None,
     ) -> FinalizedTurn:
         """Run one turn and hand back the agent result with the diff it produced.
 
@@ -616,6 +621,7 @@ class IntentService:
                 tenant_key=tenant_key,
                 untrusted_context=untrusted_context,
                 attachment_context=turn_attachments,
+                composer_mode=composer_mode,
             )
         interrupted = _extract_interrupt(final_state)
         revision: DocumentRevision | None = None
@@ -738,6 +744,7 @@ class IntentService:
         *,
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
+        composer_mode: ComposerMode | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         """SSE-oriented process: yield hop events, then a final FormatterTaskResult payload."""
         started = perf_counter()
@@ -826,6 +833,7 @@ class IntentService:
                 tenant_key=tenant_key,
                 untrusted_context=untrusted,
                 attachment_context=turn_attachments,
+                composer_mode=composer_mode,
             ):
                 if event.get("event") == "final_state":
                     final_state = cast("AgentGraphState", event["state"])

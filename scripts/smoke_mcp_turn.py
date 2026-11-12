@@ -44,14 +44,14 @@ def _request_json(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     body = None if payload is None else json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(  # noqa: S310
+    req = urllib.request.Request(
         _http_url(url),
         data=body,
         headers=headers,
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
             status = int(resp.status)
     except urllib.error.HTTPError as exc:

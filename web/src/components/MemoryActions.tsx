@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Brain, ChevronDown, LoaderCircle } from 'lucide-react';
+import { IconBrain, IconChevronDown, IconLoader } from '../icons/kimiStroke';
 import { requestMemoryExtract, requestMemoryForget, requestMemorySave } from '../api/client';
 import { t } from '../i18n';
 import type { HITLCardView } from '../types/contentDocument';
@@ -96,9 +96,9 @@ export function MemoryActions({
         disabled={disabled}
         onClick={() => setOpen(prev => !prev)}
       >
-        <Brain size={14} strokeWidth={1.75} aria-hidden />
+        <IconBrain size={14} />
         <span>{t('memory.toggle')}</span>
-        <ChevronDown size={13} className="memory-chevron" aria-hidden />
+        <IconChevronDown size={13} className="memory-chevron" />
       </button>
 
       {open && (
@@ -154,7 +154,7 @@ export function MemoryActions({
             disabled={busy || disabled}
             onClick={() => void submit()}
           >
-            {busy ? <LoaderCircle className="spin" size={14} /> : null}
+            {busy ? <IconLoader className="spin" size={14} /> : null}
             <span>
               {mode === 'save'
                 ? t('memory.submit.save')

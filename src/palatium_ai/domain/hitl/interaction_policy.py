@@ -69,6 +69,12 @@ class HitlInteractionPolicy:
     #: promoting it to a required card swallowed the answer the user asked for
     #: (live UI: «Что ты умеешь?» became "choose one of 5 capabilities").
     _INFORMATIONAL_TASK_KINDS: frozenset[str] = frozenset({"capability_discovery", "social_conversation"})
+    #: Explicit ``response_shape`` whose structure *is* the answer body (W10 p1_list).
+    #: A catalogue ListBlock must not be rewritten into exclusive HITL options —
+    #: that axis lives on Intent ``response_shape``, not phrase lists (055).
+    _CATALOGUE_SHAPES: frozenset[str] = frozenset(
+        {"inventory", "plan", "document_analysis", "comparison_table", "prose"}
+    )
 
     @classmethod
     def plan(
@@ -80,6 +86,7 @@ class HitlInteractionPolicy:
         task_kind: str | None = None,
         requires_user_choice: bool = False,
         has_turn_attachments: bool = False,
+        response_shape: str | None = None,
     ) -> HitlCardPlan:
         """Decide choice card options and whether to mint quality review."""
         if document is None:
@@ -119,6 +126,21 @@ class HitlInteractionPolicy:
                 choice_actions=(),
                 mint_quality_review=requires_review,
                 reason="informational_answer",
+                menu_shaped=cls._is_menu_shaped(document),
+                promoted_from="none",
+                force_structural=False,
+                required_choice=False,
+                ignored_user_choice=ignored_user_choice,
+            )
+
+        # Catalogue / structured deliverable (inventory, plan, …): the ListBlock
+        # *is* the answer. Structural menu promotion would strip it into a
+        # "Select one of N options" HITL card (live W10 p1_list regression).
+        if cls._is_catalogue_deliverable(response_shape, effective_user_choice):
+            return HitlCardPlan(
+                choice_actions=(),
+                mint_quality_review=requires_review,
+                reason="catalogue_answer",
                 menu_shaped=cls._is_menu_shaped(document),
                 promoted_from="none",
                 force_structural=False,
@@ -219,6 +241,22 @@ class HitlInteractionPolicy:
         structural behaviour, and an explicit clarification choice still wins.
         """
         return task_kind in cls._INFORMATIONAL_TASK_KINDS and not effective_user_choice
+
+    @classmethod
+    def _is_catalogue_deliverable(
+        cls,
+        response_shape: str | None,
+        effective_user_choice: bool,
+    ) -> bool:
+        """True when ``response_shape`` names a body composition, not a picker.
+
+        ``auto`` stays fail-closed (exclusive menus without an Intent shape flag).
+        A real clarification choice still wins over shape.
+        """
+        if effective_user_choice or not response_shape:
+            return False
+        shape = response_shape.strip().lower()
+        return shape in cls._CATALOGUE_SHAPES
 
     @classmethod
     def _is_clarification_turn(
@@ -401,8 +439,12 @@ class HitlInteractionPolicy:
             labels = tuple(item.text.strip() for item in list_blocks[0].items if item.text.strip())
             return labels, "list"
         if len(step_blocks) == 1 and not list_blocks:
-            labels = tuple(item.title.strip() for item in step_blocks[0].items if item.title.strip())
-            return labels, "steps"
+            # Steps are a process timeline (howto), not an exclusive picker. Promoting
+            # them forced ``formatter_output_invalid`` when Intent did not mint actions
+            # (W10 p1_howto). Exclusive choice menus stay on ListBlock / CalloutBlock /
+            # explicit ``actions`` (schema also requires non-empty step bodies).
+            _ = step_blocks
+            return (), "none"
 
         # Topic rows often arrive as callouts (icon + title) without a list block.
         callout_labels = tuple(

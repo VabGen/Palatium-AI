@@ -55,6 +55,12 @@ class CoderAgent(BaseAgent):
     def get_available_tools(self) -> list[str]:
         return list(self._config.allowed_tools)
 
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based draft gate — reject empty or mistyped coder payloads."""
+        if not isinstance(output.output, CoderOutput):
+            return False
+        return bool(output.output.summary.strip())
+
     @traceable(name="coder.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")

@@ -12,7 +12,11 @@ from palatium_ai.domain.agents.coder import CoderInput
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.critic import CriticInput
 from palatium_ai.domain.agents.formatter import FormatterInput
-from palatium_ai.domain.agents.researcher import ResearcherInput
+from palatium_ai.domain.agents.researcher import (
+    ATTACHMENT_REFERENCE_UNRESOLVED,
+    GROUNDING_REQUIRED_EMPTY,
+    ResearcherInput,
+)
 from palatium_ai.domain.agents.supervisor import SupervisorInput
 
 if TYPE_CHECKING:
@@ -55,6 +59,7 @@ def build_context_weaver_input(
         grounding_reason=selectors.resolved_grounding_reason(state),
         has_attachment_context=selectors.uploads_in_scope(state) and bool((state.get("untrusted_context") or "").strip()),
         has_trusted_prior=bool(routing is not None and routing.trust_prior_for_workers),
+        composer_mode=state.get("composer_mode"),
     )
 
 
@@ -144,11 +149,13 @@ def build_formatter_input(
     intent_review = snapshot.classification.requires_review and not selectors.suppress_intent_hitl(state)
     worker_summary = snapshot.worker_summary
     execution = state.get("execution")
+    policy_refusal = _is_policy_refusal_execution(execution)
     if (
         execution is not None
         and getattr(execution, "grounding_degraded", False)
         and worker_summary
         and not getattr(execution, "cannot_answer_without_source", False)
+        and not policy_refusal
     ):
         # Provenance: answer was not backed by retrieval hits.
         disclaimer = "Ответ без подтверждения во внешних источниках.\n\n"
@@ -175,7 +182,21 @@ def build_formatter_input(
         transformation=selectors.resolved_transformation(state),
         prior_context=selectors.resolved_prior_assistant_content(state),
         allow_worker_fallback=_allow_worker_fallback(state),
+        policy_refusal=policy_refusal,
     )
+
+
+def _is_policy_refusal_execution(execution: object | None) -> bool:
+    """True when the worker already authored the final user-facing refusal copy."""
+    if execution is None:
+        return False
+    if getattr(execution, "cannot_answer_without_source", False):
+        return True
+    reason = getattr(execution, "error", None)
+    return isinstance(reason, str) and reason in {
+        ATTACHMENT_REFERENCE_UNRESOLVED,
+        GROUNDING_REQUIRED_EMPTY,
+    }
 
 
 def _allow_worker_fallback(state: AgentGraphState) -> bool:

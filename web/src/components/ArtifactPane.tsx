@@ -3,25 +3,17 @@
  * Chat steers; the pane holds the editable-looking result surface (Claude/Gemini).
  */
 import { useEffect, useRef } from 'react';
-import {
-  Copy,
-  Download,
-  LoaderCircle,
-  RotateCw,
-  ThumbsDown,
-  ThumbsUp,
-  X,
-} from 'lucide-react';
-
+import { KimiActionIcon } from '../icons/kimiActionIcons';
+import { IconDownload, IconLoader, IconX } from '../icons/kimiStroke';
 import { t } from '../i18n';
 import type { ContentDocument, DocumentRevision } from '../types/contentDocument';
 import { BlockRenderer } from './BlockRenderer';
 import { CitationSources } from './CitationSources';
-import { RevisionNote } from './RevisionNote';
 import { displaySourceRefs } from '../lib/attachments';
 
 export type ArtifactPaneProps = {
   document: ContentDocument;
+  /** Kept for caller parity with the turn payload; product pane never paints W7b wash. */
   revision?: DocumentRevision | null;
   messageId: string;
   userId: string;
@@ -35,13 +27,14 @@ export type ArtifactPaneProps = {
   onLike: () => void;
   onDislike: () => void;
   onCopy: () => void;
+  onShare?: () => void;
   onExportPdf: () => void;
   onRegenerate: () => void;
 };
 
 export function ArtifactPane({
   document,
-  revision,
+  revision: _revision,
   messageId,
   userId,
   orgId,
@@ -54,6 +47,7 @@ export function ArtifactPane({
   onLike,
   onDislike,
   onCopy,
+  onShare,
   onExportPdf,
   onRegenerate,
 }: ArtifactPaneProps) {
@@ -86,13 +80,13 @@ export function ArtifactPane({
           aria-label={t('artifact.close')}
           title={t('artifact.close')}
         >
-          <X size={16} aria-hidden />
+          <IconX size={16} />
         </button>
       </header>
 
       <div className="artifact-pane-body">
-        <RevisionNote revision={revision} />
-        <BlockRenderer document={document} revision={revision} />
+        {/* Product surface: final answer only — revision wash is chat/dev chrome. */}
+        <BlockRenderer document={document} revision={null} />
         {citationAnchors.length > 0 ? (
           <CitationSources citations={citationAnchors} userId={userId} orgId={orgId} />
         ) : sourceChips.length > 0 ? (
@@ -109,53 +103,70 @@ export function ArtifactPane({
         ) : null}
       </div>
 
-      <footer className="artifact-pane-footer msg-actions">
+      <footer className="artifact-pane-footer msg-actions msg-actions--product">
         <button
           type="button"
-          className={`action-btn ${feedbackLike ? 'active' : ''}`}
+          className={`icon-btn icon-btn--sm${feedbackLike ? ' is-active' : ''}`}
           onClick={onLike}
           disabled={feedbackSending || busy}
           aria-pressed={!!feedbackLike}
           aria-label={t('action.like')}
         >
-          <ThumbsUp size={16} />
+          <KimiActionIcon name="like" size={16} />
         </button>
         <button
           type="button"
-          className={`action-btn ${feedbackDislike ? 'active' : ''}`}
+          className={`icon-btn icon-btn--sm${feedbackDislike ? ' is-active' : ''}`}
           onClick={onDislike}
           disabled={feedbackSending || busy}
           aria-pressed={!!feedbackDislike}
           aria-label={t('action.dislike')}
         >
-          <ThumbsDown size={16} />
+          <KimiActionIcon name="dislike" size={16} />
         </button>
         <button
           type="button"
-          className="action-btn"
+          className="icon-btn icon-btn--sm"
           onClick={onCopy}
           disabled={busy}
           aria-label={t('action.copy')}
         >
-          <Copy size={16} />
+          <KimiActionIcon name="copy" size={16} />
         </button>
+        {onShare ? (
+          <button
+            type="button"
+            className="icon-btn icon-btn--sm"
+            onClick={onShare}
+            disabled={busy}
+            aria-label={t('action.share')}
+            title={t('action.share')}
+          >
+            <KimiActionIcon name="share" size={16} />
+          </button>
+        ) : null}
         <button
           type="button"
-          className="action-btn"
+          className="icon-btn icon-btn--sm"
           onClick={onExportPdf}
           disabled={busy}
           aria-label={t('action.exportPdf')}
         >
-          <Download size={16} />
+          <IconDownload size={16} />
         </button>
         <button
           type="button"
-          className="action-btn"
+          className="icon-btn icon-btn--sm"
           onClick={onRegenerate}
           disabled={busy || regenerating}
           aria-label={t('action.regenerate')}
+          title={t('action.regenerate')}
         >
-          {regenerating ? <LoaderCircle className="spin" size={16} /> : <RotateCw size={16} />}
+          {regenerating ? (
+            <IconLoader className="spin" size={16} />
+          ) : (
+            <KimiActionIcon name="refresh" size={16} />
+          )}
         </button>
       </footer>
     </aside>

@@ -46,12 +46,8 @@ def main() -> int:
         _emit(
             {
                 "permission": "deny",
-                "agentMessage": (
-                    "mcp-rbac-guard: невалидный JSON на stdin — fail-closed (020)."
-                ),
-                "userMessage": (
-                    "Вызов MCP-инструмента заблокирован: guard безопасности недоступен."
-                ),
+                "agentMessage": ("mcp-rbac-guard: невалидный JSON на stdin — fail-closed (020)."),
+                "userMessage": ("Вызов MCP-инструмента заблокирован: guard безопасности недоступен."),
             }
         )
         return 0
@@ -67,13 +63,8 @@ def main() -> int:
         _emit(
             {
                 "permission": "ask",
-                "agentMessage": (
-                    f"Инструмент {tool} требует HITL-подтверждения "
-                    "по политике платформы (020)."
-                ),
-                "userMessage": (
-                    f"Агент запрашивает вызов критичного инструмента: {tool}"
-                ),
+                "agentMessage": (f"Инструмент {tool} требует HITL-подтверждения по политике платформы (020)."),
+                "userMessage": (f"Агент запрашивает вызов критичного инструмента: {tool}"),
             }
         )
         return 0
@@ -86,8 +77,7 @@ def main() -> int:
         {
             "permission": "deny",
             "agentMessage": (
-                f"Инструмент {tool} (сервер {server}) отсутствует в закрытом "
-                "перечне 070-mcp-tools.mdc — deny by default."
+                f"Инструмент {tool} (сервер {server}) отсутствует в закрытом перечне 070-mcp-tools.mdc — deny by default."
             ),
             "userMessage": f"Заблокирован вызов неизвестного инструмента: {tool}",
         }

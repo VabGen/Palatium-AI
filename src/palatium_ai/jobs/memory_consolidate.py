@@ -114,7 +114,7 @@ def _memory_handlers(
     }
 
 
-async def _run(
+async def _run(  # noqa: C901 — consolidate pipeline wiring; split tracked separately
     *,
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],

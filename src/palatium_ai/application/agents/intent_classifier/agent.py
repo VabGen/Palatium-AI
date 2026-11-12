@@ -43,6 +43,19 @@ class IntentClassifierAgent(BaseAgent):
     def get_available_tools(self) -> list[str]:
         return []
 
+    async def verify(self, output: AgentOutput) -> bool:
+        """Axis consistency gate after parse coercions (055 residual invariants)."""
+        if not isinstance(output.output, IntentClassifierOutput):
+            return False
+        body = output.output
+        if body.task_kind == "social_conversation" and body.requires_mcp:
+            return False
+        if body.task_kind == "social_conversation" and body.grounding == "required":
+            return False
+        if body.memory_mutation != "none" and not body.memory_text.strip():
+            return False
+        return not (body.residual_ask and body.memory_mutation == "none")
+
     @traceable(name="intent_classifier.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")

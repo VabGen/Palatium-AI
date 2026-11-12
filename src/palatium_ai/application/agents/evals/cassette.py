@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-from palatium_ai.application.agents.context_enricher import CONTEXTUALIZER_CONFIG, ContextualizerAgent
+from palatium_ai.application.agents.analyst import ANALYST_CONFIG, AnalystAgent
+from palatium_ai.application.agents.coder import CODER_CONFIG, CoderAgent
+from palatium_ai.application.agents.context_enricher import (
+    CONTEXT_WEAVER_CONFIG,
+    CONTEXTUALIZER_CONFIG,
+    ContextualizerAgent,
+    ContextWeaverAgent,
+)
 from palatium_ai.application.agents.critic import CRITIC_CONFIG, CriticAgent
 from palatium_ai.application.agents.evals.static_llm import SequentialStaticLLMPort, StaticLLMPort
 from palatium_ai.application.agents.formatter import FORMATTER_CONFIG, FormatterAgent
@@ -24,6 +31,12 @@ from palatium_ai.application.agents.supervisor import SUPERVISOR_CONFIG, Supervi
 from palatium_ai.application.agents.text_ingestor import TEXT_INGESTOR_CONFIG, TextIngestorAgent
 from palatium_ai.application.agents.text_ingestor.parsing import text_ingestor_output_to_dict
 from palatium_ai.application.orchestration.agent_bridge import (
+    analyst_output_to_execution_result,
+    analyst_to_agent_input,
+    coder_output_to_execution_result,
+    coder_to_agent_input,
+    context_weaver_output_to_task_result,
+    context_weaver_to_agent_input,
     contextualizer_output_to_task_result,
     contextualizer_to_agent_input,
     critic_output_to_task_result,
@@ -39,7 +52,10 @@ from palatium_ai.application.orchestration.agent_bridge import (
     supervisor_output_to_task_result,
     supervisor_to_agent_input,
 )
+from palatium_ai.domain.agents.analyst import AnalystInput
+from palatium_ai.domain.agents.coder import CoderInput, CoderOutput
 from palatium_ai.domain.agents.context_packet import ContextPacket
+from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.critic import CriticInput
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.agents.intent import IntentClassifierInput, TaskKind
@@ -64,7 +80,14 @@ from palatium_ai.domain.mcp.platform_schemas import (
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContextualizerInput
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
-from palatium_ai.domain.policies.types import ExecutionStrategy, GroundingMode
+from palatium_ai.domain.policies.types import (
+    ATTACHMENT_SCOPE_DEFAULT,
+    FILE_REFERENCE_DEFAULT,
+    GROUNDING_DEFAULT,
+    RESPONSE_SHAPE_DEFAULT,
+    ExecutionStrategy,
+    GroundingMode,
+)
 
 
 def _find_project_root(start: Path) -> Path:
@@ -76,7 +99,17 @@ def _find_project_root(start: Path) -> Path:
     raise FileNotFoundError(msg)
 
 
-_CASSETTE_ROOT = _find_project_root(Path(__file__).resolve()) / "tests" / "fixtures" / "llm"
+# Override in unit tests (monkeypatch). Must stay ``None`` at import so Docker
+# runtime (no tests/) can load this module without raising.
+_CASSETTE_ROOT: Path | None = None
+
+
+def _cassette_root() -> Path:
+    """Resolve cassette dir lazily — import must not require test fixtures (Docker)."""
+    if _CASSETTE_ROOT is not None:
+        return _CASSETTE_ROOT
+    return _find_project_root(Path(__file__).resolve()) / "tests" / "fixtures" / "llm"
+
 
 CassetteRunner = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -94,7 +127,7 @@ def load_cassette_response(relative_path: str) -> str:
       - {"response": {<object>}}       (serialized back to JSON string here)
       - "<json-string>"                (bare string, no wrapper)
     """
-    path = _CASSETTE_ROOT / relative_path
+    path = _cassette_root() / relative_path
     if not path.is_file():
         msg = f"cassette not found: {relative_path}"
         raise FileNotFoundError(msg)
@@ -314,6 +347,8 @@ async def run_intent_classifier_cassette(task: dict[str, Any]) -> dict[str, Any]
 
 
 async def run_context_enricher_cassette(task: dict[str, Any]) -> dict[str, Any]:
+    if str(task.get("phase") or "").strip().lower() == "weaving":
+        return await run_context_weaver_cassette(task)
     cassette = _require_cassette(task)
     llm_response = load_cassette_response(cassette)
     raw_input = task.get("input")
@@ -398,6 +433,7 @@ async def run_researcher_cassette(task: dict[str, Any]) -> dict[str, Any]:
     result = researcher_output_to_task_result(output, task_id=task_id, agent_role=agent.config.role)
     sources = result.output.sources_used if result.output is not None else ()
     summary = result.output.summary if result.output is not None else ""
+    tool_calls = [call.name for (_server, call) in mcp_registry.calls] if mcp_registry is not None else []
     return {
         "status": result.status,
         "requires_mcp": requires_mcp,
@@ -407,6 +443,7 @@ async def run_researcher_cassette(task: dict[str, Any]) -> dict[str, Any]:
         "sources_used": list(sources),
         "mcp_tool": raw_input.get("tool_name") if requires_tool_call else None,
         "used_mcp_source": any(source.startswith("mcp:platform.") for source in sources),
+        "tool_calls": tool_calls,
     }
 
 
@@ -433,7 +470,9 @@ async def run_memory_keeper_cassette(task: dict[str, Any]) -> dict[str, Any]:
     facts: list[dict[str, object]] = []
     if result.output is not None:
         facts = [{"text": fact.text, "kind": fact.kind, "confidence": fact.confidence} for fact in result.output.facts]
-    return {"status": result.status, "facts": facts}
+    # MemoryKeeper is extract-only: candidates go to the write gate elsewhere (060/070).
+    # Behavioral W5.2: must not call persist tools from the agent itself.
+    return {"status": result.status, "facts": facts, "tool_calls": []}
 
 
 async def run_supervisor_cassette(task: dict[str, Any]) -> dict[str, Any]:
@@ -497,6 +536,8 @@ async def run_critic_cassette(task: dict[str, Any]) -> dict[str, Any]:
         "status": result.status,
         "requires_review": result.requires_review,
         "llm_invoked": len(llm.calls) > 0,
+        "violations": list(result.output.violations) if result.output is not None else [],
+        "constitution_blocked": bool(result.requires_review and result.status == "partial"),
     }
     if result.output is not None:
         resolved["accuracy_score"] = result.output.accuracy_score
@@ -574,10 +615,132 @@ async def run_text_ingestor_cassette(task: dict[str, Any]) -> dict[str, Any]:
     return text_ingestor_output_to_dict(output.output, status=output.status)
 
 
+async def run_context_weaver_cassette(task: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic weaving eval — no LLM cassette required (ExecutionPlanner)."""
+    raw_input = task.get("input")
+    if not isinstance(raw_input, dict):
+        msg = "weaving cassette task requires input object"
+        raise ValueError(msg)
+    task_id = _task_id(task)
+    task_kind = cast("TaskKind", str(raw_input.get("task_kind", "knowledge_request")))
+    route = cast("WorkerRoute", str(raw_input.get("route", "researcher")))
+    grounding_raw = raw_input.get("grounding", GROUNDING_DEFAULT)
+    grounding = (
+        grounding_raw
+        if isinstance(grounding_raw, str) and grounding_raw in {"required", "optional", "none"}
+        else GROUNDING_DEFAULT
+    )
+    shape_raw = raw_input.get("response_shape", RESPONSE_SHAPE_DEFAULT)
+    response_shape = shape_raw if isinstance(shape_raw, str) else RESPONSE_SHAPE_DEFAULT
+    task_input = ContextWeaverInput(
+        task_id=task_id,
+        user_text=str(raw_input.get("user_text", "eval")),
+        task_kind=task_kind,
+        route=route,
+        route_plan=str(raw_input.get("route_plan", "cassette weaving")),
+        requires_mcp=bool(raw_input.get("requires_mcp", False)),
+        candidate_capabilities=tuple(raw_input.get("candidate_capabilities", ())),
+        grounding=cast("GroundingMode", grounding),
+        grounding_reason=str(raw_input.get("grounding_reason", "")),
+        response_shape=cast("Any", response_shape),
+        file_reference=cast(
+            "Any",
+            raw_input.get("file_reference", FILE_REFERENCE_DEFAULT),
+        ),
+        attachment_scope=cast(
+            "Any",
+            raw_input.get("attachment_scope", ATTACHMENT_SCOPE_DEFAULT),
+        ),
+        has_attachment_context=bool(raw_input.get("has_attachment_context", False)),
+        has_trusted_prior=bool(raw_input.get("has_trusted_prior", False)),
+    )
+    harness = Harness(llm=StaticLLMPort("{}"))
+    agent = ContextWeaverAgent(harness, CONTEXT_WEAVER_CONFIG)
+    agent_input = context_weaver_to_agent_input(
+        task_input,
+        trace_id="eval-cassette",
+        thread_id="eval-cassette",
+    )
+    output = await harness.execute_with_guardrails(agent, agent_input)
+    result = context_weaver_output_to_task_result(
+        output,
+        task_id=task_id,
+        agent_role=agent.config.role,
+    )
+    if result.output is None:
+        return {"status": result.status, "error": result.error}
+    bundle = result.output.execution_bundle
+    return {
+        "status": result.status,
+        "selected_strategy": bundle.selected_strategy,
+        "requires_tool_call": bundle.requires_tool_call,
+        "step_count": len(bundle.steps),
+        "confidence": result.confidence,
+    }
+
+
+async def run_coder_cassette(task: dict[str, Any]) -> dict[str, Any]:
+    cassette = _require_cassette(task)
+    raw_input = task.get("input")
+    if not isinstance(raw_input, dict):
+        msg = "coder cassette task requires input object"
+        raise ValueError(msg)
+    task_id = _task_id(task)
+    packet = _packet_from_raw(raw_input, task_id)
+    task_input = CoderInput(task_id=task_id, context_packet=packet)
+    harness = Harness(llm=StaticLLMPort(load_cassette_response(cassette)))
+    agent = CoderAgent(harness, CODER_CONFIG)
+    agent_input = coder_to_agent_input(task_input, trace_id="eval-cassette", thread_id="eval-cassette")
+    # skill_catalog is JIT-filled by harness when missing; seed empty for cassette.
+    agent_input = agent_input.model_copy(
+        update={"context": {**agent_input.context, "skill_catalog": "(no procedural skills)"}},
+    )
+    output = await harness.execute_with_guardrails(agent, agent_input)
+    result = coder_output_to_execution_result(output, task_id=task_id, agent_role=agent.config.role)
+    requires_sandbox = False
+    if isinstance(output.output, CoderOutput):
+        requires_sandbox = output.output.requires_sandbox_exec
+    summary = result.output.summary if result.output is not None else ""
+    return {
+        "status": result.status,
+        "summary": summary,
+        "confidence": result.confidence,
+        "worker_kind": result.worker_kind,
+        "requires_sandbox_exec": requires_sandbox,
+        "language": result.worker_language,
+    }
+
+
+async def run_analyst_cassette(task: dict[str, Any]) -> dict[str, Any]:
+    cassette = _require_cassette(task)
+    raw_input = task.get("input")
+    if not isinstance(raw_input, dict):
+        msg = "analyst cassette task requires input object"
+        raise ValueError(msg)
+    task_id = _task_id(task)
+    packet = _packet_from_raw(raw_input, task_id)
+    task_input = AnalystInput(task_id=task_id, context_packet=packet)
+    harness = Harness(llm=StaticLLMPort(load_cassette_response(cassette)))
+    agent = AnalystAgent(harness, ANALYST_CONFIG)
+    agent_input = analyst_to_agent_input(task_input, trace_id="eval-cassette", thread_id="eval-cassette")
+    output = await harness.execute_with_guardrails(agent, agent_input)
+    result = analyst_output_to_execution_result(output, task_id=task_id, agent_role=agent.config.role)
+    summary = result.output.summary if result.output is not None else ""
+    return {
+        "status": result.status,
+        "summary": summary,
+        "confidence": result.confidence,
+        "worker_kind": result.worker_kind,
+        "findings": list(result.worker_findings),
+    }
+
+
 CASSETTE_RUNNERS: dict[str, CassetteRunner] = {
     "intent_classifier": run_intent_classifier_cassette,
     "context_enricher": run_context_enricher_cassette,
     "researcher": run_researcher_cassette,
+    "coder": run_coder_cassette,
+    "analyst": run_analyst_cassette,
     "memory_keeper": run_memory_keeper_cassette,
     "supervisor": run_supervisor_cassette,
     "critic": run_critic_cassette,

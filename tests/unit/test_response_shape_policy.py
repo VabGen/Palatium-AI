@@ -107,17 +107,41 @@ def test_comparison_table_rejects_single_row() -> None:
     assert verdict.reason == "table_too_short"
 
 
-def test_document_analysis_requires_heading_and_paragraph() -> None:
+def test_document_analysis_requires_dense_structure() -> None:
+    from palatium_ai.domain.content.content_document import CalloutBlock, KeyValueBlock, KeyValueItem, ListBlock, ListItem
+
     recipe = ShapeRecipePolicy.resolve(shape="document_analysis", task_kind="knowledge_request")
     assert recipe is not None
-    satisfied = ShapeRecipePolicy.validate(
-        _doc(HeadingBlock(text="Условия"), ParagraphBlock(text="Срок — 30 дней.")),
+    dense = _doc(
+        HeadingBlock(text="Заказчик"),
+        KeyValueBlock(items=(KeyValueItem(label="Назначение", value="Поставка СЭД"),)),
+        HeadingBlock(text="Риски"),
+        CalloutBlock(tone="warning", body="Срок сжатый."),
+    )
+    assert ShapeRecipePolicy.validate(dense, recipe).satisfied is True
+
+    list_callout = _doc(
+        HeadingBlock(text="Требования"),
+        ListBlock(items=(ListItem(text="ЭЦП"),)),
+        HeadingBlock(text="Риски"),
+        CalloutBlock(tone="warning", body="Срок сжатый."),
+    )
+    assert ShapeRecipePolicy.validate(list_callout, recipe).satisfied is True
+
+    thin = ShapeRecipePolicy.validate(
+        _doc(HeadingBlock(text="Условия"), HeadingBlock(text="Срок"), ParagraphBlock(text="30 дней.")),
         recipe,
     )
-    assert satisfied.satisfied is True
+    assert thin.reason == "analysis_structure_missing"
 
-    no_paragraph = ShapeRecipePolicy.validate(_doc(HeadingBlock(text="Условия")), recipe)
-    assert no_paragraph.reason == "paragraph_block_missing"
+    few_headings = ShapeRecipePolicy.validate(
+        _doc(
+            HeadingBlock(text="Условия"),
+            KeyValueBlock(items=(KeyValueItem(label="Срок", value="30 дней"),)),
+        ),
+        recipe,
+    )
+    assert few_headings.reason == "analysis_too_few_headings"
 
     no_heading = ShapeRecipePolicy.validate(_doc(ParagraphBlock(text="Срок — 30 дней.")), recipe)
     assert no_heading.reason == "heading_block_missing"

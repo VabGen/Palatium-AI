@@ -236,7 +236,7 @@ def test_structured_block_frames_are_typed_sanitized_and_append_only() -> None:
 def test_emit_content_document_paints_typed_blocks_under_structured() -> None:
     """0-LLM finished documents must not fall back to markdown answer_delta."""
     from palatium_ai.application.agents.formatter.answer_delta import emit_content_document
-    from palatium_ai.domain.content import ContentDocument, DocumentMeta, StepsBlock, StepItem
+    from palatium_ai.domain.content import ContentDocument, DocumentMeta, StepItem, StepsBlock
 
     document = ContentDocument(
         locale="ru-RU",

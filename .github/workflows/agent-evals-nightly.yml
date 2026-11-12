@@ -97,10 +97,29 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: uv run python scripts/run_agent_evals_nightly.py --live-judge
 
+      - name: W9 product-quality live evals
+        if: steps.mode.outputs.value == 'live_smoke' || steps.mode.outputs.value == 'live_full'
+        env:
+          PALATIUM_LIVE_EVAL: "1"
+          PALATIUM_EVAL_LIVE_JUDGE: "1"
+          PALATIUM_EVAL_JUDGE_PROVIDER: ${{ secrets.PALATIUM_EVAL_JUDGE_PROVIDER }}
+          PALATIUM_EVAL_JUDGE_MODEL: ${{ secrets.PALATIUM_EVAL_JUDGE_MODEL }}
+          PALATIUM_EVAL_AGENT_PROVIDER: ${{ secrets.PALATIUM_EVAL_AGENT_PROVIDER }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ "${{ steps.mode.outputs.value }}" = "live_smoke" ]; then
+            uv run python scripts/run_w9_product_evals.py --mode live_smoke --suite all --live-judge --skip-baseline-assert
+          else
+            uv run python scripts/run_w9_product_evals.py --mode live_full --suite all --live-judge --skip-baseline-assert
+          fi
+
       - name: Upload nightly eval report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agent-evals-nightly-${{ steps.mode.outputs.value }}
-          path: artifacts/agent_evals_nightly.json
+          path: |
+            artifacts/agent_evals_nightly.json
+            artifacts/w9_product_evals.json
           if-no-files-found: ignore

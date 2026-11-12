@@ -1,9 +1,9 @@
 /**
- * Доработка ответа (W7b): живой diff в ленте.
+ * Доработка ответа (W7b): product chat shows the final answer without diff chrome.
  *
- * Проверяется то, что видит человек и что нельзя увидеть в jsdom: заметка о
- * ревизии, полоса у изменённого блока в реальной вёрстке и честный отказ от
- * подсветки, когда сервер не прислал позиции (payload до UI-волны).
+ * Server still ships `revision` in the turn payload (SoT), but Kimi-style product
+ * UI does not surface "blocks changed / removed" or paint a blue wash over the
+ * rewritten answer. Operator/devMode can still opt into chrome in unit tests.
  */
 import { expect, test } from '@playwright/test';
 
@@ -29,7 +29,7 @@ function revisedTurn(revision: Record<string, unknown>) {
   };
 }
 
-test('помечает изменённый блок и называет счётчики diff-а', async ({ page }) => {
+test('renders revised answer without product revision chrome', async ({ page }) => {
   const server = defaultApi();
   server.reply('sessions.turns', {
     json: {
@@ -38,7 +38,6 @@ test('помечает изменённый блок и называет счё�
         revisedTurn({
           revision_of: 'prev-hash',
           changed_blocks: ['b1'],
-          // `answerDocument` уже содержит два блока — абзац и kv; добавленный абзац третий.
           changed_block_indices: [2],
           removed_blocks: ['gone'],
           unchanged_blocks: 2,
@@ -50,20 +49,12 @@ test('помечает изменённый блок и называет счё�
   await server.install(page);
   await openWidget(page);
 
-  const note = page.locator('.revision-note');
-  await expect(note).toContainText('Ответ доработан');
-  await expect(note).toContainText('изменено блоков: 1');
-  await expect(note).toContainText('удалено: 1');
-
-  // Ровно тот блок, на который указал сервер, а не «все подряд».
-  const marked = page.locator('[data-revision="changed"]');
-  await expect(marked).toHaveCount(1);
-  await expect(marked).toContainText('Оплата — по счёту.');
-  // Факт изменения озвучен, а не только нарисован полосой.
-  await expect(marked).toContainText('Изменённый блок');
+  await expect(page.getByText('Оплата — по счёту.')).toBeVisible();
+  await expect(page.locator('.revision-note')).toHaveCount(0);
+  await expect(page.locator('[data-revision="changed"]')).toHaveCount(0);
 });
 
-test('без индексов показывает счётчики, но не подсвечивает блоки', async ({ page }) => {
+test('legacy revision without indices also stays chrome-free', async ({ page }) => {
   const server = defaultApi();
   server.reply('sessions.turns', {
     json: {
@@ -81,6 +72,6 @@ test('без индексов показывает счётчики, но не �
   await server.install(page);
   await openWidget(page);
 
-  await expect(page.locator('.revision-note')).toContainText('изменено блоков: 1');
+  await expect(page.locator('.revision-note')).toHaveCount(0);
   await expect(page.locator('[data-revision="changed"]')).toHaveCount(0);
 });

@@ -38,6 +38,7 @@ from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.types import ComposerMode
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
 if TYPE_CHECKING:
@@ -188,6 +189,7 @@ class IntentGraphRunner:
         revision_feedback: str | None = None,
         untrusted_context: str = "",
         attachment_context: AttachmentTurnContext | None = None,
+        composer_mode: ComposerMode | None = None,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AgentGraphState:
@@ -201,6 +203,7 @@ class IntentGraphRunner:
             revision_feedback=revision_feedback,
             untrusted_context=untrusted_context,
             attachment_context=attachment_context,
+            composer_mode=composer_mode,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )
@@ -241,6 +244,7 @@ class IntentGraphRunner:
         revision_feedback: str | None = None,
         untrusted_context: str = "",
         attachment_context: AttachmentTurnContext | None = None,
+        composer_mode: ComposerMode | None = None,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
@@ -254,6 +258,7 @@ class IntentGraphRunner:
             revision_feedback=revision_feedback,
             untrusted_context=untrusted_context,
             attachment_context=attachment_context,
+            composer_mode=composer_mode,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )
@@ -430,8 +435,9 @@ class IntentGraphRunner:
         revision_feedback: str | None,
         untrusted_context: str,
         attachment_context: AttachmentTurnContext | None,
-        exclude_trailing_user: bool,
-        trace_id: str | None,
+        composer_mode: ComposerMode | None = None,
+        exclude_trailing_user: bool = True,
+        trace_id: str | None = None,
     ) -> dict[str, Any]:
         """Parallel pre-graph I/O + scratchpad-only recall (durable deferred to continuation)."""
         resolved_trace_id = (trace_id or trace_id_var.get() or task_id).strip()
@@ -523,6 +529,8 @@ class IntentGraphRunner:
                 user_id=user_id,
             ),
         }
+        if composer_mode is not None:
+            graph_input["composer_mode"] = composer_mode
         if revision_feedback and revision_feedback.strip():
             graph_input["revision_feedback"] = revision_feedback.strip()[:4_000]
         return {
@@ -557,9 +565,7 @@ class IntentGraphRunner:
             return ()
         return outcome.parts
 
-    def _admitted_document_parts(
-        self, attachment_context: AttachmentTurnContext | None
-    ) -> tuple[DocumentPart, ...]:
+    def _admitted_document_parts(self, attachment_context: AttachmentTurnContext | None) -> tuple[DocumentPart, ...]:
         """Text attachments as citeable provider document blocks (W3a), decided once."""
         from palatium_ai.domain.policies.document_parts import document_parts_from_blocks
 
@@ -598,12 +604,16 @@ class IntentGraphRunner:
             # must degrade to the previous behaviour, never fail the turn (030.8).
             logger.exception("thread file reference resolution failed", thread_id=thread_id)
             return False
-        named = FileReferencePolicy.is_named_reference(resolution)
+        # Unique name *or* name-driven ambiguous/no_match: Intent misses paraphrases
+        # like «перечитай Скан», so Continuity must set file_reference before routing
+        # (W10.1 P0.3 — card / refusal path needs thread_file).
+        named = FileReferencePolicy.promotes_thread_file_reread(resolution)
         if named:
             logger.info(
                 "attachment.thread_file_named",
                 thread_id=thread_id,
                 reason=resolution.reason,
+                status=resolution.status,
             )
         return named
 
@@ -756,6 +766,7 @@ class IntentGraphRunner:
                     dialog=final_state.get("dialog_window"),
                     file_reference=resolved_file_reference,
                     execution_error=execution_error,
+                    response_shape=str(orch_selectors.resolved_response_shape(final_state)),
                 )
             logger.info(
                 "agent.turn.reasoning",

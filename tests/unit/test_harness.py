@@ -8,13 +8,12 @@ from uuid import uuid4
 
 import pytest
 
-from pydantic import BaseModel
-
 from palatium_ai.application.agents.harness import Harness
 from palatium_ai.core.exceptions import AgentExecutionError
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.agents.base import BaseAgent
+from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.llm.models import (
     ChatMessage,
@@ -24,9 +23,13 @@ from palatium_ai.domain.llm.models import (
 )
 
 
-class _Out(BaseModel):
-    model_config = {"frozen": True}
-    value: str = "ok"
+def _intent_out() -> IntentClassifierOutput:
+    return IntentClassifierOutput(
+        task_kind="social_conversation",
+        requires_mcp=False,
+        confidence=0.95,
+        reasoning="stub",
+    )
 
 
 class _DomainAgent(BaseAgent):
@@ -41,7 +44,7 @@ class _DomainAgent(BaseAgent):
             task_id=input.task_id,
             status="success",
             confidence=0.95,
-            output=_Out(),
+            output=_intent_out(),
         )
 
 
@@ -212,6 +215,59 @@ async def test_call_llm_empty_completion_exhausts_retries_as_agent_error() -> No
         await harness.call_llm(_RETRY_CONFIG, [ChatMessage(role="user", content="hi")])
 
     assert llm.calls == 2
+
+
+@pytest.mark.asyncio()
+async def test_harness_compacts_dialog_window_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Graph dialog key is dialog_window_json — compact must not require legacy history."""
+    from palatium_ai.domain.memory.compact import CompactResult
+    from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
+
+    window = DialogTurnWindow(
+        thread_id="t-compact",
+        turns=(
+            DialogTurn(thread_id="t-compact", role="user", content="hello " * 200, seq=0),
+            DialogTurn(thread_id="t-compact", role="assistant", content="world " * 200, seq=1),
+        ),
+    )
+
+    class _Builder:
+        async def build(self, *args: object, **kwargs: object) -> dict[str, str]:
+            _ = args, kwargs
+            return {}
+
+        async def compact(self, request: object) -> CompactResult:
+            _ = request
+            return CompactResult(
+                dialog="COMPACTED",
+                goal="g",
+                plan="p",
+                last_results="r",
+                did_compact=True,
+                method="extractive",
+                tokens_before=1000,
+                tokens_after=100,
+                limit_tokens=500,
+            )
+
+    harness = Harness(context_builder=_Builder())  # type: ignore[arg-type]
+    agent = _CapturingAgent(harness, _CONFIG)
+    output = await harness.execute_with_guardrails(
+        agent,
+        AgentInput(
+            task_id=uuid4(),
+            trace_id="trace-compact",
+            instruction="go",
+            context={
+                "dialog_window_json": window.model_dump_json(),
+                "_thread_id": "t-compact",
+            },
+        ),
+    )
+    assert output.status == "success"
+    assert agent.seen is not None
+    assert "COMPACTED" in agent.seen.context["dialog_window_json"]
+    assert agent.seen.context["goal"] == "g"
 
 
 @pytest.mark.asyncio()

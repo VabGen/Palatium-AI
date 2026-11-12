@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "description": "[baseline-refresh] W9.2 context utilization — measured 2026-11-11 live_full via qwen/generative-model.",
+  "refresh_policy": {
+    "marker": "[baseline-refresh]",
+    "rule": "PRs that change actual_pass_rate or min_pass_rate MUST include [baseline-refresh] and cite the measurement run. Silent upward drift is forbidden. Never use 0.0 as an unmeasured placeholder.",
+    "owners": ["application/agents/evals/product_quality"],
+    "measured_at": "2026-11-11",
+    "generator_provider": "qwen",
+    "generator_model": "generative-model",
+    "artifact": "artifacts/w9_live_full.json"
+  },
+  "agents": {
+    "researcher": { "actual_pass_rate": 1.0, "min_pass_rate": 1.0, "measured": true },
+    "analyst": { "actual_pass_rate": 1.0, "min_pass_rate": 1.0, "measured": true },
+    "coder": { "actual_pass_rate": 1.0, "min_pass_rate": 1.0, "measured": true },
+    "formatter": { "actual_pass_rate": 1.0, "min_pass_rate": 1.0, "measured": true }
+  }
+}

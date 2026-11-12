@@ -41,6 +41,8 @@ class AttachmentORM(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     blob_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    #: Lowercase hex SHA-256 of original blob; NULL for legacy rows until reingest.
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32),

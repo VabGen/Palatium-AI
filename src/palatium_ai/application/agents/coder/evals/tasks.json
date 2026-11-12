@@ -1,6 +1,7 @@
 [
   {
     "id": "draft_python_helper",
+    "cassette": "coder/draft_python_helper.json",
     "input": {
       "user_text": "Write a Python function that clamps a float to [0, 1].",
       "task_kind": "tool_execution",
@@ -9,6 +10,29 @@
       "requires_mcp": false,
       "selected_strategy": "code_sandbox"
     },
-    "expect": { "status": "success", "summary_min_chars": 20 }
+    "expect": {
+      "status": "success",
+      "summary_min_chars": 20,
+      "worker_kind": "coder",
+      "requires_sandbox_exec": false
+    }
+  },
+  {
+    "id": "sandbox_deferred_partial",
+    "cassette": "coder/sandbox_deferred.json",
+    "input": {
+      "user_text": "Run this code in a sandbox and show the output.",
+      "task_kind": "tool_execution",
+      "route": "coder",
+      "route_plan": "Draft then flag sandbox",
+      "requires_mcp": false,
+      "selected_strategy": "code_sandbox"
+    },
+    "expect": {
+      "status": "partial",
+      "summary_min_chars": 20,
+      "worker_kind": "coder",
+      "requires_sandbox_exec": true
+    }
   }
 ]

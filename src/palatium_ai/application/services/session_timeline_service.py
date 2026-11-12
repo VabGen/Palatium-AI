@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field, JsonValue
@@ -16,6 +16,10 @@ from palatium_ai.domain.memory.turns import DialogTurn
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.ports import DialogTurnStore
     from palatium_ai.infrastructure.database.repositories import McpToolCallRepository
+
+
+class ClearCheckpointsFn(Protocol):
+    async def __call__(self, *, thread_id: str) -> int: ...
 
 
 class DialogTurnView(BaseModel):
@@ -68,9 +72,11 @@ class SessionTimelineService:
         *,
         dialog_turn_store: DialogTurnStore | None,
         mcp_tool_call_repository: McpToolCallRepository,
+        clear_checkpoints: ClearCheckpointsFn | None = None,
     ) -> None:
         self._dialog_turn_store = dialog_turn_store
         self._mcp_tool_call_repository = mcp_tool_call_repository
+        self._clear_checkpoints = clear_checkpoints
 
     async def list_dialog_turns(self, *, thread_id: str, limit: int) -> list[DialogTurnView]:
         """Return recent dialog turns for a thread."""
@@ -78,6 +84,19 @@ class SessionTimelineService:
             return []
         window = await self._dialog_turn_store.list_recent_turns(thread_id=thread_id, limit=limit)
         return [_turn_to_view(turn) for turn in window.turns]
+
+    async def truncate_dialog_turns(self, *, thread_id: str, keep: int) -> int:
+        """Rewind transcript to the first ``keep`` turns; clear graph checkpoints.
+
+        User Edit (Big Tech): drop the edited user turn and everything after it so
+        the next ``processIntent`` does not see stale context.
+        """
+        if self._dialog_turn_store is None:
+            return 0
+        deleted = await self._dialog_turn_store.truncate_keeping(thread_id=thread_id, keep=keep)
+        if self._clear_checkpoints is not None:
+            await self._clear_checkpoints(thread_id=thread_id)
+        return deleted
 
     async def list_mcp_tool_calls(
         self,

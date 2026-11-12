@@ -20,6 +20,8 @@ class SessionRecord(BaseModel):
     user_id: str | None = None
     status: str = Field(default="active", min_length=1, max_length=32)
     title: str | None = Field(default=None, max_length=255)
+    #: Durable pin to a Projects row id (string UUID); None = unpinned.
+    project_id: str | None = Field(default=None, max_length=128)
     context: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime

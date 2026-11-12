@@ -116,7 +116,8 @@ def test_open_paragraph_emits_provisional_typed_block() -> None:
     assert open_frames
     assert open_frames[-1].block.text == "Первая"
     more = scanner.feed(" половина")
-    assert more[-1].block is not None and more[-1].block.text == "Первая половина"
+    assert more[-1].block is not None
+    assert more[-1].block.text == "Первая половина"
     assert more[-1].continues_prose is True
 
 

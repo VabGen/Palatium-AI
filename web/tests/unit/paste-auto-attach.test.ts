@@ -91,4 +91,11 @@ describe('displaySourceRefs', () => {
       ])
     ).toEqual(['Обращение.docx']);
   });
+
+  it('drops AttributionPolicy memory stamp from file chips', async () => {
+    const { displaySourceRefs, MEMORY_SOURCE_MARKER } = await import('../../src/lib/attachments');
+    expect(displaySourceRefs(['Обращение.docx', MEMORY_SOURCE_MARKER, 'from Memory'])).toEqual([
+      'Обращение.docx',
+    ]);
+  });
 });

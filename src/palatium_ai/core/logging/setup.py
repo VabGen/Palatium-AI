@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from .filters import SuppressFilter
-from .processors import add_context_vars, add_timestamp, redact_observability_strings
+from .processors import (
+    add_context_vars,
+    add_timestamp,
+    normalize_agent_schema,
+    redact_observability_strings,
+)
 from .redact import redact_secrets
 
 if TYPE_CHECKING:
@@ -52,6 +57,7 @@ def setup_logging(settings: Settings) -> None:
             ]
         ),
         add_context_vars,
+        normalize_agent_schema,
         redact_secrets,
         # After enrichment / secret-key wipe; before renderer (PII at obs boundary).
         redact_observability_strings,

@@ -323,6 +323,24 @@ def test_emphasis_field_carrying_a_style_keyword_is_dropped_but_text_survives() 
     assert items[0].text == "Выявлены главные идеи"
 
 
+def test_emphasis_field_carrying_action_style_leak_is_dropped() -> None:
+    """ActionStyle literals must not paint as list ranking labels (legal screenshots)."""
+    document = _document(
+        ListBlock(
+            items=(
+                ListItem(text="Статья 62 КГСБ — изменение иска", emphasis="primary"),
+                ListItem(text="Статья 142 КГСБ — судебные расходы", emphasis="secondary"),
+                ListItem(text="Статья 149 КГСБ — госпошлина", emphasis="Основное"),
+            )
+        )
+    )
+
+    cleaned = InternalVocabularyPolicy.sanitize_document(document)
+
+    items = cleaned.blocks[0].items
+    assert [item.emphasis for item in items] == [None, None, "Основное"]
+
+
 def test_stream_holds_a_style_placeholder_split_across_chunks() -> None:
     """``**bold`` + ``** — text`` in two frames would leak the keyword."""
     assert InternalVocabularyPolicy.safe_cut("Начало. **bold") < len("Начало. **bold")

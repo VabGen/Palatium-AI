@@ -74,10 +74,12 @@ class _Resolver:
         self._resolution = resolution
         self._explicit = explicit
         self.resolve_calls = 0
+        self.last_resolve_kwargs: dict[str, Any] = {}
         self.explicit_calls: list[str] = []
 
-    async def resolve(self, **_kwargs: Any) -> FileReferenceResolution:
+    async def resolve(self, **kwargs: Any) -> FileReferenceResolution:
         self.resolve_calls += 1
+        self.last_resolve_kwargs = kwargs
         return self._resolution
 
     async def resolve_explicit(self, *, filename: str, **_kwargs: Any) -> FileReferenceResolution:
@@ -170,6 +172,32 @@ async def test_ambiguous_reread_mints_file_card() -> None:
     assert str(_ID_A) not in body
     assert "attachment_context" not in body
     assert "несколько файлов" in body
+    assert resolver.last_resolve_kwargs.get("hint_text") == "а из БД взять этот файл и еще раз прочитать"
+
+
+@pytest.mark.asyncio()
+async def test_name_subset_ambiguous_mints_card_with_hint() -> None:
+    """Matched-subset ambiguous must re-resolve with the user ask (W10.1 P0.3)."""
+    subset = ("Скан 1_Приложение.pdf", "Скан 2_Приложение.pdf")
+    card_service = _CardService()
+    resolver = _Resolver(FileReferenceResolution(status="ambiguous", reason="several_names_in_turn_text", candidates=subset))
+    flow = _flow(resolver, card_service, AsyncMock())
+
+    formatted = await flow.attach_hitl_cards(
+        _result(),
+        thread_id="thread-1",
+        task_id="task-1",
+        selected_strategy="direct_tool_call",
+        task_kind="knowledge_request",
+        user_text="перечитай Скан",
+        user_id="user-1",
+        file_reference="thread_file",
+        execution_error=ATTACHMENT_REFERENCE_UNRESOLVED,
+    )
+
+    assert len(formatted.hitl_cards) == 1
+    assert [option.label for option in formatted.hitl_cards[0].options] == list(subset)
+    assert resolver.last_resolve_kwargs.get("hint_text") == "перечитай Скан"
 
 
 @pytest.mark.asyncio()

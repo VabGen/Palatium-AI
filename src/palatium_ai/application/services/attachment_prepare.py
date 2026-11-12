@@ -234,6 +234,8 @@ class AttachmentPrepareService:
             actions=actions,
             owner_user_id=user_id,
             org_id=org_id,
+            locale=copy.locale,
+            prose_hint=copy.body,
         )
         logger.info(
             "attachment.selection_card",

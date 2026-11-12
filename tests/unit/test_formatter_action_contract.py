@@ -20,10 +20,9 @@ from palatium_ai.infrastructure.llm.litellm_adapter import build_provider_respon
 
 #: The prompt this file used to guard against was an 11,625-char monolith. Each wave
 #: that spends prompt space re-baselines the ceiling to today +5 % instead of "60 % of
-#: the monolith": W6 few-shot moved the markdown path 6,961 → 7,511, W7 length budget
-#: moved it to 7,890. The guard keeps its point — no return to the 11.6k prompt — and
-#: stops silent creep from the next edit. Measured 2026-10-24.
-_CEILING_CHARS = 8_300
+#: the monolith": W6/W7 landed near 7.9k; kimi-answer-formatting added document_analysis
+#: few-shot (2026-11-11). Guard still forbids a return to the 11.6k monolith.
+_CEILING_CHARS = 9_400
 
 
 def test_formatter_prompt_stays_below_the_documented_ceiling() -> None:

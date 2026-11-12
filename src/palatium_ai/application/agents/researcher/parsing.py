@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from palatium_ai.application.agents.researcher.config import SUMMARY_MAX_CHARS
 from palatium_ai.application.tools.mcp import MCPToolCallOutcome
@@ -141,6 +142,33 @@ def _attachment_fence(raw: str) -> str:
         return raw
     fence = payload.get("fenced_text") if isinstance(payload, dict) else None
     return fence if isinstance(fence, str) and fence else raw
+
+
+def unwrap_read_attachment_text(raw: str) -> str:
+    """User-visible body from a singular ``read_attachment`` MCP payload.
+
+    Plural reads already go through :func:`merge_attachment_read_outcomes`. Singular
+    turns must unwrap the JSON envelope the same way — otherwise verbatim /
+    Formatter passthrough ships ``{"tool":"read_attachment",...}`` to the user
+    (W10.2 att_unique_name).
+    """
+    from palatium_ai.domain.memory.tool_output import strip_untrusted_tool_output
+
+    fence = _attachment_fence(raw)
+    return strip_untrusted_tool_output(_strip_attachment_markers(fence)).strip()
+
+
+_ATTACHMENT_OPEN = re.compile(r"<<<ATTACHMENT:[^\n>]*>>>\s*", re.MULTILINE)
+_ATTACHMENT_CLOSE = re.compile(r"\s*<<<END_ATTACHMENT>>>", re.MULTILINE)
+
+
+def _strip_attachment_markers(text: str) -> str:
+    """Drop ``<<<ATTACHMENT:…>>>`` / ``<<<END_ATTACHMENT>>>`` for user-facing copy."""
+    if not text:
+        return text
+    stripped = _ATTACHMENT_OPEN.sub("", text)
+    stripped = _ATTACHMENT_CLOSE.sub("", stripped)
+    return stripped.strip()
 
 
 def mcp_payload_is_empty(raw: str) -> bool:

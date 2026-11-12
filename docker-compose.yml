@@ -430,39 +430,33 @@ services:
       # TIER_DEEP_API_BASE: ${QWEN_BASE_URL}
       # TIER_DEEP_TIMEOUT: "120"
 
-      # ---- TIER NANO ----
-      # Быстрые, лёгкие задачи: классификация интентов, извлечение сущностей, маршрутизация.
-      TIER_NANO_MODEL: "openai/nemotron-3-nano:30b-cloud"
-      TIER_NANO_API_KEY: ${OLLAMA_API_KEY}
-      TIER_NANO_API_BASE: ${OLLAMA_BASE_URL}
+      # ---- TIER NANO / SMALL / MID / FRONTIER / DEEP ----
+      # Corporate Qwen (OpenAI-compat). Ollama cloud tiers (nemotron/gemma/beam) were
+      # retired / billing-blocked 2026-11 — fallbacks must not route there or chat
+      # answers collapse to formatter echo of the user ask.
+      TIER_NANO_MODEL: "openai/generative-model"
+      TIER_NANO_API_KEY: ${QWEN_API_KEY}
+      TIER_NANO_API_BASE: ${QWEN_BASE_URL}
       TIER_NANO_TIMEOUT: "60"
 
-      # ---- TIER SMALL ----
-      # Повседневные задачи с балансом скорости и качества.
-      TIER_SMALL_MODEL: "openai/gemma4:31b-cloud"
-      TIER_SMALL_API_KEY: ${OLLAMA_API_KEY}
-      TIER_SMALL_API_BASE: ${OLLAMA_BASE_URL}
+      TIER_SMALL_MODEL: "openai/generative-model"
+      TIER_SMALL_API_KEY: ${QWEN_API_KEY}
+      TIER_SMALL_API_BASE: ${QWEN_BASE_URL}
       TIER_SMALL_TIMEOUT: "60"
 
-      # ---- TIER MID ----
-      # Универсальная "рабочая лошадка" для широкого круга задач средней сложности.
       TIER_MID_MODEL: "openai/generative-model"
       TIER_MID_API_KEY: ${QWEN_API_KEY}
       TIER_MID_API_BASE: ${QWEN_BASE_URL}
       TIER_MID_TIMEOUT: "60"
 
-      # ---- TIER FRONTIER ----
-      # Сложные задачи, требующие глубокого понимания и качества ответа.
-      TIER_FRONTIER_MODEL: "openai/beam:cloud"
-      TIER_FRONTIER_API_KEY: ${OLLAMA_API_KEY}
-      TIER_FRONTIER_API_BASE: ${OLLAMA_BASE_URL}
+      TIER_FRONTIER_MODEL: "openai/generative-model"
+      TIER_FRONTIER_API_KEY: ${QWEN_API_KEY}
+      TIER_FRONTIER_API_BASE: ${QWEN_BASE_URL}
       TIER_FRONTIER_TIMEOUT: "60"
 
-      # ---- TIER DEEP ----
-      # Максимально сложные аналитические и многошаговые задачи.
-      TIER_DEEP_MODEL: "openai/gpt-oss:120b-cloud"
-      TIER_DEEP_API_KEY: ${OLLAMA_API_KEY}
-      TIER_DEEP_API_BASE: ${OLLAMA_BASE_URL}
+      TIER_DEEP_MODEL: "openai/generative-model"
+      TIER_DEEP_API_KEY: ${QWEN_API_KEY}
+      TIER_DEEP_API_BASE: ${QWEN_BASE_URL}
       TIER_DEEP_TIMEOUT: "120"
 
     depends_on:

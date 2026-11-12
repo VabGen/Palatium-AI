@@ -7,11 +7,11 @@ from __future__ import annotations
 from typing import Annotated, Literal, get_args
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema  # noqa: TC002 - pydantic evaluates model annotations at runtime
 
 from palatium_ai.domain.content.citations.models import CitationRef
-from palatium_ai.domain.content.code_text import normalize_code_entities
+from palatium_ai.domain.content.code_text import normalize_code_content
 
 IconToken = Literal[
     "calendar",
@@ -32,6 +32,26 @@ IconToken = Literal[
     "link",
     "edit",
     "settings",
+    # Curated expansion for answer chrome (kimi-answer-formatting F1) —
+    # subset of kimi-widget icons, not the full 105-asset library.
+    "folder",
+    "task",
+    "list",
+    "tag",
+    "bookmark",
+    "history",
+    "notification",
+    "upload",
+    "download",
+    "locate",
+    "histogram",
+    "question",
+    "translate",
+    "code",
+    "image",
+    "share",
+    "pin",
+    "completed",
 ]
 
 # Closed allow-list for Formatter <icon name="…"/> tokens (emoji forbidden).
@@ -154,9 +174,20 @@ class CodeBlock(BaseModel):
 
     @field_validator("content")
     @classmethod
-    def _verbatim_source(cls, value: str) -> str:
-        """Keep code text literal — undo a provider's HTML-entity escaping (E2E-05)."""
-        return normalize_code_entities(value)
+    def _verbatim_source(cls, value: str, info: ValidationInfo) -> str:
+        """Entity repair + restore collapsed newlines for readable source (E2E-05).
+
+        Whitespace-only content is a schema mismatch (W10.1 P0.1a): an empty fence
+        must fail closed, not render as a blank code chrome.
+        """
+        if not value.strip():
+            msg = "code.content must be non-empty after strip"
+            raise ValueError(msg)
+        language = "text"
+        raw_lang = info.data.get("language") if info.data else None
+        if isinstance(raw_lang, str) and raw_lang.strip():
+            language = raw_lang
+        return normalize_code_content(value, language=language)
 
 
 class FormulaBlock(BaseModel):

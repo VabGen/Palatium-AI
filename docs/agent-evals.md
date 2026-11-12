@@ -10,6 +10,45 @@
 | Cassette harness | `tests/fixtures/llm/<agent>/` | через `cassette` в tasks.json |
 | Nightly llm_judge | `application/agents/evals/nightly_tasks.json` | `scripts/run_agent_evals_nightly.py` |
 | Live judge smoke | staging ops | `scripts/run_agent_evals_judge_smoke.py` |
+| **W9 product-quality (live)** | `evals/product_quality/` + ADR-0012 | `scripts/run_w9_product_evals.py` (nightly `live_*`) |
+
+## W9 product-quality (ADR-0012)
+
+Live suites that measure answer quality (not cassette topology):
+
+| Suite | Baseline | PR gate | Live |
+|---|---|---|---|
+| Semantic | `baselines/semantic.json` | anti-fiction + pins | `test_w9_semantic_correctness` |
+| Context utilization | `baselines/context.json` | present/absent tags | `test_w9_context_utilization` |
+| Multi-turn | `baselines/multi_turn.json` | 3 scenarios | `test_w9_multi_turn_coherence_*` |
+| Formatter quality | `baselines/formatter.json` | request-types | `test_w9_formatter_quality` |
+
+```powershell
+# PR structural (no LLM) — anti-fiction + baseline schema (null/measured=false OK):
+uv run pytest tests/eval/test_w9_product_quality.py -q -m "not live"
+
+# Live smoke (≤3 stratified cases/suite; measure only, do not pin):
+$env:PALATIUM_LIVE_EVAL = "1"
+$env:PALATIUM_EVAL_AGENT_PROVIDER = "qwen"   # generator
+# optional live judge (must ≠ generator):
+# $env:PALATIUM_EVAL_LIVE_JUDGE = "1"
+# $env:PALATIUM_EVAL_JUDGE_PROVIDER = "anthropic"
+uv run python scripts/run_w9_product_evals.py --mode live_smoke --suite all --skip-baseline-assert
+
+# Live full (all cases; still measure-only until baseline-refresh):
+uv run python scripts/run_w9_product_evals.py --mode live_full --suite all --live-judge --skip-baseline-assert
+```
+
+Rule-based first (`must_contain` / `must_not_contain`); LLM-judge only when `needs_judge`
+after the rule gate. Cassette/supplied answers are not a live measurement.
+
+### Baseline pin (after live_full)
+
+- Until measured: `actual_pass_rate` / `min_pass_rate` = `null`, `measured: false` (never `0.0`).
+- After Phase 3: set both rates to the measured `pass_rate`, `measured: true`, PR marker
+  `[baseline-refresh]`. Loader rejects `null` under `measured: true` and rejects `0.0`
+  placeholders (`test_w9_baseline_rejects_placeholder`).
+- Do not pin a suite with `pass_rate < 0.5` — leave `null` and report the gap.
 
 ## PR CI (deterministic)
 

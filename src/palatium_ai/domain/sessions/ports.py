@@ -34,6 +34,34 @@ class SessionStore(Protocol):
         limit: int = 100,
         offset: int = 0,
         user_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[SessionRecord]:
-        """Return recently updated sessions (optionally scoped to one user)."""
+        """Return recently updated sessions (optionally scoped to user/project)."""
+        ...
+
+    async def set_project_id(
+        self,
+        *,
+        thread_id: str,
+        project_id: str | None,
+    ) -> SessionRecord:
+        """Pin or unpin a session to a project id string."""
+        ...
+
+    async def set_title(
+        self,
+        *,
+        thread_id: str,
+        title: str,
+    ) -> SessionRecord:
+        """Overwrite the session title (user rename)."""
+        ...
+
+    async def set_status(
+        self,
+        *,
+        thread_id: str,
+        status: str,
+    ) -> SessionRecord:
+        """Update lifecycle status (e.g. ``active`` → ``archived``)."""
         ...

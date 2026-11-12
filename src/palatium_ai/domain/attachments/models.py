@@ -14,6 +14,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from palatium_ai.core.types.digest import SHA256_HEX_LENGTH
+
 from .policies import AttachmentRetentionPolicy
 from .types import (
     AttachmentExtractStatus,
@@ -47,12 +49,24 @@ class Attachment(BaseModel):
     project_id: str | None = Field(default=None, max_length=64)
     #: Extracted-text PII classification (G06); mirrored from derived content on complete.
     contains_pii: bool = False
+    #: Lowercase hex SHA-256 of the original blob (sealed at complete/reingest).
+    content_sha256: str | None = Field(default=None, min_length=SHA256_HEX_LENGTH, max_length=SHA256_HEX_LENGTH)
     #: Extraction metadata for DoD SQL / reingest filters (text SoT = derived blob).
     ocr_applied: bool | None = None
     extract_status: AttachmentExtractStatus | None = None
     extracted_chars: int | None = Field(default=None, ge=0)
     created_at: datetime
     expires_at: datetime | None = None
+
+    @field_validator("content_sha256")
+    @classmethod
+    def _content_sha256_is_lowercase_hex(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if len(value) != SHA256_HEX_LENGTH or any(ch not in "0123456789abcdef" for ch in value):
+            msg = "content_sha256 must be a lowercase hex SHA-256 digest"
+            raise ValueError(msg)
+        return value
 
     @field_validator("created_at", "expires_at")
     @classmethod

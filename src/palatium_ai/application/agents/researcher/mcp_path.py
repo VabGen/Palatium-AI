@@ -617,7 +617,16 @@ async def mcp_outcome_to_output(
     tool_name: str,
     task_uuid: UUID,
 ) -> AgentOutput:
+    from palatium_ai.application.agents.researcher.parsing import (
+        merge_attachment_read_outcomes,
+        unwrap_read_attachment_text,
+    )
+
     task_input = _require_researcher_input(task_input)
+    # Singular read_attachment must unwrap the JSON envelope the same way plural
+    # reads do — otherwise verbatim/Formatter passthrough leaks the tool JSON.
+    if server_name == _PLATFORM_SERVER and tool_name == _READ_ATTACHMENT_TOOL:
+        outcome = merge_attachment_read_outcomes((outcome,))
     raw = mcp_joined_text(outcome)
     if outcome.error_code == "server_unavailable":
         logger.warning(
@@ -636,6 +645,19 @@ async def mcp_outcome_to_output(
         )
         return soft_empty_output(task_uuid, error=MCP_EMPTY_RESULT)
     source = f"mcp:{server_name}.{tool_name}"
+    # Singular thread-file re-read: the document body *is* the answer. Plural
+    # ``attachment_scope=all`` still synthesizes. Skipping singular synthesis
+    # stops the LLM inventing «файл пуст» over a real fence (W10.2).
+    if server_name == _PLATFORM_SERVER and tool_name == _READ_ATTACHMENT_TOOL:
+        body = unwrap_read_attachment_text(raw)
+        if task_input.context_packet.attachment_scope != _PLURAL_READ_SCOPE:
+            return _verbatim_mcp_output(
+                body,
+                source=source,
+                task_uuid=task_uuid,
+                confidence_threshold=deps.config.confidence_threshold,
+            )
+        outcome = MCPToolCallOutcome(content=[{"type": "text", "text": body}])
     if _verbatim_requested(task_input):
         return _verbatim_mcp_output(
             raw,
@@ -678,6 +700,7 @@ async def synthesize_mcp_output(
     llm_config = researcher_llm_config(
         deps.config,
         strategy=task_input.context_packet.execution_plan.strategy,
+        composer_mode=task_input.context_packet.composer_mode,
     )
     try:
         completion = await deps.harness.call_llm(
@@ -735,7 +758,10 @@ def _verbatim_mcp_output(
         return soft_empty_output(task_uuid, error=MCP_EMPTY_RESULT)
     if len(body) > SUMMARY_MAX_CHARS:
         body = body[:SUMMARY_MAX_CHARS].rstrip() + "…"
-    confidence = score_mcp_tool_confidence(is_error=False, summary_chars=len(body))
+    # Sealed attachment body is evidence, not a thin MCP stub — don't partial-gate
+    # short files into Critic/Formatter rewrite (W10.2 att_unique).
+    scored = score_mcp_tool_confidence(is_error=False, summary_chars=len(body))
+    confidence = max(confidence_threshold, scored) if source.endswith(f".{_READ_ATTACHMENT_TOOL}") else scored
     output = ResearcherOutput(
         summary=body,
         confidence=confidence,

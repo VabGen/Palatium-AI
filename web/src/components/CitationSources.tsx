@@ -19,6 +19,7 @@
  */
 import { useEffect, useId, useState } from 'react';
 
+import { AttachmentFileIcon, attachmentFileKind } from '../icons/fileTypeIcons';
 import { t } from '../i18n';
 import { citationKey, citationPosition, groupCitations } from '../lib/citations';
 import type { CitationRef } from '../types/contentDocument';
@@ -29,9 +30,19 @@ export type CitationSourcesProps = {
   /** Both are needed only when a citation offers "show in source" (W3b-2). */
   userId?: string;
   orgId?: string;
+  /**
+   * PDF page deep-link (kimi dual-pane). When set, page-anchored PDF citations
+   * open the file preview rail instead of the text SourcePanel.
+   */
+  onOpenPdfPage?: (attachmentId: string, filename: string, page: number) => void;
 };
 
-export function CitationSources({ citations, userId = '', orgId = '' }: CitationSourcesProps) {
+export function CitationSources({
+  citations,
+  userId = '',
+  orgId = '',
+  onOpenPdfPage,
+}: CitationSourcesProps) {
   const groups = groupCitations(citations);
   const [openSource, setOpenSource] = useState<string | null>(null);
   const [located, setLocated] = useState<{ citation: CitationRef; attachmentId: string } | null>(
@@ -66,11 +77,7 @@ export function CitationSources({ citations, userId = '', orgId = '' }: Citation
         {groups.map((group, index) => {
           const isOpen = group.sourceRef === openSource;
           return (
-            <li
-              key={group.sourceRef}
-              id={`source-ref-${index + 1}`}
-              className="source-ref-chip"
-            >
+            <li key={group.sourceRef} id={`source-ref-${index + 1}`} className="source-ref-chip">
               <button
                 type="button"
                 className={`source-ref-button${isOpen ? ' is-open' : ''}`}
@@ -81,8 +88,8 @@ export function CitationSources({ citations, userId = '', orgId = '' }: Citation
                   setOpenSource(isOpen ? null : group.sourceRef);
                 }}
               >
-                <span className="source-ref-index" aria-hidden>
-                  {index + 1}
+                <span className="source-ref-icon" aria-hidden>
+                  <AttachmentFileIcon kind={attachmentFileKind(group.sourceRef)} size={18} />
                 </span>
                 <span className="source-ref-name">{group.sourceRef}</span>
                 {group.citations.length > 1 && (
@@ -116,13 +123,23 @@ export function CitationSources({ citations, userId = '', orgId = '' }: Citation
                     // Доступное имя включает начало цитаты: у одного документа их
                     // несколько, и «Показать в источнике» × 5 неразличимы на слух.
                     aria-label={`${t('cite.showInSource')}: ${quotePreview(citation)}`}
-                    onClick={() =>
+                    onClick={() => {
+                      const attachmentId = citation.source_id ?? '';
+                      if (!attachmentId) return;
+                      const position = citationPosition(citation);
+                      if (
+                        onOpenPdfPage &&
+                        position.kind === 'page' &&
+                        attachmentFileKind(citation.source_ref) === 'pdf'
+                      ) {
+                        setLocated(null);
+                        onOpenPdfPage(attachmentId, citation.source_ref, position.page);
+                        return;
+                      }
                       setLocated(current =>
-                        current?.citation === citation
-                          ? null
-                          : { citation, attachmentId: citation.source_id ?? '' }
-                      )
-                    }
+                        current?.citation === citation ? null : { citation, attachmentId }
+                      );
+                    }}
                   >
                     {t('cite.showInSource')}
                   </button>

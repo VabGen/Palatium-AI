@@ -37,6 +37,7 @@ from palatium_ai.presentation.api.routers import (
     intents,
     memory,
     metrics,
+    projects,
     sessions,
 )
 from palatium_ai.presentation.middleware.auth import AuthMiddleware
@@ -112,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(admin.router, prefix="/api/admin", tags=["admin"])
     application.include_router(agents.router, prefix="/api/agents", tags=["agents"])
     application.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+    application.include_router(projects.router, prefix="/api/projects", tags=["projects"])
     application.include_router(intents.router, prefix="/api/intents", tags=["intents"])
     application.include_router(hitl.router, prefix="/api/hitl", tags=["hitl"])
     application.include_router(documents.router, prefix="/api/documents", tags=["documents"])

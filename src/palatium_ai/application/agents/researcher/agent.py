@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING
 from palatium_ai.application.agents.researcher.llm_research import run_llm_research
 from palatium_ai.application.agents.researcher.mcp_path import McpPathDeps, execute_mcp_capability
 from palatium_ai.application.agents.researcher.outcomes import failure_output
-from palatium_ai.application.agents.researcher.parsing import decode_researcher_input
+from palatium_ai.application.agents.researcher.parsing import (
+    FAILURE_PLACEHOLDER_SUMMARY,
+    decode_researcher_input,
+)
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.application.services.tool_argument_builder import ToolArgumentBuilder
 from palatium_ai.application.tools.executor import ToolExecutor
@@ -26,6 +29,7 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
+from palatium_ai.domain.agents.researcher import ResearcherOutput
 from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
 
@@ -88,6 +92,18 @@ class ResearcherAgent(BaseAgent):
 
     def get_available_tools(self) -> list[str]:
         return list(self._config.allowed_tools)
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based grounding check — reject success that claims evidence it lacks."""
+        if not isinstance(output.output, ResearcherOutput):
+            return False
+        body = output.output
+        if body.cannot_answer_without_source and output.status == "success":
+            return False
+        summary = body.summary.strip()
+        if not summary or summary == FAILURE_PLACEHOLDER_SUMMARY:
+            return False
+        return not (body.grounding_satisfied and not body.sources_used)
 
     @traceable(name="researcher.run")
     async def run(self, input: AgentInput) -> AgentOutput:

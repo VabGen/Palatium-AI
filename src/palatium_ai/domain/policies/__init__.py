@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from .contextualizer import ContextualizerGateDecision, ContextualizerPolicy
     from .continuity import ContinuityPolicy, EffectiveRoutingIntent
     from .critic import CriticGateDecision, CriticPolicy
+    from .dialog_correction import DialogCorrectionPolicy
     from .formatter_fast_path import (
         FormatterFastPathDecision,
         FormatterFastPathPolicy,
@@ -52,11 +53,11 @@ if TYPE_CHECKING:
     from .hop_budget import HopBudgetDecision, HopBudgetPolicy
     from .internal_vocabulary import InternalVocabularyPolicy
     from .locale import ReplyLocalePolicy
+    from .mechanical_restructure import MechanicalRestructureDecision, MechanicalRestructurePolicy
     from .memory_namespace import MemoryNamespaceBinding, MemoryNamespacePolicy
     from .memory_recall import MemoryRecallDecision, MemoryRecallPolicy
     from .parallel_workers import ParallelWorkerPolicy, ParallelWorkersDecision
     from .presentation import PresentationOwnershipDecision, PresentationOwnershipPolicy
-    from .mechanical_restructure import MechanicalRestructureDecision, MechanicalRestructurePolicy
     from .presentation_icons import PresentationIconPolicy
     from .promotion import PromotionPolicy
     from .researcher_tier import ResearcherTierDecision, ResearcherTierPolicy
@@ -107,6 +108,7 @@ __all__ = [
     "ContinuityPolicy",
     "CriticGateDecision",
     "CriticPolicy",
+    "DialogCorrectionPolicy",
     "EffectiveRoutingIntent",
     "ExecutionStrategy",
     "ExtractAdmissionDecision",
@@ -122,6 +124,8 @@ __all__ = [
     "HopBudgetDecision",
     "HopBudgetPolicy",
     "InternalVocabularyPolicy",
+    "MechanicalRestructureDecision",
+    "MechanicalRestructurePolicy",
     "MemoryNamespaceBinding",
     "MemoryNamespacePolicy",
     "MemoryRecallDecision",
@@ -130,8 +134,6 @@ __all__ = [
     "OriginCeilingPolicy",
     "ParallelWorkerPolicy",
     "ParallelWorkersDecision",
-    "MechanicalRestructureDecision",
-    "MechanicalRestructurePolicy",
     "PresentationIconPolicy",
     "PresentationOwnershipDecision",
     "PresentationOwnershipPolicy",
@@ -189,6 +191,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "ContextualizerPolicy": (".contextualizer", "ContextualizerPolicy"),
     "CriticGateDecision": (".critic", "CriticGateDecision"),
     "CriticPolicy": (".critic", "CriticPolicy"),
+    "DialogCorrectionPolicy": (".dialog_correction", "DialogCorrectionPolicy"),
     "ExtractAdmissionDecision": (".extract_admission", "ExtractAdmissionDecision"),
     "ExtractAdmissionPolicy": (".extract_admission", "ExtractAdmissionPolicy"),
     "FormatterFastPathDecision": (".formatter_fast_path", "FormatterFastPathDecision"),

@@ -208,16 +208,17 @@ def test_sibling_digit_token_resolves_scan_file() -> None:
 
 
 def test_shared_prefix_without_digit_stays_ambiguous() -> None:
-    """«скан» alone names both siblings — card, not a guess."""
+    """«скан» alone names both siblings — card over the matched subset, not a guess."""
+    scan1 = _candidate("Скан 1 _Приложение.pdf")
+    scan2 = _candidate("Скан 2 _Приложение.pdf")
     resolution = FileReferencePolicy.resolve(
-        [
-            _candidate("Скан 1 _Приложение.pdf"),
-            _candidate("Скан 2 _Приложение.pdf"),
-        ],
+        [scan1, scan2],
         hint_text="открой скан ещё раз",
     )
     assert resolution.status == "ambiguous"
     assert resolution.attachment_id is None
+    assert resolution.reason == "several_names_in_turn_text"
+    assert set(resolution.candidates) == {scan1.filename, scan2.filename}
 
 
 def test_name_shaped_stem_still_resolves() -> None:
@@ -269,6 +270,8 @@ def test_only_a_named_reference_promotes_the_turn_to_a_storage_read() -> None:
     single = FileReferencePolicy.resolve([only], hint_text="а что там по срокам?")
     assert FileReferencePolicy.is_named_reference(named) is True
     assert FileReferencePolicy.is_named_reference(single) is False
+    assert FileReferencePolicy.promotes_thread_file_reread(named) is True
+    assert FileReferencePolicy.promotes_thread_file_reread(single) is False
 
 
 def test_resolve_all_returns_every_file_without_name_matching() -> None:

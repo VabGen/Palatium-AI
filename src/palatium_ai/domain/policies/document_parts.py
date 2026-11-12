@@ -24,7 +24,9 @@ _MAX_PARTS = 8
 _MAX_CHARS_PER_PART = 48_000
 
 
-def document_parts_from_blocks(blocks: tuple[AttachmentContextBlock, ...] | list[AttachmentContextBlock]) -> tuple[DocumentPart, ...]:
+def document_parts_from_blocks(
+    blocks: tuple[AttachmentContextBlock, ...] | list[AttachmentContextBlock],
+) -> tuple[DocumentPart, ...]:
     """Build citeable parts for non-image blocks that already carry extracted text."""
     usable = [block for block in blocks if block.has_usable_text and not block.is_image]
     if not usable:

@@ -70,6 +70,7 @@ async def generate_document(
     worker_summary: str = "",
     agent_role: str,
     allow_worker_fallback: bool = True,
+    mute_stream: bool = False,
 ) -> tuple[ContentDocument, LLMCompletion]:
     """Parse streamed Markdown into a document; return the completion for W3a citations."""
     completion, markdown = await call_formatter_llm(
@@ -79,6 +80,7 @@ async def generate_document(
         max_tokens=max_tokens,
         worker_summary=worker_summary,
         allow_worker_fallback=allow_worker_fallback,
+        mute_stream=mute_stream,
     )
     truncated = was_truncated(completion)
     current_raw = markdown or completion.content

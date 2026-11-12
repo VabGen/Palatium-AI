@@ -110,6 +110,13 @@ DOCUMENT_GENERATION_CAPABILITY = "draft"
 # Exact body of a file/tool payload (OCR, extract, "дай текст"). No second paraphrase.
 VERBATIM_EXTRACTION_CAPABILITY = "verbatim_extraction"
 
+# --- Composer chrome (UI mode pills → routing hints; Track P) ---
+
+# Explicit user mode from the chat composer (Kimi UI Upgrade pills). Closed set (010).
+# Orthogonal to task_kind: Continuity/Intent still classify the ask; this axis only
+# raises grounding / MCP / researcher-tier floors the user asked for.
+ComposerMode = Literal["web_search", "deep_think", "agent"]
+
 # --- Routing / execution (supervisor, researcher, critic) ---
 
 ExecutionStrategy = Literal[
@@ -140,6 +147,7 @@ LOW_RISK_ROUTE_STRATEGIES: frozenset[RouteStrategy] = frozenset(
 #   comparison_table    — side-by-side comparison of 2+ objects along attributes.
 #   document_analysis   — sections/risks/recommendations over one document.
 #   plan                — ordered, actionable steps.
+#   inventory           — unordered catalogue / bullet list (N items, not a process).
 #   prose               — explanation without forced structure.
 # ``choice_cards``/``greeting`` are deliberately absent: requires_user_choice and
 # task_kind=social_conversation + style_hint already own those outcomes (050).
@@ -147,6 +155,7 @@ ResponseShape = Literal[
     "auto",
     "comparison_table",
     "document_analysis",
+    "inventory",
     "plan",
     "prose",
 ]

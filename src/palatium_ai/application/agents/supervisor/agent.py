@@ -27,6 +27,15 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+#: Closed route → target_agent pairs Supervisor may emit (ADR-0009 verify).
+_ROUTE_TARGET: dict[str, str] = {
+    "researcher": "researcher",
+    "coder": "coder",
+    "analyst": "analyst",
+    "formatter": "formatter",
+    "clarification": "formatter",
+}
+
 
 class SupervisorAgent(BaseAgent):
     """Определяет следующий маршрут по platform task kind (без LLM)."""
@@ -46,6 +55,16 @@ class SupervisorAgent(BaseAgent):
 
     def get_available_tools(self) -> list[str]:
         return []
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based route gate — route/target must stay in the closed matrix."""
+        if not isinstance(output.output, SupervisorOutput):
+            return False
+        body = output.output
+        if not body.plan.strip() or not body.target_agent.strip():
+            return False
+        expected_target = _ROUTE_TARGET.get(body.route)
+        return expected_target is not None and body.target_agent == expected_target
 
     @traceable(name="supervisor.run")
     async def run(self, input: AgentInput) -> AgentOutput:

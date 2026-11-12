@@ -4,78 +4,346 @@
  * `:root` — приложение (документ), `:host` — виджет внутри Shadow DOM.
  * Хост может переопределить любой токен: `palatium-assistant { --accent: … }`.
  *
- * Calm 2026 (ChatGPT/Claude): тихий canvas, content-first, floating composer.
- * Brand teal — без purple/cream/glow-theatre.
+ * Product decision 2026-11-06 (C): рескин под Kimi Brand Book
+ * https://www.kimi.ai/resources/kimi-brand — Color System + Typography & Layout.
+ * CDN-шрифты не грузим (084); self-host Inter + Geist + Geist Mono (K2).
+ * Sentient (Fontshare FFL) — опционально, пока системный serif fallback.
  */
 :root,
 :host {
-  color-scheme: dark;
-  --bg: #0a0b0d;
-  --bg-elevated: #14181f;
-  --bg-soft: #1c222b;
-  --bg-composer: color-mix(in srgb, #171c24 90%, transparent);
-  --stroke: color-mix(in srgb, #ffffff 9%, transparent);
-  --stroke-strong: color-mix(in srgb, #ffffff 14%, transparent);
-  --text: #f2f4f7;
-  --text-muted: #93a0b0;
-  --accent: #3dbea0;
-  --accent-soft: rgba(61, 190, 160, 0.14);
-  --danger: #f07178;
-  --warning: #e6b450;
-  --success: #7fd99a;
-  --info: #6cb6ff;
-  --user-bg: color-mix(in srgb, var(--accent) 11%, #1a222d);
-  --shadow: 0 0 0 1px var(--stroke);
-  --shadow-soft: 0 1px 2px rgb(0 0 0 / 26%), 0 0 0 1px var(--stroke);
-  --shadow-float:
-    0 1px 0 rgb(255 255 255 / 4%) inset, 0 12px 40px rgb(0 0 0 / 42%), 0 0 0 1px var(--stroke-strong);
-  --shadow-launcher: 0 12px 40px rgb(0 0 0 / 48%), 0 0 0 1px var(--stroke-strong);
+  /* Product parity: light canvas default (Kimi product UI); dark via data-theme=dark */
+  color-scheme: light;
+
   /*
-   * Системный стек (план 2.6): Google Fonts не подключаем.
+   * —— Color System (Brand Book palette) ——
+   * Signature blue hierarchy + expressive accents + neutrals.
+   */
+  --kimi-obsidian: #0b0f19;
+  --kimi-pure-white: #f8fafc;
+  --kimi-white: #ffffff;
+  --kimi-black: #000000;
+  --kimi-ink: #121212;
+  --kimi-panel: #12161d;
+  --kimi-brand-navy: #002f5b;
+  --kimi-brand-blue: #007cff;
+  --kimi-brand-blue-bright: #00a1ff;
+  --kimi-brand-blue-soft: #a0daf7;
+  --kimi-cyan: #00f6ff;
+  --kimi-lavender: #dfc8f5;
+  --kimi-blush: #ffd1d4;
+  --kimi-lime: #b3f4a8;
+  --kimi-butter: #f4f9a7;
+  --kimi-amber: #d97706;
+  --kimi-danger-deep: #9b1c1c;
+  --kimi-success-deep: #1f7a3f;
+  /* Composer file-card type marks (kimi.ai format-clear glyphs). */
+  --kimi-file-pdf: #e53935;
+  --kimi-file-docx: #2b579a;
+  --kimi-file-xlsx: #217346;
+  --kimi-file-pptx: #c43e1c;
+  --kimi-file-image: #007cff;
+  --kimi-file-text: #5f6368;
+  --kimi-gray-8d: #8d9390;
+  --kimi-gray-70: #707070;
+  --kimi-gray-c3: #c3c3c3;
+  --kimi-gray-e1: #e1e3e6;
+  --kimi-gray-f5: #f5f5f5;
+  --kimi-gray-f7: #f7f7f7;
+  /* kimi.ai verbatim: `--Bg-GroundPC` — page canvas / sidebar ground. */
+  --kimi-bg-ground: #fbfaf9;
+
+  /*
+   * —— Typography & Layout: spacing rhythm (base grid) ——
+   * 4 / 8 / 16 / 24 / 32 / 48 / 64
+   */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+  --space-7: 64px;
+
+  /* Base grid unit + expressive layout */
+  --grid-base: var(--space-2);
+  --grid-gutter: var(--space-3);
+  --grid-expressive-gap: var(--space-4);
+  --shell-pad-x: var(--space-3); /* 16px — stage inset matches kimi.ai `.home-page` */
+  --shell-pad-y: 0px;
+  --shell-scroll-gutter: 15px; /* kimi.ai reserves the scrollbar column */
+  --shell-max: 42rem;
+  --shell-max-expressive: 72rem;
+  --zone-top-height: 52px; /* kimi.ai `.layout-header` / `--kimi-layout-header-height` */
+  --space-transcript: var(--space-4);
+  /*
+   * kimi.ai dual-pane (live inspect 2026-11-11):
+   * `.layout-content` min-width 560px + flex-shrink 9999;
+   * `.side-console-rail.large.open` flex-basis ≈ 70% (--side-console-width).
+   */
+  --chat-split-min: 35rem; /* 560px */
+  --side-console-width: 70%;
+  --side-console-width-list: 20rem;
+
+  /* Type scale (Inter body / display hierarchy) */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 0.9375rem;
+  --text-md: 0.96875rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --leading-tight: 1.25;
+  --leading-body: 1.6;
+  --leading-prose: 1.65;
+  --tracking-tight: -0.011em;
+  --tracking-display: -0.035em;
+
+  /*
+   * Typography triad (Brand Book): Inter · Geist Mono · Sentient.
+   * K2: Inter Variable + Geist (Brand «Display» = Vercel Geist Sans OFL) + Geist Mono.
+   * Serif: Sentient when licensed files present; else Georgia stack.
    */
   --font-sans:
-    'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+    'Inter Variable', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Oxygen, Ubuntu, sans-serif;
+  --font-body: var(--font-sans);
+  --font-display:
+    'Geist', 'Inter Variable', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
     sans-serif;
-  --font-display: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --radius: 14px;
-  --radius-msg: 18px;
-  --radius-composer: 28px;
+  --font-mono:
+    'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'IBM Plex Mono', monospace;
+  --font-serif: 'Sentient', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+
+  /* —— Semantic surfaces (light product canvas = default) —— */
+  --bg: var(--kimi-bg-ground);
+  --bg-elevated: var(--kimi-white);
+  --bg-soft: var(--kimi-gray-f5);
+  --bg-composer: var(--kimi-white);
+  --bg-popover: var(--kimi-white);
+  --bg-code: color-mix(in srgb, var(--kimi-gray-e1) 65%, var(--kimi-white));
+  --wash-white-5: color-mix(in srgb, var(--kimi-ink) 4%, transparent);
+  --wash-white-6: color-mix(in srgb, var(--kimi-ink) 5%, transparent);
+  --wash-white-8: color-mix(in srgb, var(--kimi-ink) 7%, transparent);
+  --accent-hover: color-mix(in srgb, var(--accent) 82%, var(--kimi-brand-navy));
+  --stroke: color-mix(in srgb, var(--kimi-ink) 9%, transparent);
+  --stroke-strong: color-mix(in srgb, var(--kimi-ink) 14%, transparent);
+  /* Chrome aliases (Kimi UI Upgrade / dropdowns) — Color System */
+  --kimi-surface-elevated: var(--bg-elevated);
+  --kimi-border: var(--stroke-strong);
+
+  /*
+   * Kimi UI tokens — verbatim from the kimi.ai bundle (`:root` of the
+   * statics.kimi.ai stylesheets). These are the source of truth for
+   * mirroring kimi.ai chrome; do not approximate them with color-mix.
+   */
+  --kimi-labels-primary: #000000e6;
+  --kimi-labels-primary-hover: #000000e6;
+  --kimi-labels-secondary: #00000099;
+  --kimi-labels-tertiary: #00000073;
+  --kimi-labels-quaternary: #0000004d;
+  --kimi-bg-primary: #ffffff;
+  /* kimi.ai `--Always-WhiteSecondary` — frosted card action pills. */
+  --kimi-white-secondary: #ffffffd6;
+  --kimi-bg-secondary: #f5f5f5;
+  --kimi-bg-secondary-90: #f5f5f5e6;
+  --kimi-bg-tertiary: #ffffff;
+  --kimi-bg-tertiary-90: #ffffffe6;
+  --kimi-bg-gp-secondary-90: #ffffffe6;
+  --kimi-separator-s1: #00000021;
+  /*
+   * Neutral blend base for derived neutrals (overlays, hairlines, hovers).
+   * Every `color-mix(… var(--kimi-neutral) N% …)` mirrors on dark by flipping
+   * this alias to white — deriving from `--kimi-ink` directly would keep dark
+   * chrome near-black on the obsidian canvas. Shadows stay on `--kimi-ink`:
+   * a white shadow is always wrong.
+   */
+  --kimi-neutral: var(--kimi-ink);
+  /*
+   * Inverted (high-contrast) pairing: black pill/avatar on light, white on dark.
+   * `{ surface, label }` always move as a pair — mixing a flipped surface with a
+   * fixed label is how white-on-white "primary buttons" happen in dark theme.
+   */
+  --kimi-inverse-surface: var(--kimi-ink);
+  --kimi-inverse-surface-hover: color-mix(in srgb, var(--kimi-ink) 86%, var(--kimi-pure-white));
+  --kimi-inverse-label: var(--kimi-pure-white);
+  --kimi-fill-f1: #00000008;
+  --kimi-fill-f1-hover: #0000000f;
+  --kimi-fill-f1-active: #00000014;
+  --kimi-fill-f2: #0000000d;
+  /* kimi.ai `--MaskBg-ToastPC` — dark name / icon tooltips. */
+  --kimi-mask-toast: #2b2b2b;
+  --kimi-fill-f3: #00000026;
+  --kimi-fill-f3-hover: #0000002d;
+  --kimi-fill-f4: #00000040;
+  --kimi-mask-light: #0000001a;
+  /* Modal scrim — kimi.ai dialog backdrop (50% black). */
+  --kimi-mask-heavy: #00000080;
+  /* kimi.ai `--Colors-KMBlue` — trailing check / KM blue accent. */
+  --kimi-blue-km: #1783ff;
+  --kimi-editor-border: #0000000f;
+  --kimi-editor-border-hover: #00000017;
+  /* kimi.ai `.kimi-menu`: inset hairline + 0 4px 16px. */
+  --kimi-shadow-menu:
+    inset 0 0 0 0.5px var(--kimi-separator-s1), 0 4px 16px 0 var(--kimi-mask-light);
+  /* kimi.ai `.chat-editor-content` resting card (both layers are always on). */
+  --kimi-shadow-editor: 0 4px 12px #00000008, 0 5px 16px -4px #00000012;
+  --kimi-shadow-editor-focus: 0 4px 12px #00000008, 0 5px 16px -4px #00000012;
+  /* kimi.ai `.inspiration-detail` sheet. */
+  --kimi-shadow-detail: 0 8px 32px #0000001f;
+  --kimi-radius-menu: 16px;
+  --kimi-radius-menu-item: 10px;
+  /* .linear-icon-button (composer tray chips) */
+  --kimi-chip-height: 36px;
+  --kimi-chip-pad-start: 10px;
+  --kimi-chip-pad-end: 12px;
+  --kimi-chip-gap: 4px;
+  --kimi-chip-radius: 20px;
+  --kimi-chip-border-width: 0.5px;
+  --kimi-chip-icon-size: 18px;
+  /* .menu-list .menu-item */
+  --kimi-menu-row-height: 36px;
+  --kimi-menu-row-pad: 8px;
+  --kimi-menu-row-gap: 8px;
+  --kimi-menu-icon-size: 18px;
+  /* kimi.ai `.next-sidebar` default width (resizable there; 240 is its default). */
+  --sidebar-width: 15rem;
+  --sidebar-width-collapsed: var(--space-7);
+  /* P5 mobile drawer — UI Upgrade «glass on mobile» */
+  --kimi-glass: color-mix(in srgb, var(--bg) 78%, transparent);
+  --kimi-glass-blur: 16px;
+  --nav-drawer-width: min(18rem, 86vw);
+  --text: var(--kimi-ink);
+  --text-muted: var(--kimi-gray-70);
+  --accent: var(--kimi-brand-blue);
+  --accent-soft: color-mix(in srgb, var(--kimi-brand-blue) 12%, transparent);
+  --accent-contrast: var(--kimi-white);
+  --danger: color-mix(in srgb, var(--kimi-blush) 35%, var(--kimi-danger-deep) 65%);
+  --warning: var(--kimi-amber);
+  /* kimi.ai recommendation card: warm cream wash from amber (Color System). */
+  --recommend-bg: color-mix(in srgb, var(--kimi-amber) 9%, var(--kimi-pure-white));
+  --recommend-border: color-mix(in srgb, var(--kimi-amber) 42%, var(--kimi-pure-white));
+  --recommend-fg: var(--kimi-amber);
+  --success: color-mix(in srgb, var(--kimi-lime) 40%, var(--kimi-success-deep) 60%);
+  --info: var(--kimi-brand-navy);
+  --user-bg: var(--kimi-gray-f5);
+  --msg-assistant-bg: transparent;
+  --msg-user-bg: var(--user-bg);
+  --viz-emphasis: var(--kimi-brand-blue);
+  --viz-muted: var(--kimi-gray-8d);
+
+  --shadow: 0 0 0 1px var(--stroke);
+  --shadow-soft:
+    0 1px 2px color-mix(in srgb, var(--kimi-brand-navy) 5%, transparent), 0 0 0 1px var(--stroke);
+  --shadow-float:
+    0 1px 0 color-mix(in srgb, var(--kimi-white) 85%, transparent) inset,
+    0 14px 44px color-mix(in srgb, var(--kimi-brand-navy) 9%, transparent), 0 0 0 1px var(--stroke);
+  --shadow-launcher:
+    0 14px 36px color-mix(in srgb, var(--kimi-brand-navy) 12%, transparent), 0 0 0 1px var(--stroke);
+
+  --radius: 12px;
+  --radius-msg: 16px;
+  --radius-composer: 24px;
   --radius-pill: 999px;
-  --space-transcript: 20px;
-  --shell-max: 42rem;
+  --radius-control: 10px;
 
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-drawer: ease-in-out;
   --duration-press: 120ms;
   --duration-fast: 150ms;
   --duration-base: 200ms;
   --duration-slow: 280ms;
-  --duration-drawer: 400ms;
+  --duration-drawer: 300ms;
+
+  /* Organic texture (Brand Visual Assets: low-noise) */
+  --kimi-texture-fg: color-mix(in srgb, var(--kimi-brand-blue) 10%, transparent);
+  --kimi-texture-fg-soft: color-mix(in srgb, var(--kimi-brand-navy) 6%, transparent);
 }
 
+:root[data-theme='dark'],
+:host([data-theme='dark']) {
+  color-scheme: dark;
+  --bg: var(--kimi-obsidian);
+  /* Dark ground for the app surface (`--Bg-GroundPC` equivalent). */
+  --kimi-bg-ground: var(--kimi-obsidian);
+  --bg-elevated: color-mix(in srgb, var(--kimi-obsidian) 82%, var(--kimi-pure-white) 18%);
+  --bg-soft: color-mix(in srgb, var(--kimi-obsidian) 72%, var(--kimi-pure-white) 28%);
+  --bg-composer: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  --bg-popover: var(--kimi-panel);
+  --bg-code: color-mix(in srgb, var(--bg-soft) 88%, var(--kimi-black));
+  --wash-white-5: color-mix(in srgb, var(--kimi-white) 5%, transparent);
+  --wash-white-6: color-mix(in srgb, var(--kimi-white) 6%, transparent);
+  --wash-white-8: color-mix(in srgb, var(--kimi-white) 8%, transparent);
+  --accent-hover: color-mix(in srgb, var(--accent) 82%, var(--kimi-white));
+  --stroke: color-mix(in srgb, var(--kimi-pure-white) 10%, transparent);
+  --stroke-strong: color-mix(in srgb, var(--kimi-pure-white) 16%, transparent);
+  --kimi-surface-elevated: var(--bg-popover);
+  --kimi-border: var(--stroke-strong);
+
+  /*
+   * Menu/popover contract on dark surfaces. Alias the dark palette instead of
+   * copying light hexes: panels must lift off the obsidian canvas, labels keep
+   * the same 90/60/45% hierarchy mirrored to white, separators stay hairline.
+   */
+  --kimi-bg-secondary: color-mix(in srgb, var(--kimi-pure-white) 8%, var(--kimi-obsidian));
+  --kimi-bg-secondary-90: color-mix(in srgb, var(--kimi-bg-secondary) 90%, transparent);
+  --kimi-bg-tertiary: var(--bg-elevated);
+  --kimi-bg-tertiary-90: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  --kimi-labels-primary: color-mix(in srgb, var(--kimi-pure-white) 92%, transparent);
+  --kimi-labels-primary-hover: var(--kimi-pure-white);
+  --kimi-labels-secondary: color-mix(in srgb, var(--kimi-pure-white) 62%, transparent);
+  --kimi-labels-tertiary: color-mix(in srgb, var(--kimi-pure-white) 46%, transparent);
+  --kimi-labels-quaternary: color-mix(in srgb, var(--kimi-pure-white) 30%, transparent);
+  --kimi-separator-s1: color-mix(in srgb, var(--kimi-pure-white) 14%, transparent);
+  /* Dark mirror of the neutral blend base (see light block). */
+  --kimi-neutral: var(--kimi-pure-white);
+  --kimi-inverse-surface: var(--kimi-pure-white);
+  --kimi-inverse-surface-hover: color-mix(
+    in srgb,
+    var(--kimi-pure-white) 88%,
+    var(--kimi-obsidian)
+  );
+  --kimi-inverse-label: var(--kimi-obsidian);
+  --kimi-fill-f1: color-mix(in srgb, var(--kimi-pure-white) 6%, transparent);
+  --kimi-fill-f1-hover: color-mix(in srgb, var(--kimi-pure-white) 9%, transparent);
+  --kimi-fill-f1-active: color-mix(in srgb, var(--kimi-pure-white) 12%, transparent);
+  --kimi-fill-f2: color-mix(in srgb, var(--kimi-pure-white) 8%, transparent);
+  /* Toast tip stays dark on both themes (kimi MaskBg-ToastPC). */
+  --kimi-mask-toast: #2b2b2b;
+  --kimi-fill-f3: color-mix(in srgb, var(--kimi-pure-white) 16%, transparent);
+  --kimi-fill-f3-hover: color-mix(in srgb, var(--kimi-pure-white) 20%, transparent);
+  --kimi-fill-f4: color-mix(in srgb, var(--kimi-pure-white) 24%, transparent);
+  --kimi-mask-light: rgb(0 0 0 / 45%);
+  --kimi-mask-heavy: rgb(0 0 0 / 60%);
+  --text: var(--kimi-pure-white);
+  --text-muted: color-mix(in srgb, var(--kimi-pure-white) 58%, var(--kimi-gray-70) 42%);
+  --accent: var(--kimi-brand-blue);
+  --accent-soft: color-mix(in srgb, var(--kimi-brand-blue) 18%, transparent);
+  --accent-contrast: var(--kimi-white);
+  --danger: var(--kimi-blush);
+  --warning: var(--kimi-amber);
+  --recommend-bg: color-mix(in srgb, var(--kimi-amber) 14%, var(--kimi-obsidian));
+  --recommend-border: color-mix(in srgb, var(--kimi-amber) 45%, var(--kimi-obsidian));
+  --recommend-fg: color-mix(in srgb, var(--kimi-amber) 85%, var(--kimi-pure-white));
+  --success: var(--kimi-lime);
+  --info: var(--kimi-brand-blue-bright);
+  --user-bg: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  --msg-assistant-bg: transparent;
+  --msg-user-bg: var(--user-bg);
+  --viz-emphasis: var(--kimi-brand-blue-bright);
+  --viz-muted: var(--kimi-gray-8d);
+  --shadow: 0 0 0 1px var(--stroke);
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 28%), 0 0 0 1px var(--stroke);
+  --shadow-float:
+    0 1px 0 rgb(255 255 255 / 4%) inset, 0 12px 40px rgb(0 0 0 / 42%),
+    0 0 0 1px var(--stroke-strong);
+  --shadow-launcher: 0 12px 40px rgb(0 0 0 / 48%), 0 0 0 1px var(--stroke-strong);
+
+  --kimi-texture-fg: color-mix(in srgb, var(--kimi-brand-blue) 14%, transparent);
+  --kimi-texture-fg-soft: color-mix(in srgb, var(--kimi-cyan) 8%, transparent);
+}
+
+/* Explicit light attr kept for host opt-in / e2e (same as :root defaults). */
 :root[data-theme='light'],
 :host([data-theme='light']) {
   color-scheme: light;
-  --bg: #f5f6f8;
-  --bg-elevated: #ffffff;
-  --bg-soft: #ebeef3;
-  --bg-composer: #ffffff;
-  --stroke: color-mix(in srgb, #0b1220 9%, transparent);
-  --stroke-strong: color-mix(in srgb, #0b1220 14%, transparent);
-  --text: #12171e;
-  --text-muted: #5c6674;
-  --accent: #0d7a64;
-  --accent-soft: rgba(13, 122, 100, 0.1);
-  --danger: #c0392b;
-  --warning: #a86a00;
-  --success: #1f7a3f;
-  --info: #1f6fd0;
-  --user-bg: color-mix(in srgb, var(--accent) 7%, #e8eef4);
-  --shadow: 0 0 0 1px var(--stroke);
-  --shadow-soft: 0 1px 2px rgb(15 23 42 / 5%), 0 0 0 1px var(--stroke);
-  --shadow-float:
-    0 1px 0 rgb(255 255 255 / 85%) inset, 0 14px 44px rgb(15 23 42 / 9%), 0 0 0 1px var(--stroke);
-  --shadow-launcher: 0 14px 36px rgb(15 23 42 / 12%), 0 0 0 1px var(--stroke);
 }

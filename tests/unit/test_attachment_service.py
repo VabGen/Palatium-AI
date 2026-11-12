@@ -491,6 +491,11 @@ async def test_complete_upload_admits_and_persists_derived_content() -> None:
     assert attachment.status == "ready"
     assert attachment.page_count == 1
     assert attachment.derived_text_key is not None
+    assert attachment.content_sha256 is not None
+    from palatium_ai.domain.attachments.integrity import content_sha256_hex
+
+    original = await blob.read_bytes(attachment.blob_key)
+    assert attachment.content_sha256 == content_sha256_hex(original)
 
     raw = await blob.read_bytes(attachment.derived_text_key)
     content = AttachmentContent.model_validate_json(raw)

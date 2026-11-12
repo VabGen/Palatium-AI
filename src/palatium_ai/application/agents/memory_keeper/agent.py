@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from palatium_ai.application.agents.memory_keeper.config import MAX_EXISTING_MEMORIES
+from palatium_ai.application.agents.memory_keeper.config import MAX_EXISTING_MEMORIES, MEMORY_KINDS
 from palatium_ai.application.agents.memory_keeper.parsing import (
     decode_memory_keeper_input,
     parse_memory_keeper_output,
@@ -45,6 +45,17 @@ class MemoryKeeperAgent(BaseAgent):
 
     def get_available_tools(self) -> list[str]:
         return []
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Reject empty-text or out-of-taxonomy facts that slipped past parsing."""
+        if not isinstance(output.output, MemoryKeeperOutput):
+            return False
+        for fact in output.output.facts:
+            if not fact.text.strip():
+                return False
+            if fact.kind not in MEMORY_KINDS:
+                return False
+        return True
 
     @traceable(name="memory_keeper.run")
     async def run(self, input: AgentInput) -> AgentOutput:

@@ -88,6 +88,10 @@ class ContextualizerAgent(BaseAgent):
     def get_available_tools(self) -> list[str]:
         return []
 
+    async def verify(self, output: AgentOutput) -> bool:
+        """Type gate — ContinuationKind already closed by pydantic (ADR-0009)."""
+        return isinstance(output.output, ContextualizerOutput)
+
     @traceable(name="context_enricher.continuation.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "continuation")

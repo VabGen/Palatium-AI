@@ -7,6 +7,8 @@ import type {
   HITLCardView,
   HitlRespondResponse,
   HitlStepUpChallenge,
+  ProjectSummary,
+  SessionSummary,
 } from '../types/contentDocument';
 import { isDocumentRevision } from '../lib/revision';
 import {
@@ -326,7 +328,8 @@ export async function processIntent(
   threadId: string,
   userId?: string | null,
   orgId?: string | null,
-  attachmentIds: readonly string[] = []
+  attachmentIds: readonly string[] = [],
+  composerMode?: string | null
 ): Promise<FormatterTaskResult> {
   // Клиентская валидация — не даём запросу уйти, если он гарантированно 422.
   if (text.length === 0) {
@@ -348,6 +351,7 @@ export async function processIntent(
         text,
         thread_id: threadId,
         ...(attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
+        ...(composerMode ? { composer_mode: composerMode } : {}),
       }),
     },
     userId,
@@ -376,6 +380,8 @@ export type ProcessStreamHandlers = {
   onRevision?: (revision: DocumentRevision) => void;
   /** Abort in-flight SSE (unmount / new turn). */
   signal?: AbortSignal;
+  /** Track P: composer mode pills / model dropdown → Intent floors. */
+  composerMode?: string | null;
 };
 
 /**
@@ -424,6 +430,7 @@ export async function processIntentStream(
   // Retry остаётся дефолтным (2): цикл повторов срабатывает ДО первого SSE-кадра —
   // он видит только статус ответа и сеть. Поэтому 5xx/обрыв лечатся так же, как в
   // JSON-пути, а уже начатый стрим повтору не подвержен: тело читается ниже.
+  const composerMode = handlers.composerMode ?? null;
   const res = await fetchWithAuth(
     '/intents/process/stream',
     {
@@ -432,6 +439,7 @@ export async function processIntentStream(
         text,
         thread_id: threadId,
         ...(attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
+        ...(composerMode ? { composer_mode: composerMode } : {}),
       }),
       signal,
     },
@@ -439,11 +447,11 @@ export async function processIntentStream(
     orgId
   );
   if (res.status === 404 || res.status === 405) {
-    return processIntent(text, threadId, userId, orgId, attachmentIds);
+    return processIntent(text, threadId, userId, orgId, attachmentIds, composerMode);
   }
   if (!res.ok) throw await apiFailure(res);
   if (!res.body) {
-    return processIntent(text, threadId, userId, orgId, attachmentIds);
+    return processIntent(text, threadId, userId, orgId, attachmentIds, composerMode);
   }
 
   const reader = res.body.getReader();
@@ -946,6 +954,166 @@ export async function fetchDialogTurns(
   if (!res.ok) throw await apiFailure(res);
   const json = (await res.json()) as { items: DialogTurnResponse[] };
   return json.items ?? [];
+}
+
+/** User Edit rewind — keep first ``keep`` turns, delete the rest (+ checkpoints). */
+export async function truncateDialogTurns(
+  threadId: string,
+  keep: number,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<{ deleted: number; keep: number }> {
+  const res = await fetchWithAuth(
+    `/sessions/${encodeURIComponent(threadId)}/turns/truncate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keep }),
+    },
+    userId,
+    orgId
+  );
+  // Soft-ok: older proxies / empty threads may 404 — local composer edit still proceeds.
+  if (res.status === 404) return { deleted: 0, keep };
+  if (!res.ok) throw await apiFailure(res);
+  return res.json() as Promise<{ deleted: number; keep: number }>;
+}
+
+/** P1b: durable history shelf — sessions owned by the caller. */
+export async function listSessions(
+  limit = 24,
+  offset = 0,
+  userId?: string | null,
+  orgId?: string | null,
+  projectId?: string | null
+): Promise<SessionSummary[]> {
+  const qs = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (projectId?.trim()) qs.set('project_id', projectId.trim());
+  const res = await fetchWithAuth(`/sessions/?${qs}`, { method: 'GET' }, userId, orgId);
+  if (res.status === 404) return [];
+  if (!res.ok) throw await apiFailure(res);
+  const json = (await res.json()) as { items: SessionSummary[] };
+  return json.items ?? [];
+}
+
+/** P2: pin or unpin a session to a durable project. */
+export async function pinSession(
+  threadId: string,
+  projectId: string | null,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<SessionSummary> {
+  const res = await fetchWithAuth(
+    `/sessions/${encodeURIComponent(threadId)}`,
+    { method: 'PATCH', body: JSON.stringify({ project_id: projectId }) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+/** Rename a session title (owner-scoped PATCH). */
+export async function renameSession(
+  threadId: string,
+  title: string,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<SessionSummary> {
+  const res = await fetchWithAuth(
+    `/sessions/${encodeURIComponent(threadId)}`,
+    { method: 'PATCH', body: JSON.stringify({ title }) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+/** Soft-delete: archive the session so it leaves the shelf. */
+export async function archiveSession(
+  threadId: string,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<SessionSummary> {
+  const res = await fetchWithAuth(
+    `/sessions/${encodeURIComponent(threadId)}`,
+    { method: 'PATCH', body: JSON.stringify({ status: 'archived' }) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+/** P2: list projects owned by the caller. */
+export async function listProjects(
+  limit = 50,
+  offset = 0,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<ProjectSummary[]> {
+  const qs = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  const res = await fetchWithAuth(`/projects/?${qs}`, { method: 'GET' }, userId, orgId);
+  if (res.status === 404) return [];
+  if (!res.ok) throw await apiFailure(res);
+  const json = (await res.json()) as { items: ProjectSummary[] };
+  return json.items ?? [];
+}
+
+/** P2: create a project folder. */
+export async function createProject(
+  title: string,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<ProjectSummary> {
+  const res = await fetchWithAuth(
+    '/projects/',
+    { method: 'POST', body: JSON.stringify({ title }) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+/** P2: rename a project. */
+export async function renameProject(
+  projectId: string,
+  title: string,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<ProjectSummary> {
+  const res = await fetchWithAuth(
+    `/projects/${encodeURIComponent(projectId)}`,
+    { method: 'PATCH', body: JSON.stringify({ title }) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+/** P2: delete a project folder. */
+export async function deleteProject(
+  projectId: string,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<void> {
+  const res = await fetchWithAuth(
+    `/projects/${encodeURIComponent(projectId)}`,
+    { method: 'DELETE' },
+    userId,
+    orgId
+  );
+  if (res.status === 204 || res.status === 404) return;
+  if (!res.ok) throw await apiFailure(res);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

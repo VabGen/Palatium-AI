@@ -100,6 +100,7 @@ async def recall_for_thread(
         durable = await _select_durable_hits(
             memory_port,
             raw,
+            query=query,
             pinned=pinned,
             limit=limit,
             min_confidence=min_confidence,
@@ -175,6 +176,7 @@ async def _select_durable_hits(
     memory_port: MemoryPort,
     raw: list[tuple[tuple[str, ...], dict[str, object]]],
     *,
+    query: str,
     pinned: list[MemoryHit],
     limit: int,
     min_confidence: float,
@@ -185,6 +187,7 @@ async def _select_durable_hits(
     seen_texts: set[str] = {hit.text.strip().lower() for hit in pinned if hit.text.strip()}
     allowed_kinds = {k.strip().lower() for k in kinds} if kinds else None
     bump = getattr(memory_port, "bump_access", None)
+    ask = query.strip()
 
     def _rank_key(pair: tuple[tuple[str, ...], dict[str, object]]) -> float:
         score = _item_score(pair[1])
@@ -202,6 +205,12 @@ async def _select_durable_hits(
             # extract-inferred facts stay thread-scoped (P0-B bleed).
             if kind not in _USER_NS_HOT_PATH_KINDS and not _is_explicit_write(item):
                 continue
+            # Cross-thread HITL facts still need lexical overlap with the ask —
+            # otherwise an unrelated approved fact rides into every turn (W10 §5).
+            if kind not in _USER_NS_HOT_PATH_KINDS:
+                text = str(item.get("text", "")).strip()
+                if ask and text and lexical_relevance(ask, text) <= 0.0:
+                    continue
         hit = _durable_hit_from_item(
             item,
             idx=idx,

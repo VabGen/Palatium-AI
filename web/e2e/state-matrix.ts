@@ -160,7 +160,12 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       { kind: 'count', selector: '.msg.is-waiting .avatar', count: 0 },
       // Подпись фазы существует только для скринридера (084).
       { kind: 'text', selector: '.msg.is-waiting [role="status"]', contains: 'Думаю' },
-      { kind: 'attr', selector: '.thinking-indicator canvas', name: 'aria-hidden', value: 'true' },
+      {
+        kind: 'attr',
+        selector: '.thinking-indicator canvas',
+        name: 'aria-hidden',
+        value: 'true',
+      },
       { kind: 'disabled', selector: '.send-btn' },
       { kind: 'text', selector: '.msg.user .bubble', contains: 'Составь письмо' },
     ],

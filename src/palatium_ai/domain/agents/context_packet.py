@@ -12,6 +12,7 @@ from palatium_ai.domain.policies.types import (
     GROUNDING_DEFAULT,
     RESPONSE_SHAPE_DEFAULT,
     AttachmentScope,
+    ComposerMode,
     GroundingMode,
     ResponseShape,
 )
@@ -54,3 +55,5 @@ class ContextPacket(BaseModel):
         default=False,
         description="True when local knowledge/memory search returned no hits; enables web_fallback.",
     )
+    #: Explicit composer chrome (mode pills); floors Intent axes / researcher tier (Track P).
+    composer_mode: ComposerMode | None = None

@@ -202,3 +202,43 @@ def test_mechanical_flattens_to_prose_without_llm() -> None:
     assert result.output is not None
     assert all(isinstance(b, ParagraphBlock) for b in result.output.blocks)
     assert agent_metrics.response_shape_count("prose", "mechanical_flatten") == before + 1
+
+
+def test_mechanical_skips_knowledge_with_shape_alone() -> None:
+    """response_shape=prose on a fresh knowledge turn must not reuse prior social text."""
+    prior = ContentDocument(
+        locale="ru-RU",
+        blocks=(ParagraphBlock(text="Привет! Всё отлично, спасибо. А у тебя как?"),),
+        meta=DocumentMeta(confidence=0.9, kind="response"),
+    )
+    packet = ContextPacket(
+        task_id="t-mech-knowledge",
+        user_text="Сколько планет в Солнечной системе? Ответь одним предложением.",
+        task_kind="knowledge_request",
+        route="researcher",
+        route_plan="reason",
+        requires_mcp=False,
+        execution_plan=ToolExecutionPlan(
+            strategy="reason_only",
+            requires_tool_call=False,
+            rationale="r",
+        ),
+        context_summary="s",
+        response_shape="prose",
+    )
+    task = FormatterInput(
+        task_id="t-mech-knowledge",
+        context_packet=packet,
+        worker_summary="В Солнечной системе восемь планет.",
+        response_locale="ru-RU",
+        transformation="none",
+        dialog_window=_window_with_document(prior),
+    )
+    result = try_formatter_fast_path(
+        task_input=task,
+        task_kind="knowledge_request",
+        selected_strategy="reason_only",
+        worker_confidence=1.0,
+    )
+    # shape_requested blocks plain passthrough → None → Formatter LLM path.
+    assert result is None

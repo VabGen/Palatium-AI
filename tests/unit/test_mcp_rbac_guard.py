@@ -79,7 +79,5 @@ def test_ide_figma_plugin_allowed() -> None:
 
 
 def test_ide_browser_allowed() -> None:
-    result = _run_guard(
-        {"tool_name": "browser_navigate", "server_name": "cursor-ide-browser"}
-    )
+    result = _run_guard({"tool_name": "browser_navigate", "server_name": "cursor-ide-browser"})
     assert result["permission"] == "allow"

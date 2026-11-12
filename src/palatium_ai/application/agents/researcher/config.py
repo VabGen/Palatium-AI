@@ -94,9 +94,10 @@ def researcher_llm_config(
     config: AgentConfig,
     *,
     strategy: ExecutionStrategy | str | None,
+    composer_mode: str | None = None,
 ) -> AgentConfig:
     """Copy of agent config with tier from ResearcherTierPolicy."""
-    decision = ResearcherTierPolicy.decide(strategy=strategy)
+    decision = ResearcherTierPolicy.decide(strategy=strategy, composer_mode=composer_mode)
     if decision.model_tier == config.model_tier:
         return config
     return config.model_copy(update={"model_tier": decision.model_tier})

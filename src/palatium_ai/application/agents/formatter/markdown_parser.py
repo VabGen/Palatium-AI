@@ -462,7 +462,7 @@ def _promote_emphasized_ordered_lists(blocks: tuple[ContentBlock, ...]) -> tuple
             steps = tuple(
                 StepItem(
                     title=(item.emphasis or item.text)[:200],
-                    body=(item.text if (item.emphasis or "").strip() else item.text)[:2000] or " ",
+                    body=item.text[:2000] or " ",
                 )
                 for item in block.items
             )

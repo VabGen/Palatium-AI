@@ -69,6 +69,15 @@ class ContextWeaverAgent(BaseAgent):
     def get_available_tools(self) -> list[str]:
         return []
 
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based plan gate — success must carry strategy + at least one step."""
+        if not isinstance(output.output, ContextWeaverOutput):
+            return False
+        if output.status == "failure":
+            return True
+        bundle = output.output.execution_bundle
+        return bool(bundle.selected_strategy) and bool(bundle.steps)
+
     @traceable(name="context_enricher.weaving.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "weaving")
@@ -114,6 +123,7 @@ class ContextWeaverAgent(BaseAgent):
             execution_plan=execution_plan,
             context_summary=context_summary,
             attachment_scope=task_input.attachment_scope,
+            composer_mode=task_input.composer_mode,
         )
         output = ContextWeaverOutput(
             context_packet=context_packet,

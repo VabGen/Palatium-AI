@@ -1,4 +1,3 @@
-import type { OrbState } from 'thinking-orbs';
 import type { MessageKey } from '../i18n/messages';
 
 /**
@@ -11,22 +10,21 @@ import type { MessageKey } from '../i18n/messages';
  * СТАРТЕ каждого узла графа LangGraph (`stream_mode="tasks"`). Никаких таймеров
  * и «угадывания» фазы: подпись называет шаг, который выполняется сейчас.
  *
- * Таблица — это маппинг id узла → визуальный режим, а не эвристика по тексту
- * запроса (055): перечень узлов закрыт реестром `core/types/graph_nodes.py`.
- * Неизвестный/новый узел не роняет индикатор и не оставляет его пустым —
- * падает на нейтральную фазу, поэтому добавление узла на бэкенде не требует
- * синхронной правки виджета.
+ * Визуал — `ThinkingOrb` из `thinking-orbs` (`state` = режим анимации);
+ * `label` озвучивается через `role="status"` (084).
+ *
+ * Таблица — маппинг id узла → фаза, а не эвристика по тексту запроса (055):
+ * перечень узлов закрыт реестром `core/types/graph_nodes.py`. Неизвестный
+ * узел падает на нейтральную фазу.
  */
 
 /**
- * Подмножество `OrbState`, которое имеет смысл в ожидании: только режимы,
- * читаемые как «работаю». `listening` / `breathing` / `shaping`… в подписи
- * фаз не используются — незадействованных переводов не держим.
+ * Режимы `ThinkingOrb.state` (подмножество библиотеки), которые мы реально
+ * мапим с узлов графа. Источник имён — thinking-orbs; перечень здесь закрыт
+ * под наш пайплайн (не импортируем чужой OrbState как SoT продукта).
  */
-export type PendingOrbState = Extract<
-  OrbState,
-  'working' | 'weaving' | 'connecting' | 'searching' | 'solving' | 'composing' | 'shaping'
->;
+export type PendingOrbState =
+  'working' | 'weaving' | 'connecting' | 'searching' | 'solving' | 'composing' | 'shaping';
 
 export interface PendingPhase {
   readonly state: PendingOrbState;

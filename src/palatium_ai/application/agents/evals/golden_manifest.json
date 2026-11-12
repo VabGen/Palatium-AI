@@ -31,6 +31,16 @@
         "application/agents/researcher/prompts.py"
       ]
     },
+    "coder": {
+      "prompts": [
+        "application/agents/coder/prompts.py"
+      ]
+    },
+    "analyst": {
+      "prompts": [
+        "application/agents/analyst/prompts.py"
+      ]
+    },
     "supervisor": {
       "prompts": [
         "application/agents/supervisor/prompts.py"

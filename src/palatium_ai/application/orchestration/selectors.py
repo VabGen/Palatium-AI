@@ -79,11 +79,19 @@ def memory_hints(state: AgentGraphState) -> tuple[str, ...]:
 
     Возвращает пустой tuple, если recall отсутствует или не содержит подсказок.
     Используется в node_inputs для Formatter / Researcher / ContextWeaver.
+    W10 2b: drops scratchpad/medium claims the dialog already corrected.
     """
     recall = state.get("memory_recall")
     if recall is None:
         return ()
-    return tuple(getattr(recall, "hint_texts", ()) or ())
+    hints = tuple(getattr(recall, "hint_texts", ()) or ())
+    window = state.get("dialog_window")
+    turns = getattr(window, "turns", None) if window is not None else None
+    if not turns:
+        return hints
+    from palatium_ai.domain.policies.dialog_correction import DialogCorrectionPolicy
+
+    return DialogCorrectionPolicy.filter_superseded_texts(hints, turns)
 
 
 def memory_hint_kinds(state: AgentGraphState) -> tuple[str, ...]:
@@ -98,7 +106,15 @@ def memory_hint_kinds(state: AgentGraphState) -> tuple[str, ...]:
     hint_items = getattr(recall, "hint_items", None)
     if not callable(hint_items):
         return ()
-    return tuple(str(kind) for _text, kind in hint_items())
+    items = tuple((str(text), str(kind)) for text, kind in hint_items())
+    window = state.get("dialog_window")
+    turns = getattr(window, "turns", None) if window is not None else None
+    if not turns:
+        return tuple(kind for _text, kind in items)
+    from palatium_ai.domain.policies.dialog_correction import DialogCorrectionPolicy
+
+    kept = set(DialogCorrectionPolicy.filter_superseded_texts(tuple(t for t, _ in items), turns))
+    return tuple(kind for text, kind in items if text.strip() in kept)
 
 
 def resolved_response_locale(state: AgentGraphState) -> str:

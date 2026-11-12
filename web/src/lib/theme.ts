@@ -6,33 +6,32 @@ export type AppTheme = 'dark' | 'light';
 /**
  * Элемент, на котором объявлена тема приложения, для узла внутри `element`.
  *
- * Контракт темы — `tokens.css`: светлая включается ТОЛЬКО атрибутом
- * `data-theme="light"`, тёмная — дефолт. Системная `prefers-color-scheme` сюда
- * не входит: она описывает настройку ОС, а не тему хоста, и в светлой СЭД дала бы
- * тёмный виджет.
+ * Product parity 2026-11-06: default = **light** (Kimi product screenshots).
+ * Тёмная — только явный `data-theme="dark"`. Системная `prefers-color-scheme`
+ * не участвует (хост/СЭД задают тему атрибутом).
  *
- * Виджет живёт в Shadow DOM, поэтому обход предков (`closest`, `parentElement`)
- * до `data-theme` на shadow host'е НЕ доходит — берём scope через `getRootNode()`:
- * `documentElement` для standalone-страницы или хост `<palatium-assistant>`.
+ * Виджет в Shadow DOM: scope через `getRootNode()` → shadow host или
+ * `document.documentElement`.
  */
 export function themeScope(element: Element): Element {
   const root = element.getRootNode();
   return root instanceof ShadowRoot ? root.host : document.documentElement;
 }
 
-/** Тема по атрибуту `data-theme`; всё, кроме явного `light`, — тёмная. */
+/** Тема по атрибуту; всё, кроме явного `dark`, — светлая. */
 export function resolveAppTheme(scope: Element): AppTheme {
-  return scope.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  return scope.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+
+/** Выставить светлую тему по умолчанию, если хост ещё не задал `data-theme`. */
+export function ensureDefaultTheme(scope: Element): void {
+  if (!scope.hasAttribute('data-theme')) {
+    scope.setAttribute('data-theme', 'light');
+  }
 }
 
 /**
  * Текущая тема приложения, реактивно на смену `data-theme` у её scope.
- *
- * `anchorRef` — любой узел внутри приложения/виджета: по нему определяется scope
- * (см. `themeScope`), поэтому хук работает и в standalone, и в Shadow DOM.
- * Подписка на DOM-атрибут идёт через `useSyncExternalStore`, а не через
- * `useState`+эффект: снимок читается в рендере, поэтому первый кадр уже получает
- * фактическую тему, без промежуточного состояния.
  */
 export function useAppTheme(anchorRef: RefObject<HTMLElement | null>): AppTheme {
   const subscribe = useCallback(
@@ -40,8 +39,6 @@ export function useAppTheme(anchorRef: RefObject<HTMLElement | null>): AppTheme 
       const element = anchorRef.current;
       if (!element) return () => undefined;
 
-      // Наблюдаем сам scope, а не документ: в Shadow DOM мутации хоста хоть и
-      // видны документу, но `data-theme` на `:host` — единственный сигнал темы.
       const observer = new MutationObserver(onChange);
       observer.observe(themeScope(element), { attributes: true, attributeFilter: ['data-theme'] });
       return () => observer.disconnect();
@@ -51,7 +48,7 @@ export function useAppTheme(anchorRef: RefObject<HTMLElement | null>): AppTheme 
 
   const getSnapshot = useCallback(() => {
     const element = anchorRef.current;
-    return element ? resolveAppTheme(themeScope(element)) : 'dark';
+    return element ? resolveAppTheme(themeScope(element)) : 'light';
   }, [anchorRef]);
 
   return useSyncExternalStore(subscribe, getSnapshot);

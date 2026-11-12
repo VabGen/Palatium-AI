@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {
+      "id": "ctx-coder-present-01",
+      "agent": "coder",
+      "scenario": "present_repo_token",
+      "input": { "user_text": "Which feature flag gates the Zenith exporter?" },
+      "context": {
+        "tool_result": "feature_flags: zenith_exporter_v2=true for service glacier-pipe"
+      },
+      "expected": {
+        "must_contain": ["zenith_exporter_v2", "glacier-pipe"],
+        "must_not_contain": ["legacy_exporter_v1"]
+      },
+      "tags": ["coder", "context", "present"]
+    },
+    {
+      "id": "ctx-coder-absent-01",
+      "agent": "coder",
+      "scenario": "absent_repo_token",
+      "input": { "user_text": "Is zenith_exporter_v2 enabled?" },
+      "context": { "tool_result": "feature_flags: {}" },
+      "expected": {
+        "must_contain": ["нет данных"],
+        "must_not_contain": ["zenith_exporter_v2=true"]
+      },
+      "tags": ["coder", "context", "absent"]
+    }
+  ]
+}

@@ -1178,3 +1178,63 @@ def test_named_thread_file_clears_a_false_clarify() -> None:
     assert effective.continuation_kind == "answer"
     assert effective.file_reference == "thread_file"
     assert effective.requires_mcp is True
+
+
+def test_trusted_prior_answer_demotes_required_grounding() -> None:
+    """W10 2b: correction follow-up must answer from dialog prior, not empty retrieval."""
+    ctx = ContextualizerOutput(
+        rewritten_query="Какой клиент у нас основной?",
+        continuation_kind="answer",
+        confidence=0.95,
+        refers_to_prior=True,
+        prior_assistant_excerpt="Основной клиент — VEGA-9.",
+        reasoning="ask about client from prior",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        grounding="required",
+        grounding_reason="fact ask",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="which client",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="Какой клиент у нас основной?",
+    )
+    assert effective.trust_prior_for_workers is True
+    assert effective.file_reference != "thread_file"
+    assert effective.grounding == "optional"
+    assert "trusted dialog prior" in effective.grounding_reason
+
+
+def test_thread_file_keeps_required_grounding_with_trusted_prior() -> None:
+    """Storage re-read must not demote required — sticky OCR must not short-circuit."""
+    ctx = ContextualizerOutput(
+        rewritten_query="перечитай Скан 1",
+        continuation_kind="answer",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="Содержимое Скан 1: протокол ALPHA.",
+        reasoning="re-read file",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="file ask",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="перечитай Скан 1",
+        thread_file_named=True,
+    )
+    assert effective.file_reference == "thread_file"
+    assert effective.grounding == "required"

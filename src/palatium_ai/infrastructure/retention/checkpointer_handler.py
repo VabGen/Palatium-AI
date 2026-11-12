@@ -32,6 +32,34 @@ _DELETE_BY_THREAD: dict[str, str] = {
 }
 
 
+async def clear_checkpoints_for_thread(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    thread_id: str,
+) -> int:
+    """Drop LangGraph checkpoint rows for one conversation (Edit rewind).
+
+    No-op when checkpoint tables are absent (MemorySaver / fresh DB).
+    """
+    tid = thread_id.strip()
+    if not tid:
+        return 0
+    async with session_factory() as session:
+        present = await session.execute(text("SELECT to_regclass('public.checkpoints') IS NOT NULL"))
+        if not bool(present.scalar()):
+            await session.commit()
+            return 0
+        total = 0
+        for table in _CHECKPOINT_TABLES:
+            result = await session.execute(
+                text(_DELETE_BY_CONVERSATION[table]),
+                {"conv_id": tid, "prefix": f"{tid}:"},
+            )
+            total += int(getattr(result, "rowcount", 0) or 0)
+        await session.commit()
+        return total
+
+
 class CheckpointerRetentionHandler:
     """checkpointer: drop LG rows for inactive sessions and orphan thread keys."""
 

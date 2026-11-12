@@ -83,28 +83,48 @@ _repair_max_tokens = repair_max_tokens
 _FIRST_TOKEN_FALLBACK_SECONDS = FIRST_TOKEN_FALLBACK_SECONDS
 
 
+def _structured_blocks_painted() -> bool:
+    """True when at least one typed ``block_delta`` already reached the client."""
+    from palatium_ai.application.services.turn_sse_bridge import get_turn_sse_bridge
+
+    bridge = get_turn_sse_bridge()
+    return bridge is not None and bridge.sse_first_block_recorded
+
+
 def _paint_partial_frames(frames: list[PartialFrame], *, painted_prose: bool) -> bool:
     """Paint one batch of closed document frames; return the prose-painted flag.
 
     Typed frame first: the client prefers it and renders the same ``BlockRenderer``
-    as the final document. Prose is the append-only fallback for clients that predate
-    the typed frames (dual-emit, like ``text_delta``/``answer_delta`` in Phase 1).
+    as the final document. Under ``structured_incremental`` the typed surface is the
+    only preview — never dual-emit ``answer_delta`` (even for an untyped / coerced-
+    away element). Markdown then BlockRenderer is a layout shift (040). Prose
+    dual-emit remains for legacy clients only.
     The document title is not a block, so it gets its own typed frame before the
     blocks: painting it as prose first would move the text when blocks take over.
     """
+    from palatium_ai.application.services.turn_sse_bridge import get_turn_sse_bridge
+
+    structured = (bridge := get_turn_sse_bridge()) is not None and bridge.structured_preview_active()
     for frame in frames:
         if frame.index < 0:
             emit_document_title(frame.text)
-        elif frame.block is not None:
+            continue
+        if frame.block is not None:
             emit_document_block(index=frame.index, block=frame.block)
-        if frame.text:
-            if frame.continues_prose:
-                # Same paragraph, next delta: no break, no whitespace trimming —
-                # a stripped boundary would glue words together on screen.
-                emit_structured_answer_delta(frame.text, separator="", keep_whitespace=True)
-            else:
-                emit_structured_answer_delta(frame.text, separator="\n\n" if painted_prose else "")
-            painted_prose = True
+            if structured:
+                continue
+        elif structured:
+            # No typed block → wait for the next valid element / final document.
+            continue
+        if not frame.text:
+            continue
+        if frame.continues_prose:
+            # Same paragraph, next delta: no break, no whitespace trimming —
+            # a stripped boundary would glue words together on screen.
+            emit_structured_answer_delta(frame.text, separator="", keep_whitespace=True)
+        else:
+            emit_structured_answer_delta(frame.text, separator="\n\n" if painted_prose else "")
+        painted_prose = True
     return painted_prose
 
 
@@ -175,7 +195,19 @@ class FormatterAgent(BaseAgent):
             )
         self._record_shape_verdict(task_input, output)
         self._record_content_lint(task_input, output)
+        self._record_icon_coverage(output)
         return output
+
+    def _record_icon_coverage(self, output: AgentOutput) -> None:
+        """Observe heading-icon density after PresentationIconPolicy enrich (F5)."""
+        document = output.output
+        if not isinstance(document, ContentDocument):
+            return
+        from palatium_ai.domain.content.content_document import HeadingBlock
+
+        headings = [block for block in document.blocks if isinstance(block, HeadingBlock)]
+        with_icon = sum(1 for block in headings if block.icon is not None)
+        agent_metrics.record_formatter_icon_coverage(with_icon=with_icon, headings=len(headings))
 
     def _record_content_lint(self, task_input: FormatterInput, output: AgentOutput) -> None:
         """Measure deterministic defects that are schema-valid but wrong for the user.
@@ -307,9 +339,7 @@ class FormatterAgent(BaseAgent):
         )
         return messages, user_payload, user_message, max_tokens
 
-    async def _run_schema_first_streaming(
-        self, input: AgentInput, task_input: FormatterInput
-    ) -> AgentOutput:
+    async def _run_schema_first_streaming(self, input: AgentInput, task_input: FormatterInput) -> AgentOutput:
         """Paint closed blocks as the provider streams JSON (layout_shift=0)."""
         messages, user_payload, user_message, max_tokens = self._schema_first_messages(input, task_input)
         scanner = PartialDocumentScanner()
@@ -346,7 +376,12 @@ class FormatterAgent(BaseAgent):
                 error=compact_validation_error(exc),
             )
             agent_metrics.record_formatter_schema(path="schema_first", outcome="invalid")
-            return await self._run_legacy(input, task_input)
+            # Blocks already on screen must not be replaced by a Markdown restart.
+            return await self._run_legacy(
+                input,
+                task_input,
+                mute_stream=_structured_blocks_painted(),
+            )
         except Exception:
             logger.exception("formatter schema_first generation failed", task_id=str(input.task_id))
             agent_metrics.record_error(self._config.role, "schema_first_llm_stage_failure")
@@ -364,15 +399,17 @@ class FormatterAgent(BaseAgent):
             # legacy path, which renders the worker draft instead of an empty document.
             logger.warning("formatter.schema_first.empty_blocks", task_id=str(input.task_id))
             agent_metrics.record_formatter_schema(path="schema_first", outcome="empty_blocks")
-            return await self._run_legacy(input, task_input)
+            return await self._run_legacy(
+                input,
+                task_input,
+                mute_stream=_structured_blocks_painted(),
+            )
 
         document = align_formatter_meta(document, task_input)
         if citations:
             # Attached after validation, never emitted by the model: blocks are already
             # painted, and meta does not change layout (W1 invariant).
-            document = document.model_copy(
-                update={"meta": document.meta.model_copy(update={"citations": citations})}
-            )
+            document = document.model_copy(update={"meta": document.meta.model_copy(update={"citations": citations})})
         agent_metrics.record_formatter_schema(path="schema_first", outcome="valid")
         logger.info(
             "formatter.llm_path",
@@ -469,9 +506,7 @@ class FormatterAgent(BaseAgent):
         aligned = align_formatter_meta(document, task_input)
         if not citations:
             return aligned
-        return aligned.model_copy(
-            update={"meta": aligned.meta.model_copy(update={"citations": citations})}
-        )
+        return aligned.model_copy(update={"meta": aligned.meta.model_copy(update={"citations": citations})})
 
     async def _generate_schema_document_buffered(
         self,
@@ -526,8 +561,19 @@ class FormatterAgent(BaseAgent):
             return await self._run_legacy(input, task_input)
         return document, citations
 
-    async def _run_legacy(self, input: AgentInput, task_input: FormatterInput) -> AgentOutput:
-        """GFM Markdown stream → parse → align meta → optional locale repair."""
+    async def _run_legacy(
+        self,
+        input: AgentInput,
+        task_input: FormatterInput,
+        *,
+        mute_stream: bool = False,
+    ) -> AgentOutput:
+        """GFM Markdown stream → parse → align meta → optional locale repair.
+
+        ``mute_stream`` buffers the legacy rebuild when a typed preview is already
+        on screen (schema_first fallback): streaming Markdown would snap the UI
+        off BlockRenderer (040). The final ``result`` still carries the document.
+        """
         user_payload = build_formatter_user_payload(task_input)
         user_message = build_formatter_user_message(user_payload)
         messages = list(
@@ -558,6 +604,7 @@ class FormatterAgent(BaseAgent):
                 worker_summary=task_input.worker_summary or "",
                 agent_role=self._config.role,
                 allow_worker_fallback=task_input.allow_worker_fallback,
+                mute_stream=mute_stream,
             )
             document = align_formatter_meta(document, task_input)
             document = await maybe_repair_locale_gated(
@@ -575,9 +622,7 @@ class FormatterAgent(BaseAgent):
                 untrusted_context=task_input.context_packet.untrusted_context,
             )
             if citations:
-                document = document.model_copy(
-                    update={"meta": document.meta.model_copy(update={"citations": citations})}
-                )
+                document = document.model_copy(update={"meta": document.meta.model_copy(update={"citations": citations})})
         except PARSE_ERRORS as parse_exc:
             # Repair exhausted. Worker draft may still render deterministically.
             # Prefer graceful degradation over empty document + review flag.

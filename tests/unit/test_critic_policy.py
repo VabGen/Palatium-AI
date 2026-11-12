@@ -99,6 +99,24 @@ def test_answer_continuation_invokes_llm() -> None:
     assert decision.reason == "answer_continuity_gate"
 
 
+def test_answer_continuation_high_confidence_passthrough() -> None:
+    decision = CriticPolicy.decide(
+        selected_strategy="reason_only",
+        task_kind="knowledge_request",
+        continuation_kind="answer",
+        classification_confidence=0.95,
+        confidence_threshold=0.7,
+        requires_mcp=False,
+        requires_tool_call=False,
+        worker_summary="Prior point 1 expanded with citations.",
+        worker_confidence=0.91,
+        user_input_chars=40,
+        has_attachment_context=False,
+    )
+    assert decision.invoke_llm is False
+    assert decision.reason == "answer_high_confidence_passthrough"
+
+
 def test_low_confidence_clarify_invokes_llm() -> None:
     decision = CriticPolicy.decide(
         selected_strategy="clarify",
@@ -233,6 +251,7 @@ def test_verbatim_still_invokes_on_untrusted_fence() -> None:
 
 
 def test_tool_strategy_always_invokes_critic_llm() -> None:
+    """Empty / low-confidence tool result stays fail-closed (no sealed body yet)."""
     decision = CriticPolicy.decide(
         selected_strategy="direct_tool_call",
         task_kind="tool_execution",
@@ -245,3 +264,20 @@ def test_tool_strategy_always_invokes_critic_llm() -> None:
     )
     assert decision.invoke_llm is True
     assert decision.reason == "side_effect_risk"
+
+
+def test_sealed_direct_tool_body_passthrough() -> None:
+    """W10 att_partial: confident read_attachment body must not open Critic revise."""
+    decision = CriticPolicy.decide(
+        selected_strategy="direct_tool_call",
+        task_kind="knowledge_request",
+        continuation_kind="answer",
+        classification_confidence=0.9,
+        confidence_threshold=0.7,
+        requires_mcp=True,
+        requires_tool_call=True,
+        worker_summary="Содержимое Скан 1: протокол ALPHA.",
+        worker_confidence=0.85,
+    )
+    assert decision.invoke_llm is False
+    assert decision.reason == "sealed_direct_tool_passthrough"

@@ -46,7 +46,12 @@ def parse_memory_keeper_output(raw: str) -> MemoryKeeperOutput:
         text = str(item.get("text", "")).strip()
         if not text:
             continue
-        kind_raw = str(item.get("kind", "fact"))
+        kind_raw = str(item.get("kind", "fact")).strip().lower()
+        # Soft-migrate pre-060 extract labels onto MemoryType (060).
+        if kind_raw == "entity":
+            kind_raw = "incident"
+        elif kind_raw == "summary":
+            kind_raw = "episode"
         kind = cast("MemoryKind", kind_raw if kind_raw in MEMORY_KINDS else "fact")
         confidence = _clamp_confidence(coerce_float(item.get("confidence", 0.0)))
         key_hint_raw = item.get("key_hint")

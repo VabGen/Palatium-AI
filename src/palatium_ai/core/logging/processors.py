@@ -35,9 +35,22 @@ def add_context_vars(logger: logging.Logger, method_name: str, event_dict: Event
 
 
 def add_timestamp(logger: logging.Logger, method_name: str, event_dict: EventDict) -> EventDict:
-    """Add ISO timestamp."""
-    event_dict["timestamp"] = datetime.now(UTC).isoformat()
+    """Add ISO timestamp (+ ``ts`` alias for W8.1 agent log schema)."""
+    stamp = datetime.now(UTC).isoformat()
+    event_dict["timestamp"] = stamp
+    event_dict.setdefault("ts", stamp)
     return event_dict
+
+
+def normalize_agent_schema(
+    _logger: logging.Logger,
+    _method_name: str,
+    event_dict: EventDict,
+) -> EventDict:
+    """Best-effort W8.1 field aliases — does not invent a second logging stack."""
+    from palatium_ai.core.logging.agent_schema import normalize_agent_log_fields
+
+    return normalize_agent_log_fields(dict(event_dict))  # type: ignore[return-value]
 
 
 def redact_observability_strings(

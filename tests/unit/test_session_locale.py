@@ -10,7 +10,7 @@ import pytest
 from palatium_ai.application.services.session_locale import resolve_thread_response_locale
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_session_response_locale_beats_argument_preview_script() -> None:
     session = SimpleNamespace(
         context={"response_locale": "ru-RU", "ui_locale": "en-US", "last_user_text": "hello"},
@@ -26,7 +26,7 @@ async def test_session_response_locale_beats_argument_preview_script() -> None:
     assert locale == "ru-RU"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_missing_session_falls_back_to_preview_script() -> None:
     service = SimpleNamespace(get_session=AsyncMock(return_value=None))
 

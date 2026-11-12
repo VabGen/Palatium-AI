@@ -119,13 +119,25 @@ const BARE_UUID = new RegExp(`^${UUID}$`);
 const ATTACHMENT_UUID_ONLY = new RegExp(`^attachment:(?<id>${UUID})$`, 'i');
 const ATTACHMENT_PREFIX = new RegExp(`^attachment:(?:(?<id>${UUID}):)?(?<rest>.+)$`, 'i');
 
+/**
+ * Wire-format provenance stamp from ``AttributionPolicy`` (Python SoT).
+ * Kept in ``meta.source_refs`` for clients; never render as a file chip.
+ */
+export const MEMORY_SOURCE_MARKER = 'from memory';
+
+export function isInternalSourceRef(ref: string): boolean {
+  return ref.trim().toLowerCase() === MEMORY_SOURCE_MARKER;
+}
+
 function normalizeSourceRefLabel(label: string): string | null {
   const text = label.trim();
-  if (!text || BARE_UUID.test(text) || ATTACHMENT_UUID_ONLY.test(text)) return null;
+  if (!text || isInternalSourceRef(text) || BARE_UUID.test(text) || ATTACHMENT_UUID_ONLY.test(text)) {
+    return null;
+  }
   const prefixed = ATTACHMENT_PREFIX.exec(text);
   if (prefixed) {
     const rest = prefixed.groups?.rest?.trim() ?? '';
-    if (!rest || BARE_UUID.test(rest)) return null;
+    if (!rest || BARE_UUID.test(rest) || isInternalSourceRef(rest)) return null;
     return rest;
   }
   return text;
@@ -189,7 +201,22 @@ export type AttachmentDraft = {
   restoreRequested?: boolean;
   /** Server G06 flag — extracted text looked like PII. */
   containsPii?: boolean;
+  /**
+   * Local ``URL.createObjectURL`` for image thumbs in the composer.
+   * Revoke via ``revokeAttachmentPreview`` when the chip leaves staging.
+   */
+  previewUrl?: string;
 };
+
+/** Drop a chip's object-URL thumb (no-op when absent). */
+export function revokeAttachmentPreview(chip: AttachmentDraft): void {
+  if (chip.previewUrl) URL.revokeObjectURL(chip.previewUrl);
+}
+
+/** Revoke every staged image preview (clear / unmount). */
+export function revokeAttachmentPreviews(chips: readonly AttachmentDraft[]): void {
+  for (const chip of chips) revokeAttachmentPreview(chip);
+}
 
 /** Injection refuse only — manager HITL can re-admit with masked text (W5 G12). */
 export function canRequestQuarantineRestore(attachment: AttachmentResponse): boolean {
@@ -251,10 +278,29 @@ export function formatAttachmentSize(sizeBytes: number): string {
   })} MB`;
 }
 
-function extensionOf(name: string): string {
+export function extensionOf(name: string): string {
   const dot = name.lastIndexOf('.');
   if (dot <= 0) return '';
   return name.slice(dot).toLowerCase();
+}
+
+/** Stem without extension — kimi.ai file card title line. */
+export function attachmentDisplayName(filename: string): string {
+  const ext = extensionOf(filename);
+  if (!ext) return filename;
+  return filename.slice(0, -ext.length) || filename;
+}
+
+/** Uppercase type mark for Kimi preview cards (`PDF`, `DOCX`). */
+export function attachmentTypeLabel(filename: string): string {
+  return extensionOf(filename).replace(/^\./, '').toUpperCase();
+}
+
+/** kimi.ai meta line: `DOCX 70 KB` / `PDF 119.04 KB`. */
+export function attachmentChipMeta(filename: string, sizeBytes: number): string {
+  const ext = attachmentTypeLabel(filename);
+  const size = formatAttachmentSize(sizeBytes);
+  return ext ? `${ext} ${size}` : size;
 }
 
 /**

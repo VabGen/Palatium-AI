@@ -49,6 +49,9 @@ class FormatterInput(BaseModel):
     # the owner: painting the worker draft first would be replaced by the Formatter's
     # own composition (055). Legacy turns keep the early-prose fallback.
     allow_worker_fallback: bool = True
+    # Worker summary is a deterministic policy refusal (file unresolved / empty
+    # grounding). Formatter must not LLM-rewrite it (W10 P0.3 EN upload ask).
+    policy_refusal: bool = False
 
 
 class FormatterTaskResult(TaskResult):

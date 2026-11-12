@@ -3,6 +3,7 @@
 """Shared type helpers and registries."""
 
 from .coerce import coerce_float
+from .digest import SHA256_HEX_LENGTH, assert_sha256_hex_match, sha256_hex
 from .embeddings import (
     KNOWLEDGE_EMBEDDING_DIM,
     KNOWLEDGE_EMBEDDING_MODEL,
@@ -47,12 +48,15 @@ __all__ = [
     "NODE_QUALITY_REVISION",
     "NODE_RESEARCHER",
     "NODE_SUPERVISOR",
+    "SHA256_HEX_LENGTH",
     "EmbeddingModel",
     "UUIDv7",
     "abstract_tier_for",
+    "assert_sha256_hex_match",
     "assert_vector_dim",
     "coerce_float",
     "context_limit_tokens",
     "embedding_dim_for_model",
     "embedding_model_for_schema",
+    "sha256_hex",
 ]

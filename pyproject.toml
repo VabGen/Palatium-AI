@@ -122,7 +122,11 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 130
 target-version = "py314"
-exclude = ["mcp_servers/edms/edms-ai-assistant"]
+exclude = [
+    "mcp_servers/edms/edms-ai-assistant",
+    ".tmp-*.py",
+    ".tmp*.py",
+]
 
 [tool.ruff.lint]
 select = [
@@ -164,7 +168,9 @@ raises-require-match-for = ["ValueError", "RuntimeError", "ValidationError"]
     "PT011", "RUF012",
 ]
 "alembic/**/*.py" = ["S608", "E501"]
-"scripts/**/*.py" = ["T20"]
+"scripts/**/*.py" = ["T20", "C901", "S310"]
+# Audit CLI helpers: stdout is the interface (same contract as scripts/).
+"docs/audit/**/*.py" = ["T20", "C901", "S310", "S106"]
 ".cursor/hooks/**/*.py" = ["T20"]
 
 [tool.ruff.format]
