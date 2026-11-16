@@ -190,6 +190,10 @@ Floor=5 (suite ≥6 after v1.1). Не трогать `DocumentKind` без ADR.
 **Path-filter workflow:** conflict-linter бежит на PR, касающихся prompts/evals;
 расширение на все PR — после cutover.
 
+**Cutover-критерий (soft):** ``soft_new`` стабильно **0** на новых PR за 3 недели
+(не ``soft_raw`` — там константа triaged must/may). Отчёт CLI: `soft_raw` /
+`soft_triaged` / `soft_new` (exact signature `prompt_id`+`kind`).
+
 **§6 lean-cut:** только **после cutover 2026-12-19** (blocking conflict-linter) +
 `soft_new` стабилен / noqa запас / §5 fixtures зелёные. До cutover — §4 v1.1 A/B.
 
