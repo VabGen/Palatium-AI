@@ -38,6 +38,7 @@ from palatium_ai.application.agents.evals.conflict_linter.policy import (  # noq
     FIXTURE_FLOOR,
     NOQA_MAX,
     TRIAGED_SOFT_MUST_MAY,
+    soft_metric_breakdown,
 )
 from palatium_ai.application.agents.evals.conflict_linter.scan import scan_audit_revisions  # noqa: E402
 from palatium_ai.application.agents.evals.prompt_revisions import AUDIT_PROMPT_REVISIONS  # noqa: E402
@@ -133,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         active = list(audit.active)
         hard = [f for f in active if f.severity == "hard"]
         soft = [f for f in active if f.severity == "soft"]
+        soft_raw, soft_triaged, soft_new = soft_metric_breakdown(soft)
         noqa_total = 0
         for revision in AUDIT_PROMPT_REVISIONS:
             noqa_total += count_noqa_markers((_SRC / revision.relative_path).read_text(encoding="utf-8"))
@@ -144,7 +146,10 @@ def main(argv: list[str] | None = None) -> int:
             "registry_size": len(AUDIT_PROMPT_REVISIONS),
             "hard": [f.model_dump() for f in hard],
             "soft": [f.model_dump() for f in soft],
-            "soft_must_may_triaged": sorted(TRIAGED_SOFT_MUST_MAY),
+            "soft_raw": soft_raw,
+            "soft_triaged": soft_triaged,
+            "soft_new": soft_new,
+            "soft_must_may_triaged": [s.model_dump() for s in sorted(TRIAGED_SOFT_MUST_MAY, key=lambda s: s.prompt_id)],
             "suppressed": [f.model_dump() for f in audit.findings if f.suppressed],
             "noqa_count": noqa_total,
             "noqa_max": NOQA_MAX,
@@ -152,7 +157,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"audit: {len(hard)} hard same-prompt "
             f"(NOT cross-prompt — deferred after cutover {CUTOVER_DATE.isoformat()}); "
-            f"{len(soft)} soft; noqa={noqa_total}/{NOQA_MAX}; "
+            f"soft_raw={soft_raw} soft_triaged={soft_triaged} soft_new={soft_new}; "
+            f"noqa={noqa_total}/{NOQA_MAX}; "
             f"registry={len(AUDIT_PROMPT_REVISIONS)} files"
         )
         _print_findings(f"audit hard same-prompt ({len(hard)}):", hard)
