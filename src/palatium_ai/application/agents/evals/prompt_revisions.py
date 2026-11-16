@@ -42,7 +42,7 @@ AUDIT_PROMPT_REVISIONS: tuple[PromptRevision, ...] = (
     PromptRevision(
         prompt_id="coder.system",
         relative_path="application/agents/coder/prompts.py",
-        sha256="0722c445816d47666f2af7ae781f85419913f6542740344c3c6f30796b5a3005",
+        sha256="05fb7a02fc5fefcd7ec081697e5db7d55996625a3e84c5e811af6446a5d5c60f",
         changed_on="2026-11-16",
         adr_or_eval="golden_manifest:coder + tests/unit/test_prompt_audit_closures.py",
     ),
