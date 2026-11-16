@@ -173,7 +173,11 @@ def _contextualizer_from_frozen(raw: dict[str, Any]) -> ContextualizerOutput:
 
 
 def observe(dialog: MultiTurnDialog) -> MultiTurnObservation:
-    """Run Continuity + Uncertainty on frozen stubs; return observable signals."""
+    """Eval-only harness: Continuity + Uncertainty on **frozen** stubs.
+
+    Does **not** exercise Contextualizer/Intent LLM prompts or live graph wiring.
+    ``MULTI_TURN_REVISIONS`` pins fixture JSON only — agent wiring is a separate §5 PR.
+    """
     window = _window_before_check(dialog)
     check = dialog.turns[dialog.check_turn_index]
     user_text = check["content"]

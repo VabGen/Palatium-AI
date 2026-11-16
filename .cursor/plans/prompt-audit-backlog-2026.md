@@ -16,10 +16,10 @@ multi-turn → lean-cut (lean-cut только после baseline §2+§3).
 | # | Пункт | Почему | Риск | Owner / срок |
 |---|---|---|---|---|
 | 1 | **CI closures** | DoD без enforce — локальный | низкий | **DONE 2026-11-16** |
-| 2 | **Conflict-linter / LLM-judge** | единственный ⏳ структурного аудита | средний | **@VabGen**, due **2026-12-05** — см. §2 |
+| 2 | **Conflict-linter / LLM-judge** | единственный ⏳ структурного аудита | средний | **@VabGen** — §2 реализация Done (2026-12-05); **cutover 2026-12-19** |
 | 3 | **Role A/B eval** (Kimi vs OpenAI) | «без role-prefix» без эмпирики | средний | @VabGen после §2 baseline |
-| 4 | **Политика неуверенности / clarification** | «любые сценарии»: неполный вход → 4 disposition, не галлюцинация | средний | **DONE** hot-path 2026-11-16; v1.1 A–D soft |
-| 5 | **Multi-turn continuity** | смена темы / противоречие prior / «как в прошлый раз» | средний | **IN PROGRESS** fixtures floor=5 + pins (2026-11-16); agent wiring next |
+| 4 | **Политика неуверенности / clarification** | «любые сценарии»: неполный вход → 4 disposition, не галлюцинация | средний | **hot-path DONE**; v1.1 C/D open (`retrieval_empty` / `out_of_scope` — policy готов, hot-path wiring open) |
+| 5 | **Multi-turn continuity** | смена темы / противоречие prior / «как в прошлый раз» | средний | **fixtures + harness DONE (eval)**; agent wiring (Contextualizer/Intent) — **open**, отдельный PR |
 | 6 | **Lean-cut Intent/Formatter** | dense spec = контракт | высокий | **не начинать** до baseline §2+§3 |
 
 ## §2 Conflict-linter / LLM-judge
@@ -144,10 +144,10 @@ DoD wiring (2026-11-16): Continuity attach → packet → Formatter/Critic; stre
 |---|---|---|
 | A | mark + LLM error after emit | stream rollback невозможен; после mark нужен явный error-frame «предположение не подтвердилось» |
 | B | coerce exhausted path UX | `unknown_fallback:exhausted` есть; Formatter/HITL copy после второго stuck unknown |
-| C | retrieval_empty re-decide | disposition после empty search |
-| D | out_of_scope producer | явный сигнал, не только fixture |
+| C | retrieval_empty re-decide | **policy готов**, hot-path wiring — отдельный PR (не подаётся в `nodes.py` UncertaintySignals) |
+| D | out_of_scope producer | **policy готов**, Intent пока без поля — fixture-only; wiring — отдельный PR |
 
-Осталось soft: C + D; A/B — UX после cutover.
+Осталось soft: C + D (hot-path open); A/B — UX после cutover.
 
 **`DocumentMeta.kind` (2026-11-16):** unrelated к §4. Smoke-тест стрима ошибочно
 подставил `kind="answer"` (путаница с `continuation_kind`); SoT —
@@ -181,11 +181,17 @@ DoD wiring (2026-11-16): Continuity attach → packet → Formatter/Critic; stre
 не используются. Проверка — `test_refine_vs_correction_distinct_transformation`.
 
 SoT: `tests/fixtures/multi_turn/dialogs/` + pins `MULTI_TURN_REVISIONS` (sha256).
-Harness: `observe()` = ContinuityPolicy + UncertaintyPolicy на frozen stubs.
+Harness: `observe()` = ContinuityPolicy + UncertaintyPolicy на frozen stubs
+(**eval only** — не LLM Contextualizer/Intent; wiring open).
 Floor=5 (suite ≥6 after v1.1). Не трогать `DocumentKind` без ADR.
 
+**§4 fixture pin:** `UNCERTAINTY_REVISIONS` + `test_uncertainty_revisions_pin.py`.
+
+**Path-filter workflow:** conflict-linter бежит на PR, касающихся prompts/evals;
+расширение на все PR — после cutover.
+
 **§6 lean-cut:** только **после cutover 2026-12-19** (blocking conflict-linter) +
-стабильный soft rate / noqa запас / §5 fixtures зелёные. До cutover — §4 v1.1 A/B.
+`soft_new` стабилен / noqa запас / §5 fixtures зелёные. До cutover — §4 v1.1 A/B.
 
 ## Вне scope этого плана
 
@@ -196,5 +202,5 @@ Floor=5 (suite ≥6 after v1.1). Не трогать `DocumentKind` без ADR.
 ## DoD аудита (полностью завершён)
 
 1. §1 enforced в CI — **да**
-2. §2 conflict detection с owner’ом, сроком и гейтом — **открыто (due 2026-12-05)**
+2. §2 реализация Done (2026-12-05); cutover **2026-12-19** (coe off AND `--strict`)
 3. §3–§5 — product backlog «живой ассистент»; §6 — только после baseline
