@@ -9,7 +9,7 @@
 | A1.3 pin refresh | `chore/ci-refresh-audit-prompt-revisions` | **push OK; gh auth missing** | open | 34 passed |
 | A2 §4 / A3 §5 | (same `1eea968`) | already on `dev` | **в `dev`** | 42 / 11 previously |
 | B `--strict` pin | `fix/ci-cutover-strict-pin` | **push OK; gh auth missing** | open | **8 passed** |
-| C soft_new | — | — | **ждёт merge B** | — |
+| C soft_new | `fix/ci-soft-metric` | **push; open PR** | open | 16 passed (soft_raw=4, soft_new=0) |
 | D/E/F plan+pins | `docs/cutover-plan-sync-def` | **push OK; gh auth missing** | open | uncertainty pin + multi_turn |
 
 ## Manual PR links (gh not authenticated)
@@ -23,8 +23,8 @@
 | Field | Value |
 |---|---|
 | soft_raw | **4** |
-| soft_triaged | 4 known (`TRIAGED_SOFT_MUST_MAY`) — **not yet subtracted in report** |
-| soft_new | **unknown until Block C** |
+| soft_triaged | **4** (exact `prompt_id`+`kind=must_may`) |
+| soft_new | **0** |
 | noqa | 0 / 5 |
 | hard | 0 |
 
