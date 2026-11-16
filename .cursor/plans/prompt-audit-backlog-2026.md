@@ -91,7 +91,7 @@ implement two-layer conflict-linter + non-blocking CI job
 ### Выход
 
 - CI job `conflict-linter` — **non-blocking** до **2026-12-19**; затем blocking + `--strict`
-- отчёт: scope=same_prompt_only; hard/soft; noqa_count
+- отчёт: scope=same_prompt_only; hard/soft_raw/soft_triaged/soft_new; noqa_count
 - regression: `tests/fixtures/conflicts/` (floor 5+5, сейчас 5+9)
 
 ### DoD §2
@@ -100,6 +100,7 @@ implement two-layer conflict-linter + non-blocking CI job
 - [x] heuristic judge recall ≥ 4/5 (live LLM — later)
 - [x] CI job non-blocking + cutover date in workflow + pin (coe / noqa / fixtures / registry)
 - [x] soft must/may triage записан (таблица выше)
+- [x] soft metric: `soft_new = soft_raw − soft_triaged` (exact signature; #52)
 - [ ] cutover 2026-12-19: `continue-on-error` off **AND** `--strict` + pin flip
   (см. `test_cutover_requires_both_flags`)
 - [ ] cross-prompt layer (после cutover)

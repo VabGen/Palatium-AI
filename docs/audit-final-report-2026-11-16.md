@@ -1,63 +1,57 @@
-# Cutover remediation — status report (2026-11-16)
+# Cutover remediation — status report (2026-11-16, post-merge)
 
 ## Table
 
-| Блок | Ветка | PR | Статус | Тесты |
-|---|---|---|---|---|
-| A0 CTCO prompts | `refactor/prompts-ctco-audit-2026` | merged as `687c8bc` + follow-up | **в `dev`** | 55 passed (clean) |
-| A1 conflict-linter | (landed in `1eea968` mega-merge) | already on `dev` | **в `dev`** | 34 passed + recall 1.0 |
-| A1.3 pin refresh | `chore/ci-refresh-audit-prompt-revisions` | **push OK; gh auth missing** | open | 34 passed |
-| A2 §4 / A3 §5 | (same `1eea968`) | already on `dev` | **в `dev`** | 42 / 11 previously |
-| B `--strict` pin | `fix/ci-cutover-strict-pin` | **push OK; gh auth missing** | open | **8 passed** |
-| C soft_new | `fix/ci-soft-metric` | **push; open PR** | open | 16 passed (soft_raw=4, soft_new=0) |
-| D/E/F plan+pins | `docs/cutover-plan-sync-def` | **push OK; gh auth missing** | open | uncertainty pin + multi_turn |
+| Блок | PR / commit | Статус | Тесты |
+|---|---|---|---|
+| A0 CTCO prompts | `687c8bc` | **в `dev`** | 55 passed |
+| A1 conflict-linter | `1eea968` | **в `dev`** | 34 passed + recall 1.0 |
+| A1.3 pin refresh | #49 `4b94933` | **в `dev`** | AUDIT_PINS ALL_OK |
+| A2 §4 / A3 §5 | `1eea968` | **в `dev`** | 42 / 11 |
+| B `--strict` pin | #50 `7c1102d` | **в `dev`** | 8 passed |
+| C soft_new | #52 `175a24c` | **в `dev`** | 16 passed |
+| D/E/F plan+pins | #51 `3f19dfa` | **в `dev`** | uncertainty + multi_turn pins |
 
-## Manual PR links (gh not authenticated)
-
-- https://github.com/VabGen/Palatium-AI/pull/new/chore/ci-refresh-audit-prompt-revisions
-- https://github.com/VabGen/Palatium-AI/pull/new/fix/ci-cutover-strict-pin
-- https://github.com/VabGen/Palatium-AI/pull/new/docs/cutover-plan-sync-def
-
-## Metrics (last local audit)
+## Metrics (verified on `dev` @ `175a24c`)
 
 | Field | Value |
 |---|---|
 | soft_raw | **4** |
-| soft_triaged | **4** (exact `prompt_id`+`kind=must_may`) |
+| soft_triaged | **4** (`prompt_id` + `kind=must_may`) |
 | soft_new | **0** |
-| noqa | 0 / 5 |
-| hard | 0 |
+| noqa | **0 / 5** |
+| hard | **0** |
+| AUDIT_PROMPT_REVISIONS | **ALL_OK** (15) |
 
 ## `--strict` in pin
 
 | as_of | continue-on-error | `--strict` |
 |---|---|---|
-| 2026-12-18 | required true; live YAML | absent (live) |
-| 2026-12-19 / 20 | required false; canonical post job | present |
-| half-cutover (coe off, no strict) | — | **`test_cutover_requires_both_flags` fails** |
+| 2026-12-18 | true (live YAML) | absent |
+| 2026-12-19 / 20 | false (canonical post job) | present |
+| half-cutover | — | **`test_cutover_requires_both_flags` fails** |
 
-Live workflow still pre-cutover (`continue-on-error: true`, no `--strict`) — correct until 2026-12-19.
+Live workflow remains pre-cutover until **2026-12-19**.
 
 ## §4 v1.1 (D)
 
-**В плане:** `out_of_scope` / `retrieval_empty` — policy готов, hot-path wiring **open** (Intent без поля; `nodes.py` не передаёт сигналы). Не silent-done.
+**В плане:** `out_of_scope` / `retrieval_empty` — policy готов, hot-path wiring **open**
+(Intent без поля; `nodes.py` не передаёт). Отдельный PR на `dev` без новой ветки —
+по запросу.
 
 ## §5
 
-**fixtures + harness DONE (eval)** / **wiring open**.
+**fixtures + harness DONE (eval)** / **wiring open** (Contextualizer/Intent LLM).
 
-## `AUDIT_PROMPT_REVISIONS`
+## Monitoring until cutover
 
-- A0 bodies in `dev`
-- A1.3 coder pin `05fb7a02…` on branch `chore/ci-refresh-audit-prompt-revisions` — **merge needed** for ALL_OK on `origin/dev`
-
-## CI
-
-`gh` / token unavailable → no PR URL / check-run link from agent. Open PRs via links above after `gh auth login`.
+- Watch **`soft_new`** (not `soft_raw`) on conflict-linter artifacts
+- noqa ≤ 5 with headroom
+- FP = new `# noqa: conflict-linter` on legitimate prompts
 
 ## Open questions
 
-1. Merge A1.3 + B + D/E/F (или squash) — нужен `gh auth` или ручные PR.
-2. После merge B → сигнал на **C** (`soft_new`).
-3. Mega-merge `1eea968` смешал A1+A2+A3+web+LLM controls — ревью-граница размыта; отдельные PR уже не развести на истории.
-4. Intent `out_of_scope` producer — нужен ли новый contract field (отдельный ADR/PR) или эвристика из task_kind?
+1. Intent `out_of_scope` — новый contract field или эвристика? (D wiring)
+2. `retrieval_empty` re-decide — когда Researcher empty → Uncertainty? (D)
+3. §5 agent wiring — отдельный трек после baseline soft_new
+4. §6 lean-cut — только после 2026-12-19 + stable soft_new
