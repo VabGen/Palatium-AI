@@ -66,7 +66,7 @@
     "prettier": "^3.9.9",
     "qrcode": "^1.5.4",
     "typescript": "~5.9.2",
-    "typescript-eslint": "^8.71.0",
+    "typescript-eslint": "^8.72.2",
     "vite": "^8.0.0",
     "vitest": "^5.0.3"
   },
