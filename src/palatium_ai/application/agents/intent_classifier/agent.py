@@ -8,6 +8,7 @@ import json
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.application.agents.intent_classifier.config import INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS
 from palatium_ai.application.agents.intent_classifier.parsing import parse_classifier_output
 from palatium_ai.application.agents.intent_classifier.prompts import INTENT_CLASSIFIER_SYSTEM_PROMPT
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -16,7 +17,7 @@ from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.hitl.choice_resume import ChoiceResumePolicy
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -30,10 +31,30 @@ class IntentClassifierAgent(BaseAgent):
         return self._config
 
     def get_required_context_keys(self) -> list[str]:
-        return ["continuation_kind", "has_prior_dialog"]
+        return [
+            "continuation_kind",
+            "has_prior_dialog",
+            "has_thread_files",
+            "attachment_count",
+            "attachment_kinds",
+            "project_agents_md",
+        ]
 
     def get_available_tools(self) -> list[str]:
         return []
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Axis consistency gate after parse coercions (055 residual invariants)."""
+        if not isinstance(output.output, IntentClassifierOutput):
+            return False
+        body = output.output
+        if body.task_kind == "social_conversation" and body.requires_mcp:
+            return False
+        if body.task_kind == "social_conversation" and body.grounding == "required":
+            return False
+        if body.memory_mutation != "none" and not body.memory_text.strip():
+            return False
+        return not (body.residual_ask and body.memory_mutation == "none")
 
     @traceable(name="intent_classifier.run")
     async def run(self, input: AgentInput) -> AgentOutput:
@@ -61,28 +82,37 @@ class IntentClassifierAgent(BaseAgent):
 
         continuation_kind = input.context.get("continuation_kind") or None
         has_prior_dialog = input.context.get("has_prior_dialog", "false").lower() == "true"
-        messages = [
-            ChatMessage(role="system", content=INTENT_CLASSIFIER_SYSTEM_PROMPT),
-            ChatMessage(
-                role="user",
-                content=json.dumps(
+        has_thread_files = input.context.get("has_thread_files", "false").lower() == "true"
+        attachment_count = _int_from_context(input.context.get("attachment_count"))
+        attachment_kinds = tuple(kind for kind in (input.context.get("attachment_kinds") or "").split(",") if kind)
+        assembled = PromptAssemblyPolicy.assemble(
+            PromptAssemblyParts(
+                system_identity=INTENT_CLASSIFIER_SYSTEM_PROMPT,
+                project_agents_md=input.context.get("project_agents_md", ""),
+                user_content=json.dumps(
                     {
                         "text": input.instruction,
                         "continuation_kind": continuation_kind,
                         "has_prior_dialog": has_prior_dialog,
+                        "has_thread_files": has_thread_files,
+                        # Only the axes the model must label — never file content (020).
+                        "attachment_count": attachment_count,
+                        "attachment_kinds": list(attachment_kinds),
                     },
                     ensure_ascii=False,
                 ),
-            ),
-        ]
+            )
+        )
+        messages = list(assembled.messages)
         try:
             completion = await self._harness.call_llm(
                 self._config,
                 messages,
                 response_format="json_object",
+                max_tokens=INTENT_CLASSIFIER_MAX_OUTPUT_TOKENS,
             )
-            parsed = parse_classifier_output(completion.content)
-        except Exception as exc:
+            parsed = parse_classifier_output(completion.content, has_thread_files=has_thread_files)
+        except Exception as exc:  # noqa: BLE001  # returns typed AgentOutput failure; nothing propagates (030.8)
             agent_metrics.record_error(self._config.role, type(exc).__name__)
             return AgentOutput(
                 task_id=input.task_id,
@@ -98,6 +128,15 @@ class IntentClassifierAgent(BaseAgent):
             confidence=parsed.confidence,
             output=parsed,
         )
+
+
+def _int_from_context(raw: object) -> int:
+    """Context values arrive as strings (AgentInput.context is ``dict[str, str]``)."""
+    if isinstance(raw, int):
+        return max(0, raw)
+    if isinstance(raw, str) and raw.strip().lstrip("+-").isdigit():
+        return max(0, int(raw.strip()))
+    return 0
 
 
 def _empty_intent_output() -> IntentClassifierOutput:

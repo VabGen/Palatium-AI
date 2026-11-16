@@ -120,3 +120,27 @@ async def test_mcp_client_call_tool_enforces_configured_timeout(monkeypatch: pyt
     )
     with pytest.raises(MCPJsonRpcError, match="timed out"):
         await client.call_tool(MCPToolCall(name="slow_tool", arguments={}))
+
+
+class _SlowHandshakeClient(_FakeFastMcpClient):
+    """Handshake (``__aenter__``) is slow; ``list_tools`` itself is fast."""
+
+    async def __aenter__(self) -> _SlowHandshakeClient:
+        await asyncio.sleep(0.2)
+        return self
+
+    async def list_tools(self) -> list[object]:
+        return []
+
+
+@pytest.mark.asyncio()
+async def test_mcp_list_tools_timeout_excludes_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
+    """tools/list budget must not burn on Streamable HTTP session open."""
+    monkeypatch.setattr("fastmcp.Client", _SlowHandshakeClient)
+    client = MCPJsonRpcClient(
+        "http://127.0.0.1:8080/",
+        _settings(retry_attempts=1, retry_delay=0.0, timeout_seconds=0.05),  # type: ignore[arg-type]
+        server_name="edms",
+    )
+    tools = await client.list_tools()
+    assert tools == []

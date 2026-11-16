@@ -27,9 +27,7 @@ function docWithIcon(): ContentDocument {
 
 describe('icon render parity (preview ↔ final)', () => {
   it('preview and BlockRenderer both emit SVG, never raw icon tags', () => {
-    const preview = render(
-      <StreamMarkdownPreview markdown={'<icon name="document"/> Report'} />
-    );
+    const preview = render(<StreamMarkdownPreview markdown={'<icon name="document"/> Report'} />);
     const final = render(<BlockRenderer document={docWithIcon()} />);
 
     expect(preview.container.querySelector('svg')).not.toBeNull();

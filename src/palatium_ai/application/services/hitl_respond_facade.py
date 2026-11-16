@@ -14,10 +14,11 @@ from palatium_ai.application.services.hitl_service import (
     HitlCardNotFoundError,
     HitlInvalidActionError,
 )
+from palatium_ai.application.services.intent_turn_helpers import FinalizedTurn
 from palatium_ai.application.services.kill_switch import KillSwitchEngagedError
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
-from palatium_ai.domain.content import ContentDocument, DocumentMeta, ParagraphBlock
+from palatium_ai.domain.content import ContentDocument, DocumentMeta, DocumentRevision, ParagraphBlock
 from palatium_ai.domain.hitl.cards import HITLCardView, HITLResolveRequest, HITLResolveResult
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 
@@ -26,14 +27,21 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.intent_service import IntentService
+    from palatium_ai.application.services.memory_clear_service import MemoryClearService
     from palatium_ai.application.services.memory_consolidate_service import MemoryConsolidateService
     from palatium_ai.application.services.memory_forget_service import MemoryForgetService
     from palatium_ai.application.services.memory_save_service import MemorySaveService
+    from palatium_ai.application.services.memory_verify_service import MemoryVerifyService
+    from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.application.services.skill_manage_service import SkillManageService
 
 _OFF_GRAPH_TOOL_PREFIXES: tuple[str, ...] = (
     "doc-ingest-",
     "mem-save-",
     "mem-forget-",
+    "mem-clear-",
+    "mem-verify-",
+    "skill-manage-",
     "mem-extract-",
     "att-index-",
     "att-restore-",
@@ -45,33 +53,44 @@ def _is_off_graph_tool_task(task_id: str) -> bool:
     return any(task_id.startswith(prefix) for prefix in _OFF_GRAPH_TOOL_PREFIXES)
 
 
+_OFF_GRAPH_DEFAULT_SUMMARY: tuple[tuple[str, str], ...] = (
+    ("att-analyze-", "Анализ вложения завершён (пустой summary)."),
+    ("att-index-", "Вложение проиндексировано в базу знаний."),
+    ("att-restore-", "Вложение восстановлено из карантина."),
+    ("mem-save-", "Запись сохранена в память."),
+    ("mem-forget-", "Запись удалена из памяти."),
+    ("mem-clear-", "Память очищена."),
+    ("mem-verify-", "Верификация записи памяти завершена."),
+    ("skill-manage-", "Управление навыком завершено."),
+    ("mem-extract-", "Извлечение из диалога поставлено в очередь."),
+)
+
+
+def _default_off_graph_summary(task_id: str) -> str | None:
+    for prefix, text in _OFF_GRAPH_DEFAULT_SUMMARY:
+        if task_id.startswith(prefix):
+            return text
+    return None
+
+
 def _formatter_from_off_graph_payload(
     *,
     task_id: str,
     payload: dict[str, object] | None,
+    locale: str = "und",
 ) -> FormatterTaskResult | None:
     """Map off-graph mutation payload into a chat document (analyze summary, etc.)."""
     if not payload:
         return None
-    summary = str(payload.get("summary", "")).strip()
+    summary = str(payload.get("summary", "")).strip() or (_default_off_graph_summary(task_id) or "")
     if not summary:
-        if task_id.startswith("att-analyze-"):
-            summary = "Анализ вложения завершён (пустой summary)."
-        elif task_id.startswith("att-index-"):
-            summary = "Вложение проиндексировано в базу знаний."
-        elif task_id.startswith("att-restore-"):
-            summary = "Вложение восстановлено из карантина."
-        elif task_id.startswith("mem-save-"):
-            summary = "Запись сохранена в память."
-        elif task_id.startswith("mem-forget-"):
-            summary = "Запись удалена из памяти."
-        elif task_id.startswith("mem-extract-"):
-            summary = "Извлечение из диалога поставлено в очередь."
-        else:
-            return None
+        return None
 
+    from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+
+    doc_locale = ReplyLocalePolicy.normalize(locale) or ReplyLocalePolicy.resolve(user_text=summary)
     doc = ContentDocument(
-        locale="ru-RU",
+        locale=doc_locale,
         title=None,
         blocks=(ParagraphBlock(type="paragraph", text=summary[:8000]),),
         meta=DocumentMeta(confidence=1.0, requires_review=False, source_refs=(), interaction="none"),
@@ -89,12 +108,19 @@ def _formatter_from_off_graph_payload(
 
 
 class HitlRespondOutcome(BaseModel):
-    """Resolve result plus optional resumed formatter output."""
+    """Resolve result plus optional resumed formatter output and its diff.
+
+    ``revision`` rides beside ``resumed`` for the same reason it rides beside the SSE
+    ``result`` frame: the diff is a turn fact, not part of the agent contract (030). A
+    client that swaps the document on resume can therefore paint the marks immediately
+    instead of waiting for a hydrate.
+    """
 
     model_config = {"frozen": True}
 
     resolve: HITLResolveResult
     resumed: FormatterTaskResult | None = None
+    revision: DocumentRevision | None = None
 
 
 class HitlRespondFacade:
@@ -108,16 +134,24 @@ class HitlRespondFacade:
         document_ingest_service: DocumentIngestService | None = None,
         memory_save_service: MemorySaveService | None = None,
         memory_forget_service: MemoryForgetService | None = None,
+        memory_clear_service: MemoryClearService | None = None,
+        memory_verify_service: MemoryVerifyService | None = None,
+        skill_manage_service: SkillManageService | None = None,
         memory_consolidate_service: MemoryConsolidateService | None = None,
         attachment_index_service: AttachmentService | None = None,
+        session_service: SessionService | None = None,
     ) -> None:
         self._hitl = hitl_service
         self._intent = intent_service
         self._document_ingest = document_ingest_service
         self._memory_save = memory_save_service
         self._memory_forget = memory_forget_service
+        self._memory_clear = memory_clear_service
+        self._memory_verify = memory_verify_service
+        self._skill_manage = skill_manage_service
         self._memory_consolidate = memory_consolidate_service
         self._attachment_index = attachment_index_service
+        self._session_service = session_service
 
     async def respond(
         self,
@@ -149,7 +183,9 @@ class HitlRespondFacade:
             is_admin=is_admin,
             acting_manager=acting_manager,
         )
-        return HitlRespondOutcome(resolve=resolve, resumed=resumed)
+        if resumed is None:
+            return HitlRespondOutcome(resolve=resolve)
+        return HitlRespondOutcome(resolve=resolve, resumed=resumed.result, revision=resumed.revision)
 
     async def _resume_after_resolve(
         self,
@@ -161,7 +197,7 @@ class HitlRespondFacade:
         actor_org_id: str | None,
         is_admin: bool,
         acting_manager: bool,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         if resolve.replayed:
             return None
         resume_user_id, resume_org_id = self._resume_identity(
@@ -232,6 +268,12 @@ class HitlRespondFacade:
             return self._memory_save
         if task_id.startswith("mem-forget-"):
             return self._memory_forget
+        if task_id.startswith("mem-clear-"):
+            return self._memory_clear
+        if task_id.startswith("mem-verify-"):
+            return self._memory_verify
+        if task_id.startswith("skill-manage-"):
+            return self._skill_manage
         if task_id.startswith("mem-extract-"):
             return self._memory_consolidate
         if task_id.startswith(("att-index-", "att-restore-", "att-analyze-")):
@@ -246,7 +288,7 @@ class HitlRespondFacade:
         resume_user_id: str,
         resume_org_id: str,
         is_admin: bool,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         if card.purpose == "mcp_tool_approval":
             if _is_off_graph_tool_task(card.task_id):
                 payload = await self._resolve_pending_mutation(
@@ -255,10 +297,22 @@ class HitlRespondFacade:
                     task_id=card.task_id,
                 )
                 if body.action_id == "approve":
-                    return _formatter_from_off_graph_payload(
+                    # Off-graph mutation summary is a new one-block answer, never a diff.
+                    from palatium_ai.application.services.session_locale import (
+                        resolve_thread_response_locale,
+                    )
+
+                    locale = await resolve_thread_response_locale(
+                        self._session_service,
+                        thread_id=card.thread_id,
+                        fallback_text=str((payload or {}).get("summary", "")),
+                    )
+                    formatted = _formatter_from_off_graph_payload(
                         task_id=card.task_id,
                         payload=payload,
+                        locale=locale,
                     )
+                    return FinalizedTurn(result=formatted) if formatted is not None else None
                 return None
             return await self._intent.resume_after_tool_approval(
                 thread_id=card.thread_id,
@@ -298,7 +352,7 @@ class HitlRespondFacade:
         resume_user_id: str,
         resume_org_id: str,
         is_admin: bool,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         if body.action_id == "reject":
             return await self._intent.revise_after_quality_reject(
                 thread_id=card.thread_id,
@@ -330,7 +384,7 @@ class HitlRespondFacade:
                 reason=f"resume_failed:{type(cause).__name__}",
             )
             agent_metrics.record_hitl_deny("resume_compensated_deny")
-        except Exception:
+        except Exception:  # noqa: BLE001  # best-effort compensation; the deny is recorded anyway (020)
             agent_metrics.record_hitl_deny("resume_compensate_failed")
 
 

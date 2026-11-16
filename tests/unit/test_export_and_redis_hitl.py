@@ -14,9 +14,11 @@ from palatium_ai.domain.content import (
     ListBlock,
     ListItem,
     ParagraphBlock,
+    StepItem,
+    StepsBlock,
 )
 from palatium_ai.domain.hitl.cards import HITLCardView, default_review_options
-from palatium_ai.infrastructure.export.pdf import ContentDocumentPdfExporter
+from palatium_ai.infrastructure.export.pdf import ContentDocumentPdfExporter, _render_steps
 from palatium_ai.infrastructure.hitl.redis_store import RedisHitlCardStore
 from palatium_ai.presentation.api.routers.documents import _content_disposition
 
@@ -56,6 +58,44 @@ def test_pdf_export_produces_pdf_header() -> None:
     pdf = ContentDocumentPdfExporter().export(_sample_document())
     assert pdf.startswith(b"%PDF")
     assert len(pdf) > 200
+
+
+class _RecordingPdf:
+    """Минимальный двойник FPDF: собирает всё, что экспорт пишет на страницу."""
+
+    l_margin = 10.0
+
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def set_font(self, family: str, *, style: str = "", size: int) -> None:
+        _ = (family, style, size)
+
+    def set_x(self, x: float) -> None:
+        _ = x
+
+    def multi_cell(self, w: float, h: float, text: str, **kwargs: object) -> None:
+        _ = (w, h, kwargs)
+        self.texts.append(text)
+
+    def ln(self, h: float = 1) -> None:
+        _ = h
+
+
+def test_pdf_steps_omit_absent_status() -> None:
+    """Шаг без состояния печатается без «(None)» — экспорт не выдумывает статус."""
+    pdf = _RecordingPdf()
+    block = StepsBlock(
+        items=(
+            StepItem(title="Подготовка", body="Собрать документы"),
+            StepItem(title="Проверка", body="Сверить суммы", status="done"),
+        )
+    )
+
+    assert _render_steps(pdf, "DejaVu", block) is True  # type: ignore[arg-type]
+
+    assert pdf.texts[0] == "1. Подготовка"
+    assert pdf.texts[2] == "2. Проверка (done)"
 
 
 class _FakePipeline:

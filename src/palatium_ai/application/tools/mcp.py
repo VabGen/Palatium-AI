@@ -7,18 +7,26 @@ from __future__ import annotations
 import json
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
+from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.audit import get_audit_logger
 from palatium_ai.domain.mcp.argument_policy import UnsafeToolArgumentError, assert_arguments_safe
 from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolResult
 from palatium_ai.domain.mcp.tool_policy import UnpinnedMcpToolError
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
+from palatium_ai.domain.ports.mcp import McpServerUnavailableError
 
 if TYPE_CHECKING:
     from palatium_ai.domain.ports.mcp import MCPRegistryPort, McpToolCallRecorderPort
+
+#: Closed set of machine reasons on an error outcome (010): a caller maps these to
+#: user-facing copy; free-form strings never cross this boundary.
+MCPToolErrorCode = Literal["server_unavailable"]
+
+logger = get_logger(__name__)
 
 
 class MCPToolCallParams(BaseModel):
@@ -44,6 +52,9 @@ class MCPToolCallOutcome(BaseModel):
 
     content: list[dict[str, object]] = Field(default_factory=list)
     is_error: bool = False
+    #: Machine reason for an error outcome. ``server_unavailable`` means the module
+    #: could not be reached at all — a degradation, not a tool-level failure (035).
+    error_code: MCPToolErrorCode | None = None
 
 
 def _bind_arguments(params: MCPToolCallParams) -> dict[str, object]:
@@ -59,10 +70,11 @@ def _bind_arguments(params: MCPToolCallParams) -> dict[str, object]:
     )
 
 
-def _error_outcome(message: str) -> MCPToolCallOutcome:
+def _error_outcome(message: str, *, code: MCPToolErrorCode | None = None) -> MCPToolCallOutcome:
     return MCPToolCallOutcome(
         content=[{"type": "text", "text": json.dumps({"error": message}, ensure_ascii=False)}],
         is_error=True,
+        error_code=code,
     )
 
 
@@ -91,6 +103,16 @@ async def call_mcp_tool(
         )
     except UnpinnedMcpToolError as exc:
         return _error_outcome(str(exc))
+    except McpServerUnavailableError as exc:
+        # One degradation path for every adapter: circuit open, transport down, or a
+        # misconfigured endpoint all reach the caller as "module unavailable" (035).
+        logger.warning(
+            "mcp.server_unavailable",
+            server_name=params.server_name,
+            tool_name=params.tool_name,
+            error=str(exc),
+        )
+        return _error_outcome(str(exc), code="server_unavailable")
 
     event = "mcp_tool_failed" if result.is_error else "mcp_tool_succeeded"
     await _write_mcp_audit_event(

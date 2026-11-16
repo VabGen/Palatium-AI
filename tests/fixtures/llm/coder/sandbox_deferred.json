@@ -1,0 +1,8 @@
+{
+  "response": {
+    "summary": "Draft: print(sum(range(10))). Execution requires a sandboxed runtime with HITL approval.",
+    "confidence": 0.88,
+    "language": "python",
+    "requires_sandbox_exec": true
+  }
+}

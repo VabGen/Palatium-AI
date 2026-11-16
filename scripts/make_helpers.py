@@ -11,14 +11,14 @@ Python is already the one interpreter every entry point in this repo depends on
 (``scripts/menu.ps1`` and the Makefile both shell out to it), so both helpers live here
 and the Makefile carries no POSIX dependency at all.
 
-Usage:
-  python scripts/make_helpers.py help
-  python scripts/make_helpers.py init-env [--env-file env/.env]
-  python scripts/make_helpers.py env-get LITELLM_MASTER_KEY [--env-file env/.env]
-  python scripts/make_helpers.py require-key LITELLM_MASTER_KEY
-  python scripts/make_helpers.py verify
-  python scripts/make_helpers.py models [--env-file env/.env]
-  python scripts/make_helpers.py chat --model tier-mid [--prompt "Say OK"]
+Usage (stdlib-only, so `--no-project` keeps it out of the project venv):
+  uv run --no-project python scripts/make_helpers.py help
+  uv run --no-project python scripts/make_helpers.py init-env [--env-file env/.env]
+  uv run --no-project python scripts/make_helpers.py env-get LITELLM_MASTER_KEY [--env-file env/.env]
+  uv run --no-project python scripts/make_helpers.py require-key LITELLM_MASTER_KEY
+  uv run --no-project python scripts/make_helpers.py verify
+  uv run --no-project python scripts/make_helpers.py models [--env-file env/.env]
+  uv run --no-project python scripts/make_helpers.py chat --model tier-mid [--prompt "Say OK"]
 """
 
 from __future__ import annotations
@@ -174,9 +174,9 @@ _HEALTH_ENDPOINTS: tuple[tuple[str, str], ...] = (
 def _reachable(url: str, timeout: float = 5.0) -> bool:
     """True for any 2xx; a refused socket is a FAIL, not an exception."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout) as response:
             return 200 <= int(response.status) < 300
-    except Exception:
+    except Exception:  # noqa: BLE001  # a probe reports an unreachable endpoint, it never raises
         return False
 
 
@@ -207,14 +207,14 @@ def _litellm_request(path: str, key: str, payload: dict[str, object] | None = No
     """
     url = f"{_LITELLM_BASE_URL}{path}"
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(  # noqa: S310 - fixed loopback URL, no user input
+    request = urllib.request.Request(
         url,
         data=data,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="GET" if data is None else "POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=120) as response:
             return int(response.status), json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         # `HTTPError` is a `tempfile._TemporaryFileWrapper` subclass: the body lives in a

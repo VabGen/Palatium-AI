@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from datetime import UTC, datetime
 
 import pytest
@@ -45,7 +47,7 @@ def test_promotion_policy_requires_access_and_importance() -> None:
 
 
 def test_preference_promotes_without_access_bumps() -> None:
-    """Identity prefs are durable on write — Neo4j must not wait for reconsolidation."""
+    """Verified identity prefs are durable on write — Neo4j must not wait for reconsolidation."""
     thresholds = PromotionThresholds(min_access_frequency=3, min_importance=0.7)
     pref = PromotionCandidate(
         namespace=("user", "u1"),
@@ -56,11 +58,14 @@ def test_preference_promotes_without_access_bumps() -> None:
         access_frequency=0,
         user_id="u1",
         confidence=0.95,
+        trust="verified",
     )
     assert PromotionPolicy.required_access_frequency("preference", thresholds=thresholds) == 0
     assert PromotionPolicy.should_promote(pref, thresholds=thresholds) is True
-    fact_same = pref.model_copy(update={"kind": "fact"})
+    fact_same = pref.model_copy(update={"kind": "fact", "trust": "verified"})
     assert PromotionPolicy.should_promote(fact_same, thresholds=thresholds) is False
+    inferred_pref = pref.model_copy(update={"trust": "inferred"})
+    assert PromotionPolicy.should_promote(inferred_pref, thresholds=thresholds) is False
 
 
 def test_promotion_policy_rejects_blank_text() -> None:
@@ -125,6 +130,8 @@ async def test_promotion_batch_upserts_preference_without_bumps() -> None:
             "kind": "preference",
             "confidence": 0.95,
             "importance": 0.9,
+            "origin": "user_hitl",
+            "trust": "verified",
         },
     )
 
@@ -145,3 +152,130 @@ async def test_promotion_batch_upserts_preference_without_bumps() -> None:
     promoted_again = await service.run_batch(user_id="alice", limit=8)
     assert promoted_again == 0
     assert len(graph.facts) == 1
+
+
+@pytest.mark.asyncio()
+async def test_two_promoters_do_not_write_the_same_candidate_twice() -> None:
+    """F6 regression: read-then-write promote needs a claim, not just a candidate list.
+
+    Both services see the same candidate (the listing is not a reservation). Without a
+    claim each one upserts, and two active ``:MemoryFact`` nodes with one ``node_id``
+    appear on the stand. With the claim the loser skips, so one graph write happens.
+    """
+    port = InMemoryMemoryPort()
+    graph = InMemoryGraphWritePort()
+    ns = user_namespace("alice")
+    await port.put(
+        namespace=ns,
+        key="pref-name",
+        value={
+            "text": "User's name is Gennady",
+            "kind": "preference",
+            "confidence": 0.95,
+            "importance": 0.9,
+            "origin": "user_hitl",
+            "trust": "verified",
+        },
+    )
+    first = MemoryPromotionService(memory=port, graph_write=graph)
+    second = MemoryPromotionService(memory=port, graph_write=graph)
+
+    promoted = await asyncio.gather(
+        first.run_batch(user_id="alice", limit=8),
+        second.run_batch(user_id="alice", limit=8),
+    )
+
+    assert sum(promoted) == 1
+    assert len(graph.facts) == 1
+
+
+@pytest.mark.asyncio()
+async def test_claim_is_exclusive_and_released_after_a_skip() -> None:
+    port = InMemoryMemoryPort()
+    ns = user_namespace("alice")
+    await port.put(namespace=ns, key="k1", value={"text": "fact", "kind": "fact", "confidence": 0.9})
+
+    assert await port.claim_promotion(namespace=ns, key="k1") is True
+    assert await port.claim_promotion(namespace=ns, key="k1") is False
+    # A held claim also hides the row from the candidate listing.
+    assert await port.list_promotion_candidates(user_id="alice", min_access_frequency=0, min_importance=0.0) == []
+
+    assert await port.release_promotion(namespace=ns, key="k1") is True
+    assert await port.claim_promotion(namespace=ns, key="k1") is True
+
+
+@pytest.mark.asyncio()
+async def test_expired_claim_lease_is_reclaimable() -> None:
+    """A crashed promoter must not park the candidate forever."""
+    from datetime import timedelta
+
+    port = InMemoryMemoryPort()
+    ns = user_namespace("alice")
+    await port.put(namespace=ns, key="k1", value={"text": "fact", "kind": "fact", "confidence": 0.9})
+    assert await port.claim_promotion(namespace=ns, key="k1", lease_seconds=1) is True
+
+    # Age the claim past its lease instead of sleeping a second in the test.
+    port._meta[(ns, "k1")].promote_claimed_at = datetime.now(UTC) - timedelta(seconds=5)
+
+    assert await port.claim_promotion(namespace=ns, key="k1", lease_seconds=1) is True
+
+
+@pytest.mark.asyncio()
+async def test_rewritten_content_becomes_a_promotion_candidate_again() -> None:
+    """F5 regression: promoted_at follows the content, not the row.
+
+    Keeping the stamp after a rewrite is what leaves the graph on the first statement
+    forever: the listing filters ``promoted_at IS NULL`` and never sees the new text.
+    """
+    port = InMemoryMemoryPort()
+    graph = InMemoryGraphWritePort()
+    ns = user_namespace("alice")
+    await port.put(
+        namespace=ns,
+        key="db-port",
+        value={
+            "text": "port is 5432",
+            "kind": "preference",
+            "confidence": 0.9,
+            "importance": 0.9,
+            "origin": "user_hitl",
+            "trust": "verified",
+        },
+    )
+    service = MemoryPromotionService(memory=port, graph_write=graph)
+    assert await service.run_batch(user_id="alice", limit=8) == 1
+    assert await service.run_batch(user_id="alice", limit=8) == 0
+
+    await port.put(
+        namespace=ns,
+        key="db-port",
+        value={
+            "text": "port is 5433",
+            "kind": "preference",
+            "confidence": 0.9,
+            "importance": 0.9,
+            "origin": "user_hitl",
+            "trust": "verified",
+        },
+    )
+
+    assert await service.run_batch(user_id="alice", limit=8) == 1
+    active = graph.get_active_fact(user_id="alice", entry_key="db-port")
+    assert active is not None
+    assert active.text == "port is 5433"
+
+
+@pytest.mark.asyncio()
+async def test_unchanged_content_keeps_the_promotion_marker() -> None:
+    """A retried extract of the same sentence must not re-run promote."""
+    port = InMemoryMemoryPort()
+    ns = user_namespace("alice")
+    value = {"text": "port is 5433", "kind": "preference", "confidence": 0.9, "importance": 0.9}
+    await port.put(namespace=ns, key="db-port", value=value)
+    assert await port.claim_promotion(namespace=ns, key="db-port") is True
+    assert await port.mark_promoted(namespace=ns, key="db-port") is True
+
+    # Only provenance changed (another task id), the promoted payload is identical.
+    await port.put(namespace=ns, key="db-port", value={**value, "task_id": "other-task"})
+
+    assert await port.list_promotion_candidates(user_id="alice", min_access_frequency=0, min_importance=0.0) == []

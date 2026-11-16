@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from palatium_ai.domain.memory.pii import mask_pii_in_text, text_looks_like_pii
+from palatium_ai.core.security.pii import PiiKind, scan_pii, scrub_from_scan
 
 AttachmentPiiPolicyMode = Literal["tag", "mask", "reject"]
 
@@ -28,6 +28,8 @@ class AttachmentPiiDecision(BaseModel):
     #: When ``mask``, the redacted body for ``safe_text``; otherwise unused.
     masked_text: str | None = Field(default=None, max_length=500_000)
     refuse: bool = False
+    #: Detected classes — makes the intake gate observable without the value (040).
+    kinds: tuple[PiiKind, ...] = ()
 
 
 def apply_attachment_pii_policy(
@@ -36,19 +38,20 @@ def apply_attachment_pii_policy(
     mode: AttachmentPiiPolicyMode = "tag",
 ) -> AttachmentPiiDecision:
     """Classify extracted text and optionally mask or refuse (020, 060)."""
-    flagged = text_looks_like_pii(text)
-    if not flagged:
+    scan = scan_pii(text, profile="strict")
+    if not scan.found:
         return AttachmentPiiDecision(contains_pii=False, mode=mode, refuse=False)
     if mode == "reject":
-        return AttachmentPiiDecision(contains_pii=True, mode=mode, refuse=True)
+        return AttachmentPiiDecision(contains_pii=True, mode=mode, refuse=True, kinds=scan.kinds)
     if mode == "mask":
         return AttachmentPiiDecision(
             contains_pii=True,
             mode=mode,
-            masked_text=mask_pii_in_text(text),
+            masked_text=scrub_from_scan(text, scan, style="bracket"),
             refuse=False,
+            kinds=scan.kinds,
         )
-    return AttachmentPiiDecision(contains_pii=True, mode="tag", refuse=False)
+    return AttachmentPiiDecision(contains_pii=True, mode="tag", refuse=False, kinds=scan.kinds)
 
 
 __all__ = [

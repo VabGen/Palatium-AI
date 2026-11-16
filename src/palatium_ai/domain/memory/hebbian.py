@@ -1,6 +1,6 @@
 # src/palatium_ai/domain/memory/hebbian.py
 
-"""Hebbian edge weight bump for promote batch (Wave M8, eval-gated)."""
+"""Hebbian edge weight bump for promote batch (Wave M8, no consumer yet)."""
 
 from __future__ import annotations
 

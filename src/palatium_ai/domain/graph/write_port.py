@@ -62,7 +62,12 @@ class GraphWritePort(Protocol):
         ...
 
     async def bump_hebbian_on_entry(self, *, user_id: str, entry_key: str) -> float:
-        """Reinforce Hebbian weight on the active fact; return new weight (0 if none)."""
+        """Reinforce Hebbian weight on the active fact; return new weight (0 if none).
+
+        Kept as a capability, not a switch: no ranker reads the weight yet, so nothing in
+        production calls this (M9 §9.2). Wiring it into Select changes the importance
+        formula (060.2) and needs its own eval + design before a knob returns.
+        """
         ...
 
     async def list_active_facts(

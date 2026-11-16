@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {
+      "id": "ctx-researcher-present-01",
+      "agent": "researcher",
+      "scenario": "present_zenith",
+      "input": { "user_text": "What is the internal codename of the delivery program mentioned in context?" },
+      "context": {
+        "handoff": "Program «проект Зенит» owns release train Q3 for client ORION-7. Budget code ZN-1944."
+      },
+      "expected": {
+        "must_contain": ["Зенит", "ORION-7"],
+        "must_not_contain": ["Apollo", "ACME-9"]
+      },
+      "tags": ["researcher", "context", "present"]
+    },
+    {
+      "id": "ctx-researcher-absent-01",
+      "agent": "researcher",
+      "scenario": "absent_zenith",
+      "input": { "user_text": "What is the budget code for проект Зенит?" },
+      "context": { "handoff": "No delivery programs are listed in this handoff." },
+      "expected": {
+        "must_contain": ["нет данных"],
+        "must_not_contain": ["ZN-1944", "ORION-7"]
+      },
+      "tags": ["researcher", "context", "absent"]
+    }
+  ]
+}

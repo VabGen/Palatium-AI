@@ -21,11 +21,11 @@ from typing import TYPE_CHECKING
 import structlog
 
 from palatium_ai.core.config import get_settings
+from palatium_ai.core.config.observability import ObservabilityConfig
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.redaction import hash8
 
 if TYPE_CHECKING:
-    from palatium_ai.core.config.observability import ObservabilityConfig
     from palatium_ai.core.config.settings import Settings
 
 logger = structlog.get_logger(__name__)
@@ -79,4 +79,6 @@ def _observability(
 ) -> ObservabilityConfig:
     if settings is None:
         return get_settings().observability
-    return getattr(settings, "observability", settings)  # type: ignore[return-value]
+    if isinstance(settings, ObservabilityConfig):
+        return settings
+    return settings.observability

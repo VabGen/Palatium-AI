@@ -79,7 +79,9 @@ async def test_memory_extract_approve_runs_worker_then_search() -> None:
             actor_org_id=_ORG,
             is_admin=False,
         )
-        assert outcome.resumed is None
+        # Off-graph enqueue: ``resumed`` carries the formatter summary, the graph is untouched.
+        assert outcome.resumed is not None
+        assert outcome.resumed.task_id == card.task_id
         intent.resume_after_tool_approval.assert_not_awaited()
 
         payload: dict[str, object] = {"hit_count": 0}

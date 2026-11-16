@@ -21,7 +21,13 @@ venv.bak
 **/__pycache__
 **/*.py[cod]
 **/*.egg-info
+**/node_modules
+**/.playwright-cli
+**/test-results
+**/playwright-report
 dist
+!web/dist/
+!web/dist/**
 build
 
 # Секреты и локальные env (в образ не кладём)

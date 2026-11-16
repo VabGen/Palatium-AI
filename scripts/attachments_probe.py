@@ -54,6 +54,9 @@ _DEFAULT_API_URL = "http://127.0.0.1:8000"
 #: creates its own bucket at startup, but Langfuse does not, so a failed bootstrap
 #: leaves ``langfuse`` missing and v3 ingestion stays *silently* empty (020).
 _SILO_INIT_SERVICE = "silo-init"
+#: The promote/retention loop. Part of the default launch, but on its own profile, so its
+#: absence is invisible from API behaviour and has to be probed explicitly (060).
+_MEMORY_JOBS_SERVICE = "memory-consolidate"
 
 # Compose files a full-stack `up` must name explicitly. `docker-compose.override.yml`
 # carries the dev profile split (api behind docker-api, MCP behind docker-mcp), and
@@ -189,6 +192,9 @@ def _checks(
         checks.append(lambda: check_clamav(clamav_host, clamav_port))
     if not skip_api:
         checks.append(lambda: check_api(api_url))
+    # Always: the promote loop is part of the default stack, and `--skip-s3` (rebuild-app)
+    # recreates the worker too, so its verdict is never stale.
+    checks.append(lambda: check_memory_jobs(env_file))
     return checks
 
 
@@ -226,11 +232,11 @@ def _health_url(endpoint: str) -> str:
 def _http_ok(url: str, *, timeout: float = 5.0) -> tuple[bool, str]:
     """GET a URL and report whether it answered 2xx; never raises for a refused socket."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout) as response:
             return 200 <= int(response.status) < 300, f"HTTP {response.status}"
     except urllib.error.HTTPError as exc:
         return False, f"HTTP {exc.code}"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # a probe reports an unreachable endpoint, it never raises
         return False, type(exc).__name__
 
 
@@ -365,6 +371,48 @@ def check_silo_bootstrap(env_file: Path) -> Probe:
     )
 
 
+def check_memory_jobs(env_file: Path) -> Probe:
+    """Verify the out-of-band consolidation loop is part of the launch.
+
+    ``memory-consolidate`` is the only path medium → long-term graph (060), and it is
+    out-of-band: nothing in the API needs it, so a stack without it reports healthy while
+    L3 stays empty and ``recall_for_thread`` never sees a promoted fact. The absence is
+    therefore invisible from behaviour and has to be stated — the same class of silent
+    degradation as an empty Langfuse bucket above.
+    """
+    name = _MEMORY_JOBS_SERVICE
+    queried, record = _compose_service_state(env_file, name)
+    if not queried:
+        return Probe(name=name, ok=True, detail="not checked: docker compose unavailable")
+    if record is None:
+        return Probe(
+            name=name,
+            ok=False,
+            detail=f"{name} not created (profile `memory-jobs` was not part of this launch)",
+            hint=(
+                "promote never runs without it, so long-term memory stays empty: launch with "
+                "`make up` (the profile is part of the default stack), or add the worker with "
+                "`docker compose --profile memory-jobs up -d memory-consolidate`"
+            ),
+        )
+    state = str(record.get("State", "")).strip().lower()
+    status = str(record.get("Status", "")).strip() or state
+    container = str(record.get("Name") or record.get("Names") or name)
+    if state == "running":
+        return Probe(name=name, ok=True, detail=f"{container} -> running (promote loop)")
+    # Restarting/created is "not yet" for `--wait`, an exited worker is a real failure.
+    return Probe(
+        name=name,
+        ok=False,
+        detail=f"{container} -> {status}",
+        hint=(
+            "the promote/retention loop is not running: read "
+            "`docker compose --profile memory-jobs logs memory-consolidate`; "
+            "GRAPHITI_NEO4J_PASSWORD and GRAPH_QUERY_BACKEND=neo4j are required"
+        ),
+    )
+
+
 def check_clamav(host: str, port: int, *, timeout: float = 5.0) -> Probe:
     """Send the documented ``zPING`` command and require ``PONG`` back.
 
@@ -483,8 +531,14 @@ def full_launch(image: str) -> FullLaunch:
     ``attachments-s3`` profile and its overlay together — the API can never be pointed at
     a store that was not started. Both entry points (Makefile, menu) expand this same
     rule so they cannot drift (010), which is why it lives here and not in a shell.
+
+    ``memory-jobs`` is part of the default launch, not an extra profile: promote is the
+    *only* path from medium to the long-term graph (060), so a stack without the loop
+    keeps answering from ``memory.entries`` while L3 stays silently empty — the tier
+    looks implemented and dead at the same time. The loop is out-of-band (interval-based,
+    dry-run retention), so it does not sit on the request hot path.
     """
-    profiles = ["docker-mcp", "docker-api", "attachments"]
+    profiles = ["docker-mcp", "docker-api", "attachments", "memory-jobs"]
     compose_files = [_BASE_COMPOSE_FILE, _PROFILE_COMPOSE_FILE, _AV_COMPOSE_FILE]
     probe = preflight_image(image)
     if probe.ok:
@@ -574,8 +628,7 @@ def _image_ocr_lines(env: dict[str, str]) -> list[str]:
     return lines
 
 
-def main() -> int:
-    """Run the requested probes and print a machine-readable report."""
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--env-file", default=_DEFAULT_ENV_FILE, help=f"default: {_DEFAULT_ENV_FILE}")
     parser.add_argument("--preflight-image", action="store_true", help="check the S3 image is pullable")
@@ -597,47 +650,35 @@ def main() -> int:
         help="re-check probes that are not ready yet, for up to SECONDS (0 = a single pass)",
     )
     parser.add_argument("--json", action="store_true", help="also dump the report as JSON")
-    args = parser.parse_args()
+    return parser
 
-    env = _read_env_file(Path(args.env_file))
-    image = resolve_store_image(Path(args.env_file))
+
+def _warn_legacy_image_override(env: dict[str, str]) -> None:
+    """Report an ignored ``ATTACHMENTS_MINIO_IMAGE``; silently dropping it would be worse."""
     if env.get("ATTACHMENTS_MINIO_IMAGE"):
-        # Silently dropping an operator's setting would be worse than the drift it causes.
         print(
             "warn: ATTACHMENTS_MINIO_IMAGE is set but ignored — the store image is pinned "
             "by tag+digest in docker-compose.yml; change it there (050)",
             file=sys.stderr,
         )
 
-    if args.mode:
-        # Purely informational: no network beyond the S3 preflight (only for --full), no
-        # container, non-fatal exit code — it answers "will the API actually use the
-        # containers I just started?".
-        if args.full:
-            plan = full_launch(image)
-            extra = [f"note: S3 profile+overlay skipped — {plan.s3_skip_reason}"] if plan.s3_skip_reason else []
-            lines = mode_report(env, blob=plan.blob_backend, scanner=plan.scanner_backend, extra=extra)
-        else:
-            lines = mode_report(
-                env,
-                blob=env.get("ATTACHMENTS_BLOB_BACKEND") or _SETTINGS_DEFAULT_BLOB_BACKEND,
-                scanner=env.get("ATTACHMENTS_SCANNER_BACKEND") or _SETTINGS_DEFAULT_SCANNER_BACKEND,
-            )
-        for line in lines:
-            print(line)
-        return 0
 
-    if args.compose_args:
-        # stdout is captured by `$(shell ...)` in the Makefile and by the menu, so the
-        # flags stay alone on stdout while the human-readable reason for skipping S3
-        # goes to stderr.
-        plan = full_launch(image)
-        if plan.s3_skip_reason:
-            print(f"S3 profile skipped: {plan.s3_skip_reason}", file=sys.stderr)
-        print(" ".join(plan.compose_args()))
-        return 0
+def _mode_lines(*, full: bool, env: dict[str, str], image: str) -> list[str]:
+    """The backends the API will actually use, for a plain ``up`` or for ``--full``."""
+    if not full:
+        return mode_report(
+            env,
+            blob=env.get("ATTACHMENTS_BLOB_BACKEND") or _SETTINGS_DEFAULT_BLOB_BACKEND,
+            scanner=env.get("ATTACHMENTS_SCANNER_BACKEND") or _SETTINGS_DEFAULT_SCANNER_BACKEND,
+        )
+    plan = full_launch(image)
+    extra = [f"note: S3 profile+overlay skipped — {plan.s3_skip_reason}"] if plan.s3_skip_reason else []
+    return mode_report(env, blob=plan.blob_backend, scanner=plan.scanner_backend, extra=extra)
 
-    report = run_until_ready(
+
+def _run_probes(args: argparse.Namespace, env: dict[str, str], image: str) -> Report:
+    """Run the probes this invocation asks for, honouring ``--wait``."""
+    return run_until_ready(
         _checks(
             env_file=Path(args.env_file),
             image=image,
@@ -655,13 +696,45 @@ def main() -> int:
         announce=lambda message: print(message, file=sys.stderr),
     )
 
-    if args.json:
+
+def _print_report(report: Report, *, as_json: bool) -> None:
+    if as_json:
         print(json.dumps(report.as_dict(), indent=2))
     for probe in report.probes:
         marker = "OK  " if probe.ok else "FAIL"
         print(f"{marker} {probe.name}: {probe.detail}")
         if probe.hint:
             print(f"     hint: {probe.hint}")
+
+
+def main() -> int:
+    """Run the requested probes and print a machine-readable report."""
+    args = _build_parser().parse_args()
+
+    env = _read_env_file(Path(args.env_file))
+    image = resolve_store_image(Path(args.env_file))
+    _warn_legacy_image_override(env)
+
+    if args.mode:
+        # Purely informational: no network beyond the S3 preflight (only for --full), no
+        # container, non-fatal exit code — it answers "will the API actually use the
+        # containers I just started?".
+        for line in _mode_lines(full=args.full, env=env, image=image):
+            print(line)
+        return 0
+
+    if args.compose_args:
+        # stdout is captured by `$(shell ...)` in the Makefile and by the menu, so the
+        # flags stay alone on stdout while the human-readable reason for skipping S3
+        # goes to stderr.
+        plan = full_launch(image)
+        if plan.s3_skip_reason:
+            print(f"S3 profile skipped: {plan.s3_skip_reason}", file=sys.stderr)
+        print(" ".join(plan.compose_args()))
+        return 0
+
+    report = _run_probes(args, env, image)
+    _print_report(report, as_json=args.json)
 
     if report.failed:
         print("attachments_probe: FAILED")

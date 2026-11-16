@@ -45,14 +45,14 @@ def _request_json(
         headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(  # noqa: S310
+    req = urllib.request.Request(
         _http_url(url),
         data=data,
         headers=headers,
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             status = int(resp.status)
     except urllib.error.HTTPError as exc:
@@ -207,7 +207,7 @@ def main() -> int:
             )
         )
         return 0
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # smoke script reports FAILED and exits 1
         print(f"smoke_memory_hitl FAILED: {exc}", file=sys.stderr)
         return 1
 

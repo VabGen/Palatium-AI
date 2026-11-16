@@ -13,12 +13,15 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
 from palatium_ai.domain.memory.forget_payload import MemoryForgetPayload
+from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
     from palatium_ai.application.services.hitl_service import HitlService
+    from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
+    from palatium_ai.domain.memory.ports import MemoryPort
     from palatium_ai.domain.ports.mcp import MCPRegistryPort, McpToolCallRecorderPort
 
 logger = get_logger(__name__)
@@ -41,11 +44,15 @@ class MemoryForgetService:
         mcp_registry: MCPRegistryPort,
         redis_client: Redis | None = None,
         mcp_tool_call_repository: McpToolCallRecorderPort | None = None,
+        memory_port: MemoryPort | None = None,
+        scratchpad: SessionScratchpadService | None = None,
     ) -> None:
         self._hitl = hitl_service
         self._mcp_registry = mcp_registry
         self._redis = redis_client
         self._mcp_tool_call_repository = mcp_tool_call_repository
+        self._memory_port = memory_port
+        self._scratchpad = scratchpad
         self._memory_pending: dict[str, MemoryForgetPayload] = {}
 
     @traceable(name="memory_forget.request")
@@ -115,12 +122,15 @@ class MemoryForgetService:
 
     @traceable(name="memory_forget.execute_after_approval")
     async def execute_after_approval(self, *, task_id: str) -> dict[str, object]:
-        """Run platform.forget_memory after HITL approve."""
+        """Run platform.forget_memory after HITL approve, then clear the thread cache."""
         payload = await self._load_pending(task_id)
         if payload is None:
             msg = f"pending memory forget missing for task_id={task_id}"
             raise ValueError(msg)
 
+        # Read the subject before deleting: clearing the thread scratchpad needs the
+        # text, and after the MCP call the medium entry is gone (060 fan-out).
+        subject = await self._entry_text(payload)
         outcome = await call_mcp_tool(
             MCPToolCallParams(
                 server_name=_PLATFORM_SERVER,
@@ -144,18 +154,50 @@ class MemoryForgetService:
         if outcome.is_error:
             msg = "forget_memory MCP call failed"
             raise RuntimeError(msg)
+        cleared = await self._clear_thread_cache(payload=payload, subject=subject)
         logger.info(
             "memory_forget.committed",
             task_id=task_id,
             thread_id=payload.thread_id,
             entry_key=payload.entry_key,
+            scratchpad_cleared=len(cleared),
         )
         return {
             "content": outcome.content,
             "entry_key": payload.entry_key,
             "namespace_kind": payload.namespace_kind,
             "scope_id": payload.scope_id,
+            "scratchpad_cleared": len(cleared),
         }
+
+    async def _entry_text(self, payload: MemoryForgetPayload) -> str:
+        """Best-effort subject lookup; an unknown subject skips the cache purge."""
+        if self._memory_port is None:
+            return ""
+        try:
+            namespace = _namespace_for(payload)
+            entry = await self._memory_port.get(namespace=namespace, key=payload.entry_key)
+        except Exception as exc:  # noqa: BLE001  # read-ahead for cache purge; forget itself must proceed (060)
+            logger.warning("memory_forget.subject_lookup_failed", entry_key=payload.entry_key[:128], error=str(exc))
+            return ""
+        if entry is None:
+            return ""
+        return str(entry.get("text") or "").strip()
+
+    async def _clear_thread_cache(self, *, payload: MemoryForgetPayload, subject: str) -> tuple[str, ...]:
+        """Drop pinned scratchpad notes about the forgotten subject (060: forget fans out).
+
+        Medium (`memory.entries`) and L4 (Neo4j) are cleared by the MCP tool; the
+        scratchpad is a thread-local cache injected ahead of them, so a stale pin
+        would keep answering the deleted fact inside the same thread.
+        """
+        if self._scratchpad is None or not subject:
+            return ()
+        try:
+            return await self._scratchpad.forget_matching(thread_id=payload.thread_id, subject=subject)
+        except Exception as exc:  # noqa: BLE001  # cache cleanup must not fake a failed forget (060)
+            logger.warning("memory_forget.scratchpad_clear_failed", thread_id=payload.thread_id, error=str(exc))
+            return ()
 
     async def discard_pending(self, *, task_id: str) -> None:
         await self._delete_pending(task_id)
@@ -183,3 +225,12 @@ class MemoryForgetService:
         self._memory_pending.pop(task_id, None)
         if self._redis is not None:
             await self._redis.delete(f"{_PENDING_PREFIX}{task_id}")
+
+
+def _namespace_for(payload: MemoryForgetPayload) -> tuple[str, ...]:
+    """Target namespace from the validated payload (domain helpers, not MCP internals)."""
+    if payload.namespace_kind == "user":
+        return user_namespace(payload.scope_id)
+    if payload.namespace_kind == "org":
+        return org_namespace(payload.scope_id)
+    return thread_namespace(payload.scope_id)

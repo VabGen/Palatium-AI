@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from palatium_ai.domain.policies.types import ExecutionStrategy, ModelTier
+from palatium_ai.domain.policies.composer_mode import ComposerModePolicy
+from palatium_ai.domain.policies.types import ComposerMode, ExecutionStrategy, ModelTier
 
 
 class ResearcherTierDecision(BaseModel):
@@ -23,10 +24,21 @@ class ResearcherTierDecision(BaseModel):
 
 
 class ResearcherTierPolicy:
-    """Pure domain policy: execution strategy → Researcher LLM tier."""
+    """Pure domain policy: execution strategy (+ optional composer mode) → Researcher LLM tier."""
 
     @classmethod
-    def decide(cls, *, strategy: ExecutionStrategy | str | None) -> ResearcherTierDecision:
+    def decide(
+        cls,
+        *,
+        strategy: ExecutionStrategy | str | None,
+        composer_mode: ComposerMode | str | None = None,
+    ) -> ResearcherTierDecision:
+        override = ComposerModePolicy.researcher_tier_override(composer_mode)
+        if override is not None:
+            return ResearcherTierDecision(
+                model_tier=override,
+                reason="composer_mode:deep_think",
+            )
         name = (strategy or "").strip()
         if name == "reason_only":
             return ResearcherTierDecision(model_tier="small", reason="strategy:reason_only")

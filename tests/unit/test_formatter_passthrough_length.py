@@ -77,7 +77,8 @@ def test_untrusted_envelope_is_not_plain_prose() -> None:
     assert result is None
 
 
-def test_structured_answer_inside_char_limit_keeps_formatter_llm() -> None:
+def test_structured_answer_inside_char_limit_preserves_worker_shape() -> None:
+    """Structured GFM must not go through brand LLM (layout-shift rewrite)."""
     lines = ["План:"] + [f"- пункт {index}: проверить документ и срок" for index in range(1, 9)]
     structured = "\n".join(lines)
     assert 200 <= len(structured) <= FORMATTER_PASSTHROUGH_MAX_CHARS
@@ -88,4 +89,6 @@ def test_structured_answer_inside_char_limit_keeps_formatter_llm() -> None:
         selected_strategy="reason_only",
         worker_confidence=0.9,
     )
-    assert result is None
+    assert result is not None
+    assert result.output is not None
+    assert "пункт 1" in result.output.plain_text()

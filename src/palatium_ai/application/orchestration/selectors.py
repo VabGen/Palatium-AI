@@ -6,17 +6,30 @@ from __future__ import annotations
 
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.context_packet_factory import ContextPacketFactory
+from palatium_ai.core.logging import get_logger
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.execution import ExecutionStrategy
 from palatium_ai.domain.agents.intent import IntentTaskResult, TaskKind
 from palatium_ai.domain.agents.supervisor import SupervisorTaskResult, WorkerRoute
+from palatium_ai.domain.attachments.context import AttachmentContextBlock, AttachmentTurnContext
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.contextualizer import ContinuationKind
 from palatium_ai.domain.memory.tool_output import compress_worker_context
-from palatium_ai.domain.policies import ContinuityPolicy, EffectiveRoutingIntent, budget_untrusted_text
+from palatium_ai.domain.policies import (
+    RESPONSE_SHAPE_DEFAULT,
+    ContinuityPolicy,
+    EffectiveRoutingIntent,
+    GroundingMode,
+    ResponseShape,
+    budget_untrusted_text,
+)
+from palatium_ai.domain.policies.attachment_focus import AttachmentPromptPolicy
+from palatium_ai.domain.policies.types import ATTACHMENT_FOCUS_DEFAULT, AttachmentFocus, TransformationKind
 
 _CONTEXT_PACKET_FACTORY = ContextPacketFactory()
+logger = get_logger(__name__)
 
 
 def _prompt_budget(state: AgentGraphState) -> MemoryPromptBudget:
@@ -66,11 +79,42 @@ def memory_hints(state: AgentGraphState) -> tuple[str, ...]:
 
     Возвращает пустой tuple, если recall отсутствует или не содержит подсказок.
     Используется в node_inputs для Formatter / Researcher / ContextWeaver.
+    W10 2b: drops scratchpad/medium claims the dialog already corrected.
     """
     recall = state.get("memory_recall")
     if recall is None:
         return ()
-    return tuple(getattr(recall, "hint_texts", ()) or ())
+    hints = tuple(getattr(recall, "hint_texts", ()) or ())
+    window = state.get("dialog_window")
+    turns = getattr(window, "turns", None) if window is not None else None
+    if not turns:
+        return hints
+    from palatium_ai.domain.policies.dialog_correction import DialogCorrectionPolicy
+
+    return DialogCorrectionPolicy.filter_superseded_texts(hints, turns)
+
+
+def memory_hint_kinds(state: AgentGraphState) -> tuple[str, ...]:
+    """MemoryType per hint, aligned with ``memory_hints`` (060).
+
+    Consumers that personalise (Formatter) must tell a preference from a pinned ask;
+    empty means "kind unknown", which keeps the legacy first-N slice.
+    """
+    recall = state.get("memory_recall")
+    if recall is None:
+        return ()
+    hint_items = getattr(recall, "hint_items", None)
+    if not callable(hint_items):
+        return ()
+    items = tuple((str(text), str(kind)) for text, kind in hint_items())
+    window = state.get("dialog_window")
+    turns = getattr(window, "turns", None) if window is not None else None
+    if not turns:
+        return tuple(kind for _text, kind in items)
+    from palatium_ai.domain.policies.dialog_correction import DialogCorrectionPolicy
+
+    kept = set(DialogCorrectionPolicy.filter_superseded_texts(tuple(t for t, _ in items), turns))
+    return tuple(kind for text, kind in items if text.strip() in kept)
 
 
 def resolved_response_locale(state: AgentGraphState) -> str:
@@ -102,9 +146,49 @@ def ensure_routing_intent(state: AgentGraphState) -> EffectiveRoutingIntent:
         contextualizer=ctx.output if ctx is not None else None,
         dialog=state.get("dialog_window"),
         raw_intent=classification.output if classification is not None else None,
-        has_turn_attachments=bool((state.get("untrusted_context") or "").strip()),
+        has_turn_attachments=has_attachment_context(state),
         user_text=user_text if isinstance(user_text, str) else None,
     )
+
+
+def attachment_context(state: AgentGraphState) -> AttachmentTurnContext | None:
+    """Typed attachment state for this turn (Level 0); None on legacy checkpoints."""
+    ctx = state.get("attachment_context")
+    return ctx if isinstance(ctx, AttachmentTurnContext) else None
+
+
+def attachment_blocks(state: AgentGraphState) -> tuple[AttachmentContextBlock, ...]:
+    """Blocks that made it into this turn; empty when nothing was attached."""
+    ctx = attachment_context(state)
+    return ctx.blocks if ctx is not None else ()
+
+
+def turn_image_parts(state: AgentGraphState) -> tuple[ImagePart, ...]:
+    """Images admitted for this turn; empty when none (or a legacy checkpoint).
+
+    A single read for every worker node: the admission decision is made once at graph
+    entry, so the researcher and the analyst can never see a different set (ADR 0007).
+    """
+    return tuple(state.get("image_parts") or ())
+
+
+def turn_document_parts(state: AgentGraphState) -> tuple[DocumentPart, ...]:
+    """Citeable text attachments admitted for this turn (W3a); empty when none."""
+    return tuple(state.get("document_parts") or ())
+
+
+def has_attachment_context(state: AgentGraphState) -> bool:
+    """True when the turn carries attachments — derived from blocks, not text search.
+
+    ``untrusted_context`` stays a fallback only for old checkpoint states that
+    predate ``attachment_context``; the presence of blocks is the contract.
+    """
+    if attachment_blocks(state):
+        return True
+    ctx = attachment_context(state)
+    if ctx is not None:
+        return False
+    return bool((state.get("untrusted_context") or "").strip())
 
 
 def resolved_prior_assistant_content(state: AgentGraphState) -> str | None:
@@ -116,7 +200,7 @@ def resolved_prior_assistant_content(state: AgentGraphState) -> str | None:
     fence (cross-file bleed, 055). Turn fences in ``untrusted_context`` own evidence
     for the same reason.
     """
-    if (state.get("untrusted_context") or "").strip():
+    if has_attachment_context(state):
         return None
     intent = routing_intent(state)
     if intent is not None:
@@ -186,9 +270,9 @@ def resolved_task_kind(state: AgentGraphState) -> TaskKind:
     return ensure_routing_intent(state).task_kind
 
 
-def resolved_transformation(state: AgentGraphState) -> str:
+def resolved_transformation(state: AgentGraphState) -> TransformationKind:
     """Transformation axis from ContinuityPolicy (none/restructure/expand/shorten/rewrite)."""
-    return str(ensure_routing_intent(state).transformation)
+    return ensure_routing_intent(state).transformation
 
 
 def resolved_requires_mcp(state: AgentGraphState) -> bool:
@@ -211,7 +295,25 @@ def resolved_candidate_capabilities(state: AgentGraphState) -> tuple[str, ...]:
     return ensure_routing_intent(state).candidate_capabilities
 
 
-def resolved_grounding(state: AgentGraphState):
+def resolved_file_reference(state: AgentGraphState) -> str:
+    """File-reference axis from Continuity (none/thread_file, 055)."""
+    return str(ensure_routing_intent(state).file_reference)
+
+
+def resolved_attachment_scope(state: AgentGraphState) -> str:
+    """Plurality axis from Intent (auto/all/single) with the registry default.
+
+    ``all`` on a thread-file ask means "every file of this dialog": the worker reads
+    them one by one instead of refusing with an ambiguity (055).
+    """
+    from palatium_ai.domain.policies.types import ATTACHMENT_SCOPE_DEFAULT
+
+    classification = classification_result(state)
+    output = classification.output if classification is not None else None
+    return str(output.attachment_scope) if output is not None else ATTACHMENT_SCOPE_DEFAULT
+
+
+def resolved_grounding(state: AgentGraphState) -> GroundingMode:
     """Grounding mode from Continuity (default optional)."""
     from palatium_ai.domain.policies.types import GROUNDING_DEFAULT
 
@@ -227,6 +329,14 @@ def resolved_grounding_reason(state: AgentGraphState) -> str:
     if routing is None:
         return ""
     return routing.grounding_reason or ""
+
+
+def resolved_response_shape(state: AgentGraphState) -> ResponseShape:
+    """Answer-body form from Continuity (``auto`` when the user named none)."""
+    routing = routing_intent(state)
+    if routing is None:
+        return RESPONSE_SHAPE_DEFAULT
+    return routing.response_shape
 
 
 def resolved_reasoning(state: AgentGraphState) -> str:
@@ -319,12 +429,48 @@ def _with_untrusted_context(packet: ContextPacket, state: AgentGraphState) -> Co
     block is merged here — the single place every consumer (researcher, critic,
     formatter) reads the packet from. Text arrives already fenced by
     AttachmentService; it is only budgeted, never re-wrapped or unwrapped (020).
+
+    The Intent Guard applies here and nowhere else: when the ask explicitly disowns
+    this turn's uploads (or cannot target them at all), the fence is withheld from
+    every prompt, so the answer cannot quote a document the user set aside (055).
     """
     untrusted = (state.get("untrusted_context") or "").strip()
     if not untrusted:
         return packet
+    if not _uploads_in_scope(state):
+        logger.info(
+            "attachment.prompt_detached",
+            task_id=state.get("task_id"),
+            thread_id=state.get("thread_id"),
+            reason=AttachmentPromptPolicy.detach_reason(
+                task_kind=resolved_task_kind(state),
+                focus=resolved_attachment_focus(state),
+            ),
+        )
+        return packet.model_copy(update={"untrusted_context": ""})
     budgeted = budget_untrusted_text(untrusted, max_chars=_prompt_budget(state).untrusted_context_max_chars)
     return packet.model_copy(update={"untrusted_context": budgeted})
+
+
+def _uploads_in_scope(state: AgentGraphState) -> bool:
+    """Intent Guard: typed axes decide whether the turn's files belong in the prompt."""
+    return AttachmentPromptPolicy.includes_uploads(
+        task_kind=resolved_task_kind(state),
+        focus=resolved_attachment_focus(state),
+    )
+
+
+def uploads_in_scope(state: AgentGraphState) -> bool:
+    """Public Intent-Guard read: are this turn's uploads part of the ask?"""
+    return _uploads_in_scope(state)
+
+
+def resolved_attachment_focus(state: AgentGraphState) -> AttachmentFocus:
+    """Ask-vs-uploads axis; absent/labelled-unknown keeps the default (fail-safe)."""
+    classification = state.get("classification")
+    output = classification.output if classification is not None else None
+    focus = getattr(output, "attachment_focus", None)
+    return focus if focus in {"current_uploads", "none"} else ATTACHMENT_FOCUS_DEFAULT
 
 
 def selected_strategy(state: AgentGraphState) -> ExecutionStrategy:

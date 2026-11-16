@@ -9,6 +9,7 @@ import json
 from typing import LiteralString, Protocol, cast
 
 from palatium_ai.domain.graph.cypher_safety import TENANT_SCOPE_PARAM, assert_graph_query_safe
+from palatium_ai.domain.graph.temporal import AS_OF_PARAM, as_of_param_value
 from palatium_ai.domain.graph.types import GraphQueryCommand, GraphQueryResult, GraphQueryRow
 
 
@@ -110,6 +111,8 @@ class Neo4jGraphPort:
         params = dict(command.params)
         # Force tenant scope: client-supplied params must never win over the authenticated user (020/070).
         params[TENANT_SCOPE_PARAM] = command.user_id
+        # Bi-temporal anchor (M5): always bound so ``:MemoryFact`` reads have one.
+        params.setdefault(AS_OF_PARAM, as_of_param_value(command.as_of))
         assert_graph_query_safe(command.cypher, params)
 
         raw_rows = await self._transport.run_query(

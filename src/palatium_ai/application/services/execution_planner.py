@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.core.logging.context import user_id_var
 from palatium_ai.core.observability.adaptive_grounding import is_adaptive_grounding_enabled
+from palatium_ai.core.observability.file_reread_rollout import is_file_reread_enabled
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.workflow_policy import WorkflowExecutionPolicy
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
@@ -79,8 +80,6 @@ class ExecutionPlanner:
             task_input.task_kind,
             requires_mcp=task_input.requires_mcp,
         )
-        if task_input.requires_mcp:
-            return _mcp_unresolved_plan()
         adaptive_on = is_adaptive_grounding_enabled(user_id_var.get())
         if task_input.has_attachment_context:
             return _attachment_grounded_plan(
@@ -92,6 +91,12 @@ class ExecutionPlanner:
         ):
             return _prior_grounded_plan(
                 "Parallel research half: Continuity trusts dialog prior; answer without search_knowledge."
+            )
+        if task_input.requires_mcp:
+            return _unresolved_mcp_or_knowledge_plan(
+                grounding=task_input.grounding,
+                executable_kind=executable_kind,
+                parallel=True,
             )
         if adaptive_on and task_input.grounding == "none":
             return ToolExecutionPlan(
@@ -109,6 +114,12 @@ class ExecutionPlanner:
             task_input.task_kind,
             requires_mcp=task_input.requires_mcp,
         )
+
+        # Route is set from the same fact (Supervisor collapses the kind), so a re-read
+        # never reaches a worker that cannot call tools; the gate documents that the
+        # plan and the route are one decision, not two (055).
+        if task_input.route == "researcher" and _file_reread_requested(task_input) and is_file_reread_enabled(user_id_var.get()):
+            return _file_reread_plan(plural=task_input.attachment_scope == "all")
 
         route_plan = _route_local_plan(task_input.route, executable_kind, task_input.requires_mcp)
         if route_plan is not None:
@@ -152,6 +163,43 @@ class ExecutionPlanner:
             requires_tool_call=True,
             rationale="Matching MCP capability was discovered from registered tool descriptors.",
         )
+
+
+def _file_reread_requested(task_input: ContextWeaverInput) -> bool:
+    """True when Continuity set ``file_reference=thread_file`` (storage re-read).
+
+    Sticky SB2 rehydrate can set ``has_attachment_context`` from a *prior* fence
+    without a fresh upload; that used to suppress ``read_attachment`` and the
+    model answered «файл не приложен» after a successful unique-name re-read
+    (W10.2 att_partial_name). The thread_file axis is the SoT for storage reads:
+    Continuity already prefers a true this-turn fence over a stale re-read.
+    """
+    return task_input.file_reference == "thread_file"
+
+
+def _file_reread_plan(*, plural: bool = False) -> ToolExecutionPlan:
+    """Direct owner-scoped storage read; the reference is resolved in the worker path.
+
+    ``plural`` marks an explicit "every file of this dialog" ask: identity is still
+    resolved in the application layer, but the step covers the whole set and the
+    worker issues one read per file instead of a single read and a wrong summary.
+    """
+    return ToolExecutionPlan(
+        strategy="direct_tool_call",
+        capability="attachments",
+        server_name="platform",
+        tool_name="read_attachment",
+        requires_tool_call=True,
+        rationale=(
+            "Thread file re-read: the ask targets files already uploaded in this dialog; "
+            "read their owner-scoped bodies from storage instead of claiming they are missing."
+            + (
+                " The ask covers the whole set: read every file, one call per file, and answer over the combined evidence."
+                if plural
+                else ""
+            )
+        ),
+    )
 
 
 def _route_local_plan(
@@ -216,7 +264,11 @@ def _knowledge_or_tool_plan(
     ):
         return _prior_grounded_plan("Continuity trusts dialog prior; answer from prior_context without search_knowledge.")
     if task_input.requires_mcp:
-        return _mcp_unresolved_plan()
+        return _unresolved_mcp_or_knowledge_plan(
+            grounding=task_input.grounding,
+            executable_kind=executable_kind,
+            parallel=False,
+        )
     caps = {c.strip().lower() for c in task_input.candidate_capabilities}
     if CONTENT_GENERATION_CAPABILITY in caps:
         # Creative text is generated, not retrieved: corpus hits would only pull the
@@ -263,6 +315,30 @@ def _mcp_unresolved_plan() -> ToolExecutionPlan:
             "requires_mcp=true but no MCP capability resolved; worker must fail closed instead of inventing tool results."
         ),
     )
+
+
+def _unresolved_mcp_or_knowledge_plan(
+    *,
+    grounding: str,
+    executable_kind: TaskKind,
+    parallel: bool,
+) -> ToolExecutionPlan:
+    """``requires_mcp`` without a domain binding.
+
+    ClarificationGate sets ``requires_mcp=True`` + ``grounding=required`` for empty-thread
+    fact asks so the turn must retrieve then refuse — not invent (W10 3b). The old
+    ``_mcp_unresolved_plan`` short-circuited to ``reason_only``, and Researcher fell through
+    to an unconstrained LLM answer. Platform ``search_knowledge`` is the evidence path
+    when no EDMS/analytics tool bound; empty hits → GroundingPolicy clarify.
+    """
+    if GroundingPolicy.coerce_mode(grounding) == "required":
+        prefix = "Parallel research half: " if parallel else ""
+        return _search_knowledge_plan(
+            f"{prefix}requires_mcp without domain binding; grounding=required → "
+            f"retrieve via platform.search_knowledge then refuse on empty "
+            f"(executable_kind={executable_kind})."
+        )
+    return _mcp_unresolved_plan()
 
 
 def _search_knowledge_plan(rationale: str) -> ToolExecutionPlan:

@@ -1,0 +1,28 @@
+{
+  "cases": [
+    {
+      "id": "ctx-formatter-present-01",
+      "agent": "formatter",
+      "scenario": "present_customer_label",
+      "input": { "user_text": "Format a one-line status including the customer code from context." },
+      "context": { "upstream": "customer_code=ORION-7; program=проект Зенит" },
+      "expected": {
+        "must_contain": ["ORION-7", "Зенит"],
+        "must_not_contain": ["ACME-9"]
+      },
+      "tags": ["formatter", "context", "present"]
+    },
+    {
+      "id": "ctx-formatter-absent-01",
+      "agent": "formatter",
+      "scenario": "absent_customer_label",
+      "input": { "user_text": "Format a status line for customer ORION-7." },
+      "context": { "upstream": "No customer codes available." },
+      "expected": {
+        "must_contain": ["нет данных"],
+        "must_not_contain": ["ORION-7 approved"]
+      },
+      "tags": ["formatter", "context", "absent"]
+    }
+  ]
+}

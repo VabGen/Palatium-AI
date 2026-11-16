@@ -1,0 +1,92 @@
+---
+description: "Kimi Design System — токены, зонирование, правила вёрстки"
+globs: ["**/*.{tsx,jsx,html,css}"]
+alwaysApply: true
+---
+
+# Kimi Design System — обязательные правила
+
+Продуктовое решение **2026-11-06 (C):** чат `web/` рескинен под
+[Kimi Brand Book](https://www.kimi.ai/resources/kimi-brand). Runtime-токены —
+[`web/src/tokens.css`](../../web/src/tokens.css); это правило — норма для агента.
+Оркестратор задач: [`.cursor/skills/kimi-design/SKILL.md`](../skills/kimi-design/SKILL.md).
+Индекс reference: [`.cursor/references/README.md`](../references/README.md).
+Навигация / лицензия — [`docs/frontend/kimi-brand.md`](../../docs/frontend/kimi-brand.md).
+Product capabilities / showcases (не Brand): [`kimi-product-knowledge.mdc`](kimi-product-knowledge.mdc)
++ [`docs/kimi-knowledge/INDEX.md`](../../docs/kimi-knowledge/INDEX.md).
+
+## 0. Обязательная сверка с Brand Book (Workflow)
+
+Перед тем как предлагать код для любого нового компонента, страницы или изменения стиля, ты **обязан**:
+
+1. Определить, какой аспект дизайна затрагивается (логотип, цвет, типографика, сетка, данные, анимация).
+2. Обратиться к соответствующему разделу источника (в этом порядке):
+   - Официальная страница: `https://www.kimi.ai/resources/kimi-brand` (WebFetch / браузер).
+   - MCP `kimi-docs` (filesystem → `.cursor/references`) или локальный файл
+     [`.cursor/references/kimi-brand-book.md`](../references/kimi-brand-book.md).
+3. В ответе явно указать, на какой раздел Brand Book ты опираешься (например: *«Согласно разделу “Color System”, ...»*).
+4. Сверить предлагаемые значения с уже существующими токенами в `web/src/tokens.css`. Если токена нет — предложить его добавить, но не использовать «сырые» значения.
+5. Для полного редизайна / новой функции UI — следовать скиллу `kimi-design` (иерархия SoT + чеклист PR).
+
+## 1. Layout-First Coordinate Zoning
+
+Каждый экран или крупный компонент **обязан** иметь явные зоны:
+
+- `[ZONE_NAV]` — history shelf / sidebar (ширина `--sidebar-width`).
+- `[ZONE_TOP]` — шапка stage, высота **64px** (`--zone-top-height` / `--space-7`).
+- `[ZONE_HERO]` — главный визуальный акцент (empty-state / орб).
+- `[ZONE_BODY]` — основной контент (лента, артефакты).
+- `[ZONE_FOOTER]` — composer / mode pills / вторичные действия.
+
+В коде — `data-zone="ZONE_*"` (см. `ChatShell`). Не смешивать зоны в одном блоке
+без явной причины.
+
+## 2. Design System Token Contracts
+
+Сырой hex в компонентах **запрещён** — только CSS-переменные из `tokens.css`.
+
+### Палитра Brand Book (примитивы)
+
+| Токен | Hex | Роль |
+|---|---|---|
+| `--kimi-obsidian` | `#0B0F19` | тёмный canvas |
+| `--kimi-pure-white` | `#F8FAFC` | светлый canvas / текст на dark |
+| `--kimi-brand-navy` | `#002F5B` | глубокий navy |
+| `--kimi-brand-blue` | `#007CFF` | **signature accent** |
+| `--kimi-brand-blue-bright` | `#00A1FF` | hover / info |
+| `--kimi-brand-blue-soft` | `#A0DAF7` | soft fill |
+| `--kimi-amber` | `#D97706` | warning / rare accent |
+| `--kimi-ink` | `#121212` | текст на light |
+
+Семантика продукта: `--bg`, `--accent`, `--text` … **алиасят** примитивы выше
+(не дублировать hex в `styles.css`).
+
+### Типографика
+
+- `--font-display`: Geist Display → Inter → system
+- `--font-body` / `--font-sans`: Inter → system
+- `--font-mono`: Geist Mono → ui-monospace
+- `--font-serif`: Sentient → Georgia (опционально)
+
+CDN/Google Fonts в виджет **не** подключаем (084). Self-host — отдельная задача.
+
+### Spacing rhythm
+
+`--space-1`…`--space-7` = **4, 8, 16, 24, 32, 48, 64** px.
+
+### Анимация (GPU-only)
+
+Только `transform` и `opacity`. Layout thrash (`top`/`width`/`height` в keyframes)
+запрещён. `prefers-reduced-motion: reduce` обязателен (084).
+
+## 3. Reference-клоны (не продукт)
+
+Под `.cursor/` (gitignored клоны; см. `.gitignore`):
+
+- `.cursor/references/awesome-kimi-k3-frontend-prompt/` — демо / промпты K3
+- `.cursor/skills/kimi-skills/` — коллекция agent-skills (в т.ч. `kimi-widget`)
+
+Не копипастить оттуда UI в `web/` без сверки с Brand Book + этим правилом.
+Визуальная дисциплина виджетов (в git):
+[`.cursor/references/kimi-widget-design-system.md`](../references/kimi-widget-design-system.md) —
+маппинг на `tokens.css` (не iframe-имена `--kimi-color-*` в SPA).

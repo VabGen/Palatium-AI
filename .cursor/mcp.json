@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "kimi-docs": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        ".cursor\\scripts\\kimi-docs-mcp.cmd"
+      ]
+    }
+  }
+}

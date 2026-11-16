@@ -13,6 +13,15 @@ describe('InlineMarkdown', () => {
     expect(screen.getByText('Добавлено:').tagName).toBe('STRONG');
     expect(screen.getByText('заказным').tagName).toBe('EM');
   });
+
+  it('turns resolvable [n] into cite chips linked to the source footer', () => {
+    render(
+      <InlineMarkdown text="Вывод по договору[1]." sourceRefs={['Скан 1.pdf', 'Скан 2.pdf']} />
+    );
+    const chip = screen.getByRole('link', { name: '1: Скан 1.pdf' });
+    expect(chip).toHaveAttribute('href', '#source-ref-1');
+    expect(chip).toHaveClass('cite-marker');
+  });
 });
 
 describe('BlockRenderer table cells', () => {

@@ -24,6 +24,7 @@ import {
   answerDocument,
   attachmentTicket,
   choiceCard,
+  citedDocument,
   dialogTurn,
   formatterResult,
   quarantinedAttachment,
@@ -79,7 +80,9 @@ async function pickPdf(page: Page, name: string): Promise<void> {
 }
 
 async function ask(page: Page, text: string): Promise<void> {
-  await page.getByRole('textbox').fill(text);
+  // Именно `.composer-textarea`, а не `getByRole('textbox')`: в композере есть
+  // ещё поле project id, и ролевой локатор стал неоднозначным (strict mode).
+  await page.locator('.composer-textarea').fill(text);
   await page.getByRole('button', { name: 'Отправить сообщение' }).click();
 }
 
@@ -115,19 +118,55 @@ export const STATE_MATRIX: readonly WidgetState[] = [
     ],
   },
   {
-    id: 'pending',
-    title: 'Запрос в работе',
-    proves: 'Пока агенты работают, пользователь видит индикатор, а отправка заблокирована.',
+    id: 'citations',
+    title: 'Источники ответа',
+    proves:
+      'Якоря провайдера видны: один чип на источник раскрывает дословные цитаты, а неизвестная позиция честно называется неизвестной.',
     api: [
       {
-        key: 'intents.process',
+        key: 'intents.process.stream',
+        replies: [{ json: formatterResult({ output: citedDocument() }) }],
+      },
+    ],
+    drive: async page => {
+      await ask(page, 'Что сказано про оплату?');
+      await page.getByRole('button', { name: 'Договор.pdf' }).click();
+    },
+    checks: [
+      { kind: 'count', selector: '.source-ref-button', count: 1 },
+      { kind: 'attr', selector: '.source-ref-button', name: 'aria-expanded', value: 'true' },
+      { kind: 'visible', selector: '.citation-panel' },
+      { kind: 'text', selector: '.citation-quote', contains: 'Оплата в течение 5 рабочих дней.' },
+      { kind: 'text', selector: '.citation-meta', contains: 'Стр. 2' },
+      { kind: 'noEnglish' },
+    ],
+  },
+  {
+    id: 'pending',
+    title: 'Запрос в работе',
+    proves:
+      'Пока агенты работают, в ленте орб + подпись фазы (без облака), а отправка заблокирована.',
+    api: [
+      {
+        key: 'intents.process.stream',
         replies: [{ delayMs: SLOW_MS, json: formatterResult({ output: answerDocument() }) }],
       },
     ],
     drive: async page => ask(page, 'Составь письмо'),
     checks: [
-      { kind: 'visible', selector: '.typing-dots' },
-      { kind: 'text', selector: '.msg.pending', contains: 'Агенты работают' },
+      { kind: 'visible', selector: '.thinking-indicator' },
+      // Облака нет: индикатор стоит на месте аватара, а не внутри пузыря.
+      { kind: 'count', selector: '.msg.is-waiting .bubble', count: 0 },
+      { kind: 'count', selector: '.msg.is-waiting .avatar', count: 0 },
+      // Подпись фазы видна и озвучивается (084).
+      { kind: 'text', selector: '.msg.is-waiting [role="status"]', contains: 'Думаю' },
+      { kind: 'visible', selector: '.thinking-indicator__label' },
+      {
+        kind: 'attr',
+        selector: '.thinking-indicator canvas',
+        name: 'aria-hidden',
+        value: 'true',
+      },
       { kind: 'disabled', selector: '.send-btn' },
       { kind: 'text', selector: '.msg.user .bubble', contains: 'Составь письмо' },
     ],
@@ -136,13 +175,19 @@ export const STATE_MATRIX: readonly WidgetState[] = [
     id: 'answer',
     title: 'Ответ агента',
     proves: 'Структурированный ответ рендерится блоками и получает полный набор действий.',
-    api: [{ key: 'intents.process', replies: [{ json: formatterResult() }] }],
+    api: [{ key: 'intents.process.stream', replies: [{ json: formatterResult() }] }],
     drive: async page => ask(page, 'Составь письмо'),
     checks: [
-      { kind: 'visible', selector: '.msg.assistant .block-paragraph' },
-      { kind: 'visible', selector: '.msg.assistant .kv-row' },
-      { kind: 'attr', selector: '.msg-actions button', name: 'aria-label', value: 'Ответ полезен' },
-      { kind: 'hidden', selector: '.typing-dots' },
+      { kind: 'visible', selector: '.msg.assistant .artifact-anchor' },
+      { kind: 'visible', selector: '.artifact-pane .block-paragraph' },
+      { kind: 'visible', selector: '.artifact-pane .kv-row' },
+      {
+        kind: 'attr',
+        selector: '.artifact-pane .msg-actions button',
+        name: 'aria-label',
+        value: 'Ответ полезен',
+      },
+      { kind: 'hidden', selector: '.thinking-indicator' },
       { kind: 'noEnglish' },
     ],
   },
@@ -152,7 +197,7 @@ export const STATE_MATRIX: readonly WidgetState[] = [
     proves: '5xx не глотается: пользователь видит причину, а не пустой ответ.',
     api: [
       {
-        key: 'intents.process',
+        key: 'intents.process.stream',
         replies: [{ status: 503, json: { detail: 'LiteLLM недоступен' } }],
       },
     ],
@@ -169,7 +214,7 @@ export const STATE_MATRIX: readonly WidgetState[] = [
     proves: 'Карточка выбора — кликабельные карточки с ролью group, а не текстовый список.',
     api: [
       {
-        key: 'intents.process',
+        key: 'intents.process.stream',
         replies: [{ json: formatterResult({ output: null, hitl_cards: [choiceCard()] }) }],
       },
     ],
@@ -190,7 +235,7 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       'Необратимое действие требует step-up: карточка не отправляет запрос без подтверждения.',
     api: [
       {
-        key: 'intents.process',
+        key: 'intents.process.stream',
         replies: [
           {
             json: formatterResult({
@@ -219,10 +264,10 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       await page.getByRole('button', { name: 'Отправить step-up' }).click();
     },
     checks: [
-      // После резолва карточка уходит из транскрипта, а документ остаётся видимым.
+      // После резолва карточка уходит; достойный документ открывается в Artifacts.
       { kind: 'hidden', selector: '.hitl-card' },
       { kind: 'hidden', selector: '.hitl-step-up-form' },
-      { kind: 'visible', selector: '.msg.assistant .block-paragraph' },
+      { kind: 'visible', selector: '.artifact-pane .block-paragraph' },
       { kind: 'noEnglish' },
     ],
   },
@@ -232,7 +277,7 @@ export const STATE_MATRIX: readonly WidgetState[] = [
     proves: '410 от карточки переводится в понятный текст, а не показывается как HTTP-код.',
     api: [
       {
-        key: 'intents.process',
+        key: 'intents.process.stream',
         replies: [{ json: formatterResult({ output: null, hitl_cards: [choiceCard()] }) }],
       },
       { key: 'hitl.respond', replies: [{ status: 410, json: { detail: 'card expired' } }] },
@@ -264,7 +309,8 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       },
     ],
     drive: async page => {
-      await page.getByRole('button', { name: 'Память' }).click();
+      await page.getByRole('button', { name: 'Инструменты композера' }).click();
+      await page.getByRole('menuitem', { name: 'Память' }).click();
       await page.locator('.memory-input').fill('pref-lang');
       await page.locator('.memory-textarea').fill('Общается по-русски');
       await page.getByRole('button', { name: 'Запросить сохранение' }).click();
@@ -296,7 +342,8 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       },
     ],
     drive: async page => {
-      await page.getByRole('button', { name: 'Память' }).click();
+      await page.getByRole('button', { name: 'Инструменты композера' }).click();
+      await page.getByRole('menuitem', { name: 'Память' }).click();
       await page.getByRole('tab', { name: 'Забыть' }).click();
       // Поле ровно одно — ключ записи: текст для забывания не нужен.
       await page.locator('.memory-input').fill('pref-lang');
@@ -330,7 +377,8 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       },
     ],
     drive: async page => {
-      await page.getByRole('button', { name: 'Память' }).click();
+      await page.getByRole('button', { name: 'Инструменты композера' }).click();
+      await page.getByRole('menuitem', { name: 'Память' }).click();
       await page.getByRole('tab', { name: 'Извлечь' }).click();
       await page.getByRole('button', { name: 'Запросить извлечение' }).click();
     },
@@ -352,7 +400,7 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       { key: 'attachments.init', replies: [{ json: attachmentTicket() }] },
       { key: 'attachments.content', replies: [{ json: uploadedAttachment() }] },
       { key: 'attachments.complete', replies: [{ json: readyAttachment() }] },
-      { key: 'intents.process', replies: [{ json: formatterResult() }] },
+      { key: 'intents.process.stream', replies: [{ json: formatterResult() }] },
     ],
     drive: async page => {
       await pickPdf(page, 'dogovor.pdf');

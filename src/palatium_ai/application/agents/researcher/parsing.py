@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 import json
-
-from typing import TYPE_CHECKING
+import re
 
 from palatium_ai.application.agents.researcher.config import SUMMARY_MAX_CHARS
+from palatium_ai.application.tools.mcp import MCPToolCallOutcome
 from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutput
 from palatium_ai.domain.llm.json_codec import loads_llm_json
@@ -16,9 +16,6 @@ from palatium_ai.domain.memory.tool_output import (
     compress_worker_context,
     wrap_untrusted_tool_output,
 )
-
-if TYPE_CHECKING:
-    from palatium_ai.application.tools.mcp import MCPToolCallOutcome
 
 FAILURE_PLACEHOLDER_SUMMARY = "(no output)"
 
@@ -37,7 +34,7 @@ def decode_researcher_input(input_context: dict[str, str]) -> ResearcherInput:
     if raw_dialog:
         try:
             dialog_window = DialogTurnWindow.model_validate_json(raw_dialog)
-        except Exception:
+        except Exception:  # noqa: BLE001  # malformed dialog window degrades to no window
             dialog_window = None
     memory_hints: tuple[str, ...] = ()
     raw_mh = input_context.get("memory_hints_json") or "[]"
@@ -45,7 +42,7 @@ def decode_researcher_input(input_context: dict[str, str]) -> ResearcherInput:
         parsed_mh = json.loads(raw_mh)
         if isinstance(parsed_mh, list):
             memory_hints = tuple(str(h) for h in parsed_mh if str(h).strip())
-    except Exception:
+    except Exception:  # noqa: BLE001  # malformed memory hints degrade to an empty tuple
         memory_hints = ()
     return ResearcherInput(
         task_id=input_context["_task_id"],
@@ -116,6 +113,62 @@ def mcp_joined_text(outcome: MCPToolCallOutcome) -> str:
         if isinstance(text, str) and text:
             parts.append(text)
     return redact_text("\n".join(parts))
+
+
+def merge_attachment_read_outcomes(outcomes: tuple[MCPToolCallOutcome, ...]) -> MCPToolCallOutcome:
+    """Fold several ``read_attachment`` payloads into one evidence body.
+
+    Each read returns a JSON envelope whose ``fenced_text`` is that file's own
+    untrusted fence. Concatenating the envelopes would nest JSON inside the prompt,
+    so only the fences are kept: the synthesis step must see N documents, each
+    attributed to its own file. A payload that is not the expected envelope is passed
+    through unchanged rather than dropped (a lossy merge would hide a file).
+    """
+    blocks: list[str] = []
+    for outcome in outcomes:
+        for item in outcome.content:
+            text = item.get("text")
+            if not isinstance(text, str) or not text:
+                continue
+            blocks.append(_attachment_fence(text))
+    return MCPToolCallOutcome(content=[{"type": "text", "text": "\n".join(blocks)}])
+
+
+def _attachment_fence(raw: str) -> str:
+    """Extract ``fenced_text`` from a read_attachment envelope, else keep ``raw``."""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    fence = payload.get("fenced_text") if isinstance(payload, dict) else None
+    return fence if isinstance(fence, str) and fence else raw
+
+
+def unwrap_read_attachment_text(raw: str) -> str:
+    """User-visible body from a singular ``read_attachment`` MCP payload.
+
+    Plural reads already go through :func:`merge_attachment_read_outcomes`. Singular
+    turns must unwrap the JSON envelope the same way — otherwise verbatim /
+    Formatter passthrough ships ``{"tool":"read_attachment",...}`` to the user
+    (W10.2 att_unique_name).
+    """
+    from palatium_ai.domain.memory.tool_output import strip_untrusted_tool_output
+
+    fence = _attachment_fence(raw)
+    return strip_untrusted_tool_output(_strip_attachment_markers(fence)).strip()
+
+
+_ATTACHMENT_OPEN = re.compile(r"<<<ATTACHMENT:[^\n>]*>>>\s*", re.MULTILINE)
+_ATTACHMENT_CLOSE = re.compile(r"\s*<<<END_ATTACHMENT>>>", re.MULTILINE)
+
+
+def _strip_attachment_markers(text: str) -> str:
+    """Drop ``<<<ATTACHMENT:…>>>`` / ``<<<END_ATTACHMENT>>>`` for user-facing copy."""
+    if not text:
+        return text
+    stripped = _ATTACHMENT_OPEN.sub("", text)
+    stripped = _ATTACHMENT_CLOSE.sub("", stripped)
+    return stripped.strip()
 
 
 def mcp_payload_is_empty(raw: str) -> bool:

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.memory import DialogTurnWindow
@@ -11,11 +13,19 @@ from palatium_ai.domain.memory import DialogTurnWindow
 from .context_packet import ContextPacket
 from .contracts import TaskResult
 
+WorkerKind = Literal["researcher", "coder", "analyst"]
+
 # Stable failure when planned MCP args cannot be built/validated.
 RESEARCHER_TOOL_ARGS_INVALID = "researcher_tool_args_invalid"
+# Thread file re-read: the reference could not be resolved to exactly one owner file.
+# Retrying cannot change the thread's contents — the graph must not revise on this.
+ATTACHMENT_REFERENCE_UNRESOLVED = "attachment_reference_unresolved"
 # Machine codes. Formatter maps them; they are not user-facing prose.
 MCP_EMPTY_RESULT = "mcp_empty_result"
 MCP_TOOL_ERROR = "mcp_tool_error"
+# The MCP server could not be reached at all (transport down / circuit open). The
+# answer is a degradation notice, never a tool-error line (Level 5, 035).
+MCP_SERVER_UNAVAILABLE = "mcp_server_unavailable"
 # Adaptive grounding: required retrieval returned empty — ask user for source.
 GROUNDING_REQUIRED_EMPTY = "grounding_required_empty"
 
@@ -48,9 +58,16 @@ class ResearcherOutput(BaseModel):
 
 
 class ResearcherTaskResult(TaskResult):
-    """TaskResult с типизированным output для Researcher."""
+    """TaskResult с типизированным output для Researcher.
+
+    Shared graph ``execution`` slot also holds coder/analyst drafts; ``worker_kind``
+    preserves the origin so Critic/Formatter can gate without inventing a second state field.
+    """
 
     output: ResearcherOutput | None = None
     grounding_satisfied: bool = False
     grounding_degraded: bool = False
     cannot_answer_without_source: bool = False
+    worker_kind: WorkerKind = "researcher"
+    worker_language: str = ""
+    worker_findings: tuple[str, ...] = ()

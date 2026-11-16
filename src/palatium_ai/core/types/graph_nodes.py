@@ -9,6 +9,12 @@ from typing import Final, Literal
 NODE_CONTEXT_ENRICHER_CONTINUATION: Final[Literal["context_enricher_continuation"]] = "context_enricher_continuation"
 NODE_CONTEXT_ENRICHER_WEAVING: Final[Literal["context_enricher_weaving"]] = "context_enricher_weaving"
 NODE_INTENT_CLASSIFIER: Final[Literal["intent_classifier"]] = "intent_classifier"
+#: Deterministic current-turn attachment stage: select the ask's files, mint a
+#: file-choice card on ambiguity, and Map-Reduce the fences before any worker (065).
+NODE_ATTACHMENT_SELECTION: Final[Literal["attachment_selection"]] = "attachment_selection"
+#: Deterministic gate for explicit memory mutations (save/forget): resolves the target
+#: and stages a HITL card, then ends the turn. No worker/formatter ever sees it (060).
+NODE_MEMORY_MUTATION: Final[Literal["memory_mutation"]] = "memory_mutation"
 NODE_SUPERVISOR: Final[Literal["supervisor"]] = "supervisor"
 NODE_RESEARCHER: Final[Literal["researcher"]] = "researcher"
 NODE_CODER: Final[Literal["coder"]] = "coder"
@@ -24,6 +30,8 @@ type GraphNodeId = Literal[
     "context_enricher_continuation",
     "context_enricher_weaving",
     "intent_classifier",
+    "attachment_selection",
+    "memory_mutation",
     "supervisor",
     "researcher",
     "coder",
@@ -46,6 +54,8 @@ GRAPH_NODE_IDS: Final[tuple[GraphNodeId, ...]] = (
     NODE_CONTEXT_ENRICHER_CONTINUATION,
     NODE_CONTEXT_ENRICHER_WEAVING,
     NODE_INTENT_CLASSIFIER,
+    NODE_ATTACHMENT_SELECTION,
+    NODE_MEMORY_MUTATION,
     NODE_SUPERVISOR,
     NODE_RESEARCHER,
     NODE_CODER,
@@ -60,12 +70,14 @@ __all__ = [
     "GRAPH_NODE_IDS",
     "LEGACY_GRAPH_NODE_IDS",
     "NODE_ANALYST",
+    "NODE_ATTACHMENT_SELECTION",
     "NODE_CODER",
     "NODE_CONTEXT_ENRICHER_CONTINUATION",
     "NODE_CONTEXT_ENRICHER_WEAVING",
     "NODE_CRITIC",
     "NODE_FORMATTER",
     "NODE_INTENT_CLASSIFIER",
+    "NODE_MEMORY_MUTATION",
     "NODE_PARALLEL_WORKERS",
     "NODE_QUALITY_REVISION",
     "NODE_RESEARCHER",

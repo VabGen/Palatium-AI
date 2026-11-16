@@ -6,7 +6,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.core.logging import get_logger
 from palatium_ai.core.types.coerce import coerce_float
+from palatium_ai.domain.memory.promotion import DEFAULT_PROMOTE_CLAIM_SECONDS
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.ports import MemoryPort
@@ -52,7 +56,9 @@ class CrossEncoderRerankMemoryPort:
         passages = [str(item.get("text", "")).strip() for item in candidates]
         try:
             scores = await self._cross_encoder.score_pairs(query=query.strip(), passages=passages)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001  # rerank degrades to unranked hits on scorer failure
+            # 050/040: a degraded rerank must be observable, not silently swallowed.
+            logger.warning("memory.rerank.cross_encoder_failed", error_type=type(exc).__name__)
             return candidates[:safe_limit]
         if len(scores) != len(candidates):
             return candidates[:safe_limit]
@@ -69,6 +75,28 @@ class CrossEncoderRerankMemoryPort:
 
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         return await self._inner.forget(namespace=namespace, key=key)
+
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        clear = getattr(self._inner, "clear_namespace", None)
+        if clear is None:
+            return 0
+        return int(await clear(user_id=user_id, namespaces=namespaces))
+
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        listing = getattr(self._inner, "list_entries", None)
+        if listing is None:
+            return []
+        return list(await listing(namespace=namespace, limit=limit))
 
     async def bump_access(self, *, namespace: tuple[str, ...], key: str) -> int:
         bump = getattr(self._inner, "bump_access", None)
@@ -95,6 +123,24 @@ class CrossEncoderRerankMemoryPort:
                 limit=limit,
             )
         )
+
+    async def claim_promotion(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        key: str,
+        lease_seconds: int = DEFAULT_PROMOTE_CLAIM_SECONDS,
+    ) -> bool:
+        claim = getattr(self._inner, "claim_promotion", None)
+        if claim is None:
+            return False
+        return bool(await claim(namespace=namespace, key=key, lease_seconds=lease_seconds))
+
+    async def release_promotion(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        release = getattr(self._inner, "release_promotion", None)
+        if release is None:
+            return False
+        return bool(await release(namespace=namespace, key=key))
 
     async def mark_promoted(self, *, namespace: tuple[str, ...], key: str) -> bool:
         mark = getattr(self._inner, "mark_promoted", None)

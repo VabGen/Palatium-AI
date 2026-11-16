@@ -8,7 +8,10 @@ import math
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.core.logging import get_logger
 from palatium_ai.domain.knowledge.types import KnowledgeSearchHit, KnowledgeSearchResult, SearchKnowledgeQuery
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from palatium_ai.domain.knowledge.port import KnowledgePort
@@ -47,7 +50,9 @@ class EmbeddingRerankKnowledgePort:
         texts = [query.query.strip()] + [_hit_embed_text(hit) for hit in hits]
         try:
             vectors = await self._embeddings.embed(texts)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001  # rerank degrades to unranked hits when embed fails
+            # 050/040: a degraded rerank must be observable, not silently swallowed.
+            logger.warning("knowledge.rerank.embedding_failed", error_type=type(exc).__name__)
             return KnowledgeSearchResult(hits=hits[:safe_limit], query=query.query)
 
         if len(vectors) != len(texts) or not vectors[0]:

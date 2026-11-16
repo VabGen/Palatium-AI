@@ -34,18 +34,34 @@ EMOJI_TO_ICON: dict[str, IconToken] = {
     "✓": "check",
     "📄": "document",
     "📃": "document",
-    "📋": "document",
+    "📋": "list",
+    "📁": "folder",
+    "📂": "folder",
+    "📌": "pin",
+    "🔖": "bookmark",
+    "🏷️": "tag",
+    "🏷": "tag",
+    "🔔": "notification",
+    "❓": "question",
+    "📷": "image",
+    "🖼️": "image",
+    "🖼": "image",
+    "💻": "code",
+    "🔗": "link",
+    "📤": "upload",
+    "📥": "download",
+    "📍": "locate",
     "👤": "user",
     "🧑": "user",
     "👥": "users",
     "⏰": "clock",
     "🕐": "clock",
     "📊": "chart",
-    "💰": "chart",
+    "💰": "histogram",
     "⚙️": "settings",
     "⚙": "settings",
     "✨": "success",
-    "🎉": "success",
+    "🎉": "completed",
 }
 
 # Accept ``name=`` (canonical) and ``x=`` (LLM slip); always emit ``name=``.
@@ -128,6 +144,51 @@ def coerce_icon_name(raw: str) -> IconToken | None:
     return cast("IconToken", name)
 
 
+def coerce_icon_fields(node: object) -> tuple[object, int]:
+    """Blank icon names outside the UI registry; return ``(node, dropped)``.
+
+    An icon is layout chrome: the client resolves the token through a closed registry
+    and draws nothing for an unknown one, so a stray ``"icon": "document-check"`` must
+    cost the icon — never the block, and never the whole schema-first turn (which
+    falls back to the legacy contract when the document fails validation). Content is
+    untouched; names are canonicalised to the allow-list spelling.
+
+    Walks the payload because every block variant, list/step/kv item and ``actions[]``
+    can carry the field — the union has no single owner for it (055).
+    """
+    if isinstance(node, dict):
+        dropped = 0
+        cleaned: dict[str, object] = {}
+        for key, value in node.items():
+            if key == "icon":
+                coerced, lost = _coerce_icon_value(value)
+                cleaned[key] = coerced
+                dropped += lost
+                continue
+            nested, lost = coerce_icon_fields(value)
+            cleaned[key] = nested
+            dropped += lost
+        return cleaned, dropped
+    if isinstance(node, list):
+        items: list[object] = []
+        dropped = 0
+        for item in node:
+            nested, lost = coerce_icon_fields(item)
+            items.append(nested)
+            dropped += lost
+        return items, dropped
+    return node, 0
+
+
+def _coerce_icon_value(value: object) -> tuple[object, int]:
+    if not isinstance(value, str):
+        return value, 0
+    if not value.strip():
+        return None, 0
+    name = coerce_icon_name(value)
+    return (None, 1) if name is None else (name, 0)
+
+
 def sanitize_markdown_buffer(text: str) -> str:
     """Map emoji → icon tokens and drop unmapped pictographs (post-stream / one-shot)."""
     return _emoji_to_icon_tokens(text)
@@ -149,7 +210,13 @@ def _emoji_to_icon_tokens(text: str) -> str:
 
 
 def _split_incomplete_tail(text: str) -> tuple[str, str]:
-    """Hold trailing incomplete emoji or ``<icon…`` so tokens are not split across chunks."""
+    """Hold trailing incomplete ``<hitl-*…``, emoji or ``<icon…`` across chunks."""
+    # HITL first — they are longer and break server-side tag parsing if split.
+    hitl_tail = _incomplete_hitl_tail(text)
+    if hitl_tail is not None:
+        cut = len(text) - len(hitl_tail)
+        return text[:cut], hitl_tail
+
     icon_tail = _incomplete_icon_tail(text)
     if icon_tail is not None:
         cut = len(text) - len(icon_tail)
@@ -184,5 +251,28 @@ def _incomplete_icon_tail(text: str) -> str | None:
         return None
     # Closed with ``>`` but not ``/>`` — malformed; do not carry forever.
     if re.search(r"(?<!/)>", fragment):
+        return None
+    return fragment
+
+
+# ───────────────────── HITL tag tail protection ─────────────────────
+
+_INCOMPLETE_HITL = re.compile(
+    r"<hitl-(?:action|choice)\b[^>]*$",
+    re.IGNORECASE,
+)
+_MAX_HITL_TAIL = 512  # hitl-choice with a long options= JSON array
+
+
+def _incomplete_hitl_tail(text: str) -> str | None:
+    """Hold a trailing incomplete ``<hitl-action/>`` / ``<hitl-choice/>`` across chunks."""
+    match = _INCOMPLETE_HITL.search(text)
+    if match is None:
+        return None
+    fragment = text[match.start() :]
+    if len(fragment) > _MAX_HITL_TAIL:
+        return None
+    # Already closed with ``>`` or ``/>`` — do not hold.
+    if re.search(r"/?>", fragment):
         return None
     return fragment

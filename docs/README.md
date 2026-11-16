@@ -15,12 +15,35 @@
 | **[adr/0002-global-retention-scheduler.md](adr/0002-global-retention-scheduler.md)** | ADR: global retention — out-of-band CronJob + узкая DB-роль |
 | **[../.cursor/plans/global-retention.md](../.cursor/plans/global-retention.md)** | План Global Data Retention W0–W6: политики, scheduler, GDPR/152-ФЗ (актуально на 2026-10-05) |
 | **[../.cursor/plans/memory-max-pro.md](../.cursor/plans/memory-max-pro.md)** | План Memory MAX PRO: hybrid cortex, LOCKED решения, волны M0–M8 (актуально на 2026-10-06) |
+| **[../.cursor/plans/context-memory-dialog-2026.md](../.cursor/plans/context-memory-dialog-2026.md)** | План Context·Dialog·Memory post-M8: prompt tiers, ASI-06 origin ceiling, memory-as-tools, AGENTS.md, HITL skill_manage (proposed 2026-11-03) |
 | **[adr/0003-postgres-checkpointer-session-ttl.md](adr/0003-postgres-checkpointer-session-ttl.md)** | ADR: short-term = Postgres checkpointer + retention TTL |
 | **[adr/0004-hybrid-memory-not-neo4j-only.md](adr/0004-hybrid-memory-not-neo4j-only.md)** | ADR: Postgres medium + bi-temporal Neo4j; reject Neo4j-only Cortex |
+| **[adr/0005-content-document-response-shapes.md](adr/0005-content-document-response-shapes.md)** | ADR: единый `ContentDocument` + ось `response_shape`; reject per-scenario схем |
+| **[adr/0006-canvas-server-authoritative-documents.md](adr/0006-canvas-server-authoritative-documents.md)** | ADR: Canvas = server-authoritative `ContentDocument`; reject Yjs CRDT |
+| **[adr/0007-vision-image-parts.md](adr/0007-vision-image-parts.md)** | ADR: vision как `ImagePart` сообщения; OCR остаётся; алиас `vision-tier`, без fallback |
+| **[adr/0008-memory-origin-trust-ceiling.md](adr/0008-memory-origin-trust-ceiling.md)** | ADR: origin/trust ceiling на medium (ASI-06); proposed до soak CMD1 (2026-11-03) |
+| **[adr/0009-langgraph-supervisor-workers.md](adr/0009-langgraph-supervisor-workers.md)** | ADR: LangGraph Supervisor→workers→Critic; почему не Swarm/Agents SDK (2026-11-10) |
+| **[adr/0010-agents-audit-w1-w6-closure.md](adr/0010-agents-audit-w1-w6-closure.md)** | ADR: закрытие аудита agents W1–W6 — baseline refresh, PII fail-soft, reserve triggers (2026-11-10) |
+| **[adr/0011-observability-cost-contracts.md](adr/0011-observability-cost-contracts.md)** | ADR: observability / cost / contracts W7–W8 — LLM chokepoint, freshness, retry, caps (2026-11-10) |
+| **[adr/0012-product-quality-evals.md](adr/0012-product-quality-evals.md)** | ADR: product-quality evals W9 — semantic / context / multi-turn / formatter (2026-11-10) |
+| **[adr/0013-memory-scope-and-curation.md](adr/0013-memory-scope-and-curation.md)** | ADR: memory scope (`use_memory`) + verified fast-path promote / HITL clear (W11, 2026-11-12) |
+| **[../.cursor/plans/canvas-vision-phase-7.md](../.cursor/plans/canvas-vision-phase-7.md)** | План Phase 7: Canvas закрыт решением, vision заблокирован открытыми вопросами (2026-10-25) |
+| **[../.cursor/plans/response-shapes.md](../.cursor/plans/response-shapes.md)** | План: ось формы ответа, `ShapeRecipePolicy`, волны 1–4 (актуально на 2026-10-19) |
 | **[grounding-mvp-deferrals.md](grounding-mvp-deferrals.md)** | Adaptive Grounding MVP: осознанные deferrals + критерий возврата + staging A/B gate (2026-10-14) |
+| **[formatter-schema-first.md](formatter-schema-first.md)** | Formatter: schema_first-контракт, two-key canary `FORMATTER_ROLLOUT_PCT`, метрики A/B, откат, backtest правил lint, few-shot по форме, бюджет длины и серверный diff ревизии (2026-10-16, W5–W7 — 2026-10-24) |
+| **[internal-vocabulary.md](internal-vocabulary.md)** | Служебные имена полей (`attachment_context`, `prior_context`, …) не попадают в ответ и HITL-карточку: две линии защиты, точки применения, как добавить термин (2026-10-16) |
+| **[source-citation-highlight.md](source-citation-highlight.md)** | W3b-2: подсветка места в тексте источника — `CitationRef.source_id`, координатное пространство `safe_text`, quote-first локатор, `POST …/citation-locate`, UI `SourcePanel` (реализовано 2026-10-24) |
+| **[../.cursor/plans/file-reread.md](../.cursor/plans/file-reread.md)** | План: ось `file_reference=thread_file` + детерминированный резолв файла из треда, rollout `ATTACHMENTS_FILE_REREAD_PCT` (2026-10-16) |
 | **[audit/latency-audit.md](audit/latency-audit.md)** | Аудит скорости ответа: карта `/intents/process`, узкие места, план P0–P2 (актуально на 2026-10-01) |
+| **[audit/m5-verification.md](audit/m5-verification.md)** | Верификация M5 против Graphiti: таблица гарантий bi-temporal, находки F1–F6 с классификацией (2026-10-20, live-аддендум 2026-10-21) |
+| **[audit/m3-verification.md](audit/m3-verification.md)** | Верификация M3 (`SKIP LOCKED`) против Mem0/Letta: гарантии очереди, находки E1–E7 с классификацией (2026-10-20) |
+| **[audit/e2e-bug-report.md](audit/e2e-bug-report.md)** | Живой E2E UI-аудит памяти (Playwright): сценарии, баги, приоритеты, план исправления (2026-10-21) |
 | **[architecture/streaming.md](architecture/streaming.md)** | SSE-контракт `/intents/process/stream`: события, TTFT, fast path (актуально на 2026-10-09) |
 | **[embedded-assistant.md](embedded-assistant.md)** | Embeddable-виджет `<palatium-assistant>`: контракт событий, темизация, доставка, §9 — интеграционный пакет и чек-лист приёмки для команды СЭД |
+| **[integration/INTEGRATION_CONTRACT.md](integration/INTEGRATION_CONTRACT.md)** | Draft-контракт Palatium ↔ Канцлер NEXT (endpoints/Permission/scope/auth) по сверке JavaEdms; на подтверждение команде СЭД (актуально на 2026-11-03) |
+| **[frontend/FRONTEND_AUDIT.md](frontend/FRONTEND_AUDIT.md)** | Аудит `web/` vs канон `web-embed-assistant`: Track I закрыт; ложные gap’ы (MF/WS→SSE/HITL-via-event) отведены (актуально на 2026-11-03) |
+| **[frontend/kimi-brand.md](frontend/kimi-brand.md)** | Kimi Brand Book + agent SoT; план редизайна [`.cursor/plans/kimi-full-redesign.md`](../.cursor/plans/kimi-full-redesign.md) (актуально на 2026-11-06) |
+| **[kimi-knowledge/INDEX.md](kimi-knowledge/INDEX.md)** | Локальное зеркало kimi.ai (use-cases / capabilities / showcases); правило [`.cursor/rules/kimi-product-knowledge.mdc`](../.cursor/rules/kimi-product-knowledge.mdc); fetch: `scripts/fetch_kimi_docs.py` |
 | **[../deploy/observability/README.md](../deploy/observability/README.md)** | Observability-стек: Prometheus / Grafana / Loki / Alertmanager + SLO |
 | **[../env/.env.example](../env/.env.example)** | Канон env + чеклист первого подъёма |
 

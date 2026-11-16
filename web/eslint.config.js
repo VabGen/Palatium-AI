@@ -34,6 +34,9 @@ export default tseslint.config(
       'test-results/',
       '.shots/',
       'custom-elements.json',
+      // Локальный скретч (`.gitignore` → `.local/`): одноразовые скрипты живут вне
+      // исходников и не должны гейтить `npm run lint` всего `web/` (017).
+      '.local/',
     ],
   },
   js.configs.recommended,

@@ -34,14 +34,14 @@ test.describe('paste auto-attach', () => {
   test('короткая вставка остаётся в поле — attachments.init не вызывается', async ({ page }) => {
     const short = 'я'.repeat(AUTO_ATTACH_CHARS);
     const server = defaultApi();
-    server.reply('intents.process', answer());
+    server.reply('intents.process.stream', answer());
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
 
     await pasteIntoComposer(page, short);
 
-    await expect(page.getByRole('textbox')).toHaveValue(short);
+    await expect(page.locator('.composer-textarea')).toHaveValue(short);
     await expect(page.locator('.attachment-chip')).toHaveCount(0);
     expect(server.callsTo('attachments.init')).toHaveLength(0);
   });
@@ -53,7 +53,7 @@ test.describe('paste auto-attach', () => {
     const server = defaultApi();
     stubPastedTextUpload(server, longText);
     server.reply('attachments.delete', { status: 204, json: {} });
-    server.reply('intents.process', answer());
+    server.reply('intents.process.stream', answer());
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -61,7 +61,7 @@ test.describe('paste auto-attach', () => {
     await pasteIntoComposer(page, longText);
 
     await expect(page.locator('.attachment-chip.is-paste.is-ready')).toBeVisible();
-    await expect(page.getByRole('textbox')).toHaveValue('');
+    await expect(page.locator('.composer-textarea')).toHaveValue('');
     await expect(page.getByText(ru['composer.asDocument'])).toBeVisible();
 
     await page.getByRole('button', { name: 'Отправить сообщение' }).click();
@@ -73,12 +73,12 @@ test.describe('paste auto-attach', () => {
       /^pasted-text_\d{4}-\d{2}-\d{2}\.txt$/
     );
     expect(server.callsTo('attachments.complete')).toHaveLength(1);
-    expect(server.lastCall('intents.process')?.body).toMatchObject({
+    expect(server.lastCall('intents.process.stream')?.body).toMatchObject({
       attachment_ids: [ATTACHMENT_ID],
       text: ru['composer.pastedDefaultPrompt'],
     });
     const intentText = String(
-      (server.lastCall('intents.process')?.body as { text?: string }).text ?? ''
+      (server.lastCall('intents.process.stream')?.body as { text?: string }).text ?? ''
     );
     expect(intentText).not.toContain(longText.slice(0, 40));
   });
@@ -106,11 +106,11 @@ test.describe('paste auto-attach', () => {
     await page.getByRole('button', { name: ru['composer.showInField'] }).click();
 
     await expect(page.locator('.attachment-chip')).toHaveCount(0);
-    await expect(page.getByRole('textbox')).toHaveValue(restorable);
+    await expect(page.locator('.composer-textarea')).toHaveValue(restorable);
     expect(server.callsTo('attachments.delete')).toHaveLength(1);
     expect(server.lastCall('attachments.delete')?.path).toContain(ATTACHMENT_ID);
     expect(filename).toMatch(/^pasted-text_/);
-    expect(server.callsTo('intents.process')).toHaveLength(0);
+    expect(server.callsTo('intents.process.stream')).toHaveLength(0);
   });
 
   test('Удалить chip шлёт DELETE и не шлёт intent', async ({ page }) => {
@@ -130,9 +130,9 @@ test.describe('paste auto-attach', () => {
       .click();
 
     await expect(page.locator('.attachment-chip')).toHaveCount(0);
-    await expect(page.getByRole('textbox')).toHaveValue('');
+    await expect(page.locator('.composer-textarea')).toHaveValue('');
     expect(server.callsTo('attachments.delete')).toHaveLength(1);
-    expect(server.callsTo('intents.process')).toHaveLength(0);
+    expect(server.callsTo('intents.process.stream')).toHaveLength(0);
   });
 
   test('«Показать в поле» при тексте > INTENT_TEXT_LIMIT оставляет chip', async ({ page }) => {
@@ -150,7 +150,7 @@ test.describe('paste auto-attach', () => {
 
     // Toast + chip остаётся: поле не может вместить 32k+.
     await expect(page.locator('.attachment-chip.is-paste')).toBeVisible();
-    await expect(page.getByRole('textbox')).toHaveValue('');
+    await expect(page.locator('.composer-textarea')).toHaveValue('');
     expect(server.callsTo('attachments.delete')).toHaveLength(0);
   });
 });

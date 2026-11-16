@@ -18,10 +18,26 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 # Multipliers vs the configured turn_hop_budget_ms (ObservabilityConfig).
+#
+# Down-scales: low-risk routes must degrade earlier — a restyle should not burn a
+# full knowledge budget.
+#
+# Up-scales: a worker pass is structurally more expensive than a chat turn. It costs
+# continuation + intent + weaving + supervisor + worker + critic + formatter — seven
+# graph hops, each with an LLM call. Measured against a single 15 s number, such a
+# turn is over budget *by construction*, so the alert fired on every legitimate
+# research request and stopped being a signal. The scale is not a free pass: the
+# comparison excludes external I/O (document parse/OCR), so what remains inside the
+# scaled budget is genuine agent work.
 _STRATEGY_BUDGET_SCALE: dict[str, float] = {
     "format_only": 0.6,
     "clarify": 0.5,
     "ack_only": 0.4,
+    "reason_only": 1.6,
+    "retrieve_then_reason": 2.0,
+    "direct_tool_call": 2.0,
+    "code_sandbox": 2.0,
+    "data_analysis": 2.0,
 }
 
 # Critic LLM is optional quality work. When workers already burned most of the
@@ -39,7 +55,12 @@ class HopBudgetDecision(BaseModel):
 
 
 class HopBudgetPolicy:
-    """Pure domain policy: hop total vs budget → soft degrade actions."""
+    """Pure domain policy: agent work vs budget → soft degrade actions.
+
+    Every gate compares **agent work**, not wall clock: a turn that spent 25 s in
+    OCR of two scans has no reason to skip the Critic or the Formatter repairs —
+    the agents themselves were fast (see ``HopTimingCollector.agent_ms``).
+    """
 
     @classmethod
     def effective_budget_ms(cls, *, base_ms: int, strategy: str | None) -> int:

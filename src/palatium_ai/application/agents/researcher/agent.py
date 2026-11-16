@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING
 from palatium_ai.application.agents.researcher.llm_research import run_llm_research
 from palatium_ai.application.agents.researcher.mcp_path import McpPathDeps, execute_mcp_capability
 from palatium_ai.application.agents.researcher.outcomes import failure_output
-from palatium_ai.application.agents.researcher.parsing import decode_researcher_input
+from palatium_ai.application.agents.researcher.parsing import (
+    FAILURE_PLACEHOLDER_SUMMARY,
+    decode_researcher_input,
+)
 from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
 from palatium_ai.application.services.tool_argument_builder import ToolArgumentBuilder
 from palatium_ai.application.tools.executor import ToolExecutor
@@ -26,9 +29,14 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
+from palatium_ai.domain.agents.researcher import ResearcherOutput
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
 
 if TYPE_CHECKING:
+    from palatium_ai.application.services.attachment_reference_resolver import (
+        AttachmentReferenceResolver,
+    )
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.ports.harness import HarnessPort
     from palatium_ai.domain.ports.llm import LLMPort
@@ -49,11 +57,13 @@ class ResearcherAgent(BaseAgent):
         *,
         mcp_tool_call_repository: McpToolCallRecorderPort | None = None,
         capability_index: MCPCapabilityIndex | None = None,
+        file_reference_resolver: AttachmentReferenceResolver | None = None,
     ) -> None:
         super().__init__(harness, config)
         self._llm = llm
         self._mcp_registry = mcp_registry
         self._mcp_tool_call_repository = mcp_tool_call_repository
+        self._file_reference_resolver = file_reference_resolver
         self._tool_executor = ToolExecutor(self._config)
         self._capability_index: MCPCapabilityIndex | None
         if capability_index is not None:
@@ -77,10 +87,23 @@ class ResearcherAgent(BaseAgent):
             "skill_catalog",
             "memory_hints_json",
             "dialog_window_json",
+            "project_agents_md",
         ]
 
     def get_available_tools(self) -> list[str]:
         return list(self._config.allowed_tools)
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based grounding check — reject success that claims evidence it lacks."""
+        if not isinstance(output.output, ResearcherOutput):
+            return False
+        body = output.output
+        if body.cannot_answer_without_source and output.status == "success":
+            return False
+        summary = body.summary.strip()
+        if not summary or summary == FAILURE_PLACEHOLDER_SUMMARY:
+            return False
+        return not (body.grounding_satisfied and not body.sources_used)
 
     @traceable(name="researcher.run")
     async def run(self, input: AgentInput) -> AgentOutput:
@@ -118,6 +141,7 @@ class ResearcherAgent(BaseAgent):
                         argument_builder=self._argument_builder,
                         mcp_tool_call_repository=self._mcp_tool_call_repository,
                         agent_role=self._config.role,
+                        file_reference_resolver=self._file_reference_resolver,
                     ),
                     task_input,
                     context,
@@ -137,7 +161,10 @@ class ResearcherAgent(BaseAgent):
                     task_input=task_input,
                     context=context,
                     skill_catalog=input.context.get("skill_catalog", ""),
+                    project_agents_md=input.context.get("project_agents_md", ""),
                     task_id=input.task_id,
+                    image_parts=input.image_parts,
+                    document_parts=input.document_parts,
                 )
                 if handled is not None:
                     return handled
@@ -169,8 +196,11 @@ class ResearcherAgent(BaseAgent):
             task_input=task_input,
             context=context,
             skill_catalog=input.context.get("skill_catalog", ""),
+            project_agents_md=input.context.get("project_agents_md", ""),
             task_id=input.task_id,
             agent_role=self._config.role,
+            image_parts=input.image_parts,
+            document_parts=input.document_parts,
         )
 
     async def _maybe_adaptive_empty(
@@ -181,6 +211,9 @@ class ResearcherAgent(BaseAgent):
         context: AgentContext,
         skill_catalog: str,
         task_id: object,
+        image_parts: tuple[ImagePart, ...] = (),
+        document_parts: tuple[DocumentPart, ...] = (),
+        project_agents_md: str = "",
     ) -> AgentOutput | None:
         """Empty MCP → stub (flag off), degrade LLM (optional), or clarification (required)."""
         from palatium_ai.application.agents.researcher.outcomes import required_empty_clarification_output
@@ -196,7 +229,8 @@ class ResearcherAgent(BaseAgent):
             enabled=enabled,
             grounding=task_input.context_packet.grounding,
         )
-        mode = str(task_input.context_packet.grounding or "optional")
+        # ``grounding`` is a validated Literal (never empty), so no fallback is needed.
+        mode: str = task_input.context_packet.grounding
         user_text = task_input.context_packet.user_text
         if decision.action == "stub":
             logger.warning(
@@ -245,9 +279,12 @@ class ResearcherAgent(BaseAgent):
             task_input=task_input,
             context=context,
             skill_catalog=skill_catalog,
+            project_agents_md=project_agents_md,
             task_id=task_id,  # type: ignore[arg-type]
             agent_role=self._config.role,
             grounding_degraded=True,
+            image_parts=image_parts,
+            document_parts=document_parts,
         )
         agent_metrics.record_grounding_latency(
             mode=mode,

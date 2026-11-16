@@ -103,7 +103,7 @@ async def test_formatter_markdown_stream_dual_emit_and_document() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_formatter_stream_strips_emoji_from_sse_and_document() -> None:
+async def test_formatter_stream_keeps_icon_tokens_and_drops_emoji() -> None:
     markdown = '# <icon name="document"/> Title\n\nRisk ⚠️ here 📞.\n'
     harness = AsyncMock()
 
@@ -146,10 +146,14 @@ async def test_formatter_stream_strips_emoji_from_sse_and_document() -> None:
     sse_blob = "".join(
         str(e.get("content") or e.get("delta") or "") for e in events if e.get("event") in {"text_delta", "answer_delta"}
     )
+    # Preview keeps mapped icon tokens (the FE renders them via TokenIcon) and drops
+    # every pictograph; see the FormatterMarkdownEmitter module contract.
     assert "⚠" not in sse_blob
     assert "📞" not in sse_blob
     assert "📄" not in sse_blob
-    assert "<icon" not in sse_blob
+    assert '<icon name="document"/>' in sse_blob
+    assert '<icon name="warning"/>' in sse_blob
+    assert 'x="' not in sse_blob  # LLM slip form is normalised before it reaches the FE
 
     assert isinstance(output.output, ContentDocument)
     prose = output.output.plain_text()

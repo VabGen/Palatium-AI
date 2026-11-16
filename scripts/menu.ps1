@@ -17,6 +17,16 @@ if (-not (Get-Command gum -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+# Repo helpers under scripts/ are stdlib-only, so they run through uv with --no-project:
+# a cold `uv run` would sync the whole project venv just to print compose flags, and a
+# bare `python` is not on PATH on a stock Windows box (the menu died on it before, 001).
+$uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $uvCmd) {
+    Write-Host "uv not found. Install uv (https://docs.astral.sh/uv/) and re-run." -ForegroundColor Red
+    exit 1
+}
+$Uv = $uvCmd.Source
+
 # ── Context ────────────────────────────────────────────────────────────────
 $root    = Split-Path -Parent $PSScriptRoot
 $envFile = if ($env:ENV_FILE) { $env:ENV_FILE } else { "env/.env" }
@@ -31,7 +41,9 @@ if (-not $masterKey) { $masterKey = "sk-palatium-master" }
 
 function Invoke-Compose {
     param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Rest)
-    docker compose --env-file $envFile --profile docker-mcp --profile docker-api @Rest
+    # `memory-jobs` belongs to the running stack (promote loop, see `make up`), so `restart`,
+    # `ps` and `logs all` must see it — otherwise the worker is invisible to this menu.
+    docker compose --env-file $envFile --profile docker-mcp --profile docker-api --profile memory-jobs @Rest
 }
 
 function Invoke-ComposeExtra {
@@ -55,8 +67,18 @@ function Invoke-ComposeObservability {
 # The probe also decides whether `attachments-s3` can be added at all, from the store
 # image's availability — a plain list of profiles here would silently skew from `make up`.
 function Get-FullComposeArgs {
-    $flags = ((python scripts/attachments_probe.py --compose-args) -join " ") -split "\s+" |
-        Where-Object { $_ }
+    $raw = & $Uv run --no-project python scripts/attachments_probe.py --compose-args
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  attachments probe failed (exit $LASTEXITCODE) — refusing to start without its overlays (runbook §16.9)." `
+            -ForegroundColor $C_ERR
+        return $null
+    }
+    $flags = ($raw -join " ") -split "\s+" | Where-Object { $_ }
+    if (-not $flags) {
+        Write-Host "  attachments probe returned no flags — refusing to start without its overlays (runbook §16.9)." `
+            -ForegroundColor $C_ERR
+        return $null
+    }
     return @($flags)
 }
 
@@ -66,7 +88,7 @@ function Write-AttachmentsMode {
     if ($Full) { $modeArgs += "--full" }
     Write-Host ""
     Write-Host "  Attachments mode ($envFile):" -ForegroundColor $C_ACC
-    python scripts/attachments_probe.py @modeArgs | ForEach-Object {
+    & $Uv run --no-project python scripts/attachments_probe.py @modeArgs | ForEach-Object {
         $color = if ($_ -like "warn:*") { $C_ERR } elseif ($_ -like "idle:*") { $C_MUTE } else { $C_TEXT }
         Write-Host ("    {0}" -f $_) -ForegroundColor $color
     }
@@ -242,8 +264,9 @@ try {
         switch ($choice) {
             "start"        {
                 $composeArgs = Get-FullComposeArgs
+                if (-not $composeArgs) { break }
                 $withS3 = $composeArgs -contains "attachments-s3"
-                $title = if ($withS3) { "Starting stack (api+mcp+av+s3)..." } else { "Starting stack (api+mcp+av)..." }
+                $title = if ($withS3) { "Starting stack (api+mcp+av+s3+memory-jobs)..." } else { "Starting stack (api+mcp+av+memory-jobs)..." }
                 Invoke-WithSpinner -Title $title -ArgumentList @($root, $envFile, $composeArgs) -Action {
                     param($rootDir, $envFileArg, $composeFlagArgs)
                     Set-Location $rootDir
@@ -252,7 +275,9 @@ try {
                 Write-AttachmentsMode -Full
             }
             "start-full"   {
-                $composeArgs = @("--profile", "observability") + (Get-FullComposeArgs)
+                $fullArgs = Get-FullComposeArgs
+                if (-not $fullArgs) { break }
+                $composeArgs = @("--profile", "observability") + $fullArgs
                 Invoke-WithSpinner -Title "Starting full stack (+observability)..." -ArgumentList @($root, $envFile, $composeArgs) -Action {
                     param($rootDir, $envFileArg, $composeFlagArgs)
                     Set-Location $rootDir
@@ -267,7 +292,9 @@ try {
             "rebuild-app"  {
                 Invoke-Compose build api mcp-edms mcp-analytics
                 if ($LASTEXITCODE -eq 0) {
-                    Invoke-Compose up -d --no-deps api mcp-edms mcp-analytics
+                    # memory-consolidate runs the same image: leaving it up would keep the
+                    # previous build serving promote/retention.
+                    Invoke-Compose up -d --no-deps api mcp-edms mcp-analytics memory-consolidate
                 } else {
                     Write-Host "  build failed — nothing restarted" -ForegroundColor $C_ERR
                 }
@@ -286,7 +313,7 @@ try {
             "health" {
                 # Single source of truth: `make verify` runs the same helper, so the two
                 # entry points cannot drift on which endpoints count as "up" (010).
-                python scripts/make_helpers.py verify
+                & $Uv run --no-project python scripts/make_helpers.py verify
                 if ($LASTEXITCODE -ne 0) {
                     Write-Host ""
                     Write-Host "  Some endpoints are down — check 'Service status' / 'Logs all'." -ForegroundColor $C_ERR
@@ -301,21 +328,24 @@ try {
                 }
             }
             "models" {
-                curl.exe -sf -H "Authorization: Bearer $masterKey" `
-                    http://localhost:4000/v1/models | python -m json.tool
+                $raw = curl.exe -sf -H "Authorization: Bearer $masterKey" http://localhost:4000/v1/models
+                if ($raw) { $raw | ConvertFrom-Json | ConvertTo-Json -Depth 20 } `
+                    else { Write-Host "  LiteLLM is not answering on :4000" -ForegroundColor $C_ERR }
             }
             "test-tier" {
                 $json = '{"model":"tier-mid","messages":[{"role":"user","content":"Say OK"}]}'
-                curl.exe -sf http://localhost:4000/v1/chat/completions `
+                $raw = curl.exe -sf http://localhost:4000/v1/chat/completions `
                     -H "Authorization: Bearer $masterKey" `
                     -H "Content-Type: application/json" `
-                    -d $json | python -m json.tool
+                    -d $json
+                if ($raw) { $raw | ConvertFrom-Json | ConvertTo-Json -Depth 20 } `
+                    else { Write-Host "  LiteLLM is not answering on :4000" -ForegroundColor $C_ERR }
             }
             "migrate"      { Invoke-Compose exec api alembic upgrade head }
             "list-dbs"     { Invoke-Compose exec postgres psql -U postgres -c "\l" }
             "attach-up"    { Invoke-ComposeExtra "attachments" up -d clamav }
             "attach-s3-up" {
-                python scripts/attachments_probe.py --preflight-image --skip-s3 --skip-clamav --skip-api
+                & $Uv run --no-project python scripts/attachments_probe.py --preflight-image --skip-s3 --skip-clamav --skip-api
                 if ($LASTEXITCODE -eq 0) {
                     Invoke-ComposeExtra "attachments-s3" up -d minio
                 } else {
@@ -327,7 +357,7 @@ try {
                 }
             }
             "attach-down"  { Invoke-ComposeAttachments stop clamav minio }
-            "attach-probe" { python scripts/attachments_probe.py }
+            "attach-probe" { & $Uv run --no-project python scripts/attachments_probe.py }
             "attach-logs-av" { Invoke-ComposeExtra "attachments" logs -f clamav }
             "attach-logs-s3" { Invoke-ComposeExtra "attachments-s3" logs -f minio }
             "obs-up"       { Invoke-ComposeObservability up -d minio silo-init clickhouse langfuse-web langfuse-worker }

@@ -1,0 +1,8 @@
+{
+  "response": {
+    "summary": "def clamp01(x: float) -> float:\\n    return max(0.0, min(1.0, x))",
+    "confidence": 0.92,
+    "language": "python",
+    "requires_sandbox_exec": false
+  }
+}

@@ -7,7 +7,7 @@
       "requires_mcp": false
     },
     "cassette": "researcher/knowledge.json",
-    "expect": { "status": "success", "requires_mcp": false, "has_summary": true }
+    "expect": { "status": "success", "requires_mcp": false, "has_summary": true, "tool_calls": [] }
   },
   {
     "id": "researcher-search-knowledge",
@@ -26,7 +26,8 @@
       "status": "partial",
       "has_summary": true,
       "mcp_tool": "search_knowledge",
-      "used_mcp_source": true
+      "used_mcp_source": true,
+      "tool_calls": ["search_knowledge"]
     }
   },
   {
@@ -46,7 +47,8 @@
       "status": "partial",
       "has_summary": true,
       "mcp_tool": "search_memory",
-      "used_mcp_source": true
+      "used_mcp_source": true,
+      "tool_calls": ["search_memory"]
     }
   },
   {
@@ -66,7 +68,8 @@
       "status": "partial",
       "has_summary": true,
       "mcp_tool": "graph_query",
-      "used_mcp_source": true
+      "used_mcp_source": true,
+      "tool_calls": ["graph_query"]
     }
   },
   {
@@ -87,7 +90,8 @@
       "status": "partial",
       "has_summary": true,
       "mcp_tool": "web_fallback",
-      "used_mcp_source": true
+      "used_mcp_source": true,
+      "tool_calls": ["web_fallback"]
     }
   }
 ]

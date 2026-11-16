@@ -39,12 +39,17 @@ description: >
 
 ## Как стыкуется с правилами проекта
 
+- **Сначала Kimi, потом craft.** Идентичность UI — Brand Book +
+  `.cursor/rules/kimi-design.mdc` + `web/src/tokens.css`. Оркестратор:
+  `@kimi-design`. Этот индекс (`web-craft`) — только motion/полировка *поверх*
+  уже выбранных токенов; `apple-design` не перебивает Color System Kimi.
 - Это чисто клиентский слой (`web/`) — правила HITL/RBAC/audit (020, 070) сюда не применяются.
 - Новая зависимость (например, Motion, Sonner, base-ui, zustand из `pick-ui-library`) — обычное добавление в `package.json`. Отдельного процесса ревью фронтенд-зависимостей в проекте пока нет; если такой процесс появится — его следует оформить как дополнение к `code-revision`, а не к этому файлу.
 - **Порядок вызова при комплексной задаче:**
-  1. Если надо выбрать библиотеку → `@pick-ui-library`
-  2. Затем общий подход → `@emil-design-eng` (если нужен)
-  3. Реализация анимации → `@animate` (или `@animate-expo` для RN)
+  1. Brand / зоны / токены → `@kimi-design` (обязательно при редизайне и новых экранах)
+  2. Если надо выбрать библиотеку → `@pick-ui-library`
+  3. Затем общий подход → `@emil-design-eng` (если нужен)
+  4. Реализация анимации → `@animate` (или `@animate-expo` для RN)
 - **Read-only скиллы** (только анализ):
   - `improve-animations`
   - `find-animation-opportunities`

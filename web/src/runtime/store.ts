@@ -179,6 +179,18 @@ export function startNewThread(): void {
   publish();
 }
 
+/**
+ * P1b: продолжить durable session с полки истории.
+ * `threadFromHost=false` — виджет объявит id host'у (`sed:thread-changed`).
+ */
+export function switchThread(threadId: string): void {
+  const next = normalizeThreadId(threadId);
+  if (next === null || next === state.threadId) return;
+  state.threadId = next;
+  state.threadFromHost = false;
+  publish();
+}
+
 /** `lang`-атрибут элемента: задаёт локаль форматирования поверх контекста. */
 export function setLangOverride(lang: string | null): void {
   state.langOverride = lang && lang.trim().length > 0 ? lang.trim() : null;

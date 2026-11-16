@@ -28,6 +28,7 @@ def _session_record_from_orm(entity: SessionORM) -> SessionRecord:
         user_id=entity.user_id,
         status=entity.status,
         title=entity.title,
+        project_id=entity.project_id,
         context=dict(raw_context),
         created_at=entity.created_at,
         updated_at=entity.updated_at,
@@ -83,14 +84,64 @@ class SessionRepository:
         limit: int = 100,
         offset: int = 0,
         user_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[SessionRecord]:
-        """Return the most recently updated sessions (optionally scoped to one user)."""
+        """Return the most recently updated sessions (optionally scoped to user/project)."""
         async with self._session_factory() as session:
-            stmt = select(SessionORM).order_by(SessionORM.updated_at.desc()).offset(offset).limit(limit)
+            stmt = (
+                select(SessionORM)
+                .where(SessionORM.status != "archived")
+                .order_by(SessionORM.updated_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
             if user_id is not None:
                 stmt = stmt.where(SessionORM.user_id == user_id)
+            if project_id is not None:
+                stmt = stmt.where(SessionORM.project_id == project_id)
             result = await session.execute(stmt)
             return [_session_record_from_orm(row) for row in result.scalars().all()]
+
+    async def set_project_id(
+        self,
+        *,
+        thread_id: str,
+        project_id: str | None,
+    ) -> SessionRecord:
+        """Pin or unpin a session to a project id string."""
+        async with self._session_factory() as session:
+            entity = await self._get_orm_by_thread_id(thread_id=thread_id, session=session)
+            if entity is None:
+                msg = f"Session '{thread_id}' not found"
+                raise LookupError(msg)
+            entity.project_id = project_id
+            await session.commit()
+            await session.refresh(entity)
+            return _session_record_from_orm(entity)
+
+    async def set_title(self, *, thread_id: str, title: str) -> SessionRecord:
+        """Overwrite the session title (user rename)."""
+        async with self._session_factory() as session:
+            entity = await self._get_orm_by_thread_id(thread_id=thread_id, session=session)
+            if entity is None:
+                msg = f"Session '{thread_id}' not found"
+                raise LookupError(msg)
+            entity.title = title
+            await session.commit()
+            await session.refresh(entity)
+            return _session_record_from_orm(entity)
+
+    async def set_status(self, *, thread_id: str, status: str) -> SessionRecord:
+        """Update session lifecycle status."""
+        async with self._session_factory() as session:
+            entity = await self._get_orm_by_thread_id(thread_id=thread_id, session=session)
+            if entity is None:
+                msg = f"Session '{thread_id}' not found"
+                raise LookupError(msg)
+            entity.status = status
+            await session.commit()
+            await session.refresh(entity)
+            return _session_record_from_orm(entity)
 
     async def get_by_thread_id(self, *, thread_id: str) -> SessionRecord | None:
         """Find a session by its stable thread identifier."""

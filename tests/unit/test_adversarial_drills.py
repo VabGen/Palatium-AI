@@ -35,6 +35,7 @@ from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.mcp.argument_policy import UnsafeToolArgumentError, assert_arguments_safe
 from palatium_ai.domain.mcp.models import MCPToolCall, MCPToolDescriptor, MCPToolResult
 from palatium_ai.domain.mcp.tool_policy import classify_side_effect, requires_interrupt_before_call
+from palatium_ai.domain.ports.mcp import McpServerUnavailableError
 from palatium_ai.infrastructure.mcp.base import MCPJsonRpcClient
 from palatium_ai.infrastructure.mcp.registry import MCPCircuitOpenError, MCPRegistry
 from palatium_ai.infrastructure.resilience.circuit import CircuitOpenError, ConsecutiveFailureCircuit
@@ -161,7 +162,9 @@ async def test_drill_mcp_call_circuit_opens(monkeypatch: pytest.MonkeyPatch) -> 
 
     await reg.list_tools("edms")
     for _ in range(3):
-        with pytest.raises(httpx.HTTPError):
+        # Transport failure surfaces as the port's typed "server unavailable" so the
+        # answer can degrade gracefully instead of leaking an httpx error (035).
+        with pytest.raises(McpServerUnavailableError):
             await reg.call_tool(
                 "edms",
                 MCPToolCall(name="search_documents", arguments={}),

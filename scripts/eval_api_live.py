@@ -34,13 +34,13 @@ def _http_url(url: str) -> str:
 def _mint_dev_token(*, base_url: str, user_id: str) -> str:
     endpoint = _http_url(f"{base_url.rstrip('/')}/api/auth/dev-token")
     payload = json.dumps({"user_id": user_id}).encode("utf-8")
-    req = urllib.request.Request(  # noqa: S310
+    req = urllib.request.Request(
         endpoint,
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+    with urllib.request.urlopen(req, timeout=30) as resp:
         body = json.loads(resp.read().decode("utf-8"))
     token = body.get("access_token") if isinstance(body, dict) else None
     if not isinstance(token, str) or not token:
@@ -51,7 +51,7 @@ def _mint_dev_token(*, base_url: str, user_id: str) -> str:
 def _post_process(*, base_url: str, text: str, thread_id: str, token: str) -> tuple[int, float]:
     endpoint = _http_url(f"{base_url.rstrip('/')}/api/intents/process")
     payload = json.dumps({"text": text, "thread_id": thread_id}).encode("utf-8")
-    req = urllib.request.Request(  # noqa: S310
+    req = urllib.request.Request(
         endpoint,
         data=payload,
         headers={
@@ -61,7 +61,7 @@ def _post_process(*, base_url: str, text: str, thread_id: str, token: str) -> tu
         method="POST",
     )
     started = time.perf_counter()
-    with urllib.request.urlopen(req, timeout=180) as resp:  # noqa: S310
+    with urllib.request.urlopen(req, timeout=180) as resp:
         status = int(resp.status)
         _ = resp.read()
     elapsed_ms = (time.perf_counter() - started) * 1000.0

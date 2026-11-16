@@ -21,9 +21,14 @@ def formatter_max_tokens(
     payload_text: str,
     *,
     style_hint: FormatterStyleHint | str | None = None,
+    final_text_len: int = 0,
 ) -> int:
-    """Completion budget from full user payload (not final_text alone)."""
-    estimated = count_tokens(payload_text) * 2
+    """Completion budget from full user payload AND expected output size."""
+    estimated_payload = count_tokens(payload_text) * 2
+    # ~2.5 chars per token for RU; +30% headroom for markdown structure.
+    estimated_output = int(max(final_text_len / 2.5 * 1.3, 0)) if final_text_len else 0
+    estimated = max(estimated_payload, estimated_output)
+
     ceiling = FORMATTER_MAX_COMPLETION_TOKENS
     if style_hint in _BRAND_STYLES:
         ceiling = FORMATTER_BRAND_MAX_COMPLETION_TOKENS

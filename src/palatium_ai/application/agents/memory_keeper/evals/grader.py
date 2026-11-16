@@ -35,6 +35,15 @@ class MemoryKeeperGrader:
         if isinstance(kind, str) and not any(isinstance(item, dict) and item.get("kind") == kind for item in facts):
             return failed(0.0, details=f"no fact with kind={kind}")
 
+        if "tool_calls" in expect:
+            actual_tools = {str(item) for item in (resolved.get("tool_calls") or [])}
+            expected_tools = {str(item) for item in (expect.get("tool_calls") or [])}
+            if actual_tools != expected_tools:
+                return failed(
+                    0.0,
+                    details=f"tool_calls: expected {sorted(expected_tools)!r}, got {sorted(actual_tools)!r}",
+                )
+
         return passed(1.0, details="memory keeper facts ok")
 
 

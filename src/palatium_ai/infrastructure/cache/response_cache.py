@@ -61,7 +61,7 @@ class RedisResponseCache:
     async def get(self, key: str) -> str | None:
         try:
             raw = await self._redis.get(key)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # a cache read must not break the request (080)
             logger.warning("response_cache.redis_get_failed", error=str(exc))
             return None
         if raw is None:
@@ -75,5 +75,5 @@ class RedisResponseCache:
             return
         try:
             await self._redis.set(key, value[:_MAX_VALUE_CHARS], ex=ttl_seconds)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # a cache write must not break the request (080)
             logger.warning("response_cache.redis_set_failed", error=str(exc))

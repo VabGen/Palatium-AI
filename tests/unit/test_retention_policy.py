@@ -55,6 +55,66 @@ def test_memory_ttl_episode_and_pii() -> None:
     assert RetentionPolicy.memory_ttl_days(memory_type="fact", contains_pii=True, windows=windows) == 30
 
 
+def test_memory_ttl_inferred_capped_below_medium() -> None:
+    """ADR 0008 / ASI-06 O3: extract/compact inferred must not linger like HITL facts."""
+    windows = RetentionWindows(
+        memory_medium_days=30,
+        memory_episode_days=365,
+        memory_pii_days=90,
+        memory_inferred_days=7,
+    )
+    assert (
+        RetentionPolicy.memory_ttl_days(
+            memory_type="fact",
+            contains_pii=False,
+            windows=windows,
+            trust="inferred",
+        )
+        == 7
+    )
+    assert (
+        RetentionPolicy.memory_ttl_days(
+            memory_type="fact",
+            contains_pii=False,
+            windows=windows,
+            trust="verified",
+        )
+        == 30
+    )
+    # Inferred cap and PII both shrink: min(class∩pii, inferred).
+    assert (
+        RetentionPolicy.memory_ttl_days(
+            memory_type="fact",
+            contains_pii=True,
+            windows=windows,
+            trust="inferred",
+        )
+        == 7
+    )
+    strict_pii = RetentionWindows(
+        memory_medium_days=30,
+        memory_pii_days=5,
+        memory_inferred_days=7,
+    )
+    assert (
+        RetentionPolicy.memory_ttl_days(
+            memory_type="fact",
+            contains_pii=True,
+            windows=strict_pii,
+            trust="inferred",
+        )
+        == 5
+    )
+    expires = RetentionPolicy.memory_expires_at(
+        memory_type="fact",
+        contains_pii=False,
+        created_at=_NOW,
+        windows=windows,
+        trust="inferred",
+    )
+    assert expires == _NOW + timedelta(days=7)
+
+
 def test_memory_expires_at_from_created_at() -> None:
     expires = RetentionPolicy.memory_expires_at(
         memory_type="fact",

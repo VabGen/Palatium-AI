@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from palatium_ai.domain.graph.cypher_safety import TENANT_SCOPE_PARAM, assert_graph_query_safe
+from palatium_ai.domain.graph.temporal import AS_OF_PARAM, as_of_param_value
 from palatium_ai.domain.graph.types import GraphQueryCommand, GraphQueryResult, GraphQueryRow
 
 
@@ -15,6 +16,7 @@ class InMemoryGraphPort:
         params = dict(command.params)
         # Force tenant scope: client-supplied params must never win over the authenticated user (020/070).
         params[TENANT_SCOPE_PARAM] = command.user_id
+        params.setdefault(AS_OF_PARAM, as_of_param_value(command.as_of))
         assert_graph_query_safe(command.cypher, params)
         # Echo the forced tenant scope so audit/debug rows cannot report a foreign user_id.
         values = {key: str(value) for key, value in params.items()}

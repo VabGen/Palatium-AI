@@ -8,6 +8,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+# One promote attempt is claim → graph write → mark; the claim exists only so two
+# promoters (scheduled job + operator CLI) cannot both read "not promoted" and write the
+# same version (M5 audit F6). The lease bounds a *crashed* promoter: without expiry a
+# killed process would park the candidate until someone clears the column by hand.
+DEFAULT_PROMOTE_CLAIM_SECONDS = 300
+
 
 class PromotionThresholds(BaseModel):
     """Config gates for promote (constants live in MemoryConfig; this is the value object)."""
@@ -34,3 +40,5 @@ class PromotionCandidate(BaseModel):
     contains_pii: bool = False
     last_accessed: datetime | None = None
     promoted_at: datetime | None = None
+    #: ADR 0008 staged trust (resolved at list time; default inferred = fail-closed).
+    trust: str = Field(default="inferred", max_length=32)

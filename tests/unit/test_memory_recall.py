@@ -7,6 +7,7 @@ import pytest
 from palatium_ai.application.services.memory_recall import recall_for_thread
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 from palatium_ai.domain.memory.recall import MemoryHit, MemoryRecallBundle
+from palatium_ai.domain.memory.types import MEMORY_EXPLICIT_WRITE_KEY
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
 
 
@@ -16,6 +17,45 @@ def test_recall_bundle_respects_char_budget() -> None:
     block = bundle.as_prompt_block()
     assert len(block) <= 300
     assert block.startswith("- [fact]")
+
+
+def test_restrict_kinds_filters_pins_only_when_asked() -> None:
+    """A content transform narrows pins too; other axes keep query-independent notes."""
+    hits = (
+        MemoryHit(text="сравни файлы", kind="fact", score=10_000, source="scratchpad"),
+        MemoryHit(text="меня зовут Геннадий", kind="preference", score=9_999, source="scratchpad"),
+        MemoryHit(text="port 5433", kind="fact", score=10, source="medium"),
+    )
+    bundle = MemoryRecallBundle(thread_id="t", hits=hits)
+
+    narrowed = bundle.restrict_kinds(kinds=("preference",), pin_kinds=("preference",))
+    assert [hit.text for hit in narrowed.hits] == ["меня зовут Геннадий"]
+
+    # Without pin_kinds the pin survives even when durable hits are narrowed.
+    durable_only = bundle.restrict_kinds(kinds=("preference",))
+    assert "сравни файлы" in [hit.text for hit in durable_only.hits]
+
+
+@pytest.mark.asyncio()
+async def test_recall_pin_kinds_filters_scratchpad_pins() -> None:
+    """Regression: a pinned ask («сравни файлы») must not seed a content-transform turn."""
+    from palatium_ai.domain.memory.scratchpad import ScratchpadSlot, SessionScratchpad
+
+    pad = SessionScratchpad(
+        thread_id="t-pin",
+        slots=(
+            ScratchpadSlot(key="u:files", text="сравни файлы", kind="fact"),
+            ScratchpadSlot(key="u:name", text="меня зовут Геннадий", kind="preference"),
+        ),
+    )
+    bundle = await recall_for_thread(
+        None,
+        thread_id="t-pin",
+        query="перепиши ответ короче",
+        scratchpad=pad,
+        pin_kinds=("preference",),
+    )
+    assert [hit.text for hit in bundle.hits] == ["меня зовут Геннадий"]
 
 
 @pytest.mark.asyncio()
@@ -184,3 +224,70 @@ async def test_recall_skips_user_namespace_facts_on_hot_path() -> None:
     assert "unrelated.pdf" not in texts
     assert any(hit.kind == "preference" for hit in bundle.hits)
     assert "concise" in texts.lower()
+
+
+@pytest.mark.asyncio()
+async def test_recall_merges_explicitly_approved_user_fact() -> None:
+    """R2.1/E2E-03: an HITL-approved fact is durable memory and crosses threads."""
+    port = InMemoryMemoryPort()
+    await port.put(
+        namespace=user_namespace("user-2"),
+        key="db_port",
+        value={
+            "text": "порт базы данных 5433",
+            "kind": "fact",
+            "confidence": 1.0,
+            MEMORY_EXPLICIT_WRITE_KEY: True,
+        },
+    )
+    bundle = await recall_for_thread(
+        port,
+        thread_id="thread-fresh",
+        user_id="user-2",
+        query="на каком порту база данных",
+        limit=4,
+    )
+    assert any("5433" in hit.text for hit in bundle.hits)
+
+
+@pytest.mark.asyncio()
+async def test_recall_keeps_inferred_user_fact_thread_scoped() -> None:
+    """The explicit-write marker must not open the door to inferred cross-thread facts."""
+    port = InMemoryMemoryPort()
+    await port.put(
+        namespace=user_namespace("user-3"),
+        key="inferred",
+        value={"text": "порт базы данных 5433", "kind": "fact", "confidence": 0.95},
+    )
+    bundle = await recall_for_thread(
+        port,
+        thread_id="thread-fresh",
+        user_id="user-3",
+        query="на каком порту база данных",
+        limit=4,
+    )
+    assert not any("5433" in hit.text for hit in bundle.hits)
+
+
+@pytest.mark.asyncio()
+async def test_recall_drops_unrelated_explicit_user_fact() -> None:
+    """W10 §5: HITL-approved user fact still needs lexical overlap with the ask."""
+    port = InMemoryMemoryPort()
+    await port.put(
+        namespace=user_namespace("user-4"),
+        key="budget",
+        value={
+            "text": "бюджет проекта BGT-42 — 4.2 млн",
+            "kind": "fact",
+            "confidence": 1.0,
+            MEMORY_EXPLICIT_WRITE_KEY: True,
+        },
+    )
+    bundle = await recall_for_thread(
+        port,
+        thread_id="thread-znt",
+        user_id="user-4",
+        query="как настроить SSH-ключ для GitHub",
+        limit=4,
+    )
+    assert not any("BGT-42" in hit.text for hit in bundle.hits)

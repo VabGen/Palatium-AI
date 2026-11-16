@@ -44,4 +44,14 @@ def test_repair_max_tokens_doubles_on_truncation() -> None:
 
     assert _repair_max_tokens(1_024, truncated=False) == 1_024
     assert _repair_max_tokens(1_024, truncated=True) == 2_048
-    assert _repair_max_tokens(3_000, truncated=True) == FORMATTER_MAX_COMPLETION_TOKENS
+    # Doubling a base above half the ceiling is clamped to the ceiling (SoT constant).
+    above_half_ceiling = FORMATTER_MAX_COMPLETION_TOKENS // 2 + 1
+    assert _repair_max_tokens(above_half_ceiling, truncated=True) == FORMATTER_MAX_COMPLETION_TOKENS
+
+
+def test_formatter_max_tokens_grows_with_final_text_len() -> None:
+    """A long worker body must raise the completion budget (truncation guard)."""
+    short = formatter_max_tokens("hi")
+    long_body = formatter_max_tokens("hi", final_text_len=20_000)
+    assert long_body > short
+    assert long_body <= FORMATTER_MAX_COMPLETION_TOKENS

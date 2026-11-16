@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+import tempfile
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -68,18 +69,44 @@ class AuditRecord(BaseModel):
     integrity_mac: str | None = None
 
 
+def _is_writable_dir(path: Path) -> bool:
+    """True when ``path`` exists (or can be created) and accepts writes."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(path, os.W_OK)
+
+
+def _fallback_audit_path() -> Path:
+    """Last-resort writable location (container ``read_only: true`` + tmpfs /tmp)."""
+    return Path(tempfile.gettempdir()) / "palatium-audit" / "audit-chain.log"
+
+
 def _default_audit_log_path() -> Path:
-    """Путь к hash-chained audit log (writable и в Docker, и локально)."""
-    container_logs = Path("/app/logs")
-    if container_logs.is_dir() or Path("/app").is_dir():
-        return container_logs / "audit-chain.log"
+    """Путь к hash-chained audit log (writable и в Docker, и локально).
+
+    ``/app`` may exist in a hardened container whose root filesystem is mounted
+    ``read_only: true`` (memory-consolidate), so existence is not writability:
+    probe every candidate and fall back to the writable temp dir instead of
+    raising ``OSError: Read-only file system`` on the first audit append.
+    """
+    candidates: list[Path] = []
+    if Path("/app").is_dir():
+        candidates.append(Path("/app/logs"))
 
     here = Path(__file__).resolve()
     for parent in here.parents:
         if (parent / "pyproject.toml").is_file():
-            return parent / ".cursor" / "logs" / "audit-chain.log"
+            candidates.append(parent / ".cursor" / "logs")
+            break
 
-    return Path.cwd() / "logs" / "audit-chain.log"
+    candidates.append(Path.cwd() / "logs")
+    candidates.append(_fallback_audit_path().parent)
+    for candidate in candidates:
+        if _is_writable_dir(candidate):
+            return candidate / "audit-chain.log"
+    return _fallback_audit_path()
 
 
 def _audit_hmac_secret() -> str | None:
@@ -124,6 +151,8 @@ class AuditChainLogger:
     file_path: Path
     hmac_secret: str | None = None
     _lock: Lock = field(default_factory=Lock, repr=False)
+    #: Set once the chain moved off an unwritable ``AUDIT_LOG_FILE`` (read-only rootfs).
+    _redirected: bool = field(default=False, repr=False, compare=False)
 
     def _read_last_current_hash(self) -> str:
         """Читает current_hash последней валидной записи хвоста файла.
@@ -249,15 +278,47 @@ class AuditChainLogger:
                 integrity_mac=integrity_mac,
             )
 
-            self.file_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.file_path.open("a", encoding="utf-8") as f:
-                f.write(record.model_dump_json(ensure_ascii=False, exclude_none=True))
-                f.write("\n")
-                f.flush()
-                # os.fsync(f.fileno()) — раскомментировать, если аудит
-                # является комплаенс-требованием (цена: latency per record)
-
+            self._append_record(record)
             return record
+
+    def _append_record(self, record: AuditRecord) -> None:
+        """Append one serialized record; a read-only mount falls back to temp dir."""
+        try:
+            self._write_line(record)
+        except OSError:
+            if not self._redirect_to_writable_path():
+                raise
+            self._write_line(record)
+
+    def _write_line(self, record: AuditRecord) -> None:
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.file_path.open("a", encoding="utf-8") as f:
+            f.write(record.model_dump_json(ensure_ascii=False, exclude_none=True))
+            f.write("\n")
+            f.flush()
+            # os.fsync(f.fileno()) — раскомментировать, если аудит
+            # является комплаенс-требованием (цена: latency per record)
+
+    def _redirect_to_writable_path(self) -> bool:
+        """Move the chain to a writable temp file after an ``OSError`` (once).
+
+        Happens when ``AUDIT_LOG_FILE`` is pinned to a path on a ``read_only``
+        container filesystem: the process must keep auditing instead of failing
+        every turn. The move is loud (CRITICAL) because the chain forks here.
+        """
+        if self._redirected:
+            return False
+        fallback = _fallback_audit_path()
+        if not _is_writable_dir(fallback.parent):
+            return False
+        logger.critical(
+            "audit log path is not writable; redirecting chain to temp dir",
+            previous_path=str(self.file_path),
+            fallback_path=str(fallback),
+        )
+        self.file_path = fallback
+        self._redirected = True
+        return True
 
     async def append_async(
         self,

@@ -1,39 +1,60 @@
 # src/palatium_ai/domain/memory/pii.py
 
-"""PII masking + write-time classification for memory (060)."""
+"""PII masking + write-time classification for memory (060).
+
+Patterns live in ``domain/pii`` (one registry for every boundary); this module keeps the
+memory-facing names and the whole-record masking contract, so callers and tests do not
+grow a second import path (010).
+"""
 
 from __future__ import annotations
 
-import re
+from pydantic import BaseModel
+
+from palatium_ai.core.security.pii import (
+    PiiKind,
+    contains_pii as _pii_detected,
+    scan_pii,
+    scrub_pii,
+)
 
 PII_PLACEHOLDER = "[PII]"
 
 _MEMORY_TEXT_KEYS: tuple[str, ...] = ("text", "content", "body", "summary")
 
-# Structured detectors only (not UX phrase lists) — 055/020.
-_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
-_PHONE_RE = re.compile(r"(?<!\d)(?:\+?\d[\d\-\s()]{8,}\d)(?!\d)")
-_PASSPORT_LIKE_RE = re.compile(r"\b(?:passport|паспорт)\s*[:#]?\s*[A-Z0-9]{5,}\b", re.IGNORECASE)
+
+class PiiClassification(BaseModel):
+    """Write-gate result: the flag plus the classes that raised it.
+
+    The kinds are what makes the gate observable — ``contains_pii=true`` alone cannot
+    tell an operator whether emails or account numbers are being stored (040).
+    """
+
+    model_config = {"frozen": True}
+
+    contains: bool
+    kinds: tuple[PiiKind, ...] = ()
+
+
+def classify_pii(*, text: str, client_flag: bool = False) -> PiiClassification:
+    """Classify text for storage; a client ``True`` may escalate, never de-escalate."""
+    scan = scan_pii(text.strip(), profile="strict")
+    return PiiClassification(contains=bool(client_flag) or scan.found, kinds=scan.kinds)
 
 
 def text_looks_like_pii(text: str) -> bool:
     """Conservative heuristic for write-time PII classification."""
-    blob = text.strip()
-    if not blob:
-        return False
-    return bool(_EMAIL_RE.search(blob) or _PHONE_RE.search(blob) or _PASSPORT_LIKE_RE.search(blob))
+    return _pii_detected(text.strip(), profile="strict")
 
 
 def mask_pii_in_text(text: str) -> str:
     """Replace structured PII detectors with stable placeholders (attachments G06, 060)."""
-    out = _EMAIL_RE.sub("[EMAIL]", text)
-    out = _PHONE_RE.sub("[PHONE]", out)
-    return _PASSPORT_LIKE_RE.sub("[ID]", out)
+    return scrub_pii(text, profile="strict", style="bracket")
 
 
 def resolve_contains_pii(*, text: str, client_flag: bool = False) -> bool:
     """Client may escalate to true; false is never trusted without server scan."""
-    return bool(client_flag) or text_looks_like_pii(text)
+    return classify_pii(text=text, client_flag=client_flag).contains
 
 
 def memory_contains_pii(value: dict[str, object], *, column_flag: bool = False) -> bool:

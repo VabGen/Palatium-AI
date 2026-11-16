@@ -35,6 +35,13 @@ class RetentionConfig(BaseConfig):
         le=3650,
         validation_alias="RETENTION_MEMORY_PII_DAYS",
     )
+    memory_inferred_days: int = Field(
+        default=7,
+        ge=1,
+        le=3650,
+        validation_alias="RETENTION_MEMORY_INFERRED_DAYS",
+        description="ADR 0008: shorter TTL for trust=inferred extract/compact facts.",
+    )
     attachment_pii_days: int = Field(
         default=90,
         ge=1,

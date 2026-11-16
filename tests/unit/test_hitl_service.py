@@ -70,6 +70,9 @@ async def test_create_and_resolve_card() -> None:
     assert card.risk_score == pytest.approx(0.6)
     assert card.token_nonce
     assert card.owner_user_id == ACTOR
+    # R3.4: the review card names the gate *and* the confidence that tripped it,
+    # so a read-only answer never looks like an unexplained write approval.
+    assert "confidence 0.40" in card.body
 
     result = await _do_resolve(service, card, _resolve(card))
     assert result.replayed is False

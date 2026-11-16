@@ -37,6 +37,7 @@ from palatium_ai.domain.attachments import (
     Attachment,
     AttachmentAnalyzePayload,
     AttachmentChunkedUploadError,
+    AttachmentCitationLookup,
     AttachmentContent,
     AttachmentContentMissingError,
     AttachmentContextBlock,
@@ -51,12 +52,15 @@ from palatium_ai.domain.attachments import (
     AttachmentRestoreNotAllowedError,
     AttachmentRestorePayload,
     AttachmentRetentionPolicy,
+    AttachmentThreadRequiredError,
     AttachmentTurnContext,
     AttachmentUploadTooLargeError,
     IntakeDecision,
+    ReclaimReason,
     extraction_source_to_extract_status,
 )
 from palatium_ai.domain.attachments.fence_source import attachment_fence_source
+from palatium_ai.domain.content.citations import CitationAnchor, CitationLocator, citation_window
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
 from palatium_ai.domain.memory.tool_output import wrap_untrusted_tool_output
 from palatium_ai.domain.policies.types import UntrustedContentAction
@@ -226,7 +230,17 @@ class AttachmentService:
         expires_in_seconds: int | None = None,
         project_id: str | None = None,
     ) -> AttachmentUploadTicket:
-        """Validate intake, create the PENDING row and issue a presigned PUT URL."""
+        """Validate intake, create the PENDING row and issue a presigned PUT URL.
+
+        ``attach`` mode is dialog-bound by contract: without ``thread_id`` the row
+        could never be listed, resolved or fenced again, so it is refused before
+        any blob or row exists (020, 055). The API schema enforces the same rule;
+        this guard keeps non-HTTP callers honest.
+        """
+        scoped_thread = (thread_id or "").strip() or None
+        if mode == "attach" and scoped_thread is None:
+            raise AttachmentThreadRequiredError()
+
         decision = AttachmentIntakePolicy.validate(
             filename=filename,
             mime_type=mime_type,
@@ -257,7 +271,7 @@ class AttachmentService:
         attachment = Attachment(
             id=attachment_id,
             user_id=user_id,
-            thread_id=thread_id,
+            thread_id=scoped_thread,
             filename=decision.filename,
             mime_type=mime_type,
             size_bytes=size_bytes,
@@ -276,10 +290,10 @@ class AttachmentService:
         )
         await self._audit(
             event="attachment_init",
-            thread_id=thread_id or "",
+            thread_id=scoped_thread or "",
             payload={"attachment_id": str(created.id), "mode": created.mode},
         )
-        logger.info("attachment.init", attachment_id=str(created.id), mode=created.mode, thread_id=thread_id or "")
+        logger.info("attachment.init", attachment_id=str(created.id), mode=created.mode, thread_id=scoped_thread or "")
         return AttachmentUploadTicket(
             attachment_id=created.id,
             upload_url=upload_url,
@@ -519,6 +533,8 @@ class AttachmentService:
         }
         if outcome.detected_mime_type:
             row_update["mime_type"] = outcome.detected_mime_type
+        if outcome.content_sha256 is not None:
+            row_update["content_sha256"] = outcome.content_sha256
         updated = updated.model_copy(update=row_update)
         saved = await self._repository.save(updated)
         await self._audit(
@@ -573,6 +589,57 @@ class AttachmentService:
         """Fetch one attachment or raise the typed not-found error."""
         return await self._require(attachment_id, user_id=user_id)
 
+    @traceable(name="attachment.locate_citation")
+    async def locate_citation(
+        self,
+        *,
+        attachment_id: UUID,
+        user_id: str,
+        quote: str,
+        declared_range: tuple[int, int] | None,
+        anchor: CitationAnchor,
+    ) -> AttachmentCitationLookup:
+        """Return the bounded source slice around a cited quote (W3b-2).
+
+        The owner check is the same one every other read uses (explicit ``user_id``
+        filter on top of RLS, 060) — a citation is not a capability to read someone
+        else's document. What the caller gets is a window around the located span,
+        never the whole body (020).
+        """
+        attachment = await self._require(attachment_id, user_id=user_id)
+        content = await self._read_content(attachment)
+        location = CitationLocator.locate(
+            text=content.safe_text,
+            quote=quote,
+            declared_range=declared_range,
+            anchor=anchor,
+        )
+        focus = (location.start, location.end) if location.start is not None and location.end is not None else None
+        window = citation_window(content.safe_text, focus=focus)
+        agent_metrics.record_citation_highlight(outcome=location.outcome)
+        await self._audit(
+            event="attachment_citation_located",
+            thread_id=attachment.thread_id or "",
+            payload={
+                "attachment_id": str(attachment_id),
+                "outcome": location.outcome,
+                "quote_chars": str(len(quote)),
+                "total_chars": str(len(content.safe_text)),
+            },
+        )
+        return AttachmentCitationLookup(
+            attachment_id=attachment.id,
+            filename=attachment.filename,
+            outcome=location.outcome,
+            start=location.start,
+            end=location.end,
+            window_start=window.start,
+            window_end=window.end,
+            text=window.text,
+            total_chars=len(content.safe_text),
+            text_state="masked" if content.text_masked else "full",
+        )
+
     async def list_for_thread(self, *, thread_id: str, user_id: str) -> list[Attachment]:
         """List live attachments bound to a thread, newest first.
 
@@ -602,10 +669,14 @@ class AttachmentService:
         # An intake that never received its bytes is dead once its presigned ticket
         # expired — it must be reclaimable long before the row's own TTL (080).
         pending_before = reference - timedelta(seconds=self._limits.presigned_url_ttl_seconds)
+        # A thread-less attach row is unreachable from every read path; reclaim it
+        # after a grace window instead of waiting for the full attachment TTL (020).
+        orphan_before = reference - timedelta(seconds=self._limits.orphan_grace_seconds)
         batch = self._limits.retention_sweep_batch if limit is None else limit
         candidates = await self._repository.list_reclaimable(
             reference,
             pending_before=pending_before,
+            orphan_before=orphan_before,
             user_id=user_id,
             limit=batch,
         )
@@ -613,13 +684,20 @@ class AttachmentService:
         failed = 0
         skipped = 0
         for attachment in candidates:
-            if not self._is_reclaimable(attachment, now=reference):
-                # Defence in depth: an overly eager adapter must not delete live data.
+            # Defence in depth: an overly eager adapter must not delete live data,
+            # and the audit needs the exact rule that fired (010, 020).
+            reason = AttachmentRetentionPolicy.reclaim_reason(
+                attachment,
+                now=reference,
+                pending_after_seconds=self._limits.presigned_url_ttl_seconds,
+                orphan_after_seconds=self._limits.orphan_grace_seconds,
+            )
+            if reason is None:
                 skipped += 1
                 continue
             try:
-                await self._purge(attachment, user_id=user_id)
-            except Exception:
+                await self._purge(attachment, user_id=user_id, reason=reason)
+            except Exception:  # noqa: BLE001  # one failed purge is counted, the sweep continues (020)
                 failed += 1
                 agent_metrics.record_error("attachments", "retention_sweep_failed")
                 logger.warning("attachment retention purge failed", attachment_id=str(attachment.id))
@@ -640,20 +718,6 @@ class AttachmentService:
             skipped=skipped,
         )
 
-    def _is_reclaimable(self, attachment: Attachment, *, now: datetime) -> bool:
-        """The domain's answer to "may this row be dropped?", applied by both rules.
-
-        Kept as one predicate so the sweep's defence-in-depth check cannot drift
-        from the adapter's candidate query (010).
-        """
-        if AttachmentRetentionPolicy.is_due(attachment, now=now):
-            return True
-        return AttachmentRetentionPolicy.is_stale_pending(
-            attachment,
-            now=now,
-            after_seconds=self._limits.presigned_url_ttl_seconds,
-        )
-
     async def _reclaim_expired(self, *, user_id: str) -> None:
         """Best-effort retention on the owner's read path.
 
@@ -663,11 +727,17 @@ class AttachmentService:
         """
         try:
             await self.sweep_expired(user_id=user_id)
-        except Exception:
+        except Exception:  # noqa: BLE001  # degraded store must not break the read path (020)
             agent_metrics.record_error("attachments", "retention_sweep_read_path_failed")
             logger.warning("attachment retention sweep failed on the read path")
 
-    async def _purge(self, attachment: Attachment, *, user_id: str) -> None:
+    async def _purge(
+        self,
+        attachment: Attachment,
+        *,
+        user_id: str,
+        reason: ReclaimReason,
+    ) -> None:
         """Drop both objects and the row, then record why it disappeared (020)."""
         await self._delete_chunk_parts(attachment.id, up_to_index=AttachmentIntakePolicy.max_chunk_part_index(self._limits))
         await self._blob_store.delete(attachment.blob_key)
@@ -681,7 +751,7 @@ class AttachmentService:
                 "attachment_id": str(attachment.id),
                 "mode": attachment.mode,
                 "status": attachment.status,
-                "reason": "retention_expired",
+                "reason": reason,
             },
         )
 
@@ -720,6 +790,10 @@ class AttachmentService:
         """
         if not attachment_ids:
             return AttachmentTurnContext()
+        if not (thread_id or "").strip():
+            # Ids without a thread cannot be resolved under the P0-A isolation
+            # contract; refuse instead of dropping the user's file silently (020).
+            raise AttachmentThreadRequiredError()
         if len(attachment_ids) > self._limits.max_attachments_per_turn:
             msg = f"too many attachments for one turn ({len(attachment_ids)})"
             raise ValueError(msg)
@@ -1175,7 +1249,7 @@ class AttachmentService:
         """Best-effort state transition; the write already happened, so log on drift."""
         try:
             attachment = await self._repository.get(payload.attachment_id, user_id=payload.user_id)
-        except Exception:
+        except Exception:  # noqa: BLE001  # state read is best-effort; the write already happened
             logger.warning("attachment index state read failed", attachment_id=str(payload.attachment_id))
             return
         if attachment is None:
@@ -1217,6 +1291,9 @@ class AttachmentService:
             fenced_text=wrap_untrusted_tool_output(fence_body, source=source),
             action=prepared.action,
             page_count=attachment.page_count or 0,
+            mime_type=attachment.mime_type,
+            text_state="extracted",
+            contains_pii=attachment.contains_pii,
         )
 
     def _missing_text_block(self, attachment: Attachment, *, source: str) -> AttachmentContextBlock:
@@ -1238,6 +1315,9 @@ class AttachmentService:
             fenced_text=wrap_untrusted_tool_output(notice, source=source),
             action="allow",
             page_count=attachment.page_count or 0,
+            mime_type=attachment.mime_type,
+            text_state="missing",
+            contains_pii=attachment.contains_pii,
         )
 
     async def _reviewed_body(self, attachment: Attachment) -> _ReviewedBody:
@@ -1379,6 +1459,9 @@ class AttachmentService:
 
         attachment = await self._require(payload.attachment_id, user_id=payload.user_id)
         data = await self._blob_store.read_bytes(attachment.blob_key)
+        from palatium_ai.domain.attachments.integrity import verify_attachment_bytes
+
+        verify_attachment_bytes(attachment, data)
         from palatium_ai.domain.ports.attachment_analysis import AttachmentAnalysisRequest
 
         result = await self._analysis.analyze(

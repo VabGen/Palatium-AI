@@ -3,11 +3,15 @@ import { cleanup } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll } from 'vitest';
 
 import { installCanvasStub } from './canvas';
+import { installMatchMediaStub } from './match-media';
 import { server } from './msw';
 
 // jsdom не умеет canvas, а `lottie-web` требует его уже на импорте — без заглушки
 // не рендерится ни один компонент с иконкой (см. `tests/canvas.ts`).
 installCanvasStub();
+// jsdom не реализует matchMedia, а `lottie-react` читает его в эффекте — без
+// заглушки падает анимированная иконка (см. `tests/match-media.ts`).
+installMatchMediaStub();
 
 // Один сервер на файл: `setupFiles` выполняется для каждого тестового файла, а
 // `setupServer` — глобальный перехватчик процесса, поэтому поднимать его глобально

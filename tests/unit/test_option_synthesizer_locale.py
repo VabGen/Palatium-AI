@@ -6,6 +6,10 @@ user-facing and must follow ``response_locale``, not the prompt's own language.
 
 from __future__ import annotations
 
+import json
+
+from datetime import UTC, datetime
+
 import pytest
 
 from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
@@ -62,3 +66,18 @@ async def test_drops_synthesis_when_repair_stays_english() -> None:
 
     assert result.actions == ()
     assert result.framing is None
+
+
+@pytest.mark.asyncio()
+async def test_payload_carries_runtime_date_for_relative_slots() -> None:
+    """«Прошлый месяц» must resolve against the clock, not the model's prior."""
+    llm = FakeLLMPort(_RUSSIAN)
+    synth = OptionSynthesizer(llm)
+
+    await synth.synthesize(
+        user_text="Найди в СЭД документы по договору поставки за прошлый месяц.",
+        response_locale="ru-RU",
+    )
+
+    user_payload = json.loads(llm.calls[0][1].content)
+    assert user_payload["current_date"] == datetime.now(UTC).date().isoformat()

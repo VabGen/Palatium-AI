@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import time
+
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, TypeVar
 
@@ -13,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from palatium_ai.application.tools.mcp import MCPToolCallParams
 from palatium_ai.core.exceptions import ToolNotAllowedError
+from palatium_ai.core.logging.context import trace_id_var, turn_id_var
 from palatium_ai.core.observability.audit import get_audit_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
@@ -60,6 +63,7 @@ class ToolExecutor:
     ) -> R | ToolRbacDenied:
         """Вызывает handler только если tool_name ∈ allowed_tools; иначе ToolRbacDenied."""
         conversation_id = context.thread_id if context is not None else self._config.name
+        correlation = _tool_correlation_fields()
         server_name, mcp_tool_name = _mcp_identity(params)
         if not is_tool_invocation_allowed(
             self._allowed,
@@ -74,6 +78,7 @@ class ToolExecutor:
                 mcp_tool_name=mcp_tool_name,
                 agent=self._config.name,
                 allowed_tools=sorted(self._allowed),
+                **correlation,
             )
             await _write_audit_event(
                 conversation_id=conversation_id,
@@ -83,6 +88,7 @@ class ToolExecutor:
                     "tool_name": tool_name,
                     "server_name": server_name or "",
                     "mcp_tool_name": mcp_tool_name or "",
+                    **correlation,
                 },
             )
             agent_metrics.record_rbac_denied(self._config.role, tool_name)
@@ -100,6 +106,7 @@ class ToolExecutor:
             server_name=server_name,
             mcp_tool_name=mcp_tool_name,
             agent=self._config.name,
+            **correlation,
         )
         await _write_audit_event(
             conversation_id=conversation_id,
@@ -109,9 +116,27 @@ class ToolExecutor:
                 "tool_name": tool_name,
                 "server_name": server_name or "",
                 "mcp_tool_name": mcp_tool_name or "",
+                **correlation,
             },
         )
-        return await handler(params)
+        started = time.perf_counter()
+        try:
+            result = await handler(params)
+        except Exception:
+            agent_metrics.record_tool_call(
+                agent_type=self._config.role,
+                tool_name=tool_name,
+                outcome="error",
+                duration_seconds=time.perf_counter() - started,
+            )
+            raise
+        agent_metrics.record_tool_call(
+            agent_type=self._config.role,
+            tool_name=tool_name,
+            outcome="success",
+            duration_seconds=time.perf_counter() - started,
+        )
+        return result
 
     @traceable(name="tool_executor.execute")
     async def execute(
@@ -132,6 +157,18 @@ def _mcp_identity(params: BaseModel) -> tuple[str | None, str | None]:
     if isinstance(params, MCPToolCallParams):
         return params.server_name, params.tool_name
     return None, None
+
+
+def _tool_correlation_fields() -> dict[str, str]:
+    """Explicit run correlation for tool logs/audit (040; complements structlog binders)."""
+    fields: dict[str, str] = {}
+    trace_id = trace_id_var.get()
+    turn_id = turn_id_var.get()
+    if trace_id:
+        fields["trace_id"] = trace_id
+    if turn_id:
+        fields["turn_id"] = turn_id
+    return fields
 
 
 async def _write_audit_event(

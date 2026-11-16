@@ -36,12 +36,12 @@ ARG WITH_ATTACHMENTS=0
 # ---------------------------------------------------------------------------
 # Pinned by digest, not by the mutable `3.14-slim` tag (025): the tag is a moving target,
 # so the code we build on could change without a pull request in this repo. The digest
-# below is the multi-arch index of `python:3.14-slim` = 3.14.7-slim-trixie (2026-09-19);
+# below is the multi-arch index of `python:3.14-slim` = 3.14.8-slim-trixie (2026-10-06);
 # the tag stays on the line as the human-readable hint. Bumping PYTHON_VERSION without
 # refreshing the digest fails the build on purpose (`manifest unknown`) — a silent
 # base-image swap is the outcome this pin exists to prevent. Drift is gated by
 # `scripts/ci_security.py` (base image pin check).
-FROM python:${PYTHON_VERSION}-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS base
+FROM python:${PYTHON_VERSION}-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS base
 
 ARG PYTHON_VERSION
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -52,7 +52,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-RUN apt-get update \
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -103,6 +104,11 @@ ARG WITH_ATTACHMENTS=0
 
 # Только src — mcp_servers идёт через свой Dockerfile (не часть этого образа).
 COPY src ./src
+# Product procedural skills (skills/procedural/**/SKILL.md): the runtime catalog scans
+# this tree from the process cwd. Without it every start logged
+# `skill_catalog.root_missing /app/skills/procedural` and `skill_reference` had nothing
+# to serve (P5). They are product assets, so they ship in the image, not via a dev mount.
+COPY skills ./skills
 COPY alembic.ini ./
 COPY alembic ./alembic
 
@@ -121,7 +127,7 @@ RUN --mount=type=cache,target=/tmp/uv_cache \
     && if [ "${WITH_GRAPHITI}" = "1" ]; then set -- "$@" --extra graphiti; fi \
     && uv sync "$@" \
     && if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
-         /app/.venv/bin/python -c "import PIL, pytesseract, fitz"; \
+         /app/.venv/bin/python -c "import PIL, pytesseract, pymupdf"; \
        fi \
     && if [ "${WITH_GRAPHITI}" = "1" ]; then \
          /app/.venv/bin/python -c "import graphiti_core"; \
@@ -169,8 +175,8 @@ RUN groupadd --system --gid 999 app \
     && mkdir -p /app/logs /app/tmp \
     && chown -R app:app /app \
     && if [ "${WITH_ATTACHMENTS}" = "1" ]; then \
-         apt-get update \
-         && apt-get install -y --no-install-recommends \
+         apt-get -o Acquire::Retries=10 update \
+         && apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
               tesseract-ocr \
               tesseract-ocr-eng \
               tesseract-ocr-rus \
@@ -185,16 +191,23 @@ WORKDIR /app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
+# Procedural skills are read-only product assets: `skill_reference` only ever reads them.
+COPY --from=builder --chown=app:app /app/skills /app/skills
 COPY --from=builder --chown=app:app /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=app:app /app/alembic /app/alembic
+# Build with `npm --prefix web run build` before `docker compose up --build`.
+# Docker packages the same production artifact the host UI build produces.
+COPY --chown=app:app web/dist /app/web/dist
 # Shipped for licence compliance: the image carries MIT code, so it carries the notice
 # (OCI `org.opencontainers.image.licenses` above is a label, not the licence text).
 COPY --chown=app:app LICENSE /app/LICENSE
 COPY --chown=app:app scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
 
+# The Compose runtime sets read_only: true; avoid rewriting permissions on the
+# virtualenv on every UI-only image rebuild.
 RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
     && chmod 0555 /app/scripts/docker-entrypoint.sh \
-    && chmod -R a-w /app/.venv /app/src /app/alembic /app/alembic.ini /app/LICENSE \
+    && chmod -R a-w /app/web /app/skills /app/LICENSE \
     && chmod u+w /app/logs /app/tmp
 
 USER app

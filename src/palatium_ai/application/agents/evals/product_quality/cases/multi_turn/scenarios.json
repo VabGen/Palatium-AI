@@ -1,0 +1,63 @@
+{
+  "cases": [
+    {
+      "id": "mt-researcher-reference-01",
+      "agent": "researcher",
+      "scenario": "five_turn_reference",
+      "input": { "user_text": "What was the device codename from earlier?" },
+      "context": {},
+      "turns": [
+        { "role": "user", "content": "Запомни: устройство называется Квант-9, серийный Q9-771." },
+        { "role": "user", "content": "Какой сегодня приоритет тикета?" },
+        { "role": "user", "content": "Приоритет P2." },
+        { "role": "user", "content": "Ок, зафиксируй." },
+        { "role": "user", "content": "Как ты говорил ранее про устройство — напомни кодовое имя и серийный номер." }
+      ],
+      "expected": {
+        "must_contain": ["Квант-9", "Q9-771"],
+        "must_not_contain": ["Квант-8", "Q9-000"]
+      },
+      "needs_judge": true,
+      "grader": "rule_then_judge",
+      "tags": ["researcher", "multi_turn", "reference"]
+    },
+    {
+      "id": "mt-researcher-compact-01",
+      "agent": "researcher",
+      "scenario": "compact_retains_fact",
+      "input": { "user_text": "After compact, what is the vault name?" },
+      "context": { "compact_before_final": true },
+      "turns": [
+        { "role": "user", "content": "Секретный сейф называется NEBULA-VAULT-17." },
+        { "role": "user", "content": "Расскажи длинно про погоду, логистику и меню столовой без упоминания сейфа." },
+        { "role": "user", "content": "Ещё длиннее про погоду вчера и позавчера." },
+        { "role": "user", "content": "И про пробки на кольцевой." },
+        { "role": "user", "content": "После сжатия диалога: как называется сейф?" }
+      ],
+      "expected": {
+        "must_contain": ["NEBULA-VAULT-17"],
+        "must_not_contain": ["NEBULA-VAULT-99"]
+      },
+      "tags": ["researcher", "multi_turn", "compact"]
+    },
+    {
+      "id": "mt-researcher-correction-01",
+      "agent": "researcher",
+      "scenario": "correction_wins",
+      "input": { "user_text": "What is the owner login now?" },
+      "context": {},
+      "turns": [
+        { "role": "user", "content": "Владелец аккаунта — login iris.old." },
+        { "role": "user", "content": "Подтверди, пожалуйста." },
+        { "role": "user", "content": "Исправление: правильный login — iris.new, не iris.old." },
+        { "role": "user", "content": "Ок." },
+        { "role": "user", "content": "Какой login владельца сейчас?" }
+      ],
+      "expected": {
+        "must_contain": ["iris.new"],
+        "must_not_contain": ["iris.old"]
+      },
+      "tags": ["researcher", "multi_turn", "correction"]
+    }
+  ]
+}

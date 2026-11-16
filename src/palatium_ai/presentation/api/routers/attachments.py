@@ -5,26 +5,34 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
+from palatium_ai.core.types.citations import CITATION_QUOTE_MAX_CHARS
+from palatium_ai.domain.attachments.citation_lookup import CitationTextState
 from palatium_ai.domain.attachments.errors import (
     AttachmentConnectorUnavailableError,
+    AttachmentContentMissingError,
     AttachmentError,
     AttachmentModeMismatchError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
     AttachmentRestoreNotAllowedError,
+    AttachmentThreadRequiredError,
     AttachmentUploadTooLargeError,
 )
+from palatium_ai.domain.content.citations import CitationAnchor, CitationLocateOutcome
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal
-from palatium_ai.presentation.security.ownership import load_session_for_principal
+from palatium_ai.presentation.security.ownership import (
+    ensure_session_for_principal,
+    load_session_for_principal,
+)
 
 if TYPE_CHECKING:
     # Type-only: presentation may not import application at runtime (000).
@@ -44,13 +52,17 @@ AttachmentStatus = Literal[
     "indexed",
 ]
 
+#: A dialog thread id is non-blank by contract: a whitespace-only value would
+#: create an attach row that no read path can ever bind (020, 055).
+ThreadId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+
 
 class InitUploadRequest(BaseModel):
     """Client-declared metadata for an upload that will be PUT straight to storage."""
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
     filename: str = Field(min_length=1, max_length=255)
     mime_type: str = Field(min_length=1, max_length=255)
     size_bytes: int = Field(gt=0)
@@ -129,7 +141,7 @@ class IndexRequest(BaseModel):
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
     document_title: str | None = Field(default=None, max_length=256)
 
 
@@ -138,7 +150,7 @@ class RestoreRequest(BaseModel):
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
 
 
 class AnalyzeRequest(BaseModel):
@@ -146,7 +158,7 @@ class AnalyzeRequest(BaseModel):
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
     instruction: str = Field(min_length=1, max_length=4_000)
 
 
@@ -173,7 +185,7 @@ class ConnectorImportRequest(BaseModel):
 
     model_config = {"frozen": True}
 
-    thread_id: str = Field(min_length=1, max_length=128)
+    thread_id: ThreadId
     remote_ref: str = Field(min_length=1, max_length=512)
     project_id: str | None = Field(default=None, max_length=128)
 
@@ -250,6 +262,10 @@ def _error_status(exc: AttachmentError) -> int:
         (AttachmentModeMismatchError, AttachmentNotUsableError, AttachmentRestoreNotAllowedError),
     ):
         return status.HTTP_409_CONFLICT
+    if isinstance(exc, AttachmentThreadRequiredError):
+        # A malformed request rather than a state conflict: an ``attach`` upload has
+        # no meaning without the dialog it belongs to (020, P0-A).
+        return status.HTTP_422_UNPROCESSABLE_CONTENT
     return status.HTTP_400_BAD_REQUEST
 
 
@@ -291,20 +307,12 @@ async def _bind_thread_for_hitl(
     later ``GET /hitl/{card_id}`` (``allow_missing=False``) returns 404 Session not
     found after a successful restore/index toast (055).
     """
-    principal = get_principal(request)
-    session_service = get_app_resources(request.app).session_service
-    await load_session_for_principal(
+    await ensure_session_for_principal(
         request=request,
-        principal=principal,
-        session_service=session_service,
+        principal=get_principal(request),
+        session_service=get_app_resources(request.app).session_service,
         thread_id=thread_id,
-        allow_missing=True,
-    )
-    await session_service.touch_session(
-        thread_id=thread_id,
-        user_id=principal.subject,
-        context_patch={"last_operation": last_operation},
-        status="active",
+        last_operation=last_operation,
     )
 
 
@@ -629,6 +637,47 @@ class AttachmentDownloadResponse(BaseModel):
     size_bytes: int = Field(ge=0)
 
 
+class CitationLocateRequest(BaseModel):
+    """A cited quote plus the provider's hint about where it sits (W3b-2).
+
+    ``quote`` is required: without it nothing can be verified, and an offset alone has
+    already proven unreliable (fence prefix + budget trimming shift every position).
+    """
+
+    model_config = {"frozen": True}
+
+    quote: str = Field(min_length=1, max_length=CITATION_QUOTE_MAX_CHARS)
+    #: Characters in the source as the provider reported them — a hint, cross-checked.
+    source_range: tuple[int, int] | None = None
+    #: The provider space the range belongs to; anything but ``char_location`` is not
+    #: usable as a character offset and is ignored by the locator.
+    anchor: CitationAnchor = "char_location"
+
+    @model_validator(mode="after")
+    def _range_is_a_span(self) -> CitationLocateRequest:
+        span = self.source_range
+        if span is not None and (span[0] < 0 or span[1] <= span[0]):
+            raise ValueError("source_range must satisfy 0 <= start < end")
+        return self
+
+
+class CitationLocateResponse(BaseModel):
+    """Bounded window of the source around the located span; never the whole file."""
+
+    model_config = {"frozen": True}
+
+    attachment_id: UUID
+    filename: str
+    outcome: CitationLocateOutcome
+    start: int | None = None
+    end: int | None = None
+    window_start: int
+    window_end: int
+    text: str
+    total_chars: int
+    text_state: CitationTextState
+
+
 @router.get("/{attachment_id}/download", response_model=AttachmentDownloadResponse)
 async def download_attachment(attachment_id: UUID, request: Request) -> AttachmentDownloadResponse:
     """Issue a short-lived download URL for a ready/indexed original (owner only)."""
@@ -649,6 +698,58 @@ async def download_attachment(attachment_id: UUID, request: Request) -> Attachme
         mime_type=ticket.mime_type,
         expires_at=ticket.expires_at,
         size_bytes=ticket.size_bytes,
+    )
+
+
+@router.post("/{attachment_id}/citation-locate", response_model=CitationLocateResponse)
+async def locate_citation(
+    attachment_id: UUID,
+    body: CitationLocateRequest,
+    request: Request,
+    response: Response,
+) -> CitationLocateResponse:
+    """Return the bounded source slice around a cited quote (W3b-2).
+
+    POST because the payload carries a verbatim fragment of the user's document: in a
+    query string it would land in proxy access logs and browser history (020). The
+    call has no side effects — the verb is about the body, not a mutation.
+    """
+    principal = get_principal(request)
+    service = _attachment_service(request)
+
+    try:
+        lookup = await service.locate_citation(
+            attachment_id=attachment_id,
+            user_id=principal.subject,
+            quote=body.quote,
+            declared_range=body.source_range,
+            anchor=body.anchor,
+        )
+    except AttachmentNotFoundError as exc:
+        # Foreign and missing are the same answer: distinguishing them would turn the
+        # endpoint into an existence oracle for other users' attachments (020).
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="attachment not found") from exc
+    except AttachmentContentMissingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="attachment has no extracted text",
+        ) from exc
+    except AttachmentError as exc:
+        raise HTTPException(status_code=_error_status(exc), detail=str(exc)) from exc
+
+    # The fragment is confidential document text; no shared cache may keep it (020).
+    response.headers["Cache-Control"] = "no-store"
+    return CitationLocateResponse(
+        attachment_id=lookup.attachment_id,
+        filename=lookup.filename,
+        outcome=lookup.outcome,
+        start=lookup.start,
+        end=lookup.end,
+        window_start=lookup.window_start,
+        window_end=lookup.window_end,
+        text=lookup.text,
+        total_chars=lookup.total_chars,
+        text_state=lookup.text_state,
     )
 
 

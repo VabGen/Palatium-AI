@@ -21,6 +21,13 @@ LLMProviderName = Literal["openai", "anthropic", "ollama", "qwen", "gateway"]
 _SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"openai", "anthropic", "ollama", "qwen", "gateway"})
 ModelTierName = Literal["nano", "small", "mid", "frontier", "deep_reasoning"]
 
+#: Vision payload cap (ADR 0007): 10 MiB is inside every supported provider's limit
+#: while staying above a phone photo; the intake cap is separate and larger.
+_DEFAULT_VISION_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+#: Images per chat call. A turn asking about a handful of files is normal; a whole
+#: gallery is a cost spike, and vision tokens are priced per image (080).
+_DEFAULT_VISION_MAX_IMAGES = 4
+
 
 class TierBinding(NamedTuple):
     """Resolved provider + model for one AgentConfig.model_tier."""
@@ -68,6 +75,48 @@ class LLMConfig(BaseConfig):
         validation_alias="LLM_FALLBACK_PROVIDERS",
         description="Comma-separated ordered fallback providers (distinct from primary).",
     )
+    vision_model: str | None = Field(
+        default=None,
+        validation_alias="LLM_VISION_MODEL",
+        description=(
+            "Vision-capable model alias for chat image parts (ADR 0007). Empty disables "
+            "the route (fail-closed). Not a tier: an image call never inherits the "
+            "agent's text model, and it never fails over to a text-only provider."
+        ),
+    )
+    vision_max_image_bytes: int = Field(
+        default=_DEFAULT_VISION_MAX_IMAGE_BYTES,
+        ge=64 * 1024,
+        le=64 * 1024 * 1024,
+        validation_alias="LLM_VISION_MAX_IMAGE_BYTES",
+    )
+    vision_max_images: int = Field(
+        default=_DEFAULT_VISION_MAX_IMAGES,
+        ge=1,
+        le=20,
+        validation_alias="LLM_VISION_MAX_IMAGES",
+    )
+    allow_pii_images: bool = Field(
+        default=False,
+        validation_alias="ALLOW_PII_IMAGES",
+        description=(
+            "Owner opt-in (default off) to forward PII-flagged images to the vision gateway "
+            "(ADR 0007, 020/060). Off keeps the fail-closed denial. On still logs a warning, "
+            "counts the image and emits the gen_ai.pii_image_allowed span event on every "
+            "forwarded image, so the exception is auditable rather than invisible."
+        ),
+    )
+
+    @property
+    def vision_configured(self) -> bool:
+        """True when a vision alias is set; each image is still gated by the policy."""
+        return bool((self.vision_model or "").strip())
+
+    @property
+    def resolved_vision_model(self) -> str | None:
+        """Stripped alias or ``None`` (one normalisation point for every caller)."""
+        alias = (self.vision_model or "").strip()
+        return alias or None
 
     @property
     def fallback_provider_list(self) -> tuple[str, ...]:

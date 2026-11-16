@@ -4,12 +4,13 @@
 
 from palatium_ai.domain.agents.agent_config import AgentConfig
 
+# Chunk prep only; HITL + MCP ingest_document live in DocumentIngestService (070/020).
 TEXT_INGESTOR_CONFIG = AgentConfig(
     name="text_ingestor",
     role="text_ingestor",
     model_tier="small",
     temperature=0.0,
-    allowed_tools=("mcp:platform.ingest_document",),
+    allowed_tools=(),
     timeout_seconds=120,
     max_retries=1,
     confidence_threshold=0.7,

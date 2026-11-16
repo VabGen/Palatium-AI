@@ -114,6 +114,15 @@ class AttachmentConfig(BaseConfig):
         le=5000,
         validation_alias="ATTACHMENTS_SWEEP_BATCH_SIZE",
     )
+    # Grace before a thread-less ``attach`` row is reclaimed (bounds mirror
+    # AttachmentLimits): long enough not to race an upload, short enough to keep
+    # dead rows from occupying storage for the full attach TTL (020).
+    orphan_grace_seconds: int = Field(
+        default=24 * 3600,
+        ge=3600,
+        le=30 * 24 * 3600,
+        validation_alias="ATTACHMENTS_ORPHAN_GRACE_SECONDS",
+    )
     max_parsed_chars: int = Field(
         default=2_000_000,
         ge=1000,
@@ -136,8 +145,10 @@ class AttachmentConfig(BaseConfig):
         default="auto",
         validation_alias="ATTACHMENTS_IMAGE_OCR_BACKEND",
     )
-    #: Gateway model alias for the vision model (e.g. ``tier-vision``). Must exist in
-    #: the gateway's ``model_list``; this is a routing name, not an upstream API id.
+    #: Gateway model alias for the vision model used by the OCR pipeline
+    #: (e.g. ``vision-tier``). Must exist in the gateway's ``model_list``; this is a
+    #: routing name, not an upstream API id. Chat images use ``LLM_VISION_MODEL``
+    #: (ADR 0007) — different path, different budget.
     #: Required for ``gateway``; optional for ``auto`` (Vision escalate when present).
     image_ocr_model: str | None = Field(default=None, validation_alias="ATTACHMENTS_IMAGE_OCR_MODEL")
     #: Upper bound on the original image bytes sent to the model. The intake cap is far
@@ -191,6 +202,46 @@ class AttachmentConfig(BaseConfig):
         default=None,
         validation_alias="ATTACHMENTS_TESSERACT_CMD",
     )
+    #: Hard kill for ONE Tesseract invocation (a PDF page or a whole image). Without
+    #: it a pathological raster keeps the child alive indefinitely: the parser thread
+    #: never returns, ``POST /complete`` never answers, and every retry piles another
+    #: process on top (080: no unbounded resource, no hanging request).
+    #: 30 s, not 90: an A4 raster that has not produced text by then is the wrong job
+    #: for Tesseract, and the page is escalated to Vision instead of stalling the
+    #: whole document (055). Wall-clock ceiling for the document — ``pdf_ocr_budget``.
+    tesseract_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        le=600.0,
+        validation_alias="ATTACHMENTS_TESSERACT_TIMEOUT_SECONDS",
+    )
+    #: Wall-clock budget for OCR-ing ONE PDF. On exhaustion the pages already read
+    #: are kept (``truncated``) instead of growing the request without a bound.
+    pdf_ocr_budget_seconds: float = Field(
+        default=300.0,
+        gt=0.0,
+        le=1800.0,
+        validation_alias="ATTACHMENTS_PDF_OCR_BUDGET_SECONDS",
+    )
+    #: CPU-bound OCR slots shared by the PDF and image adapters (per process). One
+    #: Tesseract saturates a core per page, so parallel uploads otherwise starve the
+    #: whole box (and the API container's memory limit) until nothing completes.
+    #: The slot is held per *page*: a single multi-page scan uses this budget too, so
+    #: raising it shortens one upload (bounded by idle cores), not only concurrent ones.
+    ocr_max_concurrency: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        validation_alias="ATTACHMENTS_OCR_MAX_CONCURRENCY",
+    )
+    #: Hard ceiling for one document parse — text layer, OCR and Vision escalation
+    #: included. Fail-closed on timeout, so a request always has an answer (030.8).
+    parse_timeout_seconds: float = Field(
+        default=420.0,
+        gt=0.0,
+        le=3600.0,
+        validation_alias="ATTACHMENTS_PARSE_TIMEOUT_SECONDS",
+    )
     #: Cap on PDF pages sent to the vision model (cost/latency; G14).
     pdf_vision_max_pages: int = Field(
         default=20,
@@ -221,6 +272,35 @@ class AttachmentConfig(BaseConfig):
     pii_policy: Literal["tag", "mask", "reject"] = Field(
         default="tag",
         validation_alias="ATTACHMENTS_PII_POLICY",
+    )
+    #: Thread file re-read coverage (055/070): a follow-up turn may re-read a file the
+    #: dialog already holds instead of claiming it is missing. Single-key rollout —
+    #: the feature is binary, so a separate ENABLED key would be redundant config (055).
+    #: ``0`` = off (dark default + one-variable rollback), ``1..99`` = sticky canary,
+    #: ``100`` = every caller. Sticky per user, so a rolling update cannot flip a
+    #: dialog's behaviour mid-conversation (same semantics as FORMATTER_ROLLOUT_PCT).
+    file_reread_pct: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        validation_alias="ATTACHMENTS_FILE_REREAD_PCT",
+    )
+    #: Map-Reduce trigger for multi-file turns (065). When the selected fences exceed
+    #: this token estimate, every file is summarized in parallel before the worker
+    #: prompt, instead of one giant prompt that overflows the context window.
+    map_reduce_threshold_tokens: int = Field(
+        default=8_000,
+        ge=512,
+        le=200_000,
+        validation_alias="ATTACHMENTS_MAP_REDUCE_THRESHOLD_TOKENS",
+    )
+    #: Upper bound for one Map summary (chars). A summary longer than the file it
+    #: replaces defeats the purpose; the Reduce stage gets a bounded prompt.
+    map_reduce_block_chars: int = Field(
+        default=6_000,
+        ge=256,
+        le=64_000,
+        validation_alias="ATTACHMENTS_MAP_REDUCE_BLOCK_CHARS",
     )
 
     @field_validator(

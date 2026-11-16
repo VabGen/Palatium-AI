@@ -35,9 +35,7 @@ describe('StreamMarkdownPreview', () => {
   });
 
   it('renders legacy x= icon attribute the same as name=', () => {
-    const { container } = render(
-      <StreamMarkdownPreview markdown={'<icon x="check"/> Done'} />
-    );
+    const { container } = render(<StreamMarkdownPreview markdown={'<icon x="check"/> Done'} />);
     expect(screen.getByText(/Done/)).toBeInTheDocument();
     expect(screen.queryByText(/<icon/)).toBeNull();
     expect(container.querySelector('svg')).not.toBeNull();
@@ -48,9 +46,7 @@ describe('StreamMarkdownPreview', () => {
   });
 
   it('repairs leaked icon attribute remnants into TokenIcon', () => {
-    const { container } = render(
-      <StreamMarkdownPreview markdown={'name="document"/> Intro'} />
-    );
+    const { container } = render(<StreamMarkdownPreview markdown={'name="document"/> Intro'} />);
     expect(screen.getByText(/Intro/)).toBeInTheDocument();
     expect(screen.queryByText(/name="document"/)).toBeNull();
     expect(container.querySelector('svg')).not.toBeNull();
@@ -64,4 +60,3 @@ describe('StreamMarkdownPreview', () => {
     expect(container.querySelector('svg')).not.toBeNull();
   });
 });
-

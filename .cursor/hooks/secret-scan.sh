@@ -15,9 +15,9 @@ if command -v jq >/dev/null 2>&1; then
   FILE_PATH="$(echo "$INPUT" | jq -r '.file_path // ""')"
   NEW_CONTENT="$(echo "$INPUT" | jq -r '.new_content // ""')"
 else
-  echo "⚠️  secret-scan: jq не найден — извлекаю поля через python3 (audit-chain запись будет пропущена)." >&2
-  FILE_PATH="$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('file_path') or '')" 2>/dev/null || true)"
-  NEW_CONTENT="$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('new_content') or '')" 2>/dev/null || true)"
+  echo "⚠️  secret-scan: jq не найден — извлекаю поля через python (uv) (audit-chain запись будет пропущена)." >&2
+  FILE_PATH="$(printf '%s' "$INPUT" | py_json_field file_path 2>/dev/null || true)"
+  NEW_CONTENT="$(printf '%s' "$INPUT" | py_json_field new_content 2>/dev/null || true)"
 fi
 
 LOG_DIR="$SCRIPT_DIR/../logs"
@@ -38,7 +38,7 @@ for entry in "${SECRET_PATTERNS[@]}"; do
   pattern="${entry#*:}"
   if echo "$NEW_CONTENT" | grep -Eiq -- "$pattern"; then
     echo "[$(date -u +%FT%TZ)] SECRET_PATTERN_MATCH pattern=$name file=$FILE_PATH" >> "$LOG_DIR/security-events.log"
-    
+
     audit_append_event "secret_pattern_match" "pattern" "$name" "file_path" "$FILE_PATH" || true
     echo "⚠️  Обнаружен потенциальный секрет ($name) в $FILE_PATH — проверь перед коммитом." >&2
     break

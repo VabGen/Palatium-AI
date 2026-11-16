@@ -28,6 +28,13 @@ class DialogTurnStore(Protocol):
         """Load last-K turns for a thread (oldest → newest)."""
         ...
 
+    async def truncate_keeping(self, *, thread_id: str, keep: int) -> int:
+        """Keep the first ``keep`` turns (by seq); delete the rest. Returns deleted count.
+
+        ``keep=0`` clears the transcript. Used by user Edit (Big Tech rewind).
+        """
+        ...
+
 
 class MemoryPort(Protocol):
     """Cross-thread long-term memory (user/org namespaces). Sleep-time writes here."""
@@ -56,6 +63,28 @@ class MemoryPort(Protocol):
         """Keyword/hybrid search within a namespace (budgeted)."""
         ...
 
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        """List entries in a namespace (newest first); used by memory_audit (070 CMD3)."""
+        ...
+
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         """Delete one memory item; returns True when a row was removed."""
+        ...
+
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        """Bulk-delete medium rows for ``user_id`` (RLS); optional namespace filter.
+
+        ``namespaces=None`` clears every medium entry owned by the user.
+        Returns deleted row count.
+        """
         ...

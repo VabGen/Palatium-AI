@@ -8,6 +8,13 @@ import os
 
 import pytest
 
+from tests.support.database import database_url_or_skip, require_database_enabled
+
+# The gate lives in ``tests/support/database.py`` because ``tests/perf`` (the pgvector latency
+# eval) must apply the same "this job owns a database" rule. Kept under this name: the CI
+# contract tests (``tests/unit/test_ci_integration_db_job.py``) assert on it directly.
+_require_database_enabled = require_database_enabled
+
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: graph/service integration (no live LLM)")
@@ -20,9 +27,9 @@ def database_url() -> str | None:
 
 @pytest.fixture()
 def requires_database(database_url: str | None) -> str:
-    if not database_url:
-        pytest.skip("DATABASE_URL not set — skip Postgres integration")
-    return database_url
+    if database_url:
+        return database_url
+    return database_url_or_skip(owner="tests/integration")
 
 
 @pytest.fixture(scope="session")

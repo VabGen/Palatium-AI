@@ -9,6 +9,7 @@ from typing import ClassVar, cast
 from pydantic import Field, computed_field
 from pydantic_settings import SettingsConfigDict
 
+from .answer import AnswerWriterConfig
 from .app import AppConfig
 from .attachments import AttachmentConfig
 from .base import BaseConfig
@@ -22,6 +23,8 @@ from .logging import LoggingConfig
 from .mcp import MCPConfig
 from .memory import MemoryConfig
 from .observability import ObservabilityConfig
+from .orchestration import OrchestrationConfig
+from .project_context import ProjectContextConfig
 from .retention import RetentionConfig
 from .security import SecurityConfig
 from .skills import SkillsConfig
@@ -48,11 +51,14 @@ class Settings(BaseConfig):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    project_context: ProjectContextConfig = Field(default_factory=ProjectContextConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     attachments: AttachmentConfig = Field(default_factory=AttachmentConfig)
     formatter: FormatterConfig = Field(default_factory=FormatterConfig)
+    answer: AnswerWriterConfig = Field(default_factory=AnswerWriterConfig)
     contextualizer: ContextualizerConfig = Field(default_factory=ContextualizerConfig)
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(frozen=True)

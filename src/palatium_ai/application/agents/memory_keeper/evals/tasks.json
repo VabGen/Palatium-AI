@@ -3,6 +3,6 @@
     "id": "keeper-preference",
     "transcript": "user: I prefer tables for meeting agendas.\nassistant: Noted.",
     "cassette": "memory_keeper/preference.json",
-    "expect": { "min_facts": 1, "kind": "preference" }
+    "expect": { "min_facts": 1, "kind": "preference", "tool_calls": [] }
   }
 ]

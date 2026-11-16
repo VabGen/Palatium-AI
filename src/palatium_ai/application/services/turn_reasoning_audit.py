@@ -41,7 +41,25 @@ def turn_reasoning_fields(
     fields["attachment_refs"] = list(citation_refs_from_untrusted_context(untrusted))
     fields["hitl_cards"] = [card.purpose for card in formatted.hitl_cards]
     fields["formatter_status"] = formatted.status
+    fields.update(_worker_fields(final_state))
     return fields
+
+
+def _worker_fields(state: AgentGraphState) -> dict[str, object]:
+    execution = state.get("execution")
+    if execution is None:
+        return {
+            "worker_kind": None,
+            "worker_language": None,
+            "worker_findings_count": 0,
+            "worker_status": None,
+        }
+    return {
+        "worker_kind": getattr(execution, "worker_kind", None),
+        "worker_language": (getattr(execution, "worker_language", "") or None),
+        "worker_findings_count": len(getattr(execution, "worker_findings", ()) or ()),
+        "worker_status": getattr(execution, "status", None),
+    }
 
 
 def _intent_fields(state: AgentGraphState) -> dict[str, object]:

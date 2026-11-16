@@ -24,8 +24,6 @@ from palatium_ai.domain.hitl.cards import (
     HITLResolveRequest,
     HITLResolveResult,
     clamp_ttl_seconds,
-    default_review_options,
-    default_tool_approval_options,
     new_card_id,
 )
 from palatium_ai.domain.hitl.escalation_policy import HitlDeadLetterPolicy, HitlTimeoutPolicy
@@ -38,6 +36,7 @@ from palatium_ai.domain.hitl.step_up import (
 )
 
 if TYPE_CHECKING:
+    from palatium_ai.application.services.session_service import SessionService
     from palatium_ai.domain.content import ActionSpec
     from palatium_ai.domain.hitl.notify import HitlNotifierPort
     from palatium_ai.domain.hitl.ports import HitlCardStore, HitlDenyResumePort
@@ -80,6 +79,7 @@ class HitlService:
         step_up_verifier: HitlStepUpProviderPort | None = None,
         notifier: HitlNotifierPort | None = None,
         deny_resume: HitlDenyResumePort | None = None,
+        session_service: SessionService | None = None,
     ) -> None:
         secret = signing_secret.strip()
         if len(secret) < 16:
@@ -94,10 +94,15 @@ class HitlService:
         self._step_up_verifier = provider
         self._notifier = notifier
         self._deny_resume = deny_resume
+        self._session_service = session_service
 
     def bind_deny_resume(self, deny_resume: HitlDenyResumePort) -> None:
         """Late-bind graph deny port after IntentService is constructed (no circular ctor)."""
         self._deny_resume = deny_resume
+
+    def bind_session_service(self, session_service: SessionService) -> None:
+        """Late-bind session for sticky locale on off-graph MCP cards (no circular ctor)."""
+        self._session_service = session_service
 
     async def create_choice_card(
         self,
@@ -111,8 +116,12 @@ class HitlService:
         owner_user_id: str | None = None,
         org_id: str | None = None,
         ttl_seconds: int | None = None,
+        locale: str | None = None,
+        prose_hint: str | None = None,
     ) -> HITLCardView:
         """Mint a clickable multi-option card (user picks one alternative)."""
+        from palatium_ai.domain.hitl.copy import HitlCopyPolicy
+
         options_src = tuple(actions)
         if len(options_src) < 1:
             raise ValueError("create_choice_card requires at least one action")
@@ -135,12 +144,16 @@ class HitlService:
             for action in options_src
         )
         subject = HitlRiskPolicy.binding_subject(owner_user_id=owner, escalated=False)
+        resolved_title = (title or "").strip() or HitlCopyPolicy.choice_fallback_title(
+            locale=locale,
+            prose_hint=prose_hint or body,
+        )
         card = HITLCardView(
             card_id=card_id,
             thread_id=thread_id,
             task_id=task_id,
             purpose="user_choice",
-            title=(title or "Choose an option")[:300],
+            title=resolved_title[:300],
             body=body,
             options=self._stamp_options(
                 hitl_options,
@@ -195,17 +208,23 @@ class HitlService:
         subject = HitlRiskPolicy.binding_subject(owner_user_id=owner, escalated=False)
         content_digest = document_content_sha256(document)
 
+        from palatium_ai.domain.hitl.copy import HitlCopyPolicy
+
+        review = HitlCopyPolicy.review(
+            locale=document.locale,
+            confidence=confidence,
+            document_title=document.title,
+            # ``und`` locale still needs RU chrome when the answer prose is Cyrillic.
+            prose_hint=document.plain_text(limit=400),
+        )
         card = HITLCardView(
             card_id=card_id,
             thread_id=thread_id,
             task_id=task_id,
-            title=document.title or "Review required",
-            body=(
-                "Quality gate flagged this answer. Approve to keep it, or Reject & revise "
-                "to regenerate — do not reply with a numbered menu."
-            ),
+            title=review.title,
+            body=review.body,
             options=self._stamp_options(
-                default_review_options(),
+                review.options,
                 card_id=card_id,
                 expires_at=expires_at,
                 subject=subject,
@@ -247,12 +266,15 @@ class HitlService:
         owner_user_id: str | None = None,
         org_id: str | None = None,
         ttl_seconds: int | None = None,
+        locale: str | None = None,
     ) -> HITLCardView:
         """Create HITL card that must be resolved before a mutating MCP call resumes."""
+        from palatium_ai.domain.hitl.copy import HitlCopyPolicy
+        from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+
         now = datetime.now(UTC)
         ttl = clamp_ttl_seconds(ttl_seconds)
         clamped_risk = HitlRiskPolicy.for_mcp_tool(risk_score)
-        preview = argument_preview.strip()[:500] or "(no arguments)"
         card_id = new_card_id()
         expires_at = now + timedelta(seconds=ttl)
         nonce = new_token_nonce()
@@ -264,15 +286,39 @@ class HitlService:
                 "org_id required for write/high-risk MCP tool approval cards",
             )
         subject = HitlRiskPolicy.binding_subject(owner_user_id=owner, escalated=False)
+        # Prefer explicit locale → session sticky → script of the argument preview
+        # (055 — no phrase lists; session beats ns=/key= technical English).
+        resolved_locale = (locale or "").strip()
+        if not resolved_locale:
+            from palatium_ai.application.services.session_locale import resolve_thread_response_locale
+
+            resolved_locale = await resolve_thread_response_locale(
+                self._session_service,
+                thread_id=thread_id,
+                fallback_text=argument_preview,
+            )
+        if not resolved_locale:
+            resolved_locale = ReplyLocalePolicy.resolve(
+                user_text=argument_preview,
+                prior_locale=None,
+                ui_locale=None,
+            )
+        tool_copy = HitlCopyPolicy.tool_approval(
+            locale=resolved_locale,
+            server_name=server_name,
+            tool_name=tool_name,
+            side_effect=side_effect,
+            argument_preview=argument_preview,
+        )
         card = HITLCardView(
             card_id=card_id,
             thread_id=thread_id,
             task_id=task_id,
             purpose="mcp_tool_approval",
-            title=f"Approve MCP tool: {server_name}.{tool_name}",
-            body=(f"Side effect={side_effect}. Tool will not run until you approve. Arguments: {preview}"),
+            title=tool_copy.title,
+            body=tool_copy.body,
             options=self._stamp_options(
-                default_tool_approval_options(),
+                tool_copy.options,
                 card_id=card_id,
                 expires_at=expires_at,
                 subject=subject,
@@ -674,7 +720,7 @@ class HitlService:
                         reason=decision.reason,
                     )
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001  # notify is best-effort; the card is closed regardless
                 agent_metrics.record_hitl_deny("notify_failed")
         if status == "auto_rejected":
             await self._maybe_deny_resume_interrupt(closed, reason=decision.reason)
@@ -726,7 +772,7 @@ class HitlService:
                         reason=decision.reason,
                     )
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001  # notify is best-effort; the card is closed regardless
                 agent_metrics.record_hitl_deny("notify_failed")
         await self._maybe_deny_resume_interrupt(closed, reason=decision.reason)
         return closed
@@ -745,7 +791,7 @@ class HitlService:
                 card_id=card.card_id,
                 reason=reason,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # fail-closed deny records the metric instead of raising (020)
             agent_metrics.record_hitl_deny("deny_resume_failed")
 
     async def list_escalated(

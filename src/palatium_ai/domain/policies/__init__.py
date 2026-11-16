@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from .types import (
     GROUNDING_DEFAULT,
     LOW_RISK_ROUTE_STRATEGIES,
+    RESPONSE_SHAPE_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     TRANSFORMATION_DEFAULT,
     AgentRole,
@@ -20,6 +21,7 @@ from .types import (
     ExecutionStrategy,
     GroundingMode,
     ModelTier,
+    ResponseShape,
     RouteStrategy,
     TaskKind,
     TransformationKind,
@@ -29,6 +31,7 @@ from .types import (
 
 if TYPE_CHECKING:
     from .ack_reply import AckReplyPolicy
+    from .attachment_selection import AttachmentSelection, AttachmentSelectionPolicy
     from .attachment_stickiness import (
         AttachmentRehydrateDecision,
         AttachmentStickinessDecision,
@@ -39,6 +42,7 @@ if TYPE_CHECKING:
     from .contextualizer import ContextualizerGateDecision, ContextualizerPolicy
     from .continuity import ContinuityPolicy, EffectiveRoutingIntent
     from .critic import CriticGateDecision, CriticPolicy
+    from .dialog_correction import DialogCorrectionPolicy
     from .formatter_fast_path import (
         FormatterFastPathDecision,
         FormatterFastPathPolicy,
@@ -47,16 +51,22 @@ if TYPE_CHECKING:
     from .formatter_memory_merge import FormatterMemoryMergeDecision, FormatterMemoryMergePolicy
     from .grounding import GroundingEmptyDecision, GroundingPolicy
     from .hop_budget import HopBudgetDecision, HopBudgetPolicy
+    from .internal_vocabulary import InternalVocabularyPolicy
     from .locale import ReplyLocalePolicy
+    from .mechanical_restructure import MechanicalRestructureDecision, MechanicalRestructurePolicy
     from .memory_namespace import MemoryNamespaceBinding, MemoryNamespacePolicy
     from .memory_recall import MemoryRecallDecision, MemoryRecallPolicy
     from .parallel_workers import ParallelWorkerPolicy, ParallelWorkersDecision
+    from .presentation import PresentationOwnershipDecision, PresentationOwnershipPolicy
+    from .presentation_icons import PresentationIconPolicy
     from .promotion import PromotionPolicy
     from .researcher_tier import ResearcherTierDecision, ResearcherTierPolicy
     from .response_cache import ResponseCacheKeyParts, ResponseCacheKeyPolicy
     from .retention import RetentionDecision, RetentionPolicy, RetentionWindows
     from .retrieval import LAST_RESORT_PLATFORM_TOOLS, RetrievalBindingDecision, RetrievalPolicy
+    from .revision import RevisionPolicy
     from .scratchpad import SessionScratchpadPolicy
+    from .shape import ShapeRecipe, ShapeRecipePolicy, ShapeVerdict
     from .transform import TransformPolicy, TransformRouteDecision
     from .untrusted_content import (
         DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
@@ -65,20 +75,29 @@ if TYPE_CHECKING:
         UntrustedContentResult,
         UntrustedContentThresholds,
         budget_untrusted_text,
+        count_fence_blocks,
     )
+    from .verbosity import BUDGET_DEFAULT, VerbosityPolicy
+    from .vision import VisionBlockReason, VisionDecision, VisionPolicy, normalise_image_mime
 
 __all__ = [
+    "BUDGET_DEFAULT",
     "CLARIFY_MIN_CONFIDENCE",
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
     "FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS",
     "GROUNDING_DEFAULT",
+    "INFERRED_SCORE_FACTOR",
     "LAST_RESORT_PLATFORM_TOOLS",
     "LOW_RISK_ROUTE_STRATEGIES",
+    "RESPONSE_SHAPE_DEFAULT",
     "SUBSTANTIVE_USER_PAYLOAD_CHARS",
     "TRANSFORMATION_DEFAULT",
     "AckReplyPolicy",
     "AgentRole",
+    "AssembledPrompt",
     "AttachmentRehydrateDecision",
+    "AttachmentSelection",
+    "AttachmentSelectionPolicy",
     "AttachmentStickinessDecision",
     "AttachmentStickinessPolicy",
     "ClarificationGatePolicy",
@@ -89,8 +108,11 @@ __all__ = [
     "ContinuityPolicy",
     "CriticGateDecision",
     "CriticPolicy",
+    "DialogCorrectionPolicy",
     "EffectiveRoutingIntent",
     "ExecutionStrategy",
+    "ExtractAdmissionDecision",
+    "ExtractAdmissionPolicy",
     "FormatterFastPathDecision",
     "FormatterFastPathPolicy",
     "FormatterMemoryMergeDecision",
@@ -101,26 +123,40 @@ __all__ = [
     "GroundingPolicy",
     "HopBudgetDecision",
     "HopBudgetPolicy",
+    "InternalVocabularyPolicy",
+    "MechanicalRestructureDecision",
+    "MechanicalRestructurePolicy",
     "MemoryNamespaceBinding",
     "MemoryNamespacePolicy",
     "MemoryRecallDecision",
     "MemoryRecallPolicy",
     "ModelTier",
+    "OriginCeilingPolicy",
     "ParallelWorkerPolicy",
     "ParallelWorkersDecision",
+    "PresentationIconPolicy",
+    "PresentationOwnershipDecision",
+    "PresentationOwnershipPolicy",
     "PromotionPolicy",
+    "PromptAssemblyParts",
+    "PromptAssemblyPolicy",
     "ReplyLocalePolicy",
     "ResearcherTierDecision",
     "ResearcherTierPolicy",
     "ResponseCacheKeyParts",
     "ResponseCacheKeyPolicy",
+    "ResponseShape",
     "RetentionDecision",
     "RetentionPolicy",
     "RetentionWindows",
     "RetrievalBindingDecision",
     "RetrievalPolicy",
+    "RevisionPolicy",
     "RouteStrategy",
     "SessionScratchpadPolicy",
+    "ShapeRecipe",
+    "ShapeRecipePolicy",
+    "ShapeVerdict",
     "TaskKind",
     "TransformPolicy",
     "TransformRouteDecision",
@@ -130,11 +166,19 @@ __all__ = [
     "UntrustedContentPolicy",
     "UntrustedContentResult",
     "UntrustedContentThresholds",
+    "VerbosityPolicy",
+    "VisionBlockReason",
+    "VisionDecision",
+    "VisionPolicy",
     "budget_untrusted_text",
+    "count_fence_blocks",
+    "normalise_image_mime",
 ]
 
 _LAZY: dict[str, tuple[str, str]] = {
     "AckReplyPolicy": (".ack_reply", "AckReplyPolicy"),
+    "AttachmentSelection": (".attachment_selection", "AttachmentSelection"),
+    "AttachmentSelectionPolicy": (".attachment_selection", "AttachmentSelectionPolicy"),
     "AttachmentStickinessPolicy": (".attachment_stickiness", "AttachmentStickinessPolicy"),
     "AttachmentStickinessDecision": (".attachment_stickiness", "AttachmentStickinessDecision"),
     "AttachmentRehydrateDecision": (".attachment_stickiness", "AttachmentRehydrateDecision"),
@@ -147,6 +191,9 @@ _LAZY: dict[str, tuple[str, str]] = {
     "ContextualizerPolicy": (".contextualizer", "ContextualizerPolicy"),
     "CriticGateDecision": (".critic", "CriticGateDecision"),
     "CriticPolicy": (".critic", "CriticPolicy"),
+    "DialogCorrectionPolicy": (".dialog_correction", "DialogCorrectionPolicy"),
+    "ExtractAdmissionDecision": (".extract_admission", "ExtractAdmissionDecision"),
+    "ExtractAdmissionPolicy": (".extract_admission", "ExtractAdmissionPolicy"),
     "FormatterFastPathDecision": (".formatter_fast_path", "FormatterFastPathDecision"),
     "FormatterFastPathPolicy": (".formatter_fast_path", "FormatterFastPathPolicy"),
     "FormatterPassthroughSignals": (".formatter_fast_path", "FormatterPassthroughSignals"),
@@ -156,14 +203,25 @@ _LAZY: dict[str, tuple[str, str]] = {
     "GroundingPolicy": (".grounding", "GroundingPolicy"),
     "HopBudgetDecision": (".hop_budget", "HopBudgetDecision"),
     "HopBudgetPolicy": (".hop_budget", "HopBudgetPolicy"),
+    "InternalVocabularyPolicy": (".internal_vocabulary", "InternalVocabularyPolicy"),
     "TransformPolicy": (".transform", "TransformPolicy"),
     "TransformRouteDecision": (".transform", "TransformRouteDecision"),
     "MemoryNamespaceBinding": (".memory_namespace", "MemoryNamespaceBinding"),
     "MemoryNamespacePolicy": (".memory_namespace", "MemoryNamespacePolicy"),
     "MemoryRecallDecision": (".memory_recall", "MemoryRecallDecision"),
     "MemoryRecallPolicy": (".memory_recall", "MemoryRecallPolicy"),
+    "OriginCeilingPolicy": (".origin_ceiling", "OriginCeilingPolicy"),
+    "INFERRED_SCORE_FACTOR": (".origin_ceiling", "INFERRED_SCORE_FACTOR"),
+    "PromptAssemblyPolicy": (".prompt_assembly", "PromptAssemblyPolicy"),
+    "PromptAssemblyParts": (".prompt_assembly", "PromptAssemblyParts"),
+    "AssembledPrompt": (".prompt_assembly", "AssembledPrompt"),
     "ParallelWorkerPolicy": (".parallel_workers", "ParallelWorkerPolicy"),
     "ParallelWorkersDecision": (".parallel_workers", "ParallelWorkersDecision"),
+    "PresentationOwnershipDecision": (".presentation", "PresentationOwnershipDecision"),
+    "PresentationOwnershipPolicy": (".presentation", "PresentationOwnershipPolicy"),
+    "MechanicalRestructureDecision": (".mechanical_restructure", "MechanicalRestructureDecision"),
+    "MechanicalRestructurePolicy": (".mechanical_restructure", "MechanicalRestructurePolicy"),
+    "PresentationIconPolicy": (".presentation_icons", "PresentationIconPolicy"),
     "PromotionPolicy": (".promotion", "PromotionPolicy"),
     "ReplyLocalePolicy": (".locale", "ReplyLocalePolicy"),
     "ResearcherTierDecision": (".researcher_tier", "ResearcherTierDecision"),
@@ -176,7 +234,11 @@ _LAZY: dict[str, tuple[str, str]] = {
     "LAST_RESORT_PLATFORM_TOOLS": (".retrieval", "LAST_RESORT_PLATFORM_TOOLS"),
     "RetrievalBindingDecision": (".retrieval", "RetrievalBindingDecision"),
     "RetrievalPolicy": (".retrieval", "RetrievalPolicy"),
+    "RevisionPolicy": (".revision", "RevisionPolicy"),
     "SessionScratchpadPolicy": (".scratchpad", "SessionScratchpadPolicy"),
+    "ShapeRecipe": (".shape", "ShapeRecipe"),
+    "ShapeRecipePolicy": (".shape", "ShapeRecipePolicy"),
+    "ShapeVerdict": (".shape", "ShapeVerdict"),
     "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS": (
         ".untrusted_content",
         "DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS",
@@ -189,6 +251,13 @@ _LAZY: dict[str, tuple[str, str]] = {
     "UntrustedContentResult": (".untrusted_content", "UntrustedContentResult"),
     "UntrustedContentThresholds": (".untrusted_content", "UntrustedContentThresholds"),
     "budget_untrusted_text": (".untrusted_content", "budget_untrusted_text"),
+    "count_fence_blocks": (".untrusted_content", "count_fence_blocks"),
+    "BUDGET_DEFAULT": (".verbosity", "BUDGET_DEFAULT"),
+    "VerbosityPolicy": (".verbosity", "VerbosityPolicy"),
+    "VisionBlockReason": (".vision", "VisionBlockReason"),
+    "VisionDecision": (".vision", "VisionDecision"),
+    "VisionPolicy": (".vision", "VisionPolicy"),
+    "normalise_image_mime": (".vision", "normalise_image_mime"),
 }
 
 

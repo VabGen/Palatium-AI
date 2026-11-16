@@ -11,6 +11,7 @@ from .harness import HarnessPort
 from .llm import LlmCostEstimatorPort, LLMPort
 from .mcp import MCPClientPort, MCPRegistryPort, McpToolCallRecorderPort
 from .scanner import MalwareScannerPort, ScanVerdict
+from .vision import VisionImageSourcePort
 
 __all__ = [
     "AttachmentReadPort",
@@ -28,4 +29,5 @@ __all__ = [
     "ParsedDocument",
     "ParsedPage",
     "ScanVerdict",
+    "VisionImageSourcePort",
 ]

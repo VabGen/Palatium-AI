@@ -114,7 +114,7 @@ class LlmJudgeGrader:
                 response_format="json_object",
             )
             payload = loads_llm_json(completion.content)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # eval judge degrades to a scored failure (075)
             return failed(0.0, details=f"live judge LLM failed: {exc}")
 
         if not isinstance(payload, dict):

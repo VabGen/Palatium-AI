@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.agents.execution import ExecutionStrategy
+from palatium_ai.domain.policies.constitution import PrincipleId
 
 from .context_packet import ContextPacket
 from .contracts import TaskResult
@@ -28,10 +29,19 @@ class CriticInput(BaseModel):
     continuation_kind: str | None = None
     user_input_chars: int = Field(default=0, ge=0)
     worker_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: Recalled medium/scratchpad hints for this turn (060). Allowed PII sources for
+    #: constitution checks and judge evidence — without them, a name recall looks
+    #: like an invented leak (055).
+    memory_hints: tuple[str, ...] = ()
 
 
 class CriticOutput(BaseModel):
-    """Оценка качества решения (LLM-as-a-Judge)."""
+    """Оценка качества решения (LLM-as-a-Judge).
+
+    ``violations`` — article ids from :class:`~palatium_ai.domain.policies.constitution
+    .Constitution`. The judge names them; deterministic checks may add theirs, and any
+    violation forces ``requires_review`` (fail-closed, 020).
+    """
 
     model_config = {"frozen": True}
 
@@ -39,6 +49,7 @@ class CriticOutput(BaseModel):
     safety_score: int = Field(ge=0, le=10)
     requires_review: bool
     summary: str = Field(min_length=1)
+    violations: tuple[PrincipleId, ...] = ()
 
 
 class CriticTaskResult(TaskResult):

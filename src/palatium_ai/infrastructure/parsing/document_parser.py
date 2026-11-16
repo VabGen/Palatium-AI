@@ -24,6 +24,7 @@ import asyncio
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.ports.document_parser import (
     DocumentParseError,
     DocumentParserPort,
@@ -61,13 +62,21 @@ def _truncate_at_word(text: str, max_chars: int) -> str:
     return piece.rstrip()
 
 
-def _decode_text(data: bytes) -> str:
-    """Decode bytes with the first encoding that succeeds; never raise on bad bytes."""
+def _decode_text(data: bytes, *, kind: str) -> str:
+    """Decode bytes with the first encoding that succeeds; never raise on bad bytes.
+
+    The last-resort ``errors="replace"`` is lossy: U+FFFD replaces bytes the guess
+    could not read, so the text handed to the model may not match the file. It is
+    still better than failing an upload outright, but every fallback is counted —
+    a non-zero ``palatium_utf8_decode_failures_total`` means a real encoding defect
+    (mojibake / broken OCR) that must be visible, not silently swallowed (040).
+    """
     for encoding in _TEXT_ENCODINGS:
         try:
             return data.decode(encoding)
         except UnicodeDecodeError:
             continue
+    agent_metrics.record_utf8_decode_failure(kind=kind)
     return data.decode("utf-8", errors="replace")
 
 
@@ -84,7 +93,7 @@ class PlainTextParser:
 
     async def parse(self, data: bytes, *, mime_type: str, filename: str) -> ParsedDocument:
         """Decode bytes to text; decoding is CPU-only, so it stays on the loop."""
-        text = _decode_text(data)
+        text = _decode_text(data, kind="text")
         truncated = len(text) > self._max_chars
         body = text if not truncated else _truncate_at_word(text, self._max_chars)
         return ParsedDocument(
@@ -160,6 +169,31 @@ class PdfParser:
             return ""
 
 
+def _distinct_row_cells(cells: Iterable[Any]) -> list[Any]:
+    """One entry per merged region of a table row.
+
+    ``_Row.cells`` repeats the *same* cell once for every grid column a merge
+    spans, so a merged header was emitted N times ("филиал СЭД филиал СЭД …"):
+    duplicated facts in the prompt and in the answer the user reads (055).
+    Dedupe by the cell's XML element, not by its text — two genuinely separate
+    cells are allowed to hold the same words.
+    """
+    seen: set[int] = set()
+    distinct: list[Any] = []
+    for cell in cells:
+        marker = id(cell._tc)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        distinct.append(cell)
+    return distinct
+
+
+def _table_row_text(row: Any) -> str:
+    """Tab-separated visible text of one row, merged cells counted once."""
+    return "\t".join(cell.text for cell in _distinct_row_cells(row.cells) if cell.text.strip())
+
+
 class DocxParser:
     """Parser for ``.docx`` backed by python-docx (paragraphs + table cells)."""
 
@@ -208,7 +242,7 @@ class DocxParser:
             raise DocumentParseError("docx is corrupt or not a docx package") from exc
 
         blocks = [paragraph.text for paragraph in document.paragraphs]
-        blocks.extend("\t".join(cell.text for cell in row.cells) for table in document.tables for row in table.rows)
+        blocks.extend(_table_row_text(row) for table in document.tables for row in table.rows)
         text = "\n".join(block for block in blocks if block.strip())
         truncated = len(text) > self._max_chars
         return ParsedDocument(
@@ -464,7 +498,7 @@ class HtmlParser:
             raise DocumentParseError(msg) from exc
 
         try:
-            document = lxml_html.fromstring(_decode_text(data))
+            document = lxml_html.fromstring(_decode_text(data, kind="html"))
         except (TypeError, ValueError, etree.ParserError) as exc:
             raise DocumentParseError("html is corrupt or not parseable") from exc
 

@@ -7,7 +7,11 @@ from __future__ import annotations
 from typing import Annotated, Literal, get_args
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema  # noqa: TC002 - pydantic evaluates model annotations at runtime
+
+from palatium_ai.domain.content.citations.models import CitationRef
+from palatium_ai.domain.content.code_text import normalize_code_content
 
 IconToken = Literal[
     "calendar",
@@ -28,11 +32,39 @@ IconToken = Literal[
     "link",
     "edit",
     "settings",
+    # Curated expansion for answer chrome (kimi-answer-formatting F1) —
+    # subset of kimi-widget icons, not the full 105-asset library.
+    "folder",
+    "task",
+    "list",
+    "tag",
+    "bookmark",
+    "history",
+    "notification",
+    "upload",
+    "download",
+    "locate",
+    "histogram",
+    "question",
+    "translate",
+    "code",
+    "image",
+    "share",
+    "pin",
+    "completed",
 ]
 
 # Closed allow-list for Formatter <icon name="…"/> tokens (emoji forbidden).
 ICON_NAMES: tuple[str, ...] = get_args(IconToken)
 ICON_NAME_SET: frozenset[str] = frozenset(ICON_NAMES)
+
+#: Legacy nesting marker for list rows written before ``ListItem.level`` existed.
+#: Producers now set ``level``; readers still strip this prefix so persisted turns
+#: and GFM indent encoding stay readable (decoded by UI + ``plain_text``).
+NESTED_ITEM_PREFIX = "· "
+#: Max nesting depth for list rows (0 = root). Closed ceiling keeps the UI layout
+#: finite — deeper indent collapses to this level rather than inventing a tree type.
+LIST_LEVEL_MAX = 2
 
 CalloutTone = Literal["info", "success", "warning", "danger"]
 ListStyle = Literal["ordered", "unordered"]
@@ -43,6 +75,24 @@ ActionStyle = Literal["primary", "secondary", "danger"]
 HeadingLevel = Literal[1, 2, 3]
 # How the document expects human participation (server turns this into HITL cards).
 DocumentInteraction = Literal["none", "choice", "confirm"]
+# Semantic class of the answer (UI skin / analytics hint; core does not branch on it).
+DocumentKind = Literal[
+    "analysis",
+    "recommendation",
+    "response",
+    "letter",
+    "memo",
+    "guide",
+    "report",
+    "faq",
+]
+# Register of the prose — how ceremonial the user-facing text should read.
+FormalityLevel = Literal["casual", "neutral", "formal", "official"]
+# How much text the answer is allowed to spend. Server-derived, never a model claim:
+# the formatter fills the field after validation (``AlignFormatterMeta``), so a document
+# cannot declare itself "minimal" and then write five sections. Defaults keep every
+# persisted/legacy document valid without a ``schema_version`` bump.
+VerbosityBudget = Literal["minimal", "standard", "detailed"]
 # Opaque widget id for UI registry — not a product allow-list.
 _WIDGET_KIND_PATTERN = r"^[a-z][a-z0-9_]{0,62}$"
 
@@ -76,6 +126,9 @@ class ListItem(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     icon: IconToken | None = None
     emphasis: str | None = Field(default=None, max_length=200)
+    #: Nesting depth (0 = root). Default keeps every legacy / schema_first payload valid
+    #: without a ``schema_version`` bump; producers must not encode depth in ``text``.
+    level: int = Field(default=0, ge=0, le=LIST_LEVEL_MAX)
 
 
 class ListBlock(BaseModel):
@@ -119,6 +172,23 @@ class CodeBlock(BaseModel):
     language: str = Field(default="text", min_length=1, max_length=40)
     content: str = Field(min_length=1, max_length=50_000)
 
+    @field_validator("content")
+    @classmethod
+    def _verbatim_source(cls, value: str, info: ValidationInfo) -> str:
+        """Entity repair + restore collapsed newlines for readable source (E2E-05).
+
+        Whitespace-only content is a schema mismatch (W10.1 P0.1a): an empty fence
+        must fail closed, not render as a blank code chrome.
+        """
+        if not value.strip():
+            msg = "code.content must be non-empty after strip"
+            raise ValueError(msg)
+        language = "text"
+        raw_lang = info.data.get("language") if info.data else None
+        if isinstance(raw_lang, str) and raw_lang.strip():
+            language = raw_lang
+        return normalize_code_content(value, language=language)
+
 
 class FormulaBlock(BaseModel):
     """Math formula (KaTeX / MathJax on client)."""
@@ -155,7 +225,11 @@ class StepItem(BaseModel):
 
     title: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=2000)
-    status: StepStatus = "pending"
+    #: Absent = no process state is known, NOT "pending". The UI draws a status
+    #: marker only for a real state; a default here would assert "nothing started"
+    #: about a document that never had a process (e.g. an enumerated list of
+    #: components), and every row would show the same "pending" glyph.
+    status: StepStatus | None = None
     icon: IconToken | None = None
 
 
@@ -264,6 +338,20 @@ class DocumentMeta(BaseModel):
     source_refs: tuple[str, ...] = ()
     # none = informational; choice/confirm → server mints clickable HITL cards from actions.
     interaction: DocumentInteraction = "none"
+    # Semantic hints — defaults keep every existing (legacy) document valid (Phase 1).
+    kind: DocumentKind = "analysis"
+    formality: FormalityLevel = "neutral"
+    # Length axis of the turn (W7). ``SkipJsonSchema`` for the same reason as
+    # ``citations``: this value is the server's decision from the transformation axis,
+    # not a field the model may pick — under a strict provider schema a listed field
+    # becomes *required*, and the model would have to invent a budget it does not own.
+    verbosity_budget: SkipJsonSchema[VerbosityBudget] = "standard"
+    # Provider citation anchors (W3b). ``SkipJsonSchema`` is load-bearing: the whole
+    # ``ContentDocument`` becomes the provider's strict output schema, and a field
+    # listed there is *required* — the model would have to invent offsets it does not
+    # have. Anchors come from provider annotations, so the agent attaches them after
+    # validation; the field is part of the wire contract to the client, not to the LLM.
+    citations: SkipJsonSchema[tuple[CitationRef, ...]] = ()
 
 
 class ContentDocument(BaseModel):
@@ -274,7 +362,9 @@ class ContentDocument(BaseModel):
     schema_version: Literal[1] = 1
     locale: str = Field(min_length=2, max_length=16, pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
     title: str | None = Field(default=None, max_length=300)
-    blocks: tuple[ContentBlock, ...] = Field(min_length=1)
+    # Empty is a legitimate (honest) state: a failed/empty generation must not be
+    # faked with a whitespace paragraph. Consumers iterate `blocks` (no ^[0] access).
+    blocks: tuple[ContentBlock, ...] = Field(default_factory=tuple)
     actions: tuple[ActionSpec, ...] = ()
     meta: DocumentMeta
 
@@ -291,6 +381,8 @@ class ContentDocument(BaseModel):
                 return block.items[0].text[:limit]
             if isinstance(block, StepsBlock) and block.items:
                 return block.items[0].title[:limit]
+        if not self.blocks:
+            return ""
         return self.blocks[0].type[:limit]
 
     def plain_text(self, limit: int = 4000) -> str:
@@ -310,8 +402,8 @@ class ContentDocument(BaseModel):
     @model_validator(mode="after")
     def _validate_structured_shapes(self) -> ContentDocument:
         """Enforce table/chart shape on every validate path (not only parse_*)."""
-        _validate_table_shapes(self)
-        _validate_chart_shapes(self)
+        for block in self.blocks:
+            validate_content_block(block)
         return self
 
 
@@ -338,7 +430,7 @@ def _structured_block_plain_lines(block: ContentBlock) -> list[str]:
     """Flatten list/table/steps/kv/chart blocks."""
     match block:
         case ListBlock(items=items):
-            return [f"• {item.text}" for item in items]
+            return [_plain_list_line(item) for item in items]
         case StepsBlock(items=items):
             return [f"• {item.title} — {item.body}" for item in items]
         case KeyValueBlock(items=items):
@@ -351,29 +443,70 @@ def _structured_block_plain_lines(block: ContentBlock) -> list[str]:
             return []
 
 
+def _plain_list_line(item: ListItem) -> str:
+    """One transcript line per list item: bullet at the root, indent for nested rows."""
+    text, level = normalize_list_item_nesting(item.text, item.level)
+    if level > 0:
+        return f"{'  ' * level}· {text}"
+    return f"• {text}"
+
+
+def normalize_list_item_nesting(text: str, level: int = 0) -> tuple[str, int]:
+    """Decode legacy ``NESTED_ITEM_PREFIX`` into ``level``; never leave both encodings."""
+    cleaned = text
+    resolved = max(0, min(int(level), LIST_LEVEL_MAX))
+    while cleaned.startswith(NESTED_ITEM_PREFIX):
+        cleaned = cleaned[len(NESTED_ITEM_PREFIX) :]
+        resolved = min(LIST_LEVEL_MAX, max(resolved, 1))
+    return cleaned, resolved
+
+
+def normalize_document_list_nesting(document: ContentDocument) -> ContentDocument:
+    """Lift legacy text-prefix nesting onto ``ListItem.level`` for every list block."""
+    changed = False
+    blocks: list[ContentBlock] = []
+    for block in document.blocks:
+        if not isinstance(block, ListBlock):
+            blocks.append(block)
+            continue
+        items: list[ListItem] = []
+        list_changed = False
+        for item in block.items:
+            text, level = normalize_list_item_nesting(item.text, item.level)
+            if text != item.text or level != item.level:
+                list_changed = True
+                items.append(item.model_copy(update={"text": text, "level": level}))
+            else:
+                items.append(item)
+        if list_changed:
+            changed = True
+            blocks.append(block.model_copy(update={"items": tuple(items)}))
+        else:
+            blocks.append(block)
+    if not changed:
+        return document
+    return document.model_copy(update={"blocks": tuple(blocks)})
+
+
 def parse_content_document(payload: object) -> ContentDocument:
     """Validate arbitrary JSON-compatible payload into ContentDocument."""
-    document = ContentDocument.model_validate(payload)
-    _validate_table_shapes(document)
-    _validate_chart_shapes(document)
-    return document
+    return ContentDocument.model_validate(payload)
 
 
-def _validate_table_shapes(document: ContentDocument) -> None:
-    for block in document.blocks:
-        if not isinstance(block, TableBlock):
-            continue
+def validate_content_block(block: ContentBlock) -> None:
+    """Enforce invariants between fields of one block.
+
+    These cannot be expressed in JSON Schema (which the provider enforces), so both
+    the document validator and the incremental stream scanner must apply them: a
+    block that passes here is safe to paint before the document is complete.
+    """
+    if isinstance(block, TableBlock):
         width = len(block.columns)
         for row in block.rows:
             if len(row) != width:
                 raise ValueError(f"table row length {len(row)} != columns length {width}")
-
-
-def _validate_chart_shapes(document: ContentDocument) -> None:
-    for block in document.blocks:
-        if not isinstance(block, ChartBlock):
-            continue
-        n = len(block.labels)
+    elif isinstance(block, ChartBlock):
+        points = len(block.labels)
         for series in block.series:
-            if len(series.values) != n:
-                raise ValueError(f"chart series '{series.name}' length {len(series.values)} != labels {n}")
+            if len(series.values) != points:
+                raise ValueError(f"chart series '{series.name}' length {len(series.values)} != labels {points}")

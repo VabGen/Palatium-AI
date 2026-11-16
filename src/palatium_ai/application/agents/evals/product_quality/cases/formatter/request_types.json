@@ -1,0 +1,125 @@
+{
+  "cases": [
+    {
+      "id": "fmt-list-01",
+      "agent": "formatter",
+      "scenario": "list",
+      "input": {
+        "request_type": "list",
+        "user_text": "Список из трёх пунктов: подготовка, запуск, проверка."
+      },
+      "expected": {
+        "must_contain": ["подготовка", "запуск", "проверка"],
+        "must_not_contain": ["удалить прод"],
+        "structure": { "require_list": true, "max_paragraph_words": 60 }
+      },
+      "tags": ["formatter", "list"]
+    },
+    {
+      "id": "fmt-comparison-01",
+      "agent": "formatter",
+      "scenario": "comparison",
+      "input": {
+        "request_type": "comparison",
+        "user_text": "Сравни Postgres и Neo4j одним списком плюсов каждого."
+      },
+      "expected": {
+        "must_contain": ["Postgres", "Neo4j"],
+        "must_not_contain": ["MySQL only"],
+        "structure": { "require_list": true }
+      },
+      "tags": ["formatter", "comparison"]
+    },
+    {
+      "id": "fmt-instruction-01",
+      "agent": "formatter",
+      "scenario": "instruction",
+      "input": {
+        "request_type": "instruction",
+        "user_text": "Пошагово: как перезапустить сервис palatium-api."
+      },
+      "expected": {
+        "must_contain": ["palatium-api"],
+        "must_not_contain": ["rm -rf /"],
+        "structure": { "require_list": true }
+      },
+      "tags": ["formatter", "instruction"]
+    },
+    {
+      "id": "fmt-explanation-01",
+      "agent": "formatter",
+      "scenario": "explanation",
+      "input": {
+        "request_type": "explanation",
+        "user_text": "Объясни, что такое HITL в одном абзаце."
+      },
+      "expected": {
+        "must_contain": ["HITL"],
+        "must_not_contain": ["полностью автономно без человека всегда"],
+        "structure": { "require_heading": false }
+      },
+      "tags": ["formatter", "explanation"]
+    },
+    {
+      "id": "fmt-code-01",
+      "agent": "formatter",
+      "scenario": "code",
+      "input": {
+        "request_type": "code",
+        "user_text": "Покажи пример Python-функции add(a, b) в fenced block."
+      },
+      "expected": {
+        "must_contain": ["def", "add"],
+        "must_not_contain": ["eval("],
+        "structure": { "require_code_fence": true }
+      },
+      "tags": ["formatter", "code"]
+    },
+    {
+      "id": "fmt-fields-01",
+      "agent": "formatter",
+      "scenario": "field_preservation",
+      "input": {
+        "request_type": "field_preservation",
+        "user_text": "Оформи статус-карточку, сохранив поля из upstream без изменений значений."
+      },
+      "context": {
+        "upstream_fields": {
+          "ticket_id": "EDMS-90881",
+          "owner": "vabishchevich_h",
+          "sla": "PT4H"
+        }
+      },
+      "expected": {
+        "must_contain": ["EDMS-90881", "vabishchevich_h", "PT4H"],
+        "must_not_contain": ["EDMS-00000"],
+        "preserve_fields": {
+          "ticket_id": "EDMS-90881",
+          "owner": "vabishchevich_h",
+          "sla": "PT4H"
+        }
+      },
+      "tags": ["formatter", "field_preservation"]
+    },
+    {
+      "id": "fmt-analysis-dense-01",
+      "agent": "formatter",
+      "scenario": "document_analysis",
+      "input": {
+        "request_type": "document_analysis",
+        "response_shape": "document_analysis",
+        "user_text": "Разбери заявку: заказчик, предмет, ключевые требования и риски."
+      },
+      "expected": {
+        "must_contain": ["требован"],
+        "must_not_contain": ["📎", "📄"],
+        "structure": {
+          "require_heading": true,
+          "min_headings": 2,
+          "require_kv_or_list": true
+        }
+      },
+      "tags": ["formatter", "document_analysis", "kimi-density"]
+    }
+  ]
+}

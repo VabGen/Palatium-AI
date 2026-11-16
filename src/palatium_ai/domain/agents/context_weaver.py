@@ -7,7 +7,17 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.mcp.models import ExecutionPlanBundle
-from palatium_ai.domain.policies.types import GROUNDING_DEFAULT, GroundingMode
+from palatium_ai.domain.policies.types import (
+    ATTACHMENT_SCOPE_DEFAULT,
+    FILE_REFERENCE_DEFAULT,
+    GROUNDING_DEFAULT,
+    RESPONSE_SHAPE_DEFAULT,
+    AttachmentScope,
+    ComposerMode,
+    FileReferenceKind,
+    GroundingMode,
+    ResponseShape,
+)
 
 from .context_packet import ContextPacket
 from .contracts import TaskResult
@@ -29,10 +39,19 @@ class ContextWeaverInput(BaseModel):
     candidate_capabilities: tuple[str, ...] = Field(default_factory=tuple)
     grounding: GroundingMode = Field(default=GROUNDING_DEFAULT)
     grounding_reason: str = Field(default="", max_length=500)
+    # Presentation axis carried to the Formatter; never used by ExecutionPlanner.
+    response_shape: ResponseShape = Field(default=RESPONSE_SHAPE_DEFAULT)
+    # ``thread_file`` → planner binds a direct platform.read_attachment call (070).
+    file_reference: FileReferenceKind = Field(default=FILE_REFERENCE_DEFAULT)
+    # Plurality of a thread-file ask: ``all`` means "every file of this dialog", which
+    # the worker expands into one read per file (resolved in code, never by the LLM).
+    attachment_scope: AttachmentScope = Field(default=ATTACHMENT_SCOPE_DEFAULT)
     # True when this turn already carries fenced upload OCR/text (prefer reason_only).
     has_attachment_context: bool = False
     # Continuity trusts dialog prior for workers — prefer reason_only over search_knowledge.
     has_trusted_prior: bool = False
+    #: Explicit composer chrome (mode pills); carried into ContextPacket / researcher tier.
+    composer_mode: ComposerMode | None = None
 
 
 class ContextWeaverOutput(BaseModel):

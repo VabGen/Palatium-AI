@@ -1,10 +1,15 @@
-# Hot-path complexity regression (rules 080 / 075).
+# Performance nightlies (rules 080 / 075 / 060).
 #
-# These tests count executed bytecode instructions to pin the *scaling* of the hot paths
-# (dedupe, hybrid merge, token accounting). They are deterministic and cheap, but they are
-# about a different question than the pull-request suite, so they live here: a red nightly
-# means "somebody made a hot path super-linear", which is not something that should block an
-# unrelated PR. `make perf` runs the same selection locally.
+# Two jobs, two questions, both outside the pull-request path:
+#
+# * `hot-paths` counts executed bytecode instructions to pin the *scaling* of pure Python
+#   hot paths (dedupe, hybrid merge, token accounting). Deterministic and cheap; a red run
+#   means "somebody made a hot path super-linear". `make perf` runs the same selection
+#   locally.
+# * `memory-query-latency` measures p95 of the hybrid memory search against a real
+#   pgvector cluster (M9 step 1). Instruction counts cannot see inside Postgres, so this
+#   question is timing instead — see the module docstring for why it is an SLO budget, not
+#   a wall-clock ratio.
 #
 # Actions are pinned by commit SHA with a version comment (rule 025); `scripts/ci_security.py`
 # fails the build if that drifts.
@@ -38,6 +43,62 @@ jobs:
 
       # Instruction counts are exact, so a failure here is a real change in algorithmic
       # shape — not runner noise. `-m slow` is the opposite selection to PR CI, which runs
-      # `-m "not live and not llm_live and not slow"` (scripts/ci_quality.py).
+      # `-m "not live and not llm_live and not slow"` (scripts/ci_quality.py). The pgvector
+      # latency eval in `memory-query-latency` needs a database and skips here by design.
       - name: Hot-path scaling guard
         run: uv run pytest tests/perf -q -m slow --no-cov
+
+  # Memory query p95 (M9 step 1, rule 060). The SLO "query p95 < 200 ms" had no gate at
+  # all: the histogram was exported, but nothing ever checked a real plan. A cluster is
+  # required, so the job brings its own — same digest as docker-compose.yml (025), asserted
+  # by tests/unit/test_ci_integration_db_job.py so the pins cannot drift apart.
+  #
+  # `PALATIUM_REQUIRE_DB=1` keeps the lesson of the integration job: a lost DATABASE_URL
+  # must be red, not a silently skipped suite (075).
+  memory-query-latency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18@sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: postgres
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # Alembic reads Settings (POSTGRES_*), the test reads DATABASE_URL — both must agree.
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: postgres
+      POSTGRES_SCHEMA: palatium_ai
+      DATABASE_URL: postgresql+asyncpg://postgres:test@localhost:5432/postgres
+      PALATIUM_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Schema from migrations, never from test code (075): a test that creates its own
+      # tables would measure a schema production does not have.
+      - name: Migrations (schema before tests)
+        run: uv run alembic upgrade head
+
+      - name: Memory query p95 + statement-count guard
+        run: uv run pytest tests/perf/test_memory_query_latency.py -q -m slow --no-cov

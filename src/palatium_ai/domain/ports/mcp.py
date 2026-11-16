@@ -60,6 +60,28 @@ class MCPRegistryPort(Protocol):
         ...
 
 
+class McpServerUnavailableError(RuntimeError):
+    """A MCP server cannot serve calls right now (transport failure / open circuit).
+
+    Part of the port contract, not an adapter detail: callers must be able to tell
+    "the corporate search module is down" from "the tool ran and returned an error",
+    because the two produce different user-facing answers (Level 5 graceful
+    degradation, 035). Adapters raise a subclass; application code catches this base.
+    """
+
+    def __init__(
+        self,
+        server_name: str,
+        *,
+        retry_after_seconds: float | None = None,
+        detail: str | None = None,
+    ) -> None:
+        self.server_name = server_name
+        self.retry_after_seconds = retry_after_seconds
+        message = detail or f"MCP server '{server_name}' is unavailable"
+        super().__init__(message)
+
+
 class McpToolCallRecorderPort(Protocol):
     """Контракт записи факта MCP tool call (audit/persistence), без ORM в application."""
 

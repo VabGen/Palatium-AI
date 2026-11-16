@@ -1,0 +1,57 @@
+---
+description: "Kimi Product Knowledge — спецификации функций, сценариев и возможностей"
+globs:
+  - "docs/kimi-knowledge/**"
+  - "web/**/*.{tsx,jsx,css}"
+  - ".cursor/plans/kimi-*.md"
+alwaysApply: false
+---
+
+# Kimi Product Knowledge
+
+Перед реализацией функции, связанной с продуктами / сценариями Kimi
+(Build, Docs, Slides, Sheets, Code, Deep Research, Agent Swarm, Parallel Agent,
+landing / portfolio / MVP UX), агент **обязан** опереться на локальное зеркало,
+а не выдумывать capabilities.
+
+**Не путать слои (050):**
+
+| Вопрос | SoT |
+|--------|-----|
+| Что умеет продукт / сценарий | `docs/kimi-knowledge/` + это правило |
+| Как выглядит UI (цвет, зоны, шрифт) | `kimi-design.mdc` + `web/src/tokens.css` |
+| Brand Book extract | `.cursor/references/kimi-brand-book.md` |
+
+Brand Book и product marketing pages — разные источники; UI-токены из product-страниц
+не копировать.
+
+## Workflow
+
+1. Открыть карту: [`docs/kimi-knowledge/INDEX.md`](../../docs/kimi-knowledge/INDEX.md).
+2. Прочитать релевантный файл по ключам:
+   - `mvp-builder`, `portfolio-site-builder`, `blog-site-creator` → `use-cases/`
+   - `ai-landing-page-generator`, `image-to-website` → `capabilities/` (сайты)
+   - `ai-document-generator`, `pdf-to-ppt`, `translate-pdf` → `capabilities/` (docs/slides)
+   - `ai-python-code-generator`, `ai-cplusplus-code-generator` → `capabilities/` (code)
+   - `ai-agent`, `multi-agent`, `parallel-agent` → `resources/`
+   - `deep-research`, `agent-swarm`, `slides`, `sheets`, `docs`, `design`,
+     `websites-agent` → `showcases/`
+3. В ответе указать источник: `Source: capabilities/pdf-to-ppt` или
+   `Source: showcases/agent-swarm`.
+4. UI для этих сценариев — только токены из `kimi-design.mdc` / `tokens.css`
+   (без Tailwind, без сырого hex).
+5. Если capability **нет** в `docs/kimi-knowledge/` — не выдумывать: спросить
+   пользователя или обновить зеркало (`uv run python scripts/fetch_kimi_docs.py --force`).
+
+## Быстрая навигация
+
+- **Сайты / лендинги:** `use-cases/mvp-builder.md`,
+  `capabilities/landing-page-generator.md`, `showcases/websites-agent.md`
+- **Документы / презентации:** `capabilities/document-generator.md`,
+  `capabilities/pdf-to-ppt.md`, `showcases/docs.md`, `showcases/slides.md`
+- **Агенты:** `resources/multi-agent.md`, `resources/parallel-agent.md`,
+  `showcases/agent-swarm.md`
+- **Исследования:** `use-cases/academic-research.md`, `use-cases/market-research.md`,
+  `showcases/deep-research.md`
+
+Обновление зеркала и лицензионная оговорка — в `INDEX.md`.

@@ -42,6 +42,36 @@ def test_plain_text_includes_list_body_not_only_title() -> None:
     assert doc.preview_text() == "План встречи"
 
 
+def test_plain_text_renders_nested_items_once() -> None:
+    """Nesting is a text prefix; the transcript must not print two markers.
+
+    The old flattening emitted ``• · Подпункт`` — and the model, seeing that in
+    history, mirrored the malformed pattern back into its own answers.
+    """
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        title="Списки",
+        blocks=(
+            ListBlock(
+                style="unordered",
+                items=(
+                    ListItem(text="Пункт"),
+                    ListItem(text="· Подпункт"),
+                ),
+            ),
+        ),
+        actions=(),
+        meta=DocumentMeta(confidence=0.9, requires_review=False),
+    )
+
+    lines = doc.plain_text().splitlines()
+
+    assert "• Пункт" in lines
+    assert "  · Подпункт" in lines
+    assert not any("• ·" in line for line in lines)
+
+
 def test_assistant_turn_content_uses_plain_text() -> None:
     doc = ContentDocument(
         schema_version=1,

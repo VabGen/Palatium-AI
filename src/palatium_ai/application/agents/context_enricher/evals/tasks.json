@@ -72,5 +72,42 @@
       "continuation_kind": "answer",
       "refers_to_prior": true
     }
+  },
+  {
+    "id": "weaving-reason-only",
+    "phase": "weaving",
+    "input": {
+      "user_text": "Draft a short thank-you note.",
+      "task_kind": "knowledge_request",
+      "route": "researcher",
+      "route_plan": "Compose without retrieval",
+      "requires_mcp": false,
+      "candidate_capabilities": ["compose"],
+      "grounding": "none"
+    },
+    "expect": {
+      "status": "success",
+      "selected_strategy": "reason_only",
+      "requires_tool_call": false,
+      "step_count": 1
+    }
+  },
+  {
+    "id": "weaving-code-sandbox",
+    "phase": "weaving",
+    "input": {
+      "user_text": "Write a Python helper to clamp a float.",
+      "task_kind": "tool_execution",
+      "route": "coder",
+      "route_plan": "Draft code",
+      "requires_mcp": false,
+      "candidate_capabilities": ["code"],
+      "grounding": "none"
+    },
+    "expect": {
+      "status": "success",
+      "selected_strategy": "code_sandbox",
+      "step_count": 1
+    }
   }
 ]

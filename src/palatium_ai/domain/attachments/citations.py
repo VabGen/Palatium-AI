@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 
 from collections import defaultdict
-from re import Match
 
 # ``attachment:<uuid>:<filename>`` (preferred) or legacy ``attachment:<filename>``.
 _SOURCE_RE = re.compile(
@@ -48,28 +47,13 @@ def citation_refs_from_untrusted_context(untrusted_context: str) -> tuple[str, .
     via a short id suffix when the fence carries ``attachment:<uuid>:<filename>``.
     Empty when the turn has no attachment fence.
     """
-    text = (untrusted_context or "").strip()
-    if not text:
+    labelled = _labelled_fences(untrusted_context)
+    if not labelled:
         return ()
-
-    fences: list[tuple[str, str]] = []
-    for match in _SOURCE_RE.finditer(text):
-        parsed = _fence_filename_and_id(match)
-        if parsed is not None:
-            fences.append(parsed)
-    if not fences:
-        return ()
-
-    ids_by_name: dict[str, set[str]] = defaultdict(set)
-    for filename, id8 in fences:
-        if id8:
-            ids_by_name[filename].add(id8)
 
     refs: list[str] = []
     seen: set[str] = set()
-    for filename, id8 in fences:
-        needs_id = len(ids_by_name[filename]) > 1
-        label = f"{filename}#{id8}" if needs_id and id8 else filename
+    for label, _ in labelled:
         if label in seen:
             continue
         seen.add(label)
@@ -79,21 +63,86 @@ def citation_refs_from_untrusted_context(untrusted_context: str) -> tuple[str, .
     return tuple(refs)
 
 
-def _fence_filename_and_id(match: Match[str]) -> tuple[str, str] | None:
-    filename = (match.group("source") or "").strip()
-    if not filename:
-        return None
-    file_id = (match.group("id") or "").strip()
-    return filename, file_id[:8].lower() if file_id else ""
+def attachment_ids_by_label(untrusted_context: str) -> dict[str, str]:
+    """Map a citation label to the attachment id it names, when it names exactly one.
+
+    The label is built by the same rule that produces the chips, so the chip the user
+    clicked and the file that opens cannot disagree. A label that still collects more
+    than one id stays out: picking one of two same-named uploads is a guess, and the
+    UI then hides "show in source" instead of opening the wrong document (020, 055).
+    """
+    ids_by_label: dict[str, set[str]] = defaultdict(set)
+    for label, attachment_id in _labelled_fences(untrusted_context):
+        if attachment_id:
+            ids_by_label[label].add(attachment_id)
+    return {label: next(iter(ids)) for label, ids in ids_by_label.items() if len(ids) == 1}
+
+
+def _labelled_fences(untrusted_context: str) -> list[tuple[str, str]]:
+    """``(label, full attachment id)`` per fence, first-seen order."""
+    entries = _fence_entries(untrusted_context)
+    ids_by_name: dict[str, set[str]] = defaultdict(set)
+    for filename, attachment_id in entries:
+        if attachment_id:
+            ids_by_name[filename].add(attachment_id)
+
+    labelled: list[tuple[str, str]] = []
+    for filename, attachment_id in entries:
+        id8 = attachment_id[:8]
+        needs_id = len(ids_by_name[filename]) > 1
+        labelled.append((f"{filename}#{id8}" if needs_id and id8 else filename, attachment_id))
+    return labelled
+
+
+def _fence_entries(untrusted_context: str) -> list[tuple[str, str]]:
+    """``(filename, full attachment id)`` per fence; the id is empty for legacy fences."""
+    text = (untrusted_context or "").strip()
+    if not text:
+        return []
+    entries: list[tuple[str, str]] = []
+    for match in _SOURCE_RE.finditer(text):
+        filename = (match.group("source") or "").strip()
+        if not filename:
+            continue
+        entries.append((filename, (match.group("id") or "").strip().lower()))
+    return entries
+
+
+def _source_ref_fingerprint(name: str) -> str:
+    """One chip key for ``Договор_a.docx`` vs ``Договор a.docx`` (LLM aliases)."""
+    text = name.strip()
+    if not text:
+        return ""
+    if text.lower().startswith(("http://", "https://")):
+        return text.lower()
+    return re.sub(r"[_\s]+", " ", text.lower())
+
+
+def _prefer_source_ref_label(current: str, candidate: str) -> str:
+    """Prefer filesystem basenames (underscores) over spaced prose titles."""
+
+    def _score(value: str) -> int:
+        return (2 if "_" in value else 0) + (0 if any(ch.isspace() for ch in value) else 1)
+
+    return candidate if _score(candidate) > _score(current) else current
 
 
 def sanitize_source_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
     """Drop bare UUIDs / page noise; collapse ``file#id#pN`` to user-facing chips.
 
     Prefer plain filenames. Keep ``filename#id8`` only when the merged set has
-    more than one distinct id for the same filename (same-name uploads).
+    more than one distinct id for the same file fingerprint (same-name uploads).
+    Space↔underscore aliases of one basename collapse to a single chip.
     """
-    parsed: list[tuple[str, str]] = []
+    parsed = _collect_parsed_source_refs(refs)
+    if not parsed:
+        return ()
+    return _collapse_parsed_source_refs(parsed)
+
+
+def _collect_parsed_source_refs(refs: tuple[str, ...]) -> list[tuple[str, str, str]]:
+    """``(filename, id8, fingerprint)`` for each usable ref."""
+    parsed: list[tuple[str, str, str]] = []
     for ref in refs:
         label = (ref or "").strip()
         if not label or _BARE_UUID_RE.match(label):
@@ -102,25 +151,40 @@ def sanitize_source_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
         if parts is None:
             continue
         filename, id8 = parts
-        parsed.append((filename, id8))
+        fingerprint = _source_ref_fingerprint(filename)
+        if not fingerprint:
+            continue
+        parsed.append((filename, id8, fingerprint))
+    return parsed
 
-    if not parsed:
-        return ()
 
-    ids_by_name: dict[str, set[str]] = defaultdict(set)
-    for filename, id8 in parsed:
+def _collapse_parsed_source_refs(parsed: list[tuple[str, str, str]]) -> tuple[str, ...]:
+    """Merge aliases and emit at most one chip per fingerprint (or per id when colliding)."""
+    preferred: dict[str, str] = {}
+    ids_by_fp: dict[str, set[str]] = defaultdict(set)
+    for filename, id8, fingerprint in parsed:
+        preferred[fingerprint] = _prefer_source_ref_label(preferred.get(fingerprint, filename), filename)
         if id8:
-            ids_by_name[filename].add(id8)
+            ids_by_fp[fingerprint].add(id8)
 
     cleaned: list[str] = []
     seen: set[str] = set()
-    for filename, id8 in parsed:
-        needs_id = len(ids_by_name[filename]) > 1
-        display = f"{filename}#{id8}" if needs_id and id8 else filename
-        if display in seen:
-            continue
-        seen.add(display)
-        cleaned.append(display)
+    for _filename, id8, fingerprint in parsed:
+        name = preferred[fingerprint]
+        needs_id = len(ids_by_fp[fingerprint]) > 1
+        if needs_id:
+            if not id8:
+                continue
+            display = f"{name}#{id8}"
+            if display in seen:
+                continue
+            seen.add(display)
+            cleaned.append(display)
+        else:
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            cleaned.append(name)
         if len(cleaned) >= _MAX_REFS:
             break
     return tuple(cleaned)
@@ -156,4 +220,4 @@ def _parse_ref_parts(label: str) -> tuple[str, str] | None:
     return filename, id8
 
 
-__all__ = ["citation_refs_from_untrusted_context", "sanitize_source_refs"]
+__all__ = ["attachment_ids_by_label", "citation_refs_from_untrusted_context", "sanitize_source_refs"]

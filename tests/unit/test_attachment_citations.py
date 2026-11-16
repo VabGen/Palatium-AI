@@ -104,3 +104,16 @@ def test_sanitize_drops_attachment_uuid_fence_echo() -> None:
         )
     )
     assert refs == ("Обращение.docx", "note.txt")
+
+
+def test_sanitize_collapses_space_underscore_aliases() -> None:
+    """LLM prose titles must not double the upload basename chips."""
+    refs = sanitize_source_refs(
+        (
+            "Договор оказания услуг_2.docx",
+            "Договор оказания услуг.docx",
+            "Договор_оказания_услуг_2.docx",
+            "Договор_оказания_услуг.docx",
+        )
+    )
+    assert refs == ("Договор_оказания_услуг_2.docx", "Договор_оказания_услуг.docx")

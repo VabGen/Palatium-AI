@@ -20,7 +20,14 @@
  * достаточно стандартного дайджеста (`docs/embedded-assistant.md` §6).
  */
 import { createHash } from 'node:crypto';
-import { copyFileSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -30,6 +37,9 @@ const DIST = join(ROOT, 'dist-widget');
 const RELEASE = join(DIST, 'release.json');
 const CEM_SOURCE = join(ROOT, 'custom-elements.json');
 const CEM_ARTIFACT = join(DIST, 'custom-elements.json');
+/** K2 companion faces — next to IIFE for injectKimiFonts (not inlined; 084 budget). */
+const FONTS_SOURCE = join(ROOT, 'public', 'fonts');
+const FONTS_ARTIFACT = join(DIST, 'fonts');
 
 /**
  * Бюджет gzip, KiB. Зафиксирован в плане (`.cursor/plans/web-embed-assistant.md`,
@@ -37,8 +47,8 @@ const CEM_ARTIFACT = join(DIST, 'custom-elements.json');
  * Поднять бюджет = осознанное решение с обновлением плана, а не правка «чтобы CI был зелёным».
  */
 // Hotfix 1.1: react-markdown + remark-gfm in stream preview (DoD, evolution plan).
-// Raise only with plan note (084).
-const BUDGET_KIB = 210;
+// thinking-orbs@0.3.2 — canvas pending indicator (~+10 KiB gzip vs SVG stub).
+const BUDGET_KIB = 224;
 
 /** Кибибайт, а не «kB»: бюджет считаем в KiB, отчёт сборки печатает kB (10^3) — числа близки, но единицы разные. */
 const KIB = 1024;
@@ -121,6 +131,10 @@ function release() {
 
   const { tagName } = validateManifest();
   copyFileSync(CEM_SOURCE, CEM_ARTIFACT);
+  mkdirSync(FONTS_ARTIFACT, { recursive: true });
+  for (const name of readdirSync(FONTS_SOURCE)) {
+    copyFileSync(join(FONTS_SOURCE, name), join(FONTS_ARTIFACT, name));
+  }
 
   const file = basename(bundlePath);
   const releaseManifest = {

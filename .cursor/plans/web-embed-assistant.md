@@ -69,6 +69,14 @@ dist-widget/palatium-assistant.v0.1.0.CGHdi0nz.iife.js   469.16 KiB raw │ 142.
 а light-сборка не тянет `eval` — это снимает и риск для CSP страницы-хоста.
 Рост на W4–W6 — оба словаря RU/EN целиком (отклонение 5); резерв до бюджета — 7.56 KiB.
 
+**Потолок поднят до 224 KiB gzip (2026-10-22, осознанно).** Индикатор «агент работает» переведён
+с `typing-dots` на `thinking-orbs@0.3.2`: замер до — 198.42, после — 209.10 KiB gzip, то есть
+против прежнего потолка 210 оставалось 0.9 KiB (99.6%). В single-file IIFE (`codeSplitting: false`)
+библиотека не выносится в чанк, а 8 из 9 состояний не tree-shake'аются: реестр `MODE_FRAMES`
+достижим целиком через публичный API, отдельного subpath на одно состояние у пакета нет.
+Резерв после подъёма — 14.9 KiB. Триггер пересмотра формата доставки (ESM + `import()`, §2.4) —
+следующая зависимость, добавленная в бандл.
+
 **Отклонения от чернового плана (осознанные, с причиной):**
 
 1. **Контракт — source-first, без сборки ESM+CJS+`.d.ts`.** Потребитель один (`web/`, Vite/TS), публикации пока нет;
@@ -576,6 +584,9 @@ Dev-time `permissions.json`/`mcpAllowlist` (правило 020) к виджет�
   `.msg` и stagger переведены на токены, добавлен `.action-card.action-choice:active`.
 - `prefers-reduced-motion` **скопирован, не глобальный нюк**: гасятся появление и `transform`-отклик, сохраняются `.spin`
   и `.typing-dots` (индикаторы статуса: без них «работаю» неотличимо от «зависло»).
+  - 2026-10-22: `.typing-dots` заменён на `thinking-orbs` (`components/ThinkingIndicator.tsx`). Под reduced-motion
+    библиотека рисует статичный кадр, а текстовая подпись рядом остаётся — индикатор статуса не пропадает; `.spin`
+    (кнопка отправки, чипы вложений) не тронут.
 - **DoD:** `transition: all` — 0 · `scale(0)` — 0 · `ease-in` на UI — 0 · hover без гейта — 0 · `prefers-reduced-motion` присутствует
   и не содержит `animation-duration: 0.01ms !important` ✅ (grep). Slow-motion в DevTools не проверялся — в W8 заменён
   детерминированным тестом `prefers-reduced-motion` (гаснет появление, остаётся индикатор работы).
@@ -603,7 +614,7 @@ Dev-time `permissions.json`/`mcpAllowlist` (правило 020) к виджет�
 - **`web/scripts/widget-release.mjs`** — один проход после `vite build`: SRI `sha384`, размеры (raw/gzip), бюджет,
   валидация CEM, копия манифеста в артефакт, запись `release.json` (версия, файл, дайджест, `cacheControl`).
   Режим `--verify` сверяет дайджест и размер с файлом + версию с `package.json`.
-- **Гейт бюджета:** сборка падает при gzip > 150 KiB; число меряется тем же уровнем сжатия, что печатает `vite build`
+- **Гейт бюджета:** сборка падает при gzip > `BUDGET_KIB` (сейчас 224; история подъёмов — раздел «Замеры»); число меряется тем же уровнем сжатия, что печатает `vite build`
   (иначе отчёт и бюджет жили бы в двух мирах: level 9 даёт −380 байт).
 - **CI:** job `frontend` — `npm ci` → `typecheck` → `cem:check` → `build:widget` → `verify:widget` → артефакт
   `palatium-assistant-widget` (бандл + `release.json` + `custom-elements.json`). Node 22, кэш npm по `web/package-lock.json`.
@@ -808,12 +819,12 @@ Dev-time `permissions.json`/`mcpAllowlist` (правило 020) к виджет�
 | Гейт | Проверка |
 |---|---|
 | Ноль storage под токен/тред | grep `localStorage\|sessionStorage\|document.cookie` по `web/src` → пусто (кроме whitelist: ничего) |
-| Bundle budget | размер `.iife.js` (gz) ≤ 150 KiB — энфорсится `build:widget` (падает) |
+| Bundle budget | размер `.iife.js` (gz) ≤ `BUDGET_KIB` (сейчас 224) — энфорсится `build:widget` (падает) |
 | Motion | нет `transition: all`, `scale(0)`, `ease-in` на UI, hover без `@media (hover: hover)` |
 | XSS | тест: `BlockRenderer` не создаёт raw HTML (`innerHTML` недостижим); `safeHttpHref` отбивает `javascript:` |
 | i18n | нет хардкод-строк — типизированные ключи (`Record<MessageKey, string>`); энфорсмент — за `084` (ESLint) |
 | a11y | `npm run test:a11y` (CI: шаг `test:e2e`): axe WCAG A/AA в двух темах, Tab и видимый focus внутри Shadow DOM, контраст; визуальная сверка тем — `npm run test:shots` (вне CI) |
-| E2E | `npm run test:e2e`: матрица 15 состояний + проводной контракт + адреса + атрибуты хоста + граница доверия контекста + локаль `GE` + форматы чисел/дат, обращение по имени и непрерывность диалога (49 тестов: 45 исполняются, 4 кадра по запросу; на `standalone.html`, backend не нужен) |
+| E2E | `npm run test:e2e`: матрица 15 состояний + проводной контракт + адреса + атрибуты хоста + граница доверия контекста + локаль `GE` + форматы чисел/дат, обращение по имени и непрерывность диалога (57 тестов: 53 исполняются, 4 кадра по запросу; на `standalone.html`, backend не нужен) |
 | Доставка | энфорсится CI-job `frontend`: `cem:check` (дрейф манифеста), `build:widget` (бюджет + валидность CEM), `verify:widget` (SRI + семвер). Артефакт — `palatium-assistant-widget` |
 
 ### 4.2. Пререквизиты к команде СЭД (не «придумать контракт» — согласовать)

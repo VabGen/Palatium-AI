@@ -38,6 +38,9 @@ class MemoryEntryORM(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     access_frequency: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_accessed: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Reservation held by one promoter between "candidate read" and "graph written"
+    # (M5 audit F6). Nullable: NULL means nobody is promoting this row right now.
+    promote_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     contains_pii: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(MEMORY_EMBEDDING_DIM), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

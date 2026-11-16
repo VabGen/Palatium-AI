@@ -1,9 +1,15 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Brain, ChevronDown, LoaderCircle } from 'lucide-react';
-import { requestMemoryExtract, requestMemoryForget, requestMemorySave } from '../api/client';
+import { IconBrain, IconChevronDown, IconLoader } from '../icons/kimiStroke';
+import {
+  requestMemoryClear,
+  requestMemoryExtract,
+  requestMemoryForget,
+  requestMemorySave,
+} from '../api/client';
 import { t } from '../i18n';
 import type { HITLCardView } from '../types/contentDocument';
+import { KimiDialog } from './KimiDialog';
 
 type MemoryActionsProps = {
   threadId: string;
@@ -13,7 +19,7 @@ type MemoryActionsProps = {
   onCardCreated: (card: HITLCardView, label: string) => void;
 };
 
-type MemoryMode = 'save' | 'forget' | 'extract';
+type MemoryMode = 'save' | 'forget' | 'extract' | 'clear';
 
 export function MemoryActions({
   threadId,
@@ -27,9 +33,20 @@ export function MemoryActions({
   const [entryKey, setEntryKey] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+
+  async function runClear() {
+    const card = await requestMemoryClear({ thread_id: threadId }, userId, orgId);
+    onCardCreated(card, t('memory.label.clear'));
+    toast.success(t('memory.toast.cardCreated'));
+  }
 
   async function submit() {
     if (busy || disabled) return;
+    if (mode === 'clear') {
+      setClearConfirmOpen(true);
+      return;
+    }
     setBusy(true);
     try {
       let card: HITLCardView;
@@ -87,6 +104,29 @@ export function MemoryActions({
     }
   }
 
+  async function confirmClear() {
+    if (busy || disabled) return;
+    setBusy(true);
+    setClearConfirmOpen(false);
+    try {
+      await runClear();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      toast.error(detail.slice(0, 180) || t('memory.error.requestFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const submitLabel =
+    mode === 'save'
+      ? t('memory.submit.save')
+      : mode === 'forget'
+        ? t('memory.submit.forget')
+        : mode === 'extract'
+          ? t('memory.submit.extract')
+          : t('memory.submit.clear');
+
   return (
     <div className={`memory-actions${open ? ' is-open' : ''}`}>
       <button
@@ -96,9 +136,9 @@ export function MemoryActions({
         disabled={disabled}
         onClick={() => setOpen(prev => !prev)}
       >
-        <Brain size={14} />
+        <IconBrain size={14} />
         <span>{t('memory.toggle')}</span>
-        <ChevronDown size={14} className="memory-chevron" />
+        <IconChevronDown size={13} className="memory-chevron" />
       </button>
 
       {open && (
@@ -109,6 +149,7 @@ export function MemoryActions({
                 ['save', t('memory.mode.save')],
                 ['forget', t('memory.mode.forget')],
                 ['extract', t('memory.mode.extract')],
+                ['clear', t('memory.mode.clear')],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -116,7 +157,9 @@ export function MemoryActions({
                 type="button"
                 role="tab"
                 aria-selected={mode === id}
-                className={`memory-mode${mode === id ? ' is-active' : ''}`}
+                className={`memory-mode${mode === id ? ' is-active' : ''}${
+                  id === 'clear' ? ' memory-mode--danger' : ''
+                }`}
                 disabled={busy || disabled}
                 onClick={() => setMode(id)}
               >
@@ -125,7 +168,7 @@ export function MemoryActions({
             ))}
           </div>
 
-          {mode !== 'extract' && (
+          {mode !== 'extract' && mode !== 'clear' && (
             <input
               className="memory-input"
               value={entryKey}
@@ -147,24 +190,49 @@ export function MemoryActions({
             />
           )}
           {mode === 'extract' && <p className="memory-hint">{t('memory.extractHint')}</p>}
+          {mode === 'clear' && <p className="memory-hint memory-hint--danger">{t('memory.clearHint')}</p>}
 
           <button
             type="button"
-            className="memory-submit"
+            className={`memory-submit${mode === 'clear' ? ' memory-submit--danger' : ''}`}
             disabled={busy || disabled}
             onClick={() => void submit()}
           >
-            {busy ? <LoaderCircle className="spin" size={14} /> : null}
-            <span>
-              {mode === 'save'
-                ? t('memory.submit.save')
-                : mode === 'forget'
-                  ? t('memory.submit.forget')
-                  : t('memory.submit.extract')}
-            </span>
+            {busy ? <IconLoader className="spin" size={14} /> : null}
+            <span>{submitLabel}</span>
           </button>
         </div>
       )}
+
+      <KimiDialog
+        open={clearConfirmOpen}
+        title={t('memory.clearConfirm.title')}
+        description={t('memory.clearConfirm.description')}
+        closeLabel={t('memory.clearConfirm.cancel')}
+        onClose={() => setClearConfirmOpen(false)}
+        footer={
+          <>
+            <button
+              type="button"
+              className="kimi-btn kimi-btn--ghost"
+              disabled={busy}
+              onClick={() => setClearConfirmOpen(false)}
+            >
+              {t('memory.clearConfirm.cancel')}
+            </button>
+            <button
+              type="button"
+              className="kimi-btn kimi-btn--danger"
+              disabled={busy}
+              data-autofocus
+              onClick={() => void confirmClear()}
+            >
+              {busy ? <IconLoader className="spin" size={14} /> : null}
+              <span>{t('memory.clearConfirm.confirm')}</span>
+            </button>
+          </>
+        }
+      />
     </div>
   );
 }

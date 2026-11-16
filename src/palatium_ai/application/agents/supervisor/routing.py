@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import math
 
+from collections.abc import Mapping
+
 from palatium_ai.domain.agents.intent import TaskKind
 from palatium_ai.domain.agents.supervisor import WorkerRoute
 
@@ -38,3 +40,15 @@ def clamp_confidence(value: float, *, default: float) -> float:
     if not math.isfinite(value):
         return default
     return min(max(value, 0.0), 1.0)
+
+
+def thread_file_reread(context: Mapping[str, str]) -> bool:
+    """True when the turn re-reads a thread file and owns no fenced upload.
+
+    Same predicate the planner applies to ``ContextWeaverInput`` (``file_reference``
+    axis + no fence of this turn): the route and the plan must derive from one fact,
+    otherwise the Formatter is dispatched for an ask whose text is only in storage.
+    """
+    reference = (context.get("file_reference") or "none").strip().casefold()
+    has_fence = (context.get("has_attachment_context") or "false").strip().casefold() == "true"
+    return reference == "thread_file" and not has_fence

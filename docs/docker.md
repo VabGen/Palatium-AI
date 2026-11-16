@@ -25,6 +25,7 @@
 
 ```powershell
 cd D:\project\palatium-ai
+npm --prefix web run build
 docker compose --profile docker-mcp --profile docker-api up -d --build
 ```
 
@@ -37,6 +38,7 @@ docker compose --profile docker-mcp --profile docker-api up -d --build
 | `mcp-edms` | 8080 | MCP stub EDMS (профиль `docker-mcp`) |
 | `mcp-analytics` | 8081 | MCP stub Analytics (профиль `docker-mcp`) |
 | `api` | 8000 | FastAPI + agents (профиль `docker-api`) |
+| `/ui/` | 8000 | Production chat UI, собранный из `web/` перед build |
 | `langfuse` | 3000 | Observability (профиль `observability`) |
 
 > **`docker-compose.override.yml`** отключает MCP/API в Docker по умолчанию.
@@ -443,7 +445,7 @@ crash-recovery). Именно поэтому профиль не входит в
 ### Ожидание готовности в `make up` / `make up-full` / `make rebuild-app`
 
 Эти цели не просто делают `up -d`: следом они запускают
-`python scripts/attachments_probe.py --wait …` и падают с ненулевым кодом, если
+`uv run --no-project python scripts/attachments_probe.py --wait …` и падают с ненулевым кодом, если
 S3-хранилище, clamd или API не ответили за отведённое время (420 s для `up`/`up-full`,
 120 s для `rebuild-app`). До этого `make up` печатал «FAIL clamav» на исправно
 поднятом стеке: clamd грузит базу сигнатур до 5 минут (`start_period`), а проба
@@ -563,6 +565,12 @@ docker run --rm -p 8000:8000 `
   palatium-ai:local
 ```
 
+> Контейнер запускает `uvicorn palatium_ai.main:app` напрямую (entrypoint), без
+> `loop=`-настройки из `main()`. На Linux это эквивалентно: asyncio создаёт
+> `SelectorEventLoop`, который нужен psycopg. Повторять такой запуск на Windows нельзя —
+> там по умолчанию `ProactorEventLoop`, и Postgres-checkpointer падает на connect:
+> используйте `uv run python -m palatium_ai.main` (handbook §5.2.1).
+
 ### 7.5. MCP stubs на хосте
 
 **Рекомендуется:** Host-профиль (`dev-up.ps1`) — см. §2.4.
@@ -598,6 +606,58 @@ docker build -t palatium-ai:local .
 | `docker build --target devtools -t palatium-ai:devtools .` | shell + Poetry (не для prod) |
 
 Проверка: `docker images palatium-ai`.
+
+### Hardening runtime-образа (025)
+
+| Свойство | Как обеспечено |
+|----------|----------------|
+| Non-root | `USER app` (uid/gid 999, `--shell /usr/sbin/nologin`); ни один `RUN` после него не требует root |
+| Неизменяемый код | `chmod -R a-w /app/.venv /app/src /app/alembic`; каталог пишут только `/app/logs` и `/app/tmp` |
+| PID 1 | `tini` как entrypoint — зомби-процессы и корректный SIGTERM |
+| Base image | `python:3.14-slim` по digest, обновляется dependabot'ом (025) |
+| Healthcheck | `python -c urllib...` (без `curl`, которого нет в slim) |
+
+**Почему не distroless.** `gcr.io/distroless/python3` не содержит shell и пакетного менеджера, а
+образ исполняет `scripts/docker-entrypoint.sh` (миграции при `RUN_MIGRATIONS=1`) и опционально
+ставит `tesseract-ocr` для вложений (`WITH_ATTACHMENTS=1`). Переход потребовал бы переписать
+entrypoint на `python -m` и вынести OCR в отдельный образ — это смена контракта деплоя, а не
+косметика. Условие пересмотра — отказ от OCR в runtime-образе и от shell-старта.
+
+### Скан образа, SBOM и подпись (025)
+
+Тот же гейт, что в CI (job `supply-chain`); локально нужен только Docker:
+
+```powershell
+make supply-chain                                # собрать runtime-образ и просканировать
+make supply-chain SUPPLY_CHAIN_ARGS=--no-build   # переиспользовать palatium-ai:ci-scan
+```
+
+| Шаг | Результат |
+|-----|-----------|
+| `docker build --target runtime` | образ `palatium-ai:ci-scan` |
+| Trivy | один проход: `artifacts/trivy-report.json` (все HIGH/CRITICAL) + гейт на **fixable** без триажа |
+| SBOM | `artifacts/sbom.cdx.json` (CycloneDX, spec 1.7 у Trivy 0.76) |
+| `--sign` (только CI) | `artifacts/sbom.cdx.json.sigstore.json` + `cosign verify-blob` |
+
+Находку без плана исправления принимают строкой в `security/trivy-ignore.txt`:
+
+```text
+CVE-2026-12345 exp:2026-12-01  # util-linux в base image; non-root, недостижимо; PAL-1234
+```
+
+Просроченный `exp:` перестаёт действовать — запись нельзя «забыть» навсегда. Сканер запускается
+без `--ignore-unfixed`: блокирующее решение принимает код (`fixable_findings`), поэтому в
+отчёте видно и то, что гейт сознательно пропускает. Непоправимые находки закрываются
+обновлением base image (dependabot, 025), а не триажем.
+
+Проверить подпись SBOM из CI-прогона (скачав артефакт `sbom`):
+
+```bash
+cosign verify-blob --bundle sbom.cdx.json.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/.+/.github/workflows/ci.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  sbom.cdx.json
+```
 
 ---
 
@@ -702,8 +762,7 @@ uv run alembic upgrade head
 | Compose: `POSTGRES_PASSWORD is not set` | нет `--env-file` / нет ключа | `$env:COMPOSE_ENV_FILES="env/.env"` + `. $PROFILE` |
 | MCP tools пустые | stubs не в сети с API | Docker-профиль: сервис `mcp-edms`; Host-профиль: `dev-up.ps1` |
 | `OSError: Read-only file system: '/.cursor'` | audit писал в `/.cursor/logs` | путь `/app/logs/audit-chain.log` (`AUDIT_LOG_FILE`) |
-| `The option "--no-update" does not exist` | Poetry 2.x | в Dockerfile `poetry lock` без `--no-update` |
-| `pyproject.toml changed significantly... uv.lock` | content-hash | убрать `License ::` classifier, `poetry lock` |
+| `pyproject.toml changed significantly... uv.lock` | lock рассинхронен манифесту | `uv lock` (перегенерировать `uv.lock`) и закоммитить его вместе с правкой `pyproject.toml` |
 | Permission / read-only | Compose `read_only: true` | tmpfs на `/app/tmp`, `/app/logs` |
 
 ---

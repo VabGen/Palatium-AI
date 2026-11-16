@@ -22,6 +22,8 @@ import {
   setPanelOpen,
   subscribeRuntime,
 } from './runtime/store';
+import { injectKimiFonts } from './lib/injectKimiFonts';
+import { ensureDefaultTheme } from './lib/theme';
 import stylesCss from './styles.css?inline';
 import tokensCss from './tokens.css?inline';
 import widgetCss from './widget.css?inline';
@@ -85,7 +87,7 @@ function announceThreadChanged(element: HTMLElement, threadId: string): void {
  * @csspart transcript — лента сообщений
  * @csspart composer — блок ввода с вложениями
  * @csspart close — кнопка сворачивания панели
- * @cssprop [--accent=#3dbea0] — акцент; любой токен из `tokens.css` переопределяется на хосте
+ * @cssprop [--accent] — Kimi brand blue (`--kimi-brand-blue`); любой токен из `tokens.css` переопределяется на хосте
  */
 export class PalatiumAssistantElement extends HTMLElement {
   static get observedAttributes(): string[] {
@@ -109,6 +111,8 @@ export class PalatiumAssistantElement extends HTMLElement {
   }
 
   connectedCallback(): void {
+    injectKimiFonts();
+    ensureDefaultTheme(this);
     this.#applyLang(this.getAttribute('lang'));
 
     if (this.#root === null) {

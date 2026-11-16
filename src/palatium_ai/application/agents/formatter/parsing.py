@@ -17,24 +17,60 @@ from palatium_ai.application.agents.formatter.config import (
     REVIEW_CONFIDENCE_CAP,
     FormatterStyleHint,
 )
+from palatium_ai.application.agents.formatter.icon_sanitizer import coerce_icon_fields
+from palatium_ai.core.logging import get_logger
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.content.markdown_blocks import plain_paragraph_count
-from palatium_ai.domain.llm.response_parser import parse_llm_response
+from palatium_ai.domain.llm.json_codec import JSONCodec
+from palatium_ai.domain.llm.response_parser import parse_llm_payload
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import (
     CONTENT_GENERATION_CAPABILITY,
     DOCUMENT_GENERATION_CAPABILITY,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     VERBATIM_EXTRACTION_CAPABILITY,
 )
+from palatium_ai.domain.policies.untrusted_content import (
+    budget_untrusted_text,
+    count_fence_blocks,
+)
+from palatium_ai.domain.policies.verbosity import VerbosityPolicy
+
+logger = get_logger(__name__)
+
+
+def _log_document_repair(repair: str, head: str) -> None:
+    """Telemetry for a decoded model JSON: the strategy, never the prose (020)."""
+    _ = head
+    logger.warning("formatter.document_json.repaired", repair=repair)
+
+
+#: One decoder for every JSON-shaped Formatter answer: fences/prose are extracted,
+#: deterministic repairs run before the heuristic one (``json_repair``).
+_DOCUMENT_CODEC = JSONCodec(on_repair=_log_document_repair)
 
 
 def parse_formatter_document(raw_content: str) -> ContentDocument:
-    """Извлекает JSON и валидирует как ContentDocument."""
-    return parse_llm_response(
-        raw_content,
+    """Извлекает JSON и валидирует как ContentDocument.
+
+    One contract for every JSON-shaped model answer (``schema_first`` streaming and
+    the legacy Markdown path): fences/prose/trailing commas are handled by the codec,
+    a missing ``meta`` gets the documented defaults, and layout values the UI registry
+    cannot render (unknown icon names) are dropped instead of failing the document.
+    """
+    payload, dropped_icons = coerce_icon_fields(_DOCUMENT_CODEC.loads(raw_content))
+    if dropped_icons:
+        logger.warning("formatter.icons.dropped", count=dropped_icons)
+    from palatium_ai.application.agents.formatter.layout_coercion import coerce_layout_fields
+
+    payload, layout_fixes = coerce_layout_fields(payload)
+    if layout_fixes:
+        logger.info("formatter.layout.coerced", count=layout_fixes)
+    return parse_llm_payload(
+        payload,
         ContentDocument,
         default_factory={
             "meta": {
@@ -53,6 +89,18 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
         citation_refs_from_untrusted_context,
         sanitize_source_refs,
     )
+    from palatium_ai.domain.content.citations.markers import strip_citation_markers
+    from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
+
+    # Last user-facing boundary of every Formatter path (LLM, fast path, deterministic
+    # fallback): internal contract vocabulary the model mirrored from our payload/prompts
+    # must not reach blocks, card labels or the persisted transcript (020, 055).
+    document = InternalVocabularyPolicy.sanitize_document(document)
+    from palatium_ai.domain.content.content_document import normalize_document_list_nesting
+    from palatium_ai.domain.policies.presentation_icons import PresentationIconPolicy
+
+    # Nesting + TokenIcon chrome — global for every shape, after vocabulary scrub.
+    document = PresentationIconPolicy.enrich(normalize_document_list_nesting(document))
 
     confidence = clamp_confidence(document.meta.confidence)
     if task_input.requires_review:
@@ -74,8 +122,21 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     # Prefer LLM refs when present; always union attachment file citations (W2 G03).
     # Bare UUIDs / attachment:<uuid> are not user-facing — sanitize drops them.
     merged_refs = sanitize_source_refs((*document.meta.source_refs, *attachment_refs))
+    # Keep resolvable ``[n]`` in prose — BlockRenderer turns them into cite chips next
+    # to the claim (footer chips alone are not grounding). Dangling markers stay for
+    # ``dangling_citation`` lint. ABI gate retained so call sites stay explicit.
+    document = strip_citation_markers(document, source_count=len(merged_refs))
+    # Passport label-bullets → kv first; then inventory Steps → unordered bullets/checks
+    # so demoted catalogues are not re-folded into kv panels (dots stay dots).
+    # Promote is idempotent with ``prepare_block_for_stream_paint`` (already on
+    # ``block_delta``). Steps↔list chrome needs ``response_shape`` and must NOT run
+    # after typed blocks are on screen — that swap is the stream→final format flip
+    # Hybrid SSE forbids (040 / layout_shift_count == 0).
+    document = _promote_label_lists_to_kv(document)
+    if not _structured_blocks_already_painted():
+        document = _align_list_vs_steps_chrome(document, task_input)
 
-    return document.model_copy(
+    aligned = document.model_copy(
         update={
             "locale": locale,
             "meta": document.meta.model_copy(
@@ -84,9 +145,20 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
                     "confidence": confidence,
                     "interaction": interaction,
                     "source_refs": merged_refs,
+                    # Server-owned axis (W7): the model cannot declare its own length
+                    # budget, so the pipeline value always wins over a model guess.
+                    "verbosity_budget": VerbosityPolicy.for_transformation(task_input.transformation),
                 }
             ),
         }
+    )
+    # Medium recall into a fresh thread must not be framed as dialog-window context
+    # (W10.1 P0.2). Pure post-process — no prompt change.
+    from palatium_ai.domain.policies.attribution import AttributionPolicy
+
+    return AttributionPolicy.rewrite_false_current_session(
+        aligned,
+        memory_hints=task_input.memory_hints,
     )
 
 
@@ -95,6 +167,51 @@ def clamp_confidence(value: float) -> float:
     if not math.isfinite(value):
         return 0.0
     return min(max(value, 0.0), 1.0)
+
+
+def _structured_blocks_already_painted() -> bool:
+    """True when at least one typed ``block_delta`` already reached the client."""
+    from palatium_ai.application.services.turn_sse_bridge import get_turn_sse_bridge
+
+    bridge = get_turn_sse_bridge()
+    return bridge is not None and bridge.sse_first_block_recorded
+
+
+def _align_list_vs_steps_chrome(document: ContentDocument, task_input: FormatterInput) -> ContentDocument:
+    """Inventories → bullets/checks; real processes → StepsBlock (shape/kind axis).
+
+    Under document_analysis (and auto+analysis) status-less steps are catalogues —
+    demote them and do not promote emphasized ordered lists into number badges.
+    Plan / process answers still promote (shared MechanicalRestructurePolicy, 050).
+    """
+    from palatium_ai.domain.policies.mechanical_restructure import MechanicalRestructurePolicy
+    from palatium_ai.domain.policies.shape import ShapeRecipePolicy
+
+    shape = task_input.context_packet.response_shape
+    if MechanicalRestructurePolicy.inventories_use_list_markers(shape=shape, kind=document.meta.kind):
+        demoted = MechanicalRestructurePolicy.demote_inventory_steps(document.blocks)
+        if demoted is not None:
+            document = document.model_copy(update={"blocks": demoted})
+        if ShapeRecipePolicy.coerce(shape) == "inventory":
+            listed = MechanicalRestructurePolicy.promote_parallel_paragraphs_to_list(document.blocks)
+            if listed is not None:
+                return document.model_copy(update={"blocks": listed})
+        return document
+
+    promoted = MechanicalRestructurePolicy.promote_emphasized_ordered_lists(document.blocks)
+    if promoted is None:
+        return document
+    return document.model_copy(update={"blocks": promoted})
+
+
+def _promote_label_lists_to_kv(document: ContentDocument) -> ContentDocument:
+    """Unordered label/value bullets → KeyValueBlock (Kimi metadata panels)."""
+    from palatium_ai.domain.policies.mechanical_restructure import MechanicalRestructurePolicy
+
+    promoted = MechanicalRestructurePolicy.promote_label_lists_to_kv(document.blocks)
+    if promoted is None:
+        return document
+    return document.model_copy(update={"blocks": promoted})
 
 
 def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object]:
@@ -115,15 +232,29 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
     )
     user_text = (task_input.context_packet.user_text or "").strip()
     task_kind = task_input.context_packet.task_kind
+    content_transform = TransformPolicy.needs_reason_over_prior(task_input.transformation)
+    if content_transform and not source:
+        # The target of expand/shorten/rewrite is the prior answer, never the ask:
+        # a composer that receives only ``user_text`` answers the instruction instead of
+        # transforming the text (055).
+        source = _clip(
+            mechanical_cleanup((task_input.prior_context or "").strip()),
+            FORMATTER_SOURCE_MAX_CHARS,
+        )
     social_synthesis = _needs_social_synthesis(task_kind=task_kind, source=source)
-    # Empty final_text signals "compose a reply"; never echo the user's phatic line.
-    final_text = "" if social_synthesis else source or mechanical_cleanup(user_text)
+    # Empty final_text signals "compose a reply". NEVER fall back to user_text:
+    # when the worker failed/empty that made Formatter echo the ask as the answer
+    # (live chat 2026-11-11; same class as social echo — 055). Stimulus stays in
+    # ``user_text`` below when ``source`` is empty.
+    final_text = "" if social_synthesis else source
 
     from palatium_ai.domain.policies.formatter_memory_merge import FormatterMemoryMergePolicy
 
     merge = FormatterMemoryMergePolicy.decide(
         memory_hints=task_input.memory_hints,
         has_source_content=bool(source),
+        hit_kinds=task_input.memory_hint_kinds or None,
+        content_transform=content_transform,
     )
     memory_block = "\n".join(f"- {h}" for h in merge.hints) if merge.hints else ""
 
@@ -131,7 +262,11 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
         "final_text": final_text,
         "style_hint": resolve_style_hint(task_input),
         "task_kind": task_kind,
+        "response_shape": task_input.context_packet.response_shape,
         "response_locale": locale,
+        # Same policy call as ``align_formatter_meta``: the instruction the model gets and
+        # the value stamped into meta cannot drift apart (W7, 055).
+        "verbosity_budget": VerbosityPolicy.for_transformation(task_input.transformation),
         "format_hints": {
             "requires_review": task_input.requires_review,
             "requires_user_choice": task_input.requires_user_choice,
@@ -139,6 +274,9 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
             "revision_feedback": task_input.revision_feedback,
         },
     }
+    if content_transform:
+        # Explicit intent for the composer: transform this text, do not answer a topic.
+        payload["transformation"] = task_input.transformation
     if not source:
         payload["user_text"] = user_text
         payload["dialog_history"] = _formatter_dialog_block(
@@ -146,13 +284,34 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
             has_attachments=has_attachments,
         )
         if has_attachments:
-            payload["attachment_context"] = _clip(
+            # Budget per fence, never by head+tail on the joined blob: that dropped the
+            # second file's ``source=attachment:<id>:<name>`` header while keeping an
+            # unlabeled text tail, so the model reported "only one document" and asked
+            # the user to re-upload a file that was already there (055, 020, 065).
+            payload["attached_files"] = budget_untrusted_text(
                 task_input.context_packet.untrusted_context or "",
-                FORMATTER_ATTACHMENT_MAX_CHARS,
+                max_chars=FORMATTER_ATTACHMENT_MAX_CHARS,
             )
     if memory_block:
-        payload["memory_hints"] = memory_block
+        payload["user_facts"] = memory_block
     return payload
+
+
+def formatter_attachment_stats(
+    task_input: FormatterInput,
+    user_payload: dict[str, object],
+) -> dict[str, object]:
+    """Fence vs delivered chars — attachment loss must be observable, not silent (040, 065)."""
+    fence = task_input.context_packet.untrusted_context or ""
+    delivered = str(user_payload.get("attached_files") or "")
+    return {
+        "attachment_fences": count_fence_blocks(fence),
+        "attachment_fence_chars": len(fence),
+        "attachment_payload_chars": len(delivered),
+        # Fence present but nothing delivered is a by-design omission (worker draft is SoT);
+        # delivered-but-shorter means the budget dropped text the model cannot recover.
+        "attachment_budget_trimmed": bool(delivered) and len(delivered) < len(fence),
+    }
 
 
 def build_formatter_user_message(payload: dict[str, object]) -> str:
@@ -191,20 +350,28 @@ def resolve_style_hint(task_input: FormatterInput) -> FormatterStyleHint:
         return "document_generation"
     if CONTENT_GENERATION_CAPABILITY in caps:
         return "content_generation"
-    if _preserve_worker_shape(source):
+    if preserve_worker_shape(source):
         return "plain_text"
     return "brand_sections_icons"
 
 
-def _preserve_worker_shape(source: str) -> bool:
-    """True when the worker body already has a shape Formatter must not brand-restructure."""
+def preserve_worker_shape(source: str) -> bool:
+    """True when the worker body already has a shape Formatter must not brand-restructure.
+
+    Structured GFM (headings / lists / fences) is preserved at any length: a brand
+    LLM pass would rewrite an already-streamed draft and flash a thinner answer
+    (040 layout_shift / single-writer). Length only gates multi-paragraph plain
+    prose, where an icon-section compile can still help dense walls of text.
+    """
     if not source:
         return False
     para_count = plain_paragraph_count(source)
     if para_count == 1:
         return True
-    # Long multi-paragraph or already-structured deliverable: keep shape, skip icon sections.
-    return len(source) >= SUBSTANTIVE_USER_PAYLOAD_CHARS and (para_count is None or para_count >= 2)
+    # Headings, lists, fences — the worker shape *is* the deliverable.
+    if para_count is None:
+        return True
+    return len(source) >= SUBSTANTIVE_USER_PAYLOAD_CHARS and para_count >= 2
 
 
 def _needs_social_synthesis(*, task_kind: str, source: str) -> bool:
@@ -267,6 +434,15 @@ def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:
     except ValueError, TypeError:
         memory_hints = ()
 
+    memory_hint_kinds: tuple[str, ...] = ()
+    raw_mhk = input_context.get("memory_hint_kinds_json") or "[]"
+    try:
+        parsed_mhk = json.loads(raw_mhk)
+        if isinstance(parsed_mhk, list):
+            memory_hint_kinds = tuple(str(k) for k in parsed_mhk)
+    except ValueError, TypeError:
+        memory_hint_kinds = ()
+
     return FormatterInput(
         task_id=input_context.get("_task_id", packet.task_id),
         context_packet=packet,
@@ -279,4 +455,8 @@ def decode_formatter_input(input_context: dict[str, str]) -> FormatterInput:
         response_locale=locale,
         dialog_window=dialog_window,
         memory_hints=memory_hints,
+        memory_hint_kinds=memory_hint_kinds,
+        transformation=TransformPolicy.coerce(input_context.get("transformation")),
+        prior_context=input_context.get("prior_context") or None,
+        allow_worker_fallback=input_context.get("allow_worker_fallback", "true").lower() != "false",
     )

@@ -9,6 +9,7 @@ fail-closed rejection at intake) instead of an ImportError deep inside a request
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 
 from typing import TYPE_CHECKING
@@ -27,11 +28,14 @@ from palatium_ai.infrastructure.parsing.document_parser import (
 from palatium_ai.infrastructure.parsing.image_ocr import GatewayImageOcrParser
 from palatium_ai.infrastructure.parsing.pdf_ocr import TesseractPdfOcrParser
 from palatium_ai.infrastructure.parsing.pdf_vision import GatewayPdfVisionParser
+from palatium_ai.infrastructure.parsing.pymupdf_compat import pymupdf_available
 from palatium_ai.infrastructure.parsing.routed_parser import RoutedDocumentParser
 from palatium_ai.infrastructure.parsing.tesseract_cmd import resolve_tesseract_cmd
 from palatium_ai.infrastructure.parsing.tesseract_ocr import FallbackImageOcrParser, TesseractImageOcrParser
 
 if TYPE_CHECKING:
+    from asyncio import Semaphore
+
     from palatium_ai.core.config.attachments import AttachmentConfig
     from palatium_ai.core.config.settings import Settings
 
@@ -63,11 +67,16 @@ def build_document_parser(settings: Settings) -> DocumentParserPort:
     config = settings.attachments
     tesseract_cmd = _resolve_tesseract_or_log(config)
     parsers, rejected = _collect_leaf_parsers(config)
+    # Shared by every local OCR adapter: CPU-bound work must queue, not stampede (080).
+    # The slot is held per *page*, not per document, so one multi-page scan can use the
+    # whole configured budget instead of serializing behind a single slot.
+    ocr_limiter = asyncio.Semaphore(config.ocr_max_concurrency)
 
     image_parser, vision_available = _build_image_ocr_parser(
         settings,
         config,
         tesseract_cmd=tesseract_cmd,
+        ocr_limiter=ocr_limiter,
     )
     if image_parser is not None:
         parsers.append(image_parser)
@@ -78,6 +87,7 @@ def build_document_parser(settings: Settings) -> DocumentParserPort:
         config,
         model_supports_vision=vision_available,
         tesseract_cmd=tesseract_cmd,
+        ocr_limiter=ocr_limiter,
     )
 
     logger.info(
@@ -93,6 +103,7 @@ def build_document_parser(settings: Settings) -> DocumentParserPort:
     return RoutedDocumentParser(
         inner=leaf,
         model_supports_vision=vision_available,
+        parse_timeout_seconds=config.parse_timeout_seconds,
         pdf_ocr=pdf_ocr,
         pdf_vision=pdf_vision,
         figure_enricher=pdf_vision if config.pdf_figure_enrichment else None,
@@ -154,17 +165,21 @@ def _build_pdf_backends(
     *,
     model_supports_vision: bool,
     tesseract_cmd: str | None,
+    ocr_limiter: Semaphore,
 ) -> tuple[DocumentParserPort | None, GatewayPdfVisionParser | None]:
     """Optional PDF OCR / vision backends layered by RoutedDocumentParser."""
     pdf_ocr: DocumentParserPort | None = None
     pdf_vision: GatewayPdfVisionParser | None = None
-    if tesseract_cmd is not None and _module_available("fitz") and _module_available("pytesseract"):
+    if tesseract_cmd is not None and pymupdf_available() and _module_available("pytesseract"):
         pdf_ocr = TesseractPdfOcrParser(
             max_chars=config.max_parsed_chars,
             max_pages=min(config.max_parsed_pages, 10),
+            timeout_seconds=config.tesseract_timeout_seconds,
+            budget_seconds=config.pdf_ocr_budget_seconds,
+            limiter=ocr_limiter,
             tesseract_cmd=tesseract_cmd,
         )
-    if model_supports_vision and _module_available("fitz"):
+    if model_supports_vision and pymupdf_available():
         model = (config.image_ocr_model or "").strip()
         gateway = getattr(getattr(settings, "llm", None), "gateway", None)
         if gateway is not None and model:
@@ -185,6 +200,7 @@ def _optional_tesseract_image(
     config: AttachmentConfig,
     *,
     tesseract_cmd: str | None,
+    ocr_limiter: Semaphore,
 ) -> DocumentParserPort | None:
     """Local Tesseract image OCR when binary + pytesseract + Pillow are available."""
     if tesseract_cmd is None:
@@ -194,6 +210,8 @@ def _optional_tesseract_image(
     return TesseractImageOcrParser(
         max_chars=config.max_parsed_chars,
         max_bytes=config.image_ocr_max_bytes,
+        timeout_seconds=config.tesseract_timeout_seconds,
+        limiter=ocr_limiter,
         tesseract_cmd=tesseract_cmd,
     )
 
@@ -282,6 +300,7 @@ def _build_image_ocr_parser(
     config: AttachmentConfig,
     *,
     tesseract_cmd: str | None,
+    ocr_limiter: Semaphore,
 ) -> tuple[DocumentParserPort | None, bool]:
     """Wire progressive image OCR (Tesseract → Vision) per ``image_ocr_backend``.
 
@@ -292,7 +311,7 @@ def _build_image_ocr_parser(
     if config.image_ocr_backend == "disabled":
         return None, False
 
-    tesseract = _optional_tesseract_image(config, tesseract_cmd=tesseract_cmd)
+    tesseract = _optional_tesseract_image(config, tesseract_cmd=tesseract_cmd, ocr_limiter=ocr_limiter)
     vision = _optional_vision_image(settings, config)
     model = (config.image_ocr_model or "").strip()
     backend = config.image_ocr_backend

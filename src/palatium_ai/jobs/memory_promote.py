@@ -13,14 +13,16 @@ import sys
 
 from typing import TYPE_CHECKING
 
-from palatium_ai.application.services.memory_promotion import MemoryPromotionService
+from sqlalchemy.exc import SQLAlchemyError
+
 from palatium_ai.core.config import get_settings
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
-from palatium_ai.domain.memory.promotion import PromotionThresholds
 from palatium_ai.infrastructure.database.runtime import create_session_factory
-from palatium_ai.infrastructure.graph.factory import build_graph_write_port
-from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
+from palatium_ai.jobs.memory_promotion_factory import (
+    build_memory_promotion_service,
+    resolve_promotion_user_ids,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -51,6 +53,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override MEMORY_PROMOTE_BATCH_LIMIT per user.",
     )
+    parser.add_argument(
+        "--all-users",
+        action="store_true",
+        help=(
+            "Discover every RLS owner with promotable rows (CronJob mode). "
+            "Uses the SECURITY DEFINER RPC — a plain SELECT cannot see tenants."
+        ),
+    )
     return parser
 
 
@@ -64,28 +74,31 @@ async def _run(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     user_ids: list[str],
+    all_users: bool,
     limit: int,
 ) -> int:
     if not settings.memory.promote_enabled:
         _emit("MEMORY_PROMOTE_ENABLED=false — nothing to do")
         return EXIT_SUCCESS
-    if not user_ids:
-        _emit("at least one --user-id is required", error=True)
+    if not user_ids and not all_users:
+        _emit("at least one --user-id or --all-users is required", error=True)
         return EXIT_INVALID_CONFIG
-    memory = PostgresMemoryPort(session_factory)
-    service = MemoryPromotionService(
-        memory=memory,
-        graph_write=build_graph_write_port(settings),
-        thresholds=PromotionThresholds(
-            min_access_frequency=settings.memory.promote_min_access_frequency,
-            min_importance=settings.memory.promote_min_importance,
-        ),
-        xmemory_decouple=settings.memory.xmemory_decouple,
-        bayesian_trust=settings.memory.bayesian_trust,
-        hebbian_edge_bump=settings.memory.hebbian_edge_bump,
+    resolved = await resolve_promotion_user_ids(
+        session_factory,
+        explicit=user_ids,
+        all_users=all_users,
+        min_importance=settings.memory.promote_min_importance,
+    )
+    if not resolved:
+        _emit("no promotable owners found — nothing to do")
+        return EXIT_SUCCESS
+    _emit(f"owners={len(resolved)}")
+    service = build_memory_promotion_service(
+        settings=settings,
+        session_factory=session_factory,
     )
     total = 0
-    for user_id in user_ids:
+    for user_id in resolved:
         promoted = await service.run_batch(user_id=user_id, limit=limit)
         total += promoted
         _emit(f"user_id={user_id} promoted={promoted}")
@@ -104,9 +117,10 @@ async def _async_main(argv: list[str] | None = None) -> int:
             settings=settings,
             session_factory=session_factory,
             user_ids=[uid.strip() for uid in args.user_ids if uid.strip()],
+            all_users=bool(args.all_users),
             limit=max(1, min(int(limit), 128)),
         )
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, SQLAlchemyError, ValueError) as exc:
         agent_metrics.record_memory_promote_error(error_type=type(exc).__name__)
         logger.error("memory_promote.failed", error=str(exc))
         _emit(f"error: {exc}", error=True)

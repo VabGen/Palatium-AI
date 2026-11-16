@@ -127,9 +127,12 @@ class _ParseState:
     def flush_fence(self) -> None:
         if not self.in_fence:
             return
-        content = "\n".join(self.fence_lines).strip() or " "
-        lang = (self.fence_lang or "text")[:40] or "text"
-        self.blocks.append(CodeBlock(type="code", language=lang, content=content[:50_000]))
+        # Empty / whitespace-only fences are dropped — CodeBlock rejects blank
+        # content after strip (W10.1 P0.1a); padding with " " was a silent schema lie.
+        content = "\n".join(self.fence_lines).strip()
+        if content:
+            lang = (self.fence_lang or "text")[:40] or "text"
+            self.blocks.append(CodeBlock(type="code", language=lang, content=content[:50_000]))
         self.in_fence = False
         self.fence_lang = "text"
         self.fence_lines = []
@@ -170,6 +173,7 @@ def _consume_line(state: _ParseState, raw: str, *, max_chars: int) -> None:
         return
 
     line = raw.strip()
+    indent = _indent_width(raw)
     if not line:
         _consume_blank(state, max_chars=max_chars)
         return
@@ -187,7 +191,7 @@ def _consume_line(state: _ParseState, raw: str, *, max_chars: int) -> None:
 
     bullet_item = _parse_bullet_line(line)
     if bullet_item is not None:
-        _push_bullet_item(state, bullet_item, max_chars=max_chars)
+        _push_bullet_item(state, _flatten_nested_bullet(bullet_item, indent), max_chars=max_chars)
         return
 
     _consume_prose(state, line)
@@ -319,6 +323,27 @@ def _parse_bullet_line(line: str) -> ListItem | None:
     if plain is not None:
         return ListItem(text=_strip_markdown_bold(plain.group(1)))
     return None
+
+
+def _indent_width(raw: str) -> int:
+    prefix = raw[: len(raw) - len(raw.lstrip(" \t"))]
+    return len(prefix.expandtabs(4))
+
+
+def _flatten_nested_bullet(item: ListItem, indent: int) -> ListItem:
+    """Map GFM indent onto ``ListItem.level`` (single list block, typed nesting).
+
+    Deeper than ``LIST_LEVEL_MAX`` collapses to the ceiling — no tree of ListBlocks
+    (055: one composition contract).
+    """
+    from palatium_ai.domain.content.content_document import LIST_LEVEL_MAX, normalize_list_item_nesting
+
+    text, level = normalize_list_item_nesting(item.text, item.level)
+    if indent >= 2:
+        level = min(LIST_LEVEL_MAX, max(level, 1 if indent < 4 else 2))
+    if text == item.text and level == item.level:
+        return item
+    return item.model_copy(update={"text": text, "level": level})
 
 
 def _list_item_from_groups(emphasis_raw: str | None, body_raw: str | None) -> ListItem | None:

@@ -49,6 +49,13 @@
     }
   },
 
+  // ---- JSON: схемы манифестов ----
+  // package.json / tsconfig.json валидируются схемами schemastore.org. При выключенной
+  // загрузке схем редактор не может их получить и сыплет warning'ом на каждой
+  // package.json. Включаем на уровне workspace, чтобы поведение не зависело от
+  // user-настроек конкретной машины (в build/CI это не участвует).
+  "json.schemaDownload.enable": true,
+
   // ---- Дополнительно: исключения для Prettier ----
   "prettier.requireConfig": true,
   "prettier.configPath": "web/.prettierrc",

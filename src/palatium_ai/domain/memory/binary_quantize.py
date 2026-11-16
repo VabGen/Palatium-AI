@@ -3,8 +3,9 @@
 """Binary quantization helpers for memory@4096 (Wave M8 / 060).
 
 pgvector float HNSW maxes at 2000 dims; native 4096 uses exact cosine or
-optional ``bit(4096)`` HNSW + float rerank. These helpers are pure and
-eval-gated — enable only behind ``MEMORY_BINARY_QUANTIZE_RERANK``.
+optional ``bit(4096)`` HNSW + float rerank. These helpers are pure and have no
+settings knob: there is no ``bit(4096)`` column yet, so wiring them into the query
+path needs its own migration + reindex (M9 §5.4 / §9.2).
 """
 
 from __future__ import annotations

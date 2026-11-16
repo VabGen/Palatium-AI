@@ -91,4 +91,23 @@ describe('displaySourceRefs', () => {
       ])
     ).toEqual(['Обращение.docx']);
   });
+
+  it('drops AttributionPolicy memory stamp from file chips', async () => {
+    const { displaySourceRefs, MEMORY_SOURCE_MARKER } = await import('../../src/lib/attachments');
+    expect(displaySourceRefs(['Обращение.docx', MEMORY_SOURCE_MARKER, 'from Memory'])).toEqual([
+      'Обращение.docx',
+    ]);
+  });
+
+  it('collapses space and underscore aliases of the same basename', async () => {
+    const { displaySourceRefs } = await import('../../src/lib/attachments');
+    expect(
+      displaySourceRefs([
+        'Договор оказания услуг_2.docx',
+        'Договор оказания услуг.docx',
+        'Договор_оказания_услуг_2.docx',
+        'Договор_оказания_услуг.docx',
+      ])
+    ).toEqual(['Договор_оказания_услуг_2.docx', 'Договор_оказания_услуг.docx']);
+  });
 });

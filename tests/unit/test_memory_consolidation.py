@@ -100,7 +100,7 @@ async def test_sleep_time_consolidation_stores_add_only_facts() -> None:
     )
     service = _extract_service(harness=harness, keeper=keeper, port=port, dialog=dialog)
     worker = asyncio.create_task(service.run_worker())
-    assert await service.enqueue(thread_id="thread-a", task_id="task-1", user_id="user-a")
+    assert await service.enqueue(thread_id="thread-a", task_id="task-1", user_id="user-a") == "queued"
     await asyncio.sleep(0.15)
     await service.stop()
     await worker
@@ -146,11 +146,14 @@ async def test_sleep_time_routes_preference_user_and_entity_org() -> None:
     )
     service = _extract_service(harness=harness, keeper=keeper, port=port, dialog=dialog)
     worker = asyncio.create_task(service.run_worker())
-    assert await service.enqueue(
-        thread_id="thread-b",
-        task_id="task-2",
-        user_id="user-42",
-        org_id="org-acme",
+    assert (
+        await service.enqueue(
+            thread_id="thread-b",
+            task_id="task-2",
+            user_id="user-42",
+            org_id="org-acme",
+        )
+        == "queued"
     )
     await asyncio.sleep(0.15)
     await service.stop()

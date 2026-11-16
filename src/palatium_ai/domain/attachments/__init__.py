@@ -2,6 +2,7 @@
 
 """Attachment contracts: aggregate, axis types, policies and derived content (000, 020)."""
 
+from .citation_lookup import AttachmentCitationLookup, CitationTextState
 from .content import (
     AttachmentContent,
     AttachmentContentMetadata,
@@ -15,10 +16,12 @@ from .errors import (
     AttachmentContentMissingError,
     AttachmentError,
     AttachmentIntakeRejectedError,
+    AttachmentIntegrityError,
     AttachmentModeMismatchError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
     AttachmentRestoreNotAllowedError,
+    AttachmentThreadRequiredError,
     AttachmentTooLargeError,
     AttachmentUploadTooLargeError,
 )
@@ -28,6 +31,7 @@ from .indexing import (
     AttachmentProjectRef,
     AttachmentRestorePayload,
 )
+from .integrity import content_sha256_hex, verify_attachment_bytes
 from .models import Attachment
 from .parse_routing import (
     AUTO_ATTACH_CHARS,
@@ -49,6 +53,7 @@ from .policies import (
     AttachmentLimits,
     AttachmentRetentionPolicy,
     IntakeDecision,
+    ReclaimReason,
 )
 from .read import (
     DEFAULT_READ_MAX_CHARS,
@@ -76,6 +81,7 @@ __all__ = [
     "Attachment",
     "AttachmentAnalyzePayload",
     "AttachmentChunkedUploadError",
+    "AttachmentCitationLookup",
     "AttachmentConnectorUnavailableError",
     "AttachmentContent",
     "AttachmentContentMetadata",
@@ -86,6 +92,7 @@ __all__ = [
     "AttachmentIndexPayload",
     "AttachmentIntakePolicy",
     "AttachmentIntakeRejectedError",
+    "AttachmentIntegrityError",
     "AttachmentLimits",
     "AttachmentMode",
     "AttachmentModeMismatchError",
@@ -101,20 +108,25 @@ __all__ = [
     "AttachmentRetentionPolicy",
     "AttachmentScanSummary",
     "AttachmentStatus",
+    "AttachmentThreadRequiredError",
     "AttachmentTooLargeError",
     "AttachmentTurnContext",
     "AttachmentUploadTooLargeError",
+    "CitationTextState",
     "ExtractStatus",
     "ExtractionSource",
     "IntakeDecision",
     "OcrEngine",
     "ParseRouteDecision",
     "ParseStrategy",
+    "ReclaimReason",
     "TextFromChatDecision",
     "TextFromChatRoute",
     "choose_parse_strategy",
+    "content_sha256_hex",
     "extraction_source_to_extract_status",
     "extraction_source_to_ocr_engine",
     "route_text_from_chat",
     "text_layer_is_sufficient",
+    "verify_attachment_bytes",
 ]

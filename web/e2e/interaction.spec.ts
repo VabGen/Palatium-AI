@@ -25,7 +25,7 @@ import type { Reply } from './mock-server';
 
 /** Отправить сообщение так, как это делает человек: ввод + Enter-подобный клик. */
 async function ask(page: Page, text: string): Promise<void> {
-  await page.getByRole('textbox').fill(text);
+  await page.locator('.composer-textarea').fill(text);
   await page.getByRole('button', { name: 'Отправить сообщение' }).click();
 }
 
@@ -47,14 +47,14 @@ async function expectAnswer(page: Page): Promise<void> {
 test.describe('запросы к API', () => {
   test('intent уходит с токеном, trace-id и идентификатором треда', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', answer());
+    server.reply('intents.process.stream', answer());
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
 
     await ask(page, 'Составь письмо');
 
-    const call = server.lastCall('intents.process');
+    const call = server.lastCall('intents.process.stream');
     expect(call).not.toBeNull();
     expect(call?.body).toMatchObject({ text: 'Составь письмо' });
     // `thread_id` — не пустая строка: тред живёт в памяти сессии, а не в URL.
@@ -70,7 +70,7 @@ test.describe('запросы к API', () => {
    */
   test('стриминг: один assistant-узел от pending до готового ответа', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', { ...answer(), delayMs: 700 });
+    server.reply('intents.process.stream', { ...answer(), delayMs: 700 });
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -97,7 +97,7 @@ test.describe('запросы к API', () => {
    */
   test('tenant и права не передаются заголовками — их определяет токен', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', answer());
+    server.reply('intents.process.stream', answer());
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -142,7 +142,7 @@ test.describe('запросы к API', () => {
     });
     server.reply('attachments.content', { json: uploaded });
     server.reply('attachments.complete', { json: { ...uploaded, status: 'ready', page_count: 3 } });
-    server.reply('intents.process', answer());
+    server.reply('intents.process.stream', answer());
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -161,7 +161,7 @@ test.describe('запросы к API', () => {
     expect(upload?.bytes).toBe(E2E_PDF_BYTES.byteLength);
     expect(server.callsTo('attachments.complete')).toHaveLength(1);
     // Файл попадает в ход как `attachment_ids`, а не как текст промпта.
-    expect(server.lastCall('intents.process')?.body).toMatchObject({
+    expect(server.lastCall('intents.process.stream')?.body).toMatchObject({
       attachment_ids: [ATTACHMENT_ID],
     });
   });
@@ -193,7 +193,7 @@ test.describe('запросы к API', () => {
     });
     server.reply('attachments.content', { json: uploaded });
     server.reply('attachments.complete', { json: { ...uploaded, status: 'ready', page_count: 1 } });
-    server.reply('intents.process', answer(), answer());
+    server.reply('intents.process.stream', answer(), answer());
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -212,7 +212,7 @@ test.describe('запросы к API', () => {
     await ask(page, 'Кратко повтори главное');
     await expect(page.locator('.msg.assistant:not(.pending)')).toHaveCount(2);
 
-    const processCalls = server.callsTo('intents.process');
+    const processCalls = server.callsTo('intents.process.stream');
     expect(processCalls).toHaveLength(2);
     expect(processCalls[0]?.body).toMatchObject({ attachment_ids: [ATTACHMENT_ID] });
     // Follow-up без повторной загрузки — без attachment_ids; ответ из истории диалога.
@@ -280,7 +280,7 @@ test.describe('запросы к API', () => {
         },
       }
     );
-    server.reply('intents.process', answer(), answer());
+    server.reply('intents.process.stream', answer(), answer());
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -304,7 +304,7 @@ test.describe('запросы к API', () => {
     await ask(page, 'Сделай сводку по файлу');
     await expect(page.locator('.msg.assistant:not(.pending)')).toHaveCount(2);
 
-    const processCalls = server.callsTo('intents.process');
+    const processCalls = server.callsTo('intents.process.stream');
     expect(processCalls).toHaveLength(2);
     expect(processCalls[0]?.body).toMatchObject({ attachment_ids: [ATTACHMENT_ID] });
     expect(processCalls[1]?.body).toMatchObject({ attachment_ids: [SECOND_ID] });
@@ -335,14 +335,14 @@ test.describe('запросы к API', () => {
 
   test('«Новый диалог» меняет thread_id без перезагрузки страницы', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', answer(), answer());
+    server.reply('intents.process.stream', answer(), answer());
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
 
     await ask(page, 'Первый вопрос');
     await expect(page.locator('.msg.assistant')).toHaveCount(1);
-    const firstThread = (server.lastCall('intents.process')?.body as { thread_id: string })
+    const firstThread = (server.lastCall('intents.process.stream')?.body as { thread_id: string })
       .thread_id;
 
     await page.getByRole('button', { name: 'Новый диалог' }).click();
@@ -350,7 +350,7 @@ test.describe('запросы к API', () => {
     await ask(page, 'Второй вопрос');
     await expect(page.locator('.msg.assistant')).toHaveCount(1);
 
-    const secondThread = (server.lastCall('intents.process')?.body as { thread_id: string })
+    const secondThread = (server.lastCall('intents.process.stream')?.body as { thread_id: string })
       .thread_id;
     expect(secondThread).not.toBe(firstThread);
     // Страница СЭД осталась той же: сброс треда — это состояние виджета.
@@ -360,7 +360,7 @@ test.describe('запросы к API', () => {
 
   test('повторная генерация переиспользует исходный запрос', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', answer(), {
+    server.reply('intents.process.stream', answer(), {
       json: { task_id: 'task-2', output: answerDocument('Второй вариант.') },
     });
     await stubSessionSocket(page);
@@ -371,7 +371,7 @@ test.describe('запросы к API', () => {
     await page.getByRole('button', { name: 'Сформировать ответ заново' }).click();
     await expect(page.locator('.msg.assistant .block-paragraph')).toContainText('Второй вариант.');
 
-    const calls = server.callsTo('intents.process');
+    const calls = server.callsTo('intents.process.stream');
     expect(calls).toHaveLength(2);
     expect((calls[1].body as { text: string }).text).toBe('Составь письмо');
     // Сообщение заменяется, а не добавляется: в транскрипте по-прежнему один ответ.
@@ -380,7 +380,7 @@ test.describe('запросы к API', () => {
 
   test('оценка ответа уходит телом, которое ждёт бэкенд', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', answer());
+    server.reply('intents.process.stream', answer());
     server.reply('feedback', { json: { status: 'stored', rating: 'like' } });
     await stubSessionSocket(page);
     await server.install(page);
@@ -399,7 +399,7 @@ test.describe('запросы к API', () => {
 test.describe('сбои и токен', () => {
   test('5xx повторяется, но не молча: пользователь видит причину', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', { status: 503, json: { detail: 'LiteLLM недоступен' } });
+    server.reply('intents.process.stream', { status: 503, json: { detail: 'LiteLLM недоступен' } });
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -408,12 +408,16 @@ test.describe('сбои и токен', () => {
     await expect(page.locator('.msg-error')).toContainText('LiteLLM недоступен');
 
     // Один запрос + два повтора с backoff: сеть/5xx ретраятся, 4xx — нет.
-    expect(server.callsTo('intents.process')).toHaveLength(3);
+    expect(server.callsTo('intents.process.stream')).toHaveLength(3);
   });
 
   test('401 обновляет токен и повторяет запрос один раз', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', { status: 401, json: { detail: 'token expired' } }, answer());
+    server.reply(
+      'intents.process.stream',
+      { status: 401, json: { detail: 'token expired' } },
+      answer()
+    );
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -424,13 +428,17 @@ test.describe('сбои и токен', () => {
     // Первый mint при старте + повторный после 401: токен живёт только в памяти,
     // поэтому обновление — это новый выпуск, а не чтение из storage.
     expect(server.callsTo('auth.dev-token')).toHaveLength(2);
-    expect(server.callsTo('intents.process')).toHaveLength(2);
+    expect(server.callsTo('intents.process.stream')).toHaveLength(2);
     await expect(page.locator('.msg-error')).toHaveCount(0);
   });
 
   test('в host-режиме токен обновляет хост, а не сам виджет', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', { status: 401, json: { detail: 'token expired' } }, answer());
+    server.reply(
+      'intents.process.stream',
+      { status: 401, json: { detail: 'token expired' } },
+      answer()
+    );
     await stubSessionSocket(page);
     await server.install(page);
     await openWidget(page);
@@ -444,7 +452,7 @@ test.describe('сбои и токен', () => {
     // Хост выпустил токен по `sed:auth-token-requested`; виджет сам в СЭД не минтит
     // (иначе он обходил бы модель доступа хост-приложения — 020).
     expect(server.callsTo('auth.dev-token').length).toBe(mintsBefore + 1);
-    expect(server.lastCall('intents.process')?.authorization).toMatch(/^Bearer /);
+    expect(server.lastCall('intents.process.stream')?.authorization).toMatch(/^Bearer /);
     expect(await navigationCount(page)).toBe(1);
   });
 });
@@ -452,7 +460,7 @@ test.describe('сбои и токен', () => {
 test.describe('HITL на проводе', () => {
   test('необратимое действие не уходит до подтверждения step-up', async ({ page }) => {
     const server = defaultApi();
-    server.reply('intents.process', {
+    server.reply('intents.process.stream', {
       json: {
         task_id: 'task-1',
         output: answerDocument('Черновик готов к отправке.'),

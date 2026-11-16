@@ -344,6 +344,7 @@ async def test_every_operation_binds_the_rls_scope(rls_calls: list[tuple[object,
     await repository.list_reclaimable(
         _CREATED_AT,
         pending_before=_CREATED_AT,
+        orphan_before=_CREATED_AT,
         user_id=_USER,
         limit=10,
     )
@@ -351,14 +352,15 @@ async def test_every_operation_binds_the_rls_scope(rls_calls: list[tuple[object,
     assert [uid for _session, uid in rls_calls] == [_USER] * 8
 
 
-async def test_list_reclaimable_is_user_scoped_and_covers_both_rules(
+async def test_list_reclaimable_is_user_scoped_and_covers_every_rule(
     rls_calls: list[tuple[object, str]],
 ) -> None:
     """Retention cannot be cross-tenant with the app role, so the predicate is explicit.
 
-    Two rules feed one pass: an elapsed TTL, and an intake whose presigned ticket
-    expired before the bytes arrived — the latter would otherwise sit in the table
-    for the row's whole retention window with nobody to reclaim it (080).
+    Three rules feed one pass: an elapsed TTL; an intake whose presigned ticket
+    expired before the bytes arrived; and an ``attach`` row with no thread, which
+    every read path addresses by ``thread_id`` and therefore can never reach. Each
+    would otherwise sit in the table for the row's whole retention window (080).
     """
     factory = _SessionFactory(_Result(many=[_orm(expires_at=_CREATED_AT)]))
     repository = PostgresAttachmentRepository(factory)  # type: ignore[arg-type]
@@ -366,6 +368,7 @@ async def test_list_reclaimable_is_user_scoped_and_covers_both_rules(
     found = await repository.list_reclaimable(
         _CREATED_AT,
         pending_before=_CREATED_AT,
+        orphan_before=_CREATED_AT,
         user_id=_USER,
         limit=25,
     )
@@ -377,6 +380,7 @@ async def test_list_reclaimable_is_user_scoped_and_covers_both_rules(
     assert "expires_at" in statement
     assert "status" in statement
     assert "created_at" in statement
+    assert "thread_id" in statement
     assert "LIMIT" in statement.upper()
 
 

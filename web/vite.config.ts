@@ -16,6 +16,15 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: path => path.replace(/^\/api/, '/api'),
       },
+      // The session socket is addressed at the origin of the API base
+      // (`runtime/endpoints.ts`), so the dev server has to carry it too — without
+      // `ws: true` the handshake dies on 5173 and the UI silently loses the thread
+      // subscription (embedding in СЭД works because its proxy forwards /ws).
+      '/ws': {
+        target: 'ws://127.0.0.1:8000',
+        ws: true,
+        changeOrigin: true,
+      },
       '/health': 'http://127.0.0.1:8000',
     },
   },
@@ -45,6 +54,10 @@ export default defineConfig({
             {
               name: 'animations',
               test: /[/\\]node_modules[/\\]lottie-react([/\\]|$)/,
+            },
+            {
+              name: 'marketplace',
+              test: /[/\\]src[/\\]components[/\\](PluginsPage|SkillsPage)\./,
             },
           ],
         },

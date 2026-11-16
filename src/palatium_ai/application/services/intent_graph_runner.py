@@ -13,9 +13,12 @@ from typing import TYPE_CHECKING, Any, cast
 from palatium_ai.application.orchestration.run_config import build_graph_run_config
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.application.services.intent_turn_helpers import (
+    FinalizedTurn,
     assistant_turn_content,
     assistant_turn_payload,
+    enqueue_turn_extract,
     response_preview,
+    turn_revision,
     write_audit,
 )
 from palatium_ai.application.services.memory_recall import recall_for_thread
@@ -29,18 +32,26 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.turn_tokens import turn_token_usage
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.attachments.context import AttachmentTurnContext
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.memory.budget import MemoryPromptBudget
 from palatium_ai.domain.memory.turns import DialogTurnWindow
+from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.types import ComposerMode
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
+    from palatium_ai.application.services.attachment_reference_resolver import (
+        AttachmentReferenceResolver,
+    )
     from palatium_ai.application.services.cost_budget import CostBudgetService
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
     from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.application.services.vision_images import VisionImageService
     from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.domain.memory.scratchpad import SessionScratchpad
@@ -77,6 +88,34 @@ def _cancel_pending_tasks(*tasks: asyncio.Task[Any] | None) -> None:
             task.cancel()
 
 
+def _with_staged_mutation_card(
+    final_state: AgentGraphState,
+    formatted: FormatterTaskResult | None,
+) -> FormatterTaskResult | None:
+    """Carry the memory gate's approval card into the turn's final document.
+
+    A mixed ask (command + question) stages the card and then runs the normal pipeline,
+    whose Formatter replaces ``formatted``. The card is the only path to the side
+    effect, so it must survive that overwrite (060, 020); if the pipeline produced
+    nothing, the gate's preview is still a better answer than a "graph produced no
+    result" failure. Cards already present are not duplicated (idempotent finalize).
+    """
+    staged = final_state.get("memory_mutation_result")
+    if not isinstance(staged, FormatterTaskResult) or not staged.hitl_cards:
+        return formatted
+    if not isinstance(formatted, FormatterTaskResult):
+        return staged
+    known = {card.card_id for card in formatted.hitl_cards}
+    if all(card.card_id in known for card in staged.hitl_cards):
+        return formatted
+    return formatted.model_copy(
+        update={
+            "hitl_cards": (*staged.hitl_cards, *formatted.hitl_cards),
+            "requires_review": True,
+        }
+    )
+
+
 class IntentGraphRunner:
     """Runs the agent graph and finalizes successful formatted turns."""
 
@@ -99,6 +138,9 @@ class IntentGraphRunner:
         mcp_tool_output_max_chars: int = 3000,
         turn_hop_budget_ms: int = 15_000,
         graph_write: GraphWritePort | None = None,
+        file_reference_resolver: AttachmentReferenceResolver | None = None,
+        vision_images: VisionImageService | None = None,
+        origin_ceiling: bool = True,
     ) -> None:
         self._graph = graph
         self._session_service = session_service
@@ -116,6 +158,9 @@ class IntentGraphRunner:
         self._mcp_tool_output_max_chars = mcp_tool_output_max_chars
         self._turn_hop_budget_ms = turn_hop_budget_ms
         self._graph_write = graph_write
+        self._file_reference_resolver = file_reference_resolver
+        self._vision_images = vision_images
+        self._origin_ceiling = origin_ceiling
         self._attach_hitl_cards: AttachHitlCards | None = None
 
     def bind_attach_hitl_cards(self, attach: AttachHitlCards) -> None:
@@ -143,6 +188,9 @@ class IntentGraphRunner:
         tenant_key: str | None = None,
         revision_feedback: str | None = None,
         untrusted_context: str = "",
+        attachment_context: AttachmentTurnContext | None = None,
+        composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AgentGraphState:
@@ -155,6 +203,9 @@ class IntentGraphRunner:
             org_id=org_id,
             revision_feedback=revision_feedback,
             untrusted_context=untrusted_context,
+            attachment_context=attachment_context,
+            composer_mode=composer_mode,
+            use_memory=use_memory,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )
@@ -194,6 +245,9 @@ class IntentGraphRunner:
         tenant_key: str | None = None,
         revision_feedback: str | None = None,
         untrusted_context: str = "",
+        attachment_context: AttachmentTurnContext | None = None,
+        composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
@@ -206,6 +260,9 @@ class IntentGraphRunner:
             org_id=org_id,
             revision_feedback=revision_feedback,
             untrusted_context=untrusted_context,
+            attachment_context=attachment_context,
+            composer_mode=composer_mode,
+            use_memory=use_memory,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )
@@ -223,7 +280,7 @@ class IntentGraphRunner:
             # Dual stream: hops for SSE progress; values for terminal state without a
             # second aget_state round-trip (checkpoint_ns-as-subgraph pitfall — run_config).
             # When TurnSseBridge is bound (process_stream), multiplex answer_delta /
-            # formatter_delta events from mid-node emits.
+            # block_delta events from mid-node emits.
             final_state: AgentGraphState | None = None
             async for event in self._iter_graph_stream_events(
                 graph_input=graph_input,
@@ -263,13 +320,13 @@ class IntentGraphRunner:
         task_id: str,
         thread_id: str,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Yield hop / answer_delta / formatter_delta; ``_values`` carries rolling state."""
+        """Yield hop / answer_delta / block_delta; ``_values`` carries rolling state."""
         bridge = get_turn_sse_bridge()
         if bridge is None:
             async for item in self._graph.astream(
                 graph_input,
                 config=run_config,
-                stream_mode=["updates", "values"],
+                stream_mode=["tasks", "values"],
             ):
                 async for event in self._events_from_astream_item(
                     item,
@@ -301,7 +358,7 @@ class IntentGraphRunner:
         aiter = self._graph.astream(
             graph_input,
             config=run_config,
-            stream_mode=["updates", "values"],
+            stream_mode=["tasks", "values"],
         ).__aiter__()
 
         # typeshed types ``__anext__`` / ``Queue.get`` as Awaitable, but create_task
@@ -349,8 +406,14 @@ class IntentGraphRunner:
         if not isinstance(item, tuple) or len(item) != 2:
             return
         mode, chunk = item
-        if mode == "updates" and isinstance(chunk, dict):
-            for node_name in chunk:
+        if mode == "tasks" and isinstance(chunk, dict):
+            # `tasks` шлёт два события на узел: старт (payload без `result`) и
+            # финиш. Индикатору нужен СТАРТ: фаза должна называть шаг, который
+            # выполняется сейчас. Финиш повторил бы имя и откатил фазу назад.
+            if "result" in chunk:
+                return
+            node_name = chunk.get("name")
+            if node_name:
                 yield {
                     "event": "hop",
                     "node": str(node_name),
@@ -375,17 +438,24 @@ class IntentGraphRunner:
         org_id: str | None,
         revision_feedback: str | None,
         untrusted_context: str,
-        exclude_trailing_user: bool,
-        trace_id: str | None,
+        attachment_context: AttachmentTurnContext | None,
+        composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
+        exclude_trailing_user: bool = True,
+        trace_id: str | None = None,
     ) -> dict[str, Any]:
         """Parallel pre-graph I/O + scratchpad-only recall (durable deferred to continuation)."""
         resolved_trace_id = (trace_id or trace_id_var.get() or task_id).strip()
 
-        dialog_window, pad, session = await asyncio.gather(
+        dialog_window, pad, session, image_parts = await asyncio.gather(
             self.load_dialog_window(thread_id=thread_id),
             self._load_scratchpad(thread_id=thread_id),
             self._session_service.get_session(thread_id=thread_id),
+            # Admission overlaps the dialog/session I/O instead of adding a hop: the
+            # decision is one per turn, and workers then read it from state (ADR 0007).
+            self._admitted_image_parts(attachment_context),
         )
+        document_parts = self._admitted_document_parts(attachment_context)
 
         if exclude_trailing_user and dialog_window.turns and dialog_window.turns[-1].role == "user":
             prior_turns = dialog_window.turns[:-1]
@@ -428,8 +498,12 @@ class IntentGraphRunner:
             prior_locale=prior_locale,
             ui_locale=ui_locale,
         )
+        # Defense in depth: when personalization is off, durable ports stay None so
+        # a policy miss cannot still search Medium/L4 (W11).
+        durable_port = self._memory_port if use_memory else None
+        durable_graph = self._graph_write if use_memory else None
         recall_ctx = TurnRecallContext(
-            memory_port=self._memory_port,
+            memory_port=durable_port,
             thread_id=thread_id,
             query=text,
             user_id=user_id,
@@ -438,8 +512,9 @@ class IntentGraphRunner:
             max_chars=self._recall_max_chars,
             min_confidence=self._recall_min_confidence,
             scratchpad=pad,
-            graph_write=self._graph_write,
+            graph_write=durable_graph,
             as_of=datetime.now(UTC),
+            origin_ceiling=self._origin_ceiling,
         )
         graph_input: AgentGraphState = {
             "task_id": task_id,
@@ -454,7 +529,18 @@ class IntentGraphRunner:
             "revisions_count": 0,
             "response_locale": response_locale,
             "untrusted_context": untrusted_context,
+            "attachment_context": attachment_context or AttachmentTurnContext(),
+            "image_parts": image_parts,
+            "document_parts": document_parts,
+            "thread_file_named": await self._names_thread_file(
+                text=text,
+                thread_id=thread_id,
+                user_id=user_id,
+            ),
+            "use_memory": use_memory,
         }
+        if composer_mode is not None:
+            graph_input["composer_mode"] = composer_mode
         if revision_feedback and revision_feedback.strip():
             graph_input["revision_feedback"] = revision_feedback.strip()[:4_000]
         return {
@@ -467,6 +553,79 @@ class IntentGraphRunner:
         if self._scratchpad is None:
             return None
         return await self._scratchpad.load(thread_id=thread_id)
+
+    async def _admitted_image_parts(self, attachment_context: AttachmentTurnContext | None) -> tuple[ImagePart, ...]:
+        """Images this turn may send to the vision gateway (ADR 0007), decided once.
+
+        Without a wired service the vision route is off (fail-closed). A store failure
+        degrades to "no images" with a warning instead of failing the turn: the fenced
+        text is still a valid answer path, and silently dropping the picture is exactly
+        what the denial vocabulary exists to make visible (040).
+        """
+        if self._vision_images is None or attachment_context is None or not attachment_context.blocks:
+            return ()
+        try:
+            outcome = await self._vision_images.parts_for_blocks(attachment_context.blocks)
+        except Exception as exc:  # noqa: BLE001  # degradation: store hiccup must not kill a text turn (035)
+            logger.warning(
+                "vision.turn_images_unavailable",
+                error=str(exc),
+                block_count=len(attachment_context.blocks),
+            )
+            return ()
+        return outcome.parts
+
+    def _admitted_document_parts(self, attachment_context: AttachmentTurnContext | None) -> tuple[DocumentPart, ...]:
+        """Text attachments as citeable provider document blocks (W3a), decided once."""
+        from palatium_ai.domain.policies.document_parts import document_parts_from_blocks
+
+        if attachment_context is None or not attachment_context.blocks:
+            return ()
+        return document_parts_from_blocks(attachment_context.blocks)
+
+    async def _names_thread_file(
+        self,
+        *,
+        text: str,
+        thread_id: str,
+        user_id: str | None,
+    ) -> bool:
+        """True when the ask deterministically names a file this dialog already holds.
+
+        Intent's ``file_reference`` axis is one LLM judgement over a free-form ask and
+        misses paraphrases ("покажи текст файла Кодекс корпоративной этики"), which
+        then routed a storage re-read into a knowledge search and ended in "nothing
+        found" (055). The attachment registry is a fact, so a *named* match is applied
+        before any routing: ``ambiguous`` / ``single_thread_file`` stay Intent-driven,
+        otherwise an unrelated ask could drag the dialog's only document into the answer.
+        """
+        resolver = self._file_reference_resolver
+        owner = (user_id or "").strip()
+        if resolver is None or not owner or not (thread_id or "").strip() or not text.strip():
+            return False
+        try:
+            resolution = await resolver.resolve(
+                user_id=owner,
+                thread_id=thread_id,
+                hint_text=text,
+            )
+        except Exception:
+            # Resolution is an optimisation of the axis, not a gate: a broken registry
+            # must degrade to the previous behaviour, never fail the turn (030.8).
+            logger.exception("thread file reference resolution failed", thread_id=thread_id)
+            return False
+        # Unique name *or* name-driven ambiguous/no_match: Intent misses paraphrases
+        # like «перечитай Скан», so Continuity must set file_reference before routing
+        # (W10.1 P0.3 — card / refusal path needs thread_file).
+        named = FileReferencePolicy.promotes_thread_file_reread(resolution)
+        if named:
+            logger.info(
+                "attachment.thread_file_named",
+                thread_id=thread_id,
+                reason=resolution.reason,
+                status=resolution.status,
+            )
+        return named
 
     async def _emit_hop_observability(
         self,
@@ -500,6 +659,23 @@ class IntentGraphRunner:
                 hop_slowest_node=hop_fields["hop_slowest_node"],
                 hop_slowest_ms=hop_fields["hop_slowest_ms"],
                 hop_total_ms=hop_fields["hop_total_ms"],
+                hop_agent_ms=hop_fields["hop_agent_ms"],
+                hop_io_ms=hop_fields["hop_io_ms"],
+                hop_budget_ms=hop_fields["hop_budget_ms"],
+                reason="agent_work",
+            )
+        elif hop_fields["hop_wall_over_budget"]:
+            # Slow because of documented external I/O (OCR/parse), not agent work:
+            # reported, but it must not count as an agent-budget violation.
+            logger.info(
+                "agent.turn.slow_io",
+                thread_id=thread_id,
+                task_id=task_id,
+                trace_id=trace_id,
+                hop_total_ms=hop_fields["hop_total_ms"],
+                hop_agent_ms=hop_fields["hop_agent_ms"],
+                hop_io_ms=hop_fields["hop_io_ms"],
+                hop_io_ms_by_kind=hop_fields["hop_io_ms_by_kind"],
                 hop_budget_ms=hop_fields["hop_budget_ms"],
             )
         if tenant_key is not None:
@@ -540,13 +716,13 @@ class IntentGraphRunner:
         user_id: str | None,
         org_id: str | None,
         operation: str,
-    ) -> FormatterTaskResult:
+    ) -> FinalizedTurn:
         """Attach HITL, persist assistant turn, update session after a graph run."""
         if self._attach_hitl_cards is None:
             msg = "IntentGraphRunner.bind_attach_hitl_cards must be called before finalize"
             raise RuntimeError(msg)
 
-        formatted = final_state.get("formatted")
+        formatted = _with_staged_mutation_card(final_state, final_state.get("formatted"))
         classification = final_state.get("classification")
         routing_intent = final_state.get("routing_intent")
         if routing_intent is not None:
@@ -571,37 +747,60 @@ class IntentGraphRunner:
             str(getattr(routing_intent, "underspecification_kind", "none") or "none") if routing_intent is not None else "none"
         )
         prior_context = getattr(routing_intent, "prior_context", None) if routing_intent is not None else None
+        resolved_file_reference = (
+            str(getattr(routing_intent, "file_reference", "none") or "none") if routing_intent is not None else "none"
+        )
+        execution = final_state.get("execution")
+        execution_error = execution.error if execution is not None else None
         has_turn_attachments = bool((final_state.get("untrusted_context") or "").strip())
 
+        # A graph gate may have minted the turn's card already (memory mutation): that
+        # card is the only path to the side effect, so synthesized menus/review cards
+        # must not replace it (020, 055). Off-graph pauses never reach this method.
+        pre_minted_cards = isinstance(formatted, FormatterTaskResult) and bool(formatted.hitl_cards)
         if isinstance(formatted, FormatterTaskResult):
-            formatted = await self._attach_hitl_cards(
-                formatted,
-                thread_id=thread_id,
-                task_id=task_id,
-                selected_strategy=selected_strategy,
-                task_kind=resolved_task_kind,
-                requires_user_choice=resolved_requires_user_choice,
-                underspecification_kind=resolved_underspec,
-                user_text=text,
-                prior_context=prior_context if isinstance(prior_context, str) else None,
-                user_id=user_id,
-                org_id=org_id,
-                has_turn_attachments=has_turn_attachments,
-                dialog=final_state.get("dialog_window"),
-            )
+            if not pre_minted_cards:
+                formatted = await self._attach_hitl_cards(
+                    formatted,
+                    thread_id=thread_id,
+                    task_id=task_id,
+                    selected_strategy=selected_strategy,
+                    task_kind=resolved_task_kind,
+                    requires_user_choice=resolved_requires_user_choice,
+                    underspecification_kind=resolved_underspec,
+                    user_text=text,
+                    prior_context=prior_context if isinstance(prior_context, str) else None,
+                    user_id=user_id,
+                    org_id=org_id,
+                    has_turn_attachments=has_turn_attachments,
+                    dialog=final_state.get("dialog_window"),
+                    file_reference=resolved_file_reference,
+                    execution_error=execution_error,
+                    response_shape=str(orch_selectors.resolved_response_shape(final_state)),
+                )
             logger.info(
                 "agent.turn.reasoning",
                 thread_id=thread_id,
                 turn_id=task_id,
                 **turn_reasoning_fields(final_state, formatted, selected_strategy=selected_strategy),
             )
+            # W7b: diff is computed here, where the previous answer is already in hand
+            # (dialog window), not in the Formatter — the agent must not grow a store
+            # dependency (000). One computation feeds the payload and the caller.
+            revision = turn_revision(formatted, final_state)
             if self._dialog_turn_store is not None:
+                from palatium_ai.application.orchestration import selectors as graph_selectors
+
                 await self._dialog_turn_store.append_turn(
                     thread_id=thread_id,
                     role="assistant",
                     content=assistant_turn_content(formatted),
                     task_id=task_id,
-                    payload=assistant_turn_payload(formatted),
+                    payload=assistant_turn_payload(
+                        formatted,
+                        revision=revision,
+                        response_shape=str(graph_selectors.resolved_response_shape(final_state)),
+                    ),
                 )
             await self.refresh_scratchpad(thread_id=thread_id)
             pinned_locale = (
@@ -635,15 +834,17 @@ class IntentGraphRunner:
                     "operation": operation,
                 },
             )
-            if self._consolidation is not None and formatted.status == "success":
+            if formatted.status == "success":
                 # Memory write path ≠ answer path: still enqueue when HITL review is pending.
-                await self._consolidation.enqueue(
+                await enqueue_turn_extract(
+                    self._consolidation,
+                    final_state,
                     thread_id=thread_id,
                     task_id=task_id,
                     user_id=user_id,
                     org_id=org_id,
                 )
-            return formatted
+            return FinalizedTurn(result=formatted, revision=revision)
 
         failure_result = FormatterTaskResult(
             task_id=task_id,
@@ -666,4 +867,4 @@ class IntentGraphRunner:
             },
             status="needs_review",
         )
-        return failure_result
+        return FinalizedTurn(result=failure_result)

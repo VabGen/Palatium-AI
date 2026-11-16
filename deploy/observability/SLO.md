@@ -34,6 +34,7 @@ treating "no series" as breach — pages on a quiet system.
 | Memory entry hygiene (060) | `histogram_quantile(0.95, …palatium_memory_entry_size_bytes_bucket…) > 16384` | `PalatiumMemoryEntryOversized` | info |
 | Extract DLQ (060 / M3) | `palatium_memory_extract_dead_letter_total > 0` | `PalatiumMemoryExtractDeadLetter` | warning |
 | Promote batch errors (060 / M7) | `sum(rate(palatium_memory_promote_errors_total[15m])) > 0` | `PalatiumMemoryPromoteErrors` | warning |
+| PII fact supersede withheld (060 / M5 F3) | `increase(palatium_memory_promote_blocked_pii_total[1h]) > 0` | `PalatiumMemoryPromoteBlockedPii` | info |
 
 ## NOT monitored in Prometheus — and why
 

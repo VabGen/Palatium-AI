@@ -1,0 +1,134 @@
+# .github/workflows/prompt-evals.yml
+
+name: prompt-evals
+
+# Prompt changes are behavior changes: run the deterministic evals of exactly the
+# affected agents (golden manifest) and, when judge credentials are configured,
+# the optional deepeval metrics. deepeval is installed in this job only — it pins
+# rich<15, which would downgrade the production fastmcp dependency if it entered
+# the project lockfile (025/055).
+
+on:
+  pull_request:
+    paths:
+      - "src/palatium_ai/application/agents/**/prompts.py"
+      - "src/palatium_ai/application/agents/evals/**"
+      - "src/palatium_ai/application/agents/*/evals/**"
+      - ".github/workflows/prompt-evals.yml"
+  workflow_dispatch:
+    inputs:
+      metrics:
+        description: Metric backend for prompt-gate runs
+        type: choice
+        options:
+          - none
+          - deepeval
+        default: none
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prompt-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Exact pin: this package is not part of uv.lock (see header comment).
+  DEEPEVAL_VERSION: "4.3.1"
+
+jobs:
+  deterministic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Prompt eval gate (deterministic)
+        shell: bash
+        run: |
+          base="origin/${GITHUB_BASE_REF:-dev}"
+          uv run python scripts/run_prompt_eval_gate.py \
+            --base-ref "$base" \
+            --report artifacts/prompt_evals.json
+
+      - name: Upload prompt eval report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: prompt-evals
+          path: artifacts/prompt_evals.json
+          if-no-files-found: ignore
+
+  deepeval:
+    needs: deterministic
+    if: github.event_name != 'workflow_dispatch' || inputs.metrics == 'deepeval'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Detect judge credentials
+        id: judge
+        shell: bash
+        env:
+          JUDGE_PROVIDER: ${{ secrets.PALATIUM_EVAL_JUDGE_PROVIDER }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "${JUDGE_PROVIDER:-}" ] && [ -n "${OPENAI_API_KEY:-}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::deepeval metrics skipped: judge provider secrets are not configured for this run"
+          fi
+
+      - name: Install deepeval (eval-only, pinned)
+        if: steps.judge.outputs.available == 'true'
+        run: uv pip install "deepeval==${DEEPEVAL_VERSION}"
+
+      - name: Prompt eval gate (deepeval metrics)
+        if: steps.judge.outputs.available == 'true'
+        env:
+          PALATIUM_EVAL_LIVE_JUDGE: "1"
+          PALATIUM_EVAL_JUDGE_PROVIDER: ${{ secrets.PALATIUM_EVAL_JUDGE_PROVIDER }}
+          PALATIUM_EVAL_JUDGE_MODEL: ${{ secrets.PALATIUM_EVAL_JUDGE_MODEL }}
+          PALATIUM_EVAL_AGENT_PROVIDER: ${{ secrets.PALATIUM_EVAL_AGENT_PROVIDER }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          base="origin/${GITHUB_BASE_REF:-dev}"
+          uv run python scripts/run_prompt_eval_gate.py \
+            --base-ref "$base" \
+            --metrics deepeval \
+            --report artifacts/prompt_evals_deepeval.json
+
+      - name: Upload deepeval report
+        if: always() && steps.judge.outputs.available == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: prompt-evals-deepeval
+          path: artifacts/prompt_evals_deepeval.json
+          if-no-files-found: ignore

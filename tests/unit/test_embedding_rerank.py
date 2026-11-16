@@ -48,3 +48,17 @@ async def test_embedding_rerank_prefers_semantic_match() -> None:
     hits = await port.search(namespace=ns, query="tables for meetings", limit=2)
     assert hits
     assert "tables" in str(hits[0]["text"]).lower()
+
+
+@pytest.mark.asyncio()
+async def test_promote_claim_is_forwarded_to_the_inner_port() -> None:
+    """A decorator that hides ``claim_promotion`` would let two promoters write twice."""
+    inner = InMemoryMemoryPort()
+    ns = thread_namespace("t-rerank")
+    await inner.put(namespace=ns, key="k", value={"text": "fact", "kind": "fact", "confidence": 0.9})
+    port = EmbeddingRerankMemoryPort(inner, _FakeEmbeddings())  # type: ignore[arg-type]
+
+    assert await port.claim_promotion(namespace=ns, key="k") is True
+    assert await inner.claim_promotion(namespace=ns, key="k") is False
+    assert await port.release_promotion(namespace=ns, key="k") is True
+    assert await inner.claim_promotion(namespace=ns, key="k") is True

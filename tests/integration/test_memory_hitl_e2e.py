@@ -67,7 +67,12 @@ async def test_memory_save_approve_search_then_forget_approve() -> None:
         actor_org_id=_ORG,
         is_admin=False,
     )
-    assert save_outcome.resumed is None
+    # Approve runs the pending mutation and surfaces its result as a chat document
+    # (``HitlRespondOutcome.resumed`` is the formatter output, not a graph resume):
+    # the off-graph memory write never enters ``resume_after_tool_approval``.
+    assert save_outcome.resumed is not None
+    assert save_outcome.resumed.task_id == save_card.task_id
+    assert save_outcome.resumed.status == "success"
     intent.resume_after_tool_approval.assert_not_awaited()
 
     after_save = await handler.call_tool(  # type: ignore[attr-defined]
@@ -102,7 +107,9 @@ async def test_memory_save_approve_search_then_forget_approve() -> None:
         actor_org_id=_ORG,
         is_admin=False,
     )
-    assert forget_outcome.resumed is None
+    assert forget_outcome.resumed is not None
+    assert forget_outcome.resumed.task_id == forget_card.task_id
+    intent.resume_after_tool_approval.assert_not_awaited()
 
     after_forget = await handler.call_tool(  # type: ignore[attr-defined]
         "search_memory",

@@ -18,13 +18,17 @@ from palatium_ai.domain.mcp.external_schemas import (
 )
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
 from palatium_ai.domain.mcp.platform_schemas import (
+    PLATFORM_EXPLAIN_BELIEF_SCHEMA,
     PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA,
     PLATFORM_FORGET_MEMORY_SCHEMA,
     PLATFORM_GRAPH_QUERY_SCHEMA,
     PLATFORM_INGEST_DOCUMENT_SCHEMA,
+    PLATFORM_MEMORY_AUDIT_SCHEMA,
+    PLATFORM_MEMORY_VERIFY_SCHEMA,
     PLATFORM_SAVE_MEMORY_SCHEMA,
     PLATFORM_SEARCH_KNOWLEDGE_SCHEMA,
     PLATFORM_SEARCH_MEMORY_SCHEMA,
+    PLATFORM_SKILL_MANAGE_SCHEMA,
     PLATFORM_SKILL_REFERENCE_SCHEMA,
     PLATFORM_WEB_FALLBACK_SCHEMA,
 )
@@ -84,8 +88,12 @@ def platform_stub() -> object:
         ("platform_stub", "save_memory", PLATFORM_SAVE_MEMORY_SCHEMA),
         ("platform_stub", "forget_memory", PLATFORM_FORGET_MEMORY_SCHEMA),
         ("platform_stub", "extract_transcript_memories", PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA),
+        ("platform_stub", "explain_belief", PLATFORM_EXPLAIN_BELIEF_SCHEMA),
+        ("platform_stub", "memory_audit", PLATFORM_MEMORY_AUDIT_SCHEMA),
+        ("platform_stub", "memory_verify", PLATFORM_MEMORY_VERIFY_SCHEMA),
         ("platform_stub", "graph_query", PLATFORM_GRAPH_QUERY_SCHEMA),
         ("platform_stub", "skill_reference", PLATFORM_SKILL_REFERENCE_SCHEMA),
+        ("platform_stub", "skill_manage", PLATFORM_SKILL_MANAGE_SCHEMA),
         ("platform_stub", "web_fallback", PLATFORM_WEB_FALLBACK_SCHEMA),
     ),
 )
@@ -114,8 +122,12 @@ async def test_stub_registered_schema_matches_domain_pin(
         ("platform", "save_memory", PLATFORM_SAVE_MEMORY_SCHEMA, "write"),
         ("platform", "forget_memory", PLATFORM_FORGET_MEMORY_SCHEMA, "write"),
         ("platform", "extract_transcript_memories", PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA, "write"),
+        ("platform", "explain_belief", PLATFORM_EXPLAIN_BELIEF_SCHEMA, "read"),
+        ("platform", "memory_audit", PLATFORM_MEMORY_AUDIT_SCHEMA, "read"),
+        ("platform", "memory_verify", PLATFORM_MEMORY_VERIFY_SCHEMA, "write"),
         ("platform", "graph_query", PLATFORM_GRAPH_QUERY_SCHEMA, "read"),
         ("platform", "skill_reference", PLATFORM_SKILL_REFERENCE_SCHEMA, "read"),
+        ("platform", "skill_manage", PLATFORM_SKILL_MANAGE_SCHEMA, "write"),
         ("platform", "web_fallback", PLATFORM_WEB_FALLBACK_SCHEMA, "read"),
     ),
 )

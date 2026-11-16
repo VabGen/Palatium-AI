@@ -20,6 +20,7 @@ def retention_windows_from_settings(settings: Settings) -> RetentionWindows:
         memory_medium_days=cfg.memory_medium_days,
         memory_episode_days=cfg.memory_episode_days,
         memory_pii_days=cfg.memory_pii_days,
+        memory_inferred_days=cfg.memory_inferred_days,
         attachment_pii_days=cfg.attachment_pii_days,
         knowledge_orphan_days=cfg.knowledge_orphan_days,
         graph_pii_days=cfg.graph_pii_days,

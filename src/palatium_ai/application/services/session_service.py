@@ -65,10 +65,37 @@ class SessionService:
         limit: int = 100,
         offset: int = 0,
         user_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[SessionRecord]:
-        """Return recently updated sessions (optionally scoped to one user)."""
-        return await self._store.list_sessions(limit=limit, offset=offset, user_id=user_id)
+        """Return recently updated sessions (optionally scoped to user/project)."""
+        return await self._store.list_sessions(
+            limit=limit,
+            offset=offset,
+            user_id=user_id,
+            project_id=project_id,
+        )
 
     async def get_session(self, *, thread_id: str) -> SessionRecord | None:
         """Return a single session by its stable thread ID."""
         return await self._store.get_by_thread_id(thread_id=thread_id)
+
+    async def set_project_id(
+        self,
+        *,
+        thread_id: str,
+        project_id: str | None,
+    ) -> SessionRecord:
+        """Pin or unpin a session to a project id string."""
+        return await self._store.set_project_id(thread_id=thread_id, project_id=project_id)
+
+    async def set_title(self, *, thread_id: str, title: str) -> SessionRecord:
+        """Overwrite the session title after a user rename."""
+        cleaned = title.strip()
+        if not cleaned:
+            msg = "Session title must not be empty"
+            raise ValueError(msg)
+        return await self._store.set_title(thread_id=thread_id, title=cleaned[:255])
+
+    async def set_status(self, *, thread_id: str, status: str) -> SessionRecord:
+        """Update session lifecycle status (archive / restore)."""
+        return await self._store.set_status(thread_id=thread_id, status=status)

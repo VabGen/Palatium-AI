@@ -24,9 +24,11 @@ class HarnessPort(Protocol):
 
     Последовательность внутри execute_with_guardrails (не дублировать в узлах):
 
-    span → JIT context → ToolRegistry (RBAC) → secret scan → run → verify →
+    span → secret redact (instruction) → JIT missing keys → secret redact (context) →
+    compact@80% → timed run → verify → confidence gate → metrics.
 
-    confidence gate → metrics.
+    RBAC для MCP/tools — единая точка ``ToolExecutor`` (070), не шаг harness:
+    агент вызывает инструменты сам; harness не фильтрует allow-list до ``run``.
 
     """
 

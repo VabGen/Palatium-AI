@@ -304,6 +304,9 @@ async def _capture_states(intent: IntentService) -> list[dict[str, Any]]:
         tenant_key: str | None = None,
         revision_feedback: str | None = None,
         untrusted_context: str = "",
+        # AttachmentContext arrives with the fenced turn body (P0): the double must
+        # accept it, otherwise the process() call fails before the graph is reached.
+        attachment_context: object | None = None,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> object:
@@ -316,6 +319,7 @@ async def _capture_states(intent: IntentService) -> list[dict[str, Any]]:
             tenant_key=tenant_key,
             revision_feedback=revision_feedback,
             untrusted_context=untrusted_context,
+            attachment_context=attachment_context,  # type: ignore[arg-type]
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )

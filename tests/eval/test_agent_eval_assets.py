@@ -14,6 +14,7 @@ import pytest
 from palatium_ai.application.agents.evals import run_all_agent_evals
 from palatium_ai.application.agents.evals.llm_judge import grade_from_judge_payload, llm_judge
 from palatium_ai.application.agents.evals.runner import (
+    AGENT_PACKAGES,
     assert_baseline_gate,
     assert_nightly_baseline_gate,
     build_suite_report,
@@ -26,16 +27,8 @@ from palatium_ai.domain.agents.evals import Grader
 
 _AGENTS_ROOT = Path(__file__).resolve().parents[2] / "src" / "palatium_ai" / "application" / "agents"
 
-_AGENT_EVAL_PACKAGES: tuple[str, ...] = (
-    "intent_classifier",
-    "context_enricher",
-    "supervisor",
-    "researcher",
-    "memory_keeper",
-    "critic",
-    "formatter",
-    "text_ingestor",
-)
+# Single source (runner.AGENT_PACKAGES) — a second copy of the list drifts on the next agent.
+_AGENT_EVAL_PACKAGES: tuple[str, ...] = AGENT_PACKAGES
 
 
 def _agent_eval_dir(agent: str) -> Path:

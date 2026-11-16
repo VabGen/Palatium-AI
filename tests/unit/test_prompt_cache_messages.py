@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from palatium_ai.application.agents.harness import _with_system_prompt_cache
 from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 from palatium_ai.infrastructure.llm.litellm_adapter import _to_litellm_messages
 
 
@@ -17,6 +20,24 @@ def test_with_system_prompt_cache_marks_first_system() -> None:
     assert out[1].cache_control is None
 
 
+def test_with_system_prompt_cache_records_all_assembly_tiers(monkeypatch: Any) -> None:
+    tiers: list[str] = []
+    monkeypatch.setattr(
+        "palatium_ai.application.agents.harness.agent_metrics.record_prompt_cache_hint",
+        lambda *, tier: tiers.append(tier),
+    )
+    assembled = PromptAssemblyPolicy.assemble(
+        PromptAssemblyParts(
+            system_identity="You are the researcher.",
+            memory_block="- prefers duck",
+            dialog_block="user: hi",
+            user_content='{"user_text":"next?"}',
+        )
+    )
+    _with_system_prompt_cache(list(assembled.messages))
+    assert tiers == ["stable", "context", "volatile"]
+
+
 def test_to_litellm_messages_emits_cache_control_block() -> None:
     messages = [
         ChatMessage(role="system", content="STATIC", cache_control="ephemeral"),
@@ -27,3 +48,25 @@ def test_to_litellm_messages_emits_cache_control_block() -> None:
     block = payload[0]["content"][0]
     assert block["cache_control"] == {"type": "ephemeral"}
     assert payload[1]["content"] == "hi"
+
+
+def test_to_litellm_messages_coalesces_leading_system_tiers() -> None:
+    """Qwen/OpenAI-compat rejects non-leading system; CMD2 tiers must merge."""
+    assembled = PromptAssemblyPolicy.assemble(
+        PromptAssemblyParts(
+            system_identity="You are the researcher.",
+            memory_block="- prefers duck",
+            dialog_block="user: hi",
+            user_content='{"user_text":"next?"}',
+        )
+    )
+    payload = _to_litellm_messages(list(assembled.messages))
+    system_roles = [m["role"] for m in payload if m["role"] == "system"]
+    assert system_roles == ["system"]
+    assert payload[0]["role"] == "system"
+    text = payload[0]["content"]
+    assert isinstance(text, str)
+    assert "You are the researcher." in text
+    assert "prefers duck" in text
+    assert "user: hi" in text
+    assert payload[-1]["role"] == "user"

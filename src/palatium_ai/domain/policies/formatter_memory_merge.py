@@ -38,12 +38,20 @@ class FormatterMemoryMergePolicy:
         has_source_content: bool,
         hit_kinds: tuple[str, ...] | list[str] | None = None,
         max_hints: int = 4,
+        content_transform: bool = False,
     ) -> FormatterMemoryMergeDecision:
         """Return hints to inject; empty when nothing should personalize the turn."""
         capped = max(1, min(int(max_hints), 8))
         raw = tuple(h.strip() for h in memory_hints if h and str(h).strip())
         if not raw:
             return FormatterMemoryMergeDecision(hints=(), reason="no_hints")
+        if content_transform:
+            # expand/shorten/rewrite transforms prior text: a remembered topic or pinned
+            # ask would let the composer answer that instead ("сравнение файлов", 055).
+            return FormatterMemoryMergeDecision(
+                hints=(),
+                reason="content_transform_no_personalization",
+            )
         if not has_source_content:
             return FormatterMemoryMergeDecision(
                 hints=raw[:capped],
@@ -63,10 +71,10 @@ class FormatterMemoryMergePolicy:
             if len(selected) >= capped:
                 break
         if not selected:
-            # Preferences may be unlabeled; keep first hint for personalization.
+            # Kinds are known and none is a preference: facts/pins are not identity.
             return FormatterMemoryMergeDecision(
-                hints=raw[:1],
-                reason="fallback_first_with_source",
+                hints=(),
+                reason="no_personalization_kinds_with_source",
             )
         return FormatterMemoryMergeDecision(
             hints=tuple(selected[:capped]),

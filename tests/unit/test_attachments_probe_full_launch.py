@@ -46,6 +46,15 @@ def test_full_launch_switches_api_onto_the_containers_it_starts(monkeypatch) -> 
     assert "docker-compose.attachments-s3.yml" in plan.compose_files
 
 
+def test_full_launch_includes_the_memory_consolidation_loop(monkeypatch) -> None:
+    """Promote is the only way into the long-term graph (060): a launch without the loop
+    leaves L3 empty while the stack looks healthy, so it is part of the default stack."""
+    mod = _load_probe_module()
+    monkeypatch.setattr(mod, "preflight_image", _stub_preflight(mod, ok=True))
+
+    assert "memory-jobs" in mod.full_launch("img").profiles
+
+
 def test_full_launch_keeps_av_and_degrades_the_store_when_image_is_blocked(monkeypatch) -> None:
     mod = _load_probe_module()
     monkeypatch.setattr(mod, "preflight_image", _stub_preflight(mod, ok=False, hint="mirror it"))
@@ -59,6 +68,8 @@ def test_full_launch_keeps_av_and_degrades_the_store_when_image_is_blocked(monke
     # ...while an unreachable store must not also switch the scanner back off.
     assert plan.scanner_backend == "clamav"
     assert "docker-compose.attachments-av.yml" in plan.compose_files
+    # Neither does it drop the memory loop: unrelated feature, same default stack.
+    assert "memory-jobs" in plan.profiles
     assert plan.s3_skip_reason == "mirror it"
 
 
@@ -70,7 +81,7 @@ def test_compose_args_keep_base_and_profile_overrides_explicit(monkeypatch) -> N
 
     profiles = [args[i + 1] for i, arg in enumerate(args) if arg == "--profile"]
     files = [args[i + 1] for i, arg in enumerate(args) if arg == "-f"]
-    assert profiles == ["docker-mcp", "docker-api", "attachments", "attachments-s3"]
+    assert profiles == ["docker-mcp", "docker-api", "attachments", "memory-jobs", "attachments-s3"]
     # Passing any `-f` disables compose's auto-load of docker-compose.override.yml, which
     # carries the dev profile split — dropping it would silently change which services exist.
     assert files == [
@@ -441,6 +452,7 @@ def _stub_named_checks(mod, monkeypatch) -> None:
         ("check_silo_bootstrap", "silo-init"),
         ("check_clamav", "clamav"),
         ("check_api", "api"),
+        ("check_memory_jobs", "memory-jobs"),
     ):
         monkeypatch.setattr(mod, function, _factory(name))
 
@@ -465,7 +477,7 @@ def test_bootstrap_is_probed_together_with_the_store(monkeypatch) -> None:
     mod = _load_probe_module()
     _stub_named_checks(mod, monkeypatch)
 
-    assert _run_checks(mod, skip_s3=False) == ["s3", "silo-init", "clamav", "api"]
+    assert _run_checks(mod, skip_s3=False) == ["s3", "silo-init", "clamav", "api", "memory-jobs"]
 
 
 def test_bootstrap_is_skipped_with_the_store(monkeypatch) -> None:
@@ -473,4 +485,62 @@ def test_bootstrap_is_skipped_with_the_store(monkeypatch) -> None:
     mod = _load_probe_module()
     _stub_named_checks(mod, monkeypatch)
 
-    assert _run_checks(mod, skip_s3=True) == ["clamav", "api"]
+    # The memory worker is still probed: `rebuild-app` recreates it from the same image,
+    # so its verdict is never about a container nobody touched.
+    assert _run_checks(mod, skip_s3=True) == ["clamav", "api", "memory-jobs"]
+
+
+def test_memory_jobs_probe_accepts_the_loop_running(monkeypatch) -> None:
+    mod = _load_probe_module()
+    _stub_compose_state(
+        mod,
+        monkeypatch,
+        queried=True,
+        record={"Name": "palatium-ai-memory-consolidate-1", "State": "running", "Status": "Up 3 minutes"},
+    )
+
+    probe = mod.check_memory_jobs(Path("env/.env"))
+
+    assert probe.ok
+    assert "running" in probe.detail
+
+
+def test_memory_jobs_probe_fails_when_the_profile_was_not_part_of_the_launch(monkeypatch) -> None:
+    """The bug this pins: `Start stack` came up healthy while promote never ran (060).
+
+    Nothing in the API needs the worker, so its absence is invisible from behaviour — the
+    probe has to state it, with the command that fixes it.
+    """
+    mod = _load_probe_module()
+    _stub_compose_state(mod, monkeypatch, queried=True, record=None)
+
+    probe = mod.check_memory_jobs(Path("env/.env"))
+
+    assert not probe.ok
+    assert "not created" in probe.detail
+    assert "profile memory-jobs" in probe.hint
+
+
+def test_memory_jobs_probe_fails_on_a_worker_that_is_not_running(monkeypatch) -> None:
+    mod = _load_probe_module()
+    _stub_compose_state(
+        mod,
+        monkeypatch,
+        queried=True,
+        record={"Name": "palatium-ai-memory-consolidate-1", "State": "restarting", "Status": "Restarting (1) 5s"},
+    )
+
+    probe = mod.check_memory_jobs(Path("env/.env"))
+
+    assert not probe.ok
+    assert "logs memory-consolidate" in probe.hint
+
+
+def test_memory_jobs_probe_does_not_blame_the_stack_without_compose(monkeypatch) -> None:
+    mod = _load_probe_module()
+    _stub_compose_state(mod, monkeypatch, queried=False, record=None)
+
+    probe = mod.check_memory_jobs(Path("env/.env"))
+
+    assert probe.ok
+    assert "not checked" in probe.detail

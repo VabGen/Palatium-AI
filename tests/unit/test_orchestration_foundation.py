@@ -177,3 +177,17 @@ def test_node_input_builders_fall_back_without_context_bundle() -> None:
     assert researcher_input.context_packet.execution_plan.strategy == "reason_only"
     assert critic_input.context_packet.execution_plan.strategy == "reason_only"
     assert formatter_input.context_packet.execution_plan.strategy == "format_only"
+
+
+def test_formatter_worker_fallback_follows_single_writer_contract() -> None:
+    state = _state(with_context_bundle=True)
+    snapshot = OrchestrationSnapshot.from_state(state)
+
+    assert build_formatter_input(snapshot, state).allow_worker_fallback is True
+
+    state["presentation_owner"] = "formatter"
+    state["presentation_owner_reason"] = "restructure_requested"
+    assert build_formatter_input(snapshot, state).allow_worker_fallback is False
+
+    state["presentation_owner_reason"] = "rollout_excluded"
+    assert build_formatter_input(snapshot, state).allow_worker_fallback is True

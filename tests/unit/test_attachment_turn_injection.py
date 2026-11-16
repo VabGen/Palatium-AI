@@ -121,12 +121,20 @@ def _formatter_document_json(title: str) -> str:
 
 
 def _last_user_payload(llm: FakeLLMPort) -> dict[str, object]:
-    """Parse the user message of the latest LLM call into a dict."""
+    """Parse the user message of the latest LLM call into a dict.
+
+    The Formatter wraps its JSON in ``<formatter_input>`` (070-style fence), so unwrap it
+    before parsing — the same helper must read both raw-JSON workers and the Formatter.
+    """
     assert llm.calls, "LLM was never called"
     last = llm.calls[-1]
     user_messages = [message for message in last if message.role == "user"]
     assert user_messages, "no user message in the last LLM call"
-    payload = json.loads(user_messages[-1].content)
+    raw = user_messages[-1].content
+    open_tag, close_tag = "<formatter_input>", "</formatter_input>"
+    if open_tag in raw and close_tag in raw:
+        raw = raw.split(open_tag, 1)[1].rsplit(close_tag, 1)[0]
+    payload = json.loads(raw)
     assert isinstance(payload, dict)
     return payload
 
@@ -168,6 +176,56 @@ async def test_turn_context_is_resolved_for_the_calling_user() -> None:
     assert stub.calls == [((attachment_id,), "u-1", "t-1")]
 
 
+def _primed_context(attachment_id: object, text: str = "Договор поставки №42") -> AttachmentTurnContext:
+    return AttachmentTurnContext(
+        blocks=(
+            AttachmentContextBlock(
+                attachment_id=attachment_id,  # type: ignore[arg-type]  # UUID built by the test
+                filename="contract.txt",
+                source="attachment:contract.txt",
+                fenced_text=_fence(text),
+                action="allow",
+                page_count=1,
+            ),
+        )
+    )
+
+
+async def test_rehydrate_reuses_the_entry_context_for_the_same_ids() -> None:
+    """One turn resolves an attachment once, even if continuation asks again (P5).
+
+    The reported symptom was a duplicated ``attachment.build_turn_context`` per turn.
+    The entry already fenced these ids, so a rehydrate of exactly those ids must return
+    that fence instead of re-reading rows and blobs.
+    """
+    attachment_id = uuid4()
+    stub = _StubAttachmentService(_primed_context(attachment_id))
+    service = _intent_service(object(), stub)
+
+    entry = await service._turn_attachment_context([attachment_id], thread_id="t-2", user_id="u-2")
+    ctx = service._bind_turn_attachment_context(thread_id="t-2", user_id="u-2", primed=entry)
+    assert ctx.rehydrate is not None
+
+    assert await ctx.rehydrate([attachment_id]) == entry.fenced_text
+    assert len(stub.calls) == 1, "the same ids were read twice inside one turn"
+
+
+async def test_rehydrate_reads_attachments_it_did_not_fence_at_entry() -> None:
+    """A different id set is a genuine new read — the memo must not answer it."""
+    fenced_id = uuid4()
+    other_id = uuid4()
+    stub = _StubAttachmentService(_primed_context(fenced_id))
+    service = _intent_service(object(), stub)
+
+    entry = await service._turn_attachment_context([fenced_id], thread_id="t-3", user_id="u-3")
+    ctx = service._bind_turn_attachment_context(thread_id="t-3", user_id="u-3", primed=entry)
+    assert ctx.rehydrate is not None
+
+    await ctx.rehydrate([other_id])
+
+    assert [call[0] for call in stub.calls] == [(fenced_id,), (other_id,)]
+
+
 async def test_unusable_attachment_fails_the_turn_instead_of_being_dropped() -> None:
     """Fail closed: a quarantined file must surface, not vanish from the answer (020)."""
     stub = _StubAttachmentService(error=AttachmentNotUsableError(uuid4(), state="quarantined"))
@@ -177,8 +235,8 @@ async def test_unusable_attachment_fails_the_turn_instead_of_being_dropped() -> 
         await service._turn_untrusted_context([uuid4()], thread_id="t", user_id="u")
 
 
-async def test_fenced_attachment_reaches_researcher_and_formatter_payloads() -> None:
-    """End-to-end: the fence is what the workers see, and only via the packet."""
+async def test_fenced_attachment_reaches_critic_payload() -> None:
+    """End-to-end: the critic grounds on the same fence, and only via the packet."""
     llm_intent = FakeLLMPort(
         '{"task_kind": "knowledge_request", "requires_mcp": false, "candidate_capabilities": ["summarize"], '
         '"confidence": 0.95, "reasoning": "Question about an attached document"}',
@@ -233,17 +291,12 @@ async def test_fenced_attachment_reaches_researcher_and_formatter_payloads() -> 
     # The critic sees the same fenced block, so it can judge grounding and spot a draft
     # that obeyed an instruction hidden in the attachment.
     critic_payload = _last_user_payload(llm_critic)
-    assert str(critic_payload["attachment_context"]).startswith(_FENCE_START)
-    assert "Договор поставки №42" in str(critic_payload["attachment_context"])
-
-    formatter_payload = _last_user_payload(llm_formatter)
-    attachment_context = str(formatter_payload["attachment_context"])
-    assert attachment_context.startswith(_FENCE_START)
-    assert "Договор поставки №42" in attachment_context
+    assert str(critic_payload["attached_files"]).startswith(_FENCE_START)
+    assert "Договор поставки №42" in str(critic_payload["attached_files"])
 
 
 async def test_researcher_payload_carries_fenced_attachment_context() -> None:
-    """The Researcher receives the block as ``attachment_context``, never merged into the ask."""
+    """The Researcher receives the block as ``attached_files``, never merged into the ask."""
     from palatium_ai.application.orchestration.agent_bridge import researcher_to_agent_input
     from palatium_ai.domain.agents.context_packet import ContextPacket
     from palatium_ai.domain.agents.researcher import ResearcherInput
@@ -274,8 +327,8 @@ async def test_researcher_payload_carries_fenced_attachment_context() -> None:
     await harness.execute_with_guardrails(agent, agent_input)
 
     payload = _last_user_payload(llm)
-    assert str(payload["attachment_context"]).startswith(_FENCE_START)
-    assert "Договор поставки №42" in str(payload["attachment_context"])
+    assert str(payload["attached_files"]).startswith(_FENCE_START)
+    assert "Договор поставки №42" in str(payload["attached_files"])
     assert payload["user_text"] == "What are the delivery terms?"
 
 
@@ -315,5 +368,7 @@ async def test_turn_without_attachments_sends_an_empty_context_slot() -> None:
     assert result.status == "success"
     # Reviewer and formatter always run for this route, so they prove the slot exists
     # (and is empty) even when no attachment was sent.
-    assert _last_user_payload(llm_critic)["attachment_context"] == ""
-    assert _last_user_payload(llm_formatter)["attachment_context"] == ""
+    assert _last_user_payload(llm_critic)["attached_files"] == ""
+    # Formatter uses a minimal hot payload (no attachment slot at all):
+    # no non-empty fence must leak when no file was sent.
+    assert not str(_last_user_payload(llm_formatter).get("attached_files", "")).strip()

@@ -29,10 +29,20 @@ from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutp
 from palatium_ai.domain.agents.supervisor import SupervisorInput, SupervisorOutput, SupervisorTaskResult
 from palatium_ai.domain.agents.text_ingestor import TextIngestorInput, TextIngestorOutput, TextIngestorTaskResult
 from palatium_ai.domain.content import ContentDocument
+from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.memory.contextualizer import ContextualizerInput, ContextualizerOutput, ContextualizerTaskResult
+from palatium_ai.domain.memory.turns import DialogTurnWindow
+from palatium_ai.domain.policies.dialog_correction import DialogCorrectionPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.policies.types import ContinuationKind
+
+
+def _dialog_window_json(window: DialogTurnWindow | None) -> str:
+    """Serialize dialog for agents with superseded claims already redacted (P1.1)."""
+    if window is None:
+        return ""
+    return DialogCorrectionPolicy.apply(window).model_dump_json()
 
 
 def task_id_to_uuid(task_id: str) -> UUID:
@@ -41,6 +51,20 @@ def task_id_to_uuid(task_id: str) -> UUID:
         return UUID(task_id)
     except ValueError:
         return uuid5(NAMESPACE_DNS, task_id)
+
+
+def _with_worker_handoff_meta(
+    context: dict[str, str],
+    *,
+    parent_role: str,
+    parent_context_chars: int,
+) -> dict[str, str]:
+    """Stamp W7.1 freshness markers — child gets explicit handoff, not parent.messages."""
+    return {
+        **context,
+        "_parent_role": parent_role,
+        "_parent_context_chars": str(max(0, parent_context_chars)),
+    }
 
 
 def intent_to_agent_input(
@@ -58,6 +82,11 @@ def intent_to_agent_input(
         context={
             "continuation_kind": continuation or "",
             "has_prior_dialog": "true" if task_input.has_prior_dialog else "false",
+            "has_thread_files": "true" if task_input.has_thread_files else "false",
+            # Plurality/modality of THIS turn: the model needs the real count to label
+            # ``attachment_scope`` instead of guessing it from prose (010, 055).
+            "attachment_count": str(task_input.attachment_count),
+            "attachment_kinds": ",".join(task_input.attachment_kinds),
             "_thread_id": thread_id,
         },
     )
@@ -105,7 +134,7 @@ def contextualizer_to_agent_input(
         trace_id=trace_id,
         instruction=task_input.user_text,
         context={
-            "dialog_window_json": task_input.dialog_window.model_dump_json(),
+            "dialog_window_json": _dialog_window_json(task_input.dialog_window),
             "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
             "prompt_budget_json": task_input.prompt_budget.model_dump_json(),
             "task_kind": task_kind,
@@ -114,6 +143,7 @@ def contextualizer_to_agent_input(
                 list(task_input.candidate_capabilities),
                 ensure_ascii=False,
             ),
+            "has_attachment_context": "true" if task_input.has_attachment_context else "false",
             "_thread_id": thread_id,
         },
     )
@@ -168,6 +198,8 @@ def supervisor_to_agent_input(
             "task_kind": task_input.task_kind,
             "requires_mcp": "true" if task_input.requires_mcp else "false",
             "classification_confidence": str(task_input.classification_confidence),
+            "file_reference": task_input.file_reference,
+            "has_attachment_context": "true" if task_input.has_attachment_context else "false",
             "candidate_capabilities_json": json.dumps(list(task_input.candidate_capabilities), ensure_ascii=False),
             "_thread_id": thread_id,
         },
@@ -228,6 +260,7 @@ def critic_to_agent_input(
             "continuation_kind": task_input.continuation_kind or "",
             "user_input_chars": str(task_input.user_input_chars),
             "worker_confidence": ("" if task_input.worker_confidence is None else str(task_input.worker_confidence)),
+            "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },
@@ -275,12 +308,14 @@ def formatter_to_agent_input(
     *,
     trace_id: str,
     thread_id: str,
+    document_parts: tuple[DocumentPart, ...] = (),
 ) -> AgentInput:
     """Build AgentInput for Formatter from graph node payload."""
     return AgentInput(
         task_id=task_id_to_uuid(task_input.task_id),
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
+        document_parts=document_parts,
         context={
             "context_packet_json": task_input.context_packet.model_dump_json(),
             "worker_summary": task_input.worker_summary or "",
@@ -290,8 +325,12 @@ def formatter_to_agent_input(
             "underspecification_kind": task_input.underspecification_kind,
             "revision_feedback": task_input.revision_feedback or "",
             "response_locale": task_input.response_locale,
-            "dialog_window_json": (task_input.dialog_window.model_dump_json() if task_input.dialog_window is not None else ""),
+            "dialog_window_json": _dialog_window_json(task_input.dialog_window),
             "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
+            "memory_hint_kinds_json": json.dumps(list(task_input.memory_hint_kinds), ensure_ascii=False),
+            "transformation": task_input.transformation,
+            "prior_context": task_input.prior_context or "",
+            "allow_worker_fallback": "true" if task_input.allow_worker_fallback else "false",
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },
@@ -353,8 +392,11 @@ def context_weaver_to_agent_input(
             "candidate_capabilities_json": json.dumps(list(task_input.candidate_capabilities), ensure_ascii=False),
             "grounding": task_input.grounding,
             "grounding_reason": task_input.grounding_reason or "",
+            "response_shape": task_input.response_shape,
             "has_attachment_context": "true" if task_input.has_attachment_context else "false",
             "has_trusted_prior": "true" if task_input.has_trusted_prior else "false",
+            "file_reference": task_input.file_reference,
+            "attachment_scope": task_input.attachment_scope,
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },
@@ -402,24 +444,38 @@ def researcher_to_agent_input(
     thread_id: str,
     user_id: str = "",
     org_id: str = "",
+    image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
 ) -> AgentInput:
-    """Build AgentInput for Researcher from graph node payload."""
+    """Build AgentInput for Researcher from graph node payload.
+
+    ``image_parts`` / ``document_parts`` come from the turn's admission decision
+    (ADR 0007 / W3a), never from the node: a worker is not allowed to decide that an
+    upload may reach the model.
+    """
+    packet_json = task_input.context_packet.model_dump_json()
     return AgentInput(
         task_id=task_id_to_uuid(task_input.task_id),
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
-        context={
-            "context_packet_json": task_input.context_packet.model_dump_json(),
-            "prior_context": task_input.prior_context or "",
-            "mcp_tool_output_max_chars": str(task_input.mcp_tool_output_max_chars),
-            "revision_feedback": task_input.revision_feedback or "",
-            "dialog_window_json": (task_input.dialog_window.model_dump_json() if task_input.dialog_window is not None else ""),
-            "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
-            "_task_id": task_input.task_id,
-            "_thread_id": thread_id,
-            "_user_id": user_id,
-            "_org_id": org_id,
-        },
+        image_parts=image_parts,
+        document_parts=document_parts,
+        context=_with_worker_handoff_meta(
+            {
+                "context_packet_json": packet_json,
+                "prior_context": task_input.prior_context or "",
+                "mcp_tool_output_max_chars": str(task_input.mcp_tool_output_max_chars),
+                "revision_feedback": task_input.revision_feedback or "",
+                "dialog_window_json": _dialog_window_json(task_input.dialog_window),
+                "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
+                "_task_id": task_input.task_id,
+                "_thread_id": thread_id,
+                "_user_id": user_id,
+                "_org_id": org_id,
+            },
+            parent_role="context_enricher",
+            parent_context_chars=len(packet_json),
+        ),
     )
 
 
@@ -431,7 +487,11 @@ def researcher_output_to_task_result(
 ) -> ResearcherTaskResult:
     """Map harness AgentOutput back to graph ResearcherTaskResult."""
     from palatium_ai.application.agents.researcher.parsing import FAILURE_PLACEHOLDER_SUMMARY
-    from palatium_ai.domain.agents.researcher import GROUNDING_REQUIRED_EMPTY, MCP_EMPTY_RESULT
+    from palatium_ai.domain.agents.researcher import (
+        ATTACHMENT_REFERENCE_UNRESOLVED,
+        GROUNDING_REQUIRED_EMPTY,
+        MCP_EMPTY_RESULT,
+    )
 
     parsed: ResearcherOutput | None = None
     if isinstance(agent_output.output, ResearcherOutput) and (agent_output.output.summary != FAILURE_PLACEHOLDER_SUMMARY):
@@ -454,6 +514,24 @@ def researcher_output_to_task_result(
             grounding_satisfied=False,
             grounding_degraded=True,
             cannot_answer_without_source=True,
+        )
+
+    # Thread file unresolved: RU policy copy is the answer. Do not escalate to Critic
+    # review (Formatter would LLM-rewrite it to an EN upload ask — W10 att_not_found).
+    # Ambiguous → file-choice card is minted separately; cannot_answer stays false so
+    # researcher_node does not open a second clarify path.
+    if agent_output.error_message == ATTACHMENT_REFERENCE_UNRESOLVED:
+        return ResearcherTaskResult(
+            task_id=task_id,
+            agent_role=agent_role,
+            status="partial",
+            confidence=agent_output.confidence,
+            requires_review=False,
+            output=parsed,
+            error=ATTACHMENT_REFERENCE_UNRESOLVED,
+            grounding_satisfied=False,
+            grounding_degraded=False,
+            cannot_answer_without_source=False,
         )
 
     # Empty MCP hits are expected soft-partial — Formatter shows "nothing found", no HITL
@@ -513,16 +591,21 @@ def coder_to_agent_input(
     thread_id: str,
 ) -> AgentInput:
     """Build AgentInput for Coder from graph node payload."""
+    packet_json = task_input.context_packet.model_dump_json()
     return AgentInput(
         task_id=task_id_to_uuid(task_input.task_id),
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
-        context={
-            "context_packet_json": task_input.context_packet.model_dump_json(),
-            "revision_feedback": task_input.revision_feedback or "",
-            "_task_id": task_input.task_id,
-            "_thread_id": thread_id,
-        },
+        context=_with_worker_handoff_meta(
+            {
+                "context_packet_json": packet_json,
+                "revision_feedback": task_input.revision_feedback or "",
+                "_task_id": task_input.task_id,
+                "_thread_id": thread_id,
+            },
+            parent_role="context_enricher",
+            parent_context_chars=len(packet_json),
+        ),
     )
 
 
@@ -536,11 +619,13 @@ def coder_output_to_execution_result(
     summary = "coder failed"
     confidence = agent_output.confidence
     sources: tuple[str, ...] = ()
+    language = ""
     if isinstance(agent_output.output, CoderOutput):
         summary = agent_output.output.summary
         confidence = agent_output.output.confidence
-        if agent_output.output.language:
-            sources = (f"language:{agent_output.output.language}",)
+        language = agent_output.output.language or ""
+        if language:
+            sources = (f"language:{language}",)
         if agent_output.output.requires_sandbox_exec:
             sources = (*sources, "sandbox_exec_deferred")
     parsed = ResearcherOutput(summary=summary, confidence=confidence, sources_used=sources)
@@ -553,6 +638,8 @@ def coder_output_to_execution_result(
             requires_review=True,
             output=parsed,
             error=agent_output.error_message or "coder failed",
+            worker_kind="coder",
+            worker_language=language,
         )
     return ResearcherTaskResult(
         task_id=task_id,
@@ -562,6 +649,8 @@ def coder_output_to_execution_result(
         requires_review=agent_output.status == "partial",
         output=parsed,
         error=agent_output.error_message,
+        worker_kind="coder",
+        worker_language=language,
     )
 
 
@@ -570,18 +659,27 @@ def analyst_to_agent_input(
     *,
     trace_id: str,
     thread_id: str,
+    image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
 ) -> AgentInput:
-    """Build AgentInput for Analyst from graph node payload."""
+    """Build AgentInput for Analyst from graph node payload (same admission as Researcher)."""
+    packet_json = task_input.context_packet.model_dump_json()
     return AgentInput(
         task_id=task_id_to_uuid(task_input.task_id),
         trace_id=trace_id,
         instruction=task_input.context_packet.user_text,
-        context={
-            "context_packet_json": task_input.context_packet.model_dump_json(),
-            "revision_feedback": task_input.revision_feedback or "",
-            "_task_id": task_input.task_id,
-            "_thread_id": thread_id,
-        },
+        image_parts=image_parts,
+        document_parts=document_parts,
+        context=_with_worker_handoff_meta(
+            {
+                "context_packet_json": packet_json,
+                "revision_feedback": task_input.revision_feedback or "",
+                "_task_id": task_input.task_id,
+                "_thread_id": thread_id,
+            },
+            parent_role="context_enricher",
+            parent_context_chars=len(packet_json),
+        ),
     )
 
 
@@ -594,12 +692,12 @@ def analyst_output_to_execution_result(
     """Map Analyst AgentOutput into shared execution slot (ResearcherTaskResult)."""
     summary = "analyst failed"
     confidence = agent_output.confidence
-    sources: tuple[str, ...] = ()
+    findings: tuple[str, ...] = ()
     if isinstance(agent_output.output, AnalystOutput):
         summary = agent_output.output.summary
         confidence = agent_output.output.confidence
-        sources = agent_output.output.findings
-    parsed = ResearcherOutput(summary=summary, confidence=confidence, sources_used=sources)
+        findings = agent_output.output.findings
+    parsed = ResearcherOutput(summary=summary, confidence=confidence, sources_used=findings)
     if agent_output.status == "failure":
         return ResearcherTaskResult(
             task_id=task_id,
@@ -609,6 +707,8 @@ def analyst_output_to_execution_result(
             requires_review=True,
             output=parsed,
             error=agent_output.error_message or "analyst failed",
+            worker_kind="analyst",
+            worker_findings=findings,
         )
     return ResearcherTaskResult(
         task_id=task_id,
@@ -618,6 +718,8 @@ def analyst_output_to_execution_result(
         requires_review=agent_output.status == "partial",
         output=parsed,
         error=agent_output.error_message,
+        worker_kind="analyst",
+        worker_findings=findings,
     )
 
 
@@ -660,6 +762,7 @@ def merge_parallel_worker_results(
     grounding_satisfied = (
         (research.grounding_satisfied or analyst.grounding_satisfied) and not grounding_degraded and not cannot_answer
     )
+    findings = tuple(dict.fromkeys((*research.worker_findings, *analyst.worker_findings)))
     return ResearcherTaskResult(
         task_id=research.task_id,
         agent_role="parallel_workers",
@@ -678,6 +781,9 @@ def merge_parallel_worker_results(
         grounding_satisfied=grounding_satisfied,
         grounding_degraded=grounding_degraded,
         cannot_answer_without_source=cannot_answer,
+        worker_kind="researcher",
+        worker_language=research.worker_language or analyst.worker_language,
+        worker_findings=findings,
     )
 
 

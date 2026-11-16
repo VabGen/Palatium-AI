@@ -145,7 +145,5 @@ export function sanitizeStreamMarkdown(markdown: string): string {
     .replace(EMOJI_RUN, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-  return closeDanglingMarkdown(
-    repairIconAttrRemnants(iconTokensToMarkdownImages(cleaned))
-  );
+  return closeDanglingMarkdown(repairIconAttrRemnants(iconTokensToMarkdownImages(cleaned)));
 }

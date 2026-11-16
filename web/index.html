@@ -4,15 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Palatium Chat</title>
+    <!-- Inline favicon: no /favicon.ico request, so the console stays clean on load (E2E-06). -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230B0F19'/%3E%3Cpath d='M16 6l2.6 6.9L25.5 16l-6.9 2.6L16 25.5l-2.6-6.9L6.5 16l6.9-3.1z' fill='%23007CFF'/%3E%3C/svg%3E"
+    />
     <!--
-      Веб-шрифты здесь намеренно НЕ подключаются (план 2.6): виджет обязан
-      работать без внешних сетевых запросов — страница-хост СЭД сама решает,
-      какие шрифты загружать. Используется системный стек из `tokens.css`;
-      self-hosted `@font-face` — отдельная задача (нужны файлы и лицензия).
+      K2a: self-host Inter Variable + Geist Mono via `src/fonts.css` → /fonts/*.woff2
+      (public/). No CDN (084). Widget injects the same faces via injectKimiFonts().
     -->
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>

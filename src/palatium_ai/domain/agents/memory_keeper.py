@@ -1,16 +1,15 @@
-# src/palatium_ai/domain/agents/memory_keeper.py
-
 """Контракты MemoryKeeper — sleep-time consolidation (ADD-only)."""
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field
+
+from palatium_ai.domain.memory.types import MemoryType
 
 from .contracts import TaskResult
 
-MemoryKind = Literal["fact", "preference", "entity", "summary"]
+# Extract candidates use the same closed MemoryType vocabulary as medium storage (060).
+MemoryKind = MemoryType
 
 
 class MemoryFactCandidate(BaseModel):

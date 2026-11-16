@@ -1,0 +1,28 @@
+{
+  "schema": "memory_cmd_prompt_tiers_v1",
+  "plan": "context-memory-dialog-2026.md",
+  "wave": "CMD2",
+  "status": "implemented_cmd2",
+  "tiers": [
+    {
+      "name": "stable",
+      "cache_control": "ephemeral",
+      "contents": ["agent_system_prompt", "tool_guidance_summaries", "project_agents_md"]
+    },
+    {
+      "name": "context",
+      "cache_control": null,
+      "contents": ["thread_meta", "skill_catalog_index", "route_axes"]
+    },
+    {
+      "name": "volatile",
+      "cache_control": null,
+      "contents": ["memory_hits", "dialog_window", "attachment_fences", "timestamp"]
+    }
+  ],
+  "current_runtime": {
+    "harness_cache_hint": "first_system_message_only",
+    "file": "src/palatium_ai/application/agents/harness.py",
+    "symbol": "_with_system_prompt_cache"
+  }
+}

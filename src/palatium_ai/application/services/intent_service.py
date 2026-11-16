@@ -20,6 +20,7 @@ from palatium_ai.application.services.intent_hitl_flow import (
 )
 from palatium_ai.application.services.intent_turn_helpers import (
     PENDING_ATTACHMENT_IDS_KEY,
+    FinalizedTurn,
     assistant_turn_content as _assistant_turn_content,
     assistant_turn_payload as _assistant_turn_payload,
     derive_session_title as _derive_session_title,
@@ -27,6 +28,7 @@ from palatium_ai.application.services.intent_turn_helpers import (
     parse_pending_attachment_ids,
     serialize_pending_attachment_ids,
     snapshot_awaits_resume as _snapshot_awaits_resume,
+    stream_result_frame,
     tenant_budget_key as _tenant_budget_key,
     write_audit as _write_audit,
 )
@@ -42,16 +44,22 @@ from palatium_ai.application.services.turn_response_cache import (
     turn_response_cache,
 )
 from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, turn_sse_bridge
+from palatium_ai.core.config.formatter import FormatterMode
 from palatium_ai.core.logging import get_logger
+from palatium_ai.core.observability.formatter_rollout import resolve_formatter_mode
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.agents.intent import IntentTaskResult
+from palatium_ai.domain.attachments.context import AttachmentTurnContext
 from palatium_ai.domain.attachments.errors import AttachmentNotFoundError
+from palatium_ai.domain.content import DocumentRevision
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.memory.turns import attachment_ids_payload
 from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.response_cache import ResponseCacheKeyPolicy
+from palatium_ai.domain.policies.types import ComposerMode, StreamingContract
 from palatium_ai.domain.sessions.context_privacy import session_user_text_preview
 
 _DEFAULT_DIALOG_WINDOW = 12
@@ -60,11 +68,13 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from palatium_ai.application.orchestration.state import AgentGraphState
+    from palatium_ai.application.services.attachment_reference_resolver import AttachmentReferenceResolver
     from palatium_ai.application.services.attachment_service import AttachmentService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
     from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.application.services.vision_images import VisionImageService
     from palatium_ai.domain.graph.write_port import GraphWritePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
 
@@ -106,6 +116,11 @@ class IntentService:
         attachment_service: AttachmentService | None = None,
         response_cache: ResponseCacheService | None = None,
         graph_write: GraphWritePort | None = None,
+        file_reference_resolver: AttachmentReferenceResolver | None = None,
+        vision_images: VisionImageService | None = None,
+        formatter_mode: FormatterMode = "legacy",
+        formatter_rollout_pct: int = 0,
+        origin_ceiling: bool = True,
     ) -> None:
         self._session_service = session_service
         self._hitl_service = hitl_service
@@ -117,6 +132,11 @@ class IntentService:
         self._option_synthesizer = option_synthesizer
         self._attachment_service = attachment_service
         self._response_cache = response_cache or ResponseCacheService(None, enabled=False)
+        # The Formatter owns generation; the streaming contract is derived from the
+        # same two-key rollout so the SSE layer can never disagree with the agent
+        # about whether a document will paint itself (055: one contract, one decision).
+        self._formatter_mode: FormatterMode = formatter_mode
+        self._formatter_rollout_pct: int = formatter_rollout_pct
 
         self._graph_runner = IntentGraphRunner(
             graph,
@@ -135,6 +155,9 @@ class IntentService:
             mcp_tool_output_max_chars=mcp_tool_output_max_chars,
             turn_hop_budget_ms=turn_hop_budget_ms,
             graph_write=graph_write,
+            file_reference_resolver=file_reference_resolver,
+            vision_images=vision_images,
+            origin_ceiling=origin_ceiling,
         )
         self._hitl_flow = IntentHitlFlow(
             graph_runner=self._graph_runner,
@@ -142,24 +165,25 @@ class IntentService:
             hitl_service=hitl_service,
             kill_switch=self._kill_switch,
             cost_budget=self._cost_budget,
-            process_turn=self.process,
+            process_turn=self.finalize_turn,
             dialog_turn_store=dialog_turn_store,
             consolidation=consolidation,
             option_synthesizer=option_synthesizer,
+            file_reference_resolver=file_reference_resolver,
         )
         self._graph_runner.bind_attach_hitl_cards(self._hitl_flow.attach_hitl_cards)
 
-    async def _turn_untrusted_context(
+    async def _turn_attachment_context(
         self,
         attachment_ids: Sequence[UUID] | None,
         *,
         thread_id: str,
         user_id: str | None,
-    ) -> str:
-        """Resolve this turn's fenced attachment text (020).
+    ) -> AttachmentTurnContext:
+        """Resolve this turn's typed attachment blocks (Level 0, 020).
 
         Attachments are optional: with no service wired or no ids the turn runs
-        exactly as before. When ids are present the block is resolved through
+        exactly as before. When ids are present the blocks are resolved through
         ``AttachmentService``, which re-runs the injection policy and returns
         text already wrapped in the untrusted fence; ``AttachmentError``
         propagates to the API boundary so the caller sees a typed refusal
@@ -173,11 +197,25 @@ class IntentService:
                     reason="attachment_service_unavailable",
                     attachment_count=len(attachment_ids),
                 )
-            return ""
-        context = await self._attachment_service.build_turn_context(
+            return AttachmentTurnContext()
+        return await self._attachment_service.build_turn_context(
             attachment_ids=list(attachment_ids),
             user_id=user_id or "",
             thread_id=thread_id,
+        )
+
+    async def _turn_untrusted_context(
+        self,
+        attachment_ids: Sequence[UUID] | None,
+        *,
+        thread_id: str,
+        user_id: str | None,
+    ) -> str:
+        """Fenced projection of ``_turn_attachment_context`` (prompt slot)."""
+        context = await self._turn_attachment_context(
+            attachment_ids,
+            thread_id=thread_id,
+            user_id=user_id,
         )
         return context.fenced_text
 
@@ -232,10 +270,30 @@ class IntentService:
             return {}
         return {PENDING_ATTACHMENT_IDS_KEY: self._serialize_pending_attachment_ids(attachment_ids)}
 
-    def _bind_turn_attachment_context(self, *, thread_id: str, user_id: str | None) -> TurnAttachmentContext:
-        """Callbacks for continuation_node rehydrate / clear sticky (SB2)."""
+    def _bind_turn_attachment_context(
+        self,
+        *,
+        thread_id: str,
+        user_id: str | None,
+        primed: AttachmentTurnContext | None = None,
+    ) -> TurnAttachmentContext:
+        """Callbacks for continuation_node rehydrate / clear sticky (SB2).
+
+        ``primed`` is what the entry already fenced for this turn. A rehydrate of the
+        same ids returns it instead of re-reading the attachment rows and blobs, so one
+        turn resolves each attachment exactly once (P5: the duplicated call in logs).
+        """
 
         async def _rehydrate(ids: Sequence[UUID]) -> str:
+            wanted = tuple(ids)
+            if primed is not None and primed.fenced_text.strip() and primed.attachment_ids == wanted:
+                logger.info(
+                    "attachment.rehydrate_reused",
+                    thread_id=thread_id,
+                    attachment_count=len(wanted),
+                    reason="same_ids_fenced_at_entry",
+                )
+                return primed.fenced_text
             # P0-A: cross-thread UUID in dialog prior must not fence foreign text.
             # Entry-path explicit ids still raise AttachmentNotFoundError to the API.
             try:
@@ -256,7 +314,7 @@ class IntentService:
         async def _clear() -> None:
             await self._clear_pending_attachments(thread_id=thread_id)
 
-        return TurnAttachmentContext(rehydrate=_rehydrate, clear_pending=_clear)
+        return TurnAttachmentContext(rehydrate=_rehydrate, clear_pending=_clear, primed=primed)
 
     @traceable(name="intent_service.classify")
     async def classify(
@@ -269,6 +327,8 @@ class IntentService:
         *,
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
+        composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
     ) -> IntentTaskResult:
         """Возвращает platform-level классификацию задачи."""
         resolved_task_id = task_id or str(uuid4())
@@ -291,7 +351,13 @@ class IntentService:
                 "last_task_id": resolved_task_id,
                 "last_user_text": session_user_text_preview(text),
                 "org_id": org_id or "",
+                "use_memory": use_memory,
             },
+        )
+        turn_attachments = await self._turn_attachment_context(
+            attachment_ids,
+            thread_id=thread_id,
+            user_id=user_id,
         )
         final_state = await self._graph_runner.run_graph(
             text=text,
@@ -300,11 +366,10 @@ class IntentService:
             user_id=user_id,
             org_id=org_id,
             tenant_key=_tenant_budget_key(user_id=user_id, org_id=org_id, thread_id=thread_id),
-            untrusted_context=await self._turn_untrusted_context(
-                attachment_ids,
-                thread_id=thread_id,
-                user_id=user_id,
-            ),
+            untrusted_context=turn_attachments.fenced_text,
+            attachment_context=turn_attachments,
+            composer_mode=composer_mode,
+            use_memory=use_memory,
         )
         classification = final_state.get("classification")
         critic = final_state.get("critic")
@@ -379,6 +444,7 @@ class IntentService:
                         "requires_user_choice": routing_intent.requires_user_choice,
                         "underspecification_kind": routing_intent.underspecification_kind,
                         "candidate_capabilities": routing_intent.candidate_capabilities,
+                        "response_shape": routing_intent.response_shape,
                         "reasoning": routing_intent.reasoning,
                     }
                 ),
@@ -444,8 +510,42 @@ class IntentService:
         *,
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
+        composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
     ) -> FormatterTaskResult:
         """Возвращает финальный отформатированный ответ платформы."""
+        turn = await self.finalize_turn(
+            text,
+            thread_id,
+            task_id,
+            user_id=user_id,
+            org_id=org_id,
+            is_admin=is_admin,
+            attachment_ids=attachment_ids,
+            composer_mode=composer_mode,
+            use_memory=use_memory,
+        )
+        return turn.result
+
+    async def finalize_turn(
+        self,
+        text: str,
+        thread_id: str,
+        task_id: str | None = None,
+        user_id: str | None = None,
+        org_id: str | None = None,
+        *,
+        is_admin: bool = False,
+        attachment_ids: Sequence[UUID] | None = None,
+        composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
+    ) -> FinalizedTurn:
+        """Run one turn and hand back the agent result with the diff it produced.
+
+        The JSON endpoint only needs ``result`` (``process``), while a HITL resume must
+        also ship ``revision``: both sides of the API then describe the same turn instead
+        of one of them re-deriving "is this a revision?".
+        """
         started = perf_counter()
         resolved_task_id = task_id or str(uuid4())
         logger.info(
@@ -471,7 +571,7 @@ class IntentService:
         )
         # Overlap attachment fence build with session/dialog I/O (Phase 2 latency).
         attachment_task = asyncio.create_task(
-            self._turn_untrusted_context(
+            self._turn_attachment_context(
                 resolved_attachments,
                 thread_id=thread_id,
                 user_id=user_id,
@@ -487,6 +587,7 @@ class IntentService:
                     "last_task_id": resolved_task_id,
                     "last_user_text": session_user_text_preview(text),
                     "org_id": org_id or "",
+                    "use_memory": use_memory,
                     **self._attachment_context_patch(resolved_attachments),
                 },
             )
@@ -499,7 +600,8 @@ class IntentService:
                     task_id=resolved_task_id,
                     payload=payload,
                 )
-            untrusted_context = await attachment_task
+            turn_attachments = await attachment_task
+            untrusted_context = turn_attachments.fenced_text
         except BaseException:
             if not attachment_task.done():
                 attachment_task.cancel()
@@ -508,9 +610,14 @@ class IntentService:
         cache_ctx = TurnResponseCacheContext(
             cache=self._response_cache,
             tenant_key=tenant_key,
+            thread_key=thread_id,
             user_text=text,
         )
-        attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
+        attach_ctx = self._bind_turn_attachment_context(
+            thread_id=thread_id,
+            user_id=user_id,
+            primed=turn_attachments,
+        )
         with turn_response_cache(cache_ctx), turn_attachment_context(attach_ctx):
             final_state = await self._graph_runner.run_graph(
                 text=text,
@@ -520,8 +627,12 @@ class IntentService:
                 org_id=org_id,
                 tenant_key=tenant_key,
                 untrusted_context=untrusted_context,
+                attachment_context=turn_attachments,
+                composer_mode=composer_mode,
+                use_memory=use_memory,
             )
         interrupted = _extract_interrupt(final_state)
+        revision: DocumentRevision | None = None
         if interrupted is not None:
             formatted = await self._hitl_flow.finalize_tool_interrupt(
                 interrupt_payload=interrupted,
@@ -531,7 +642,9 @@ class IntentService:
                 org_id=org_id,
             )
         else:
-            formatted = await self._graph_runner.finalize_formatted_state(
+            # A tool interrupt is not a revised document; otherwise the diff comes from
+            # the same single computation that persists the turn.
+            finalized = await self._graph_runner.finalize_formatted_state(
                 final_state,
                 text=text,
                 thread_id=thread_id,
@@ -540,15 +653,18 @@ class IntentService:
                 org_id=org_id,
                 operation="process",
             )
+            formatted = finalized.result
+            revision = finalized.revision
         await self._after_process_metrics_and_cache(
             final_state=final_state if interrupted is None else None,
             formatted=formatted,
             text=text,
             tenant_key=tenant_key,
+            thread_key=thread_id,
             started=started,
             skip_cache=bool(resolved_attachments),
         )
-        return formatted
+        return FinalizedTurn(result=formatted, revision=revision)
 
     async def _resolve_response_locale(self, *, thread_id: str, user_text: str) -> str:
         session = await self._session_service.get_session(thread_id=thread_id)
@@ -572,6 +688,7 @@ class IntentService:
         formatted: FormatterTaskResult,
         text: str,
         tenant_key: str,
+        thread_key: str,
         started: float,
         skip_cache: bool,
     ) -> None:
@@ -581,13 +698,19 @@ class IntentService:
         strategy = "unknown"
         locale = "und"
         source_content = ""
+        continuation_kind: str | None = None
+        trust_prior_for_workers = False
+        has_turn_attachments = False
         if final_state is not None:
             routing = final_state.get("routing_intent")
             if routing is not None:
                 task_kind = str(getattr(routing, "task_kind", "") or "unknown")
+                trust_prior_for_workers = bool(routing.trust_prior_for_workers)
             strategy = str(orch_selectors.selected_strategy(final_state))
             locale = str(final_state.get("response_locale") or "und")
             source_content = orch_selectors.resolved_worker_summary(final_state) or ""
+            continuation_kind = orch_selectors.resolved_continuation_kind(final_state)
+            has_turn_attachments = bool((final_state.get("untrusted_context") or "").strip())
         elif formatted.output is not None:
             locale = formatted.output.locale or "und"
         agent_metrics.record_turn_duration(
@@ -599,12 +722,24 @@ class IntentService:
             return
         await self._response_cache.put_if_cacheable(
             tenant_key=tenant_key,
+            thread_key=thread_key,
             user_text=text,
             locale=locale,
             strategy=strategy,
             result=formatted,
             source_content=source_content,
+            prior_fingerprint=ResponseCacheKeyPolicy.fingerprint_prior(final_state.get("dialog_window")),
+            continuation_kind=continuation_kind,
+            trust_prior_for_workers=trust_prior_for_workers,
+            has_turn_attachments=has_turn_attachments,
         )
+
+    def _stream_contract(self, user_id: str | None) -> StreamingContract:
+        """Streaming contract for this caller — same two-key rollout as the Formatter."""
+        mode = resolve_formatter_mode(self._formatter_mode, self._formatter_rollout_pct, user_id)
+        if mode == "schema_first":
+            return "structured_incremental"
+        return "legacy_markdown"
 
     @traceable(name="intent_service.process_stream")
     async def process_stream(
@@ -617,6 +752,8 @@ class IntentService:
         *,
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
+        composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
     ) -> AsyncGenerator[dict[str, Any]]:
         """SSE-oriented process: yield hop events, then a final FormatterTaskResult payload."""
         started = perf_counter()
@@ -645,7 +782,7 @@ class IntentService:
         )
         # Overlap attachment fence build with session/dialog I/O (Phase 2 latency).
         attachment_task = asyncio.create_task(
-            self._turn_untrusted_context(
+            self._turn_attachment_context(
                 resolved_attachments,
                 thread_id=thread_id,
                 user_id=user_id,
@@ -661,6 +798,7 @@ class IntentService:
                     "last_task_id": resolved_task_id,
                     "last_user_text": session_user_text_preview(text),
                     "org_id": org_id or "",
+                    "use_memory": use_memory,
                     **self._attachment_context_patch(resolved_attachments),
                 },
             )
@@ -673,7 +811,8 @@ class IntentService:
                     task_id=resolved_task_id,
                     payload=payload,
                 )
-            untrusted = await attachment_task
+            turn_attachments = await attachment_task
+            untrusted = turn_attachments.fenced_text
         except BaseException:
             if not attachment_task.done():
                 attachment_task.cancel()
@@ -682,12 +821,17 @@ class IntentService:
         cache_ctx = TurnResponseCacheContext(
             cache=self._response_cache,
             tenant_key=tenant_key,
+            thread_key=thread_id,
             user_text=text,
         )
-        attach_ctx = self._bind_turn_attachment_context(thread_id=thread_id, user_id=user_id)
+        attach_ctx = self._bind_turn_attachment_context(
+            thread_id=thread_id,
+            user_id=user_id,
+            primed=turn_attachments,
+        )
         with (
             turn_response_cache(cache_ctx),
-            turn_sse_bridge(TurnSseBridge()),
+            turn_sse_bridge(TurnSseBridge(stream_contract=self._stream_contract(user_id))),
             turn_attachment_context(attach_ctx),
         ):
             async for event in self._graph_runner.stream_graph(
@@ -698,6 +842,9 @@ class IntentService:
                 org_id=org_id,
                 tenant_key=tenant_key,
                 untrusted_context=untrusted,
+                attachment_context=turn_attachments,
+                composer_mode=composer_mode,
+                use_memory=use_memory,
             ):
                 if event.get("event") == "final_state":
                     final_state = cast("AgentGraphState", event["state"])
@@ -714,6 +861,7 @@ class IntentService:
             return
 
         interrupted = _extract_interrupt(final_state)
+        revision: DocumentRevision | None = None
         if interrupted is not None:
             formatted = await self._hitl_flow.finalize_tool_interrupt(
                 interrupt_payload=interrupted,
@@ -723,7 +871,9 @@ class IntentService:
                 org_id=org_id,
             )
         else:
-            formatted = await self._graph_runner.finalize_formatted_state(
+            # W7b: the same diff that lands in the persisted turn, so a live revision is
+            # visible without a reload. A tool interrupt is not a revised document.
+            finalized = await self._graph_runner.finalize_formatted_state(
                 final_state,
                 text=text,
                 thread_id=thread_id,
@@ -732,20 +882,24 @@ class IntentService:
                 org_id=org_id,
                 operation="process_stream",
             )
+            formatted = finalized.result
+            revision = finalized.revision
         await self._after_process_metrics_and_cache(
             final_state=final_state if interrupted is None else None,
             formatted=formatted,
             text=text,
             tenant_key=tenant_key,
+            thread_key=thread_id,
             started=started,
             skip_cache=bool(resolved_attachments),
         )
-        yield {
-            "event": "result",
-            "task_id": resolved_task_id,
-            "thread_id": thread_id,
-            "result": formatted.model_dump(mode="json"),
-        }
+        frame = stream_result_frame(
+            formatted,
+            task_id=resolved_task_id,
+            thread_id=thread_id,
+            revision=revision,
+        )
+        yield frame
 
     @traceable(name="intent_service.process_hitl_choice")
     async def process_hitl_choice(
@@ -757,7 +911,7 @@ class IntentService:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult:
+    ) -> FinalizedTurn:
         """Resume after user_choice: action_id-bound text, never raw option.label as intent."""
         return await self._hitl_flow.process_hitl_choice(
             thread_id=thread_id,
@@ -794,7 +948,7 @@ class IntentService:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult:
+    ) -> FinalizedTurn:
         """Re-run graph with critic/human reject feedback (no new user turn)."""
         return await self._hitl_flow.revise_after_quality_reject(
             thread_id=thread_id,
@@ -813,7 +967,7 @@ class IntentService:
         user_id: str | None = None,
         org_id: str | None = None,
         is_admin: bool = False,
-    ) -> FormatterTaskResult | None:
+    ) -> FinalizedTurn | None:
         """Resume a graph paused on mcp_tool_approval after HITL resolve."""
         return await self._hitl_flow.resume_after_tool_approval(
             thread_id=thread_id,

@@ -13,12 +13,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
+from palatium_ai.application.services.pii_gate import classify_for_write
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.audit import get_audit_logger
 from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text
 from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
-from palatium_ai.domain.memory.pii import resolve_contains_pii
-from palatium_ai.domain.memory.types import MemoryType
+from palatium_ai.domain.memory.types import (
+    MEMORY_ORIGIN_KEY,
+    MEMORY_TRUST_KEY,
+    MemoryOrigin,
+    MemoryType,
+)
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.ports import MemoryPort
@@ -67,7 +72,8 @@ class MemoryWriteService:
 
         namespace = _resolve_namespace(namespace_kind, scope_id.strip())
         memory_type = _canonical_type(kind)
-        pii_flag = resolve_contains_pii(text=text_value, client_flag=False)
+        pii_flag = classify_for_write(text=text_value)
+        origin = _origin_for_system_source(source)
         value: dict[str, object] = {
             "text": text_value[:2000],
             "kind": kind.strip().lower() or "fact",
@@ -78,6 +84,8 @@ class MemoryWriteService:
             "user_id": (user_id or "").strip(),
             "org_id": (org_id or "").strip(),
             "contains_pii": pii_flag,
+            MEMORY_ORIGIN_KEY: origin,
+            MEMORY_TRUST_KEY: "inferred",
         }
         await self._memory.put(namespace=namespace, key=entry_key.strip(), value=value)
         await _audit_write(
@@ -88,6 +96,16 @@ class MemoryWriteService:
             namespace_kind=namespace_kind,
         )
         return True
+
+
+def _origin_for_system_source(source: str) -> MemoryOrigin:
+    """Map system write source → origin (ADR 0008)."""
+    normalized = source.strip().lower()
+    if "compact" in normalized:
+        return "compact"
+    if normalized.startswith("extract") or "memory_keeper" in normalized:
+        return "extract"
+    return "system"
 
 
 def _resolve_namespace(kind: NamespaceKind, scope_id: str) -> tuple[str, ...]:
@@ -126,5 +144,5 @@ async def _audit_write(
                 "contains_pii": "true" if contains_pii else "false",
             },
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # audit write is best-effort; the write result is kept (040)
         logger.warning("memory_write.audit_failed", error=str(exc))

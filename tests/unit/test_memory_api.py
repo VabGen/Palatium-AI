@@ -76,7 +76,7 @@ def api_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         "get_principal",
         lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=frozenset({"user"})),
     )
-    monkeypatch.setattr(memory, "load_session_for_principal", AsyncMock())
+    monkeypatch.setattr(memory, "ensure_session_for_principal", AsyncMock())
     return TestClient(app)
 
 

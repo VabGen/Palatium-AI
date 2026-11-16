@@ -11,10 +11,12 @@ what to write, which keeps the security decision testable without a database.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 from palatium_ai.core.logging import logger
+from palatium_ai.core.observability.hop_timings import get_hop_collector
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.security.prompt_injection import (
     PromptInjectionReport,
@@ -28,6 +30,7 @@ from palatium_ai.domain.attachments.content import (
     AttachmentContentMetadata,
     AttachmentScanSummary,
 )
+from palatium_ai.domain.attachments.integrity import content_sha256_hex, verify_attachment_bytes
 from palatium_ai.domain.attachments.pii_policy import (
     AttachmentPiiPolicyMode,
     apply_attachment_pii_policy,
@@ -37,7 +40,6 @@ from palatium_ai.domain.attachments.read import extraction_source_to_ocr_engine
 from palatium_ai.domain.attachments.sniff import sniff_media_type
 from palatium_ai.domain.attachments.types import AttachmentRejectionReason, AttachmentStatus
 from palatium_ai.domain.memory.pii import mask_pii_in_text
-from palatium_ai.domain.policies.types import UntrustedContentAction
 from palatium_ai.domain.policies.untrusted_content import (
     FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
     UntrustedContentPolicy,
@@ -53,6 +55,8 @@ if TYPE_CHECKING:
     from palatium_ai.domain.ports.scanner import MalwareScannerPort, ScanVerdict
 
 _REFUSING_ACTIONS = frozenset({"quarantine", "reject"})
+#: External I/O kind for parse/OCR spans reported to the turn hop collector.
+_PARSE_IO_KIND = "attachment_parse"
 _OOXML_MIME_TYPES = frozenset(
     {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -60,6 +64,17 @@ _OOXML_MIME_TYPES = frozenset(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
 )
+
+
+def _report_parse_io(started_at: float) -> None:
+    """Report parse/OCR duration as external I/O on the active turn.
+
+    OCR of a scan is machine work nobody in the graph controls: counting it as an
+    agent hop made every attachment turn look like a slow graph (055).
+    """
+    hop = get_hop_collector()
+    if hop is not None:
+        hop.record_external_io(kind=_PARSE_IO_KIND, duration_ms=round((perf_counter() - started_at) * 1000))
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +88,8 @@ class AttachmentPipelineOutcome:
     content: AttachmentContent | None = None
     #: Magic-byte MIME when sniff succeeded; may replace a lying client declaration.
     detected_mime_type: str | None = None
+    #: SHA-256 of the bytes just read from ``blob_key`` (None when object missing).
+    content_sha256: str | None = None
 
     @property
     def admitted(self) -> bool:
@@ -122,7 +139,7 @@ class AttachmentPipeline:
         if not self._parser.supports(mime_type):
             return None
         try:
-            parsed = await self._parser.parse(data, mime_type=mime_type, filename=attachment.filename)
+            parsed = await self._call_parser(data, attachment, mime_type=mime_type)
         except DocumentParseError:
             logger.warning(
                 "attachment.reparse refused",
@@ -159,6 +176,12 @@ class AttachmentPipeline:
         if isinstance(stored, AttachmentPipelineOutcome):
             return stored
         data, size_bytes = stored
+        digest = content_sha256_hex(data)
+        # Reingest / second complete: refuse if the sealed blob was swapped (020).
+        verify_attachment_bytes(attachment, data)
+
+        def _seal(outcome: AttachmentPipelineOutcome) -> AttachmentPipelineOutcome:
+            return replace(outcome, content_sha256=digest)
 
         sniffed = sniff_media_type(data)
         mime_decision = AttachmentIntakePolicy.content_matches_declared(
@@ -174,19 +197,21 @@ class AttachmentPipeline:
                 detected=sniffed or "",
                 rejection_reason=mime_decision.reason,
             )
-            return AttachmentPipelineOutcome(
-                status="rejected",
-                rejection_reason=mime_decision.reason or "mime_mismatch",
-                stored_size_bytes=size_bytes,
-                error="uploaded content does not match the declared media type",
-                detected_mime_type=sniffed if sniffed and sniffed != "text/*" else None,
+            return _seal(
+                AttachmentPipelineOutcome(
+                    status="rejected",
+                    rejection_reason=mime_decision.reason or "mime_mismatch",
+                    stored_size_bytes=size_bytes,
+                    error="uploaded content does not match the declared media type",
+                    detected_mime_type=sniffed if sniffed and sniffed != "text/*" else None,
+                )
             )
         # Concrete binary sniff wins; text/* keeps the declared subtype (csv/md/plain).
         effective_mime = sniffed if sniffed and sniffed != "text/*" else attachment.mime_type
 
         verdict = await self._scanner.scan(data, filename=attachment.filename)
         if not verdict.admitted:
-            return _scan_refusal(verdict, size_bytes=size_bytes)
+            return _seal(_scan_refusal(verdict, size_bytes=size_bytes))
 
         active = _active_content_refusal(
             attachment=attachment,
@@ -195,18 +220,20 @@ class AttachmentPipeline:
             size_bytes=size_bytes,
         )
         if active is not None:
-            return active
+            return _seal(active)
 
         parsed = await self._parse(data, attachment, mime_type=effective_mime)
         if isinstance(parsed, AttachmentPipelineOutcome):
-            return parsed
+            return _seal(parsed)
 
-        return self._admit_extracted(
-            attachment=attachment,
-            parsed=parsed,
-            effective_mime=effective_mime,
-            size_bytes=size_bytes,
-            force_mask_injection=force_mask_injection,
+        return _seal(
+            self._admit_extracted(
+                attachment=attachment,
+                parsed=parsed,
+                effective_mime=effective_mime,
+                size_bytes=size_bytes,
+                force_mask_injection=force_mask_injection,
+            )
         )
 
     def _admit_extracted(
@@ -220,6 +247,8 @@ class AttachmentPipeline:
     ) -> AttachmentPipelineOutcome:
         """Run PII / secret / injection gates on already-parsed text."""
         pii = apply_attachment_pii_policy(parsed.flow_text, mode=self._pii_policy)
+        if pii.kinds:
+            agent_metrics.record_pii_detected(kinds=pii.kinds, profile="strict")
         if pii.refuse:
             logger.warning(
                 "attachment refused: pii policy reject",
@@ -267,9 +296,16 @@ class AttachmentPipeline:
         if prepared.action in _REFUSING_ACTIONS:
             return _injection_refusal(prepared, parsed=parsed, report=report, size_bytes=size_bytes)
         detected_for_row = effective_mime if effective_mime != attachment.mime_type else None
-        safe_text = _prompt_body(prepared.action, parsed, prepared)
+        # ``prepared.text`` is the scanned flow view: already redacted when masked and
+        # never page-addressed — ``parsed.text`` would hand our ``[[page N]]`` addresses
+        # to the model, which copies them into the answer verbatim (the seam leaked).
+        safe_text = prepared.text
+        text_masked = prepared.action == "mask"
         if pii.mode == "mask":
             safe_text = mask_pii_in_text(safe_text)
+            # ``mode`` is "mask" whenever the policy says so, including text with no
+            # PII; the flag must describe the blob, not the configuration.
+            text_masked = text_masked or pii.contains_pii
         return _content_outcome(
             parsed=parsed,
             report=report,
@@ -278,6 +314,7 @@ class AttachmentPipeline:
             size_bytes=size_bytes,
             detected_mime_type=detected_for_row,
             contains_pii=pii.contains_pii,
+            text_masked=text_masked,
         )
 
     async def _read_stored(
@@ -316,6 +353,14 @@ class AttachmentPipeline:
         data = await self._blob_store.read_bytes(attachment.blob_key)
         return data, stat.size_bytes
 
+    async def _call_parser(self, data: bytes, attachment: Attachment, *, mime_type: str) -> ParsedDocument:
+        """Parser call with its duration attributed to external I/O, not agent work."""
+        started = perf_counter()
+        try:
+            return await self._parser.parse(data, mime_type=mime_type, filename=attachment.filename)
+        finally:
+            _report_parse_io(started)
+
     async def _parse(
         self,
         data: bytes,
@@ -333,7 +378,7 @@ class AttachmentPipeline:
                 detected_mime_type=mime_type,
             )
         try:
-            parsed = await self._parser.parse(data, mime_type=mime_type, filename=attachment.filename)
+            parsed = await self._call_parser(data, attachment, mime_type=mime_type)
         except DocumentParseError as exc:
             logger.warning(
                 "attachment parse refused",
@@ -445,18 +490,6 @@ def _injection_refusal(
     )
 
 
-def _prompt_body(action: UntrustedContentAction, parsed: ParsedDocument, prepared: UntrustedContentResult) -> str:
-    """Pick the stored prompt body.
-
-    ``mask`` must use the redacted flow text, because redaction spans are computed
-    on the marker-free view. ``allow`` keeps the page-addressed extraction so page
-    citations survive into the turn.
-    """
-    if action == "mask":
-        return prepared.text
-    return parsed.text
-
-
 def _content_outcome(
     *,
     parsed: ParsedDocument,
@@ -466,6 +499,7 @@ def _content_outcome(
     size_bytes: int,
     detected_mime_type: str | None = None,
     contains_pii: bool = False,
+    text_masked: bool = False,
 ) -> AttachmentPipelineOutcome:
     """Build the usable outcome with the scan summary attached for audit."""
     summary = AttachmentScanSummary(
@@ -481,6 +515,7 @@ def _content_outcome(
         page_count=parsed.page_count,
         truncated=parsed.truncated,
         contains_pii=contains_pii,
+        text_masked=text_masked,
         metadata=AttachmentContentMetadata(
             ocr_engine=extraction_source_to_ocr_engine(parsed.extraction_source),
             extraction_source=parsed.extraction_source,

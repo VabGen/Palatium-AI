@@ -689,7 +689,8 @@ palatium-ai-litellm-1    Up (healthy)   0.0.0.0:4000->4000/tcp
 # 1. Убить host-процессы
 .\scripts\dev-down.ps1 -Force
 
-# 2. Поднять всё в Docker
+# 2. Собрать production UI и поднять всё в Docker
+npm --prefix web run build
 docker compose --profile docker-mcp --profile docker-api up -d --build
 
 # 3. Проверить

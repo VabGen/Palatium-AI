@@ -74,6 +74,13 @@ Forgetting — feature: dual TTL + retention + (M5) graph `invalid_at`/`expired_
 
 - **extract** — transcript → medium (`MemoryExtractService`; MCP
   `extract_transcript_memories`, 070).
+  Implicit per-turn enqueue проходит допуск `ExtractAdmissionPolicy`
+  (`domain/policies/extract_admission.py`): не-реколлируемые оси
+  (`task_kind=social_conversation|clarification_needed`, стратегия
+  `ack_only|format_only|clarify`) job не порождают — каждый job это отдельный
+  LLM-вызов MemoryKeeper. Решение принимается по осям turn'а, длина текста и
+  списки фраз сигналом НЕ являются (055); явный запрос пользователя через MCP/HITL
+  политикой не гейтится.
 - **promote** — medium → long-term graph (`PromotionPolicy` +
   `GraphWritePort` / `Neo4jGraphWritePort`). Ad-hoc MERGE из агента запрещён.
   Extract worker **не** вызывает promote (отдельный CronJob / one-shot, ADR 0002).
@@ -96,7 +103,12 @@ HITL-карточка user-initiated extract: `MemoryExtractHitlService`
 5. TTL / retention / extract / promote — **не блокируют** user-request hot-path.
    Durable disposition и promote — out-of-band (CronJob / compose one-shot,
    ADR 0002); extract queue — durable (`SKIP LOCKED`, план M3), не голый
-   `asyncio.Queue` в API. `datetime.now(UTC)` везде (050).
+   `asyncio.Queue` в API. Ёмкость очереди — два потолка: глобальный
+   (`max_queue`) и доля владельца (fair share `max_queue // MIN_TENANT_SLOTS`,
+   `ExtractQueueCapacity`), оба проверяются в самом INSERT под enqueue-lock —
+   иначе один tenant отказывает в extract всем остальным (M3 E7); отказ
+   возвращается причиной (`queue_full` / `tenant_full`), не `bool`.
+   `datetime.now(UTC)` везде (050).
 6. Гибридный поиск = pgvector (косинус) + Postgres FTS (`tsvector` + `ts_rank_cd`),
    финальное ранжирование по importance. Назвать это «BM25» в коде/комментариях —
    неверно; сторонние расширения (ParadeDB и т.п.) — только после явного
@@ -110,6 +122,12 @@ HITL-карточка user-initiated extract: `MemoryExtractHitlService`
 8. **Перед записью в medium/long-term — secret scanner (020) + PII-классификация.**
    PII в long-term — только с `contains_pii=true` и правилом забывания;
    молчаливая запись PII запрещена. Compact-persist использует тот же gate.
+   **Upsert не продлевает PII-retention и не снимает флаг**: в conflict-ветке
+   `contains_pii = existing OR incoming` (липкий; расPIIфикация — только явным
+   retention/anonymise-действием), `expires_at = LEAST(existing, incoming)` для
+   PII-строки («PII clock = created_at only»). Sliding-окно остаётся только у
+   non-PII: активность легитимно продлевает medium/episode. Ретенция удаляет по
+   `expires_at` — перезапись, продлевающая срок, означает «не забывается никогда».
 9. Перед компакцией контекста (065) goal + plan + последние результаты
    сохраняются в **medium** (gated Write) — НИКОГДА не терять их при trim.
    В long-term граф они попадают только через **promote**.
@@ -121,5 +139,7 @@ HITL-карточка user-initiated extract: `MemoryExtractHitlService`
 Метрики памяти — из единого реестра 040 (`palatium_memory_recall_at_k`,
 `palatium_memory_query_duration_seconds`, `palatium_memory_entry_size_bytes`).
 Здесь и где-либо ещё свои имена памяти не вводить (050: рассинхронизация).
-SLO-ориентиры (не хардкод без eval): Recall@k > 0.85; query p95 < 200 ms
-(nightly/perf). Маркетинговые % из внешних бенчмарков — не контракт.
+SLO-ориентиры (не хардкод без eval): Recall@k > 0.85 — `tests/eval/`
+(`test_memory_failure_modes_m7.py`); query p95 < 200 ms — гейт
+`tests/perf/test_memory_query_latency.py` (реальный pgvector, `slow`, job
+`memory-query-latency`). Маркетинговые % из внешних бенчмарков — не контракт.

@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from .filters import SuppressFilter
-from .processors import add_context_vars, add_timestamp, redact_observability_strings
+from .processors import (
+    add_context_vars,
+    add_timestamp,
+    normalize_agent_schema,
+    redact_observability_strings,
+)
 from .redact import redact_secrets
 
 if TYPE_CHECKING:
@@ -52,6 +57,7 @@ def setup_logging(settings: Settings) -> None:
             ]
         ),
         add_context_vars,
+        normalize_agent_schema,
         redact_secrets,
         # After enrichment / secret-key wipe; before renderer (PII at obs boundary).
         redact_observability_strings,
@@ -63,7 +69,7 @@ def setup_logging(settings: Settings) -> None:
     else:
         renderer = structlog.dev.ConsoleRenderer(
             colors=True,
-            pad_event=30,
+            pad_event_to=30,
             exception_formatter=structlog.dev.rich_traceback,
         )
 
@@ -83,11 +89,19 @@ def setup_logging(settings: Settings) -> None:
 
     # Uvicorn --reload on Windows pipes worker stdout; without line buffering, access /
     # turn logs stay invisible until the buffer fills or the process exits.
+    #
+    # `encoding="utf-8"` is mandatory, not cosmetic: a piped stdio stream defaults to
+    # `locale.getpreferredencoding()` — cp1251/cp866 on a Russian Windows host — so
+    # Cyrillic structlog events are written as single-byte legacy bytes and every
+    # UTF-8 reader (log shipper, VS Code terminal, log tooling) renders them as the
+    # classic "UTF-8 bytes shown through a cp1251 console" mojibake. `errors="replace"`
+    # keeps a hostile code page from crashing a log call (040: logging is best-effort
+    # telemetry, but it must not lie about the encoding).
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
             with contextlib.suppress(OSError, ValueError, AttributeError):
-                reconfigure(line_buffering=True)
+                reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.terminator = "\n"

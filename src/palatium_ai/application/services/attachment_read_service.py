@@ -11,10 +11,12 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.attachments.content import AttachmentContent
 from palatium_ai.domain.attachments.errors import (
+    AttachmentIntegrityError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
     AttachmentTooLargeError,
 )
+from palatium_ai.domain.attachments.integrity import verify_attachment_bytes
 from palatium_ai.domain.attachments.policies import (
     DEFAULT_ATTACHMENT_LIMITS,
     AttachmentIntakePolicy,
@@ -125,6 +127,16 @@ class AttachmentReadService:
         except BlobNotFoundError:
             logger.warning("attachment_read.blob_missing", attachment_id=str(attachment.id))
             return self._empty_notice(attachment, request)
+
+        try:
+            verify_attachment_bytes(attachment, data)
+        except AttachmentIntegrityError:
+            agent_metrics.record_error("attachments", "integrity_mismatch")
+            logger.error(
+                "attachment_read.integrity_mismatch",
+                attachment_id=str(attachment.id),
+            )
+            raise
 
         content = await self._pipeline.reparse_bytes(
             attachment,

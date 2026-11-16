@@ -11,6 +11,7 @@ from palatium_ai.application.agents.supervisor.routing import (
     ROUTE_MATRIX,
     clamp_confidence,
     default_plans,
+    thread_file_reread,
 )
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
@@ -26,6 +27,15 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+#: Closed route → target_agent pairs Supervisor may emit (ADR-0009 verify).
+_ROUTE_TARGET: dict[str, str] = {
+    "researcher": "researcher",
+    "coder": "coder",
+    "analyst": "analyst",
+    "formatter": "formatter",
+    "clarification": "formatter",
+}
+
 
 class SupervisorAgent(BaseAgent):
     """Определяет следующий маршрут по platform task kind (без LLM)."""
@@ -35,10 +45,26 @@ class SupervisorAgent(BaseAgent):
         return self._config
 
     def get_required_context_keys(self) -> list[str]:
-        return ["task_kind", "requires_mcp", "classification_confidence"]
+        return [
+            "task_kind",
+            "requires_mcp",
+            "classification_confidence",
+            "file_reference",
+            "has_attachment_context",
+        ]
 
     def get_available_tools(self) -> list[str]:
         return []
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based route gate — route/target must stay in the closed matrix."""
+        if not isinstance(output.output, SupervisorOutput):
+            return False
+        body = output.output
+        if not body.plan.strip() or not body.target_agent.strip():
+            return False
+        expected_target = _ROUTE_TARGET.get(body.route)
+        return expected_target is not None and body.target_agent == expected_target
 
     @traceable(name="supervisor.run")
     async def run(self, input: AgentInput) -> AgentOutput:
@@ -57,6 +83,7 @@ class SupervisorAgent(BaseAgent):
         executable_kind = WorkflowExecutionPolicy.executable_task_kind(
             task_kind,
             requires_mcp=requires_mcp,
+            thread_file_reread=thread_file_reread(input.context),
         )
 
         try:

@@ -276,6 +276,33 @@ def test_false_format_with_social_demotes_to_new_topic() -> None:
     assert effective.trust_prior_for_workers is False
 
 
+def test_false_format_without_refers_to_prior_is_self_contained() -> None:
+    """A ``format`` label with ``refers_to_prior=false`` contradicts its own contract.
+
+    Answering it from ``prior_context`` replays the previous turn (the "how are you
+    called?" → old statement bug). Fail safe: the ask is self-contained.
+    """
+    ctx = ContextualizerOutput(
+        rewritten_query="Как меня зовут?",
+        continuation_kind="format",
+        confidence=0.8,
+        refers_to_prior=False,
+        prior_assistant_excerpt=None,
+        reasoning="inconsistent label",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.8,
+        reasoning="name lookup",
+    )
+    effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=_dialog_with_prior(), raw_intent=raw)
+    assert effective.continuation_kind == "new_topic"
+    assert effective.trust_prior_for_workers is False
+    assert effective.task_kind == "knowledge_request"
+
+
 def test_format_with_turn_attachments_does_not_bind_prior_file() -> None:
     """New upload + «сводка» must not rewrite the previous file via format-of-prior."""
     dialog = _dialog_with_prior()
@@ -1010,3 +1037,269 @@ def test_prior_context_clipped_to_worker_budget() -> None:
     effective = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
     assert effective.prior_context is not None
     assert len(effective.prior_context) == DEFAULT_PROMPT_BUDGET.worker_summary_max_chars
+
+
+def test_rewrite_that_replaces_the_ask_is_pinned_back_to_the_user_turn() -> None:
+    """Regression: a Contextualizer rewrite must not answer an earlier question.
+
+    Turn «покажи текст файла» was rewritten into the previous ask («Кто является
+    истцом в файле Кодекс корпоративной этики V2.0 ред 10.1?»), so every worker
+    answered the old question. A rewrite that shares nothing with the user's turn
+    is discarded.
+    """
+    effective = ContinuityPolicy.resolve_effective_user_text(
+        raw_user_text="покажи текст файла",
+        rewritten_query="Кто является истцом в файле Кодекс корпоративной этики V2.0 ред 10.1?",
+        has_turn_attachments=False,
+    )
+    assert effective == "покажи текст файла"
+    assert not ContinuityPolicy.rewrite_preserves_ask(
+        user_text="покажи текст файла",
+        rewritten="Кто является истцом в файле Кодекс корпоративной этики V2.0 ред 10.1?",
+    )
+
+
+def test_rewrite_enrichment_of_an_underspecified_ask_is_kept() -> None:
+    """Legit enrichment keeps a content word of the ask; inflection is tolerated."""
+    enriched = "Сводка причин роста цен на иван-чай"
+    assert ContinuityPolicy.rewrite_preserves_ask(
+        user_text="дай короткую сводку",
+        rewritten=enriched,
+    )
+    assert (
+        ContinuityPolicy.resolve_effective_user_text(
+            raw_user_text="дай короткую сводку",
+            rewritten_query=enriched,
+            has_turn_attachments=False,
+        )
+        == enriched
+    )
+
+
+def test_ask_without_content_words_allows_enrichment() -> None:
+    assert ContinuityPolicy.rewrite_preserves_ask(user_text="а он?", rewritten="кто такой заявитель?")
+
+
+def test_ballooned_rewrite_that_keeps_one_token_is_pinned_back() -> None:
+    """Regression: an 8× rewrite sharing one word with the ask replaced the ask.
+
+    The old check accepted any surviving content token, so a terse ask («анализ
+    скан 1») could be rewritten into a long unrelated topic that happened to reuse
+    «анализ». Past enrichment scale the ask must keep most of its words (055).
+    """
+    raw = "перепиши ответ на обращение более короткое"
+    rewritten = "Сравнение файлов: в диалоге есть несколько документов, поэтому покажите обращение, которое нужно переписать."
+    assert ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten="Ответ на обращение сокращён.")
+    assert not ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten=rewritten)
+    assert (
+        ContinuityPolicy.resolve_effective_user_text(
+            raw_user_text=raw,
+            rewritten_query=rewritten,
+            has_turn_attachments=False,
+        )
+        == raw
+    )
+
+
+def test_named_thread_file_forces_the_storage_axis() -> None:
+    """A file named in code needs ``platform.read_attachment``, not a formatter echo."""
+    ctx = ContextualizerOutput(
+        rewritten_query="покажи полный текст файла Кодекс корпоративной этики",
+        continuation_kind="format",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="previously formatted answer",
+        reasoning="show full text",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="response_formatting",
+        requires_mcp=False,
+        candidate_capabilities=("format",),
+        confidence=0.9,
+        reasoning="show text",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="покажи полный текст файла Кодекс корпоративной этики",
+        thread_file_named=True,
+    )
+    assert effective.file_reference == "thread_file"
+    assert effective.task_kind == "knowledge_request"
+    assert effective.requires_mcp is True
+
+
+def test_intent_thread_file_auto_scope_is_demoted_without_code_evidence() -> None:
+    """Evidence-first: bare Intent ``thread_file``+``auto`` cannot force storage re-read."""
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        file_reference="thread_file",
+        attachment_scope="auto",
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="history-blind over-fire",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="текст который передал в чат",
+        thread_file_named=False,
+    )
+    assert effective.file_reference == "none"
+
+
+def test_intent_thread_file_kept_for_explicit_singular_scope() -> None:
+    """``attachment_scope=single`` is Intent's closed plurality axis — keep re-read."""
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        file_reference="thread_file",
+        attachment_scope="single",
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="one of several uploads",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="перечитай документ",
+        thread_file_named=False,
+    )
+    assert effective.file_reference == "thread_file"
+
+
+def test_intent_thread_file_kept_for_explicit_all_scope() -> None:
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        file_reference="thread_file",
+        attachment_scope="all",
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="compare both uploads",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="сравни оба файла",
+        thread_file_named=False,
+    )
+    assert effective.file_reference == "thread_file"
+
+
+def test_named_thread_file_does_not_override_a_new_upload() -> None:
+    """A fenced upload owns the turn; an old thread file must not be re-read."""
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        confidence=0.9,
+        reasoning="summarize upload",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        has_turn_attachments=True,
+        user_text="суммируй Кодекс корпоративной этики",
+        thread_file_named=True,
+    )
+    assert effective.file_reference == "none"
+
+
+def test_named_thread_file_clears_a_false_clarify() -> None:
+    """Naming the file fills the referent; a clarify label cannot withhold the read."""
+    ctx = ContextualizerOutput(
+        rewritten_query="покажи текст файла Кодекс корпоративной этики",
+        continuation_kind="clarify",
+        confidence=0.9,
+        refers_to_prior=False,
+        reasoning="which file?",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="clarification_needed",
+        requires_mcp=False,
+        requires_user_choice=False,
+        underspecification_kind="open_text",
+        candidate_capabilities=(),
+        confidence=0.9,
+        reasoning="ambiguous file",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="покажи текст файла Кодекс корпоративной этики",
+        thread_file_named=True,
+    )
+    assert effective.continuation_kind == "answer"
+    assert effective.file_reference == "thread_file"
+    assert effective.requires_mcp is True
+
+
+def test_trusted_prior_answer_demotes_required_grounding() -> None:
+    """W10 2b: correction follow-up must answer from dialog prior, not empty retrieval."""
+    ctx = ContextualizerOutput(
+        rewritten_query="Какой клиент у нас основной?",
+        continuation_kind="answer",
+        confidence=0.95,
+        refers_to_prior=True,
+        prior_assistant_excerpt="Основной клиент — VEGA-9.",
+        reasoning="ask about client from prior",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        grounding="required",
+        grounding_reason="fact ask",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="which client",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="Какой клиент у нас основной?",
+    )
+    assert effective.trust_prior_for_workers is True
+    assert effective.file_reference != "thread_file"
+    assert effective.grounding == "optional"
+    assert "trusted dialog prior" in effective.grounding_reason
+
+
+def test_thread_file_keeps_required_grounding_with_trusted_prior() -> None:
+    """Storage re-read must not demote required — sticky OCR must not short-circuit."""
+    ctx = ContextualizerOutput(
+        rewritten_query="перечитай Скан 1",
+        continuation_kind="answer",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="Содержимое Скан 1: протокол ALPHA.",
+        reasoning="re-read file",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="file ask",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="перечитай Скан 1",
+        thread_file_named=True,
+    )
+    assert effective.file_reference == "thread_file"
+    assert effective.grounding == "required"

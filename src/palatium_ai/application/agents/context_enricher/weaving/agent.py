@@ -62,10 +62,21 @@ class ContextWeaverAgent(BaseAgent):
             "grounding_reason",
             "has_attachment_context",
             "has_trusted_prior",
+            "file_reference",
+            "attachment_scope",
         ]
 
     def get_available_tools(self) -> list[str]:
         return []
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Rule-based plan gate — success must carry strategy + at least one step."""
+        if not isinstance(output.output, ContextWeaverOutput):
+            return False
+        if output.status == "failure":
+            return True
+        bundle = output.output.execution_bundle
+        return bool(bundle.selected_strategy) and bool(bundle.steps)
 
     @traceable(name="context_enricher.weaving.run")
     async def run(self, input: AgentInput) -> AgentOutput:
@@ -108,8 +119,11 @@ class ContextWeaverAgent(BaseAgent):
             candidate_capabilities=task_input.candidate_capabilities,
             grounding=task_input.grounding,
             grounding_reason=task_input.grounding_reason,
+            response_shape=task_input.response_shape,
             execution_plan=execution_plan,
             context_summary=context_summary,
+            attachment_scope=task_input.attachment_scope,
+            composer_mode=task_input.composer_mode,
         )
         output = ContextWeaverOutput(
             context_packet=context_packet,

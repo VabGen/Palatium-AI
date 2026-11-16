@@ -1,6 +1,7 @@
 [
   {
     "id": "trend_summary",
+    "cassette": "analyst/trend_summary.json",
     "input": {
       "user_text": "Summarize week-over-week sales trends from the provided context.",
       "task_kind": "knowledge_request",
@@ -9,6 +10,11 @@
       "requires_mcp": false,
       "selected_strategy": "data_analysis"
     },
-    "expect": { "status": "success", "summary_min_chars": 20 }
+    "expect": {
+      "status": "success",
+      "summary_min_chars": 20,
+      "worker_kind": "analyst",
+      "min_findings": 1
+    }
   }
 ]

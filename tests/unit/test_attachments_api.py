@@ -22,12 +22,15 @@ from fastapi.testclient import TestClient
 from palatium_ai.application.services.attachment_service import AttachmentSweepResult, AttachmentUploadTicket
 from palatium_ai.core.config.security import SecurityConfig
 from palatium_ai.domain.agents.intent import IntentClassifierOutput, IntentTaskResult
+from palatium_ai.domain.attachments.citation_lookup import AttachmentCitationLookup
 from palatium_ai.domain.attachments.errors import (
+    AttachmentContentMissingError,
     AttachmentIntakeRejectedError,
     AttachmentModeMismatchError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
     AttachmentRestoreNotAllowedError,
+    AttachmentThreadRequiredError,
     AttachmentUploadTooLargeError,
 )
 from palatium_ai.domain.attachments.models import Attachment
@@ -92,6 +95,7 @@ class _FakeAttachmentService:
         self.connector_list_calls: list[dict[str, object]] = []
         self.connector_import_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
+        self.locate_calls: list[dict[str, object]] = []
         self.sweep_calls: list[str] = []
         self.sweep_result = AttachmentSweepResult()
         #: Mirrors the service property the router reads to cap the request body.
@@ -191,6 +195,22 @@ class _FakeAttachmentService:
         self.delete_calls.append(kwargs)
         self._raise_if_needed()
 
+    async def locate_citation(self, **kwargs: object) -> AttachmentCitationLookup:
+        self.locate_calls.append(kwargs)
+        self._raise_if_needed()
+        return AttachmentCitationLookup(
+            attachment_id=_ATTACHMENT_ID,
+            filename="contract.pdf",
+            outcome="quote_match",
+            start=1188,
+            end=1225,
+            window_start=900,
+            window_end=1600,
+            text="…the delivery terms are…",
+            total_chars=24110,
+            text_state="full",
+        )
+
 
 def _app(
     monkeypatch: pytest.MonkeyPatch,
@@ -209,7 +229,10 @@ def _app(
         "get_principal",
         lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=roles),
     )
+    # Both seams: ``init``/``list`` take the read-only owner check, HITL minting takes
+    # the binding helper that also materialises the session row.
     monkeypatch.setattr(attachments, "load_session_for_principal", AsyncMock())
+    monkeypatch.setattr(attachments, "ensure_session_for_principal", AsyncMock())
     return TestClient(app)
 
 
@@ -268,6 +291,66 @@ def test_init_upload_rejects_unknown_mode(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert response.status_code == 422
     assert service.init_calls == []
+
+
+def test_init_upload_requires_a_thread_for_attach(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: ``attach`` without ``thread_id`` created a file no turn could find.
+
+    The schema refuses it before the handler runs, so no presigned URL is minted
+    and no dead row can be written (020, P0-A).
+    """
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        "/attachments/init",
+        json={
+            "filename": "contract.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 1024,
+            "mode": "attach",
+        },
+    )
+
+    assert response.status_code == 422
+    assert service.init_calls == []
+
+
+def test_init_upload_rejects_a_blank_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A whitespace-only id is stripped and then fails ``min_length`` (020)."""
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        "/attachments/init",
+        json={
+            "thread_id": "   ",
+            "filename": "contract.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 1024,
+            "mode": "attach",
+        },
+    )
+
+    assert response.status_code == 422
+    assert service.init_calls == []
+
+
+def test_init_upload_maps_a_threadless_attach_to_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-HTTP callers hit the same rule in the use-case layer; the API reports it."""
+    client, _ = _client(monkeypatch, error=AttachmentThreadRequiredError())
+
+    response = client.post(
+        "/attachments/init",
+        json={
+            "thread_id": "thread-1",
+            "filename": "contract.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 1024,
+            "mode": "attach",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "thread_id" in response.json()["detail"]
 
 
 def test_init_upload_maps_intake_rejection_to_400(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -477,20 +560,24 @@ def test_restore_request_returns_hitl_card(monkeypatch: pytest.MonkeyPatch) -> N
     ]
 
 
-def test_restore_request_touches_session_on_fresh_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression: restore mint without a prior chat left GET /hitl 404 Session not found."""
+def test_restore_request_binds_thread_before_minting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: restore mint without a prior chat left GET /hitl 404 Session not found.
+
+    The router must delegate to the binding helper (owner check + session row); the
+    row itself is asserted on the helper in ``test_session_ownership``.
+    """
     app = FastAPI()
     app.include_router(attachments.router, prefix="/attachments")
     service = _FakeAttachmentService()
-    session_service = AsyncMock()
-    resources = SimpleNamespace(session_service=session_service, attachment_service=service)
+    resources = SimpleNamespace(session_service=AsyncMock(), attachment_service=service)
     monkeypatch.setattr(attachments, "get_app_resources", lambda _app: resources)
     monkeypatch.setattr(
         attachments,
         "get_principal",
         lambda _req: AuthPrincipal(subject="user-1", org_id="org-1", roles=frozenset({"user"})),
     )
-    monkeypatch.setattr(attachments, "load_session_for_principal", AsyncMock())
+    bind = AsyncMock()
+    monkeypatch.setattr(attachments, "ensure_session_for_principal", bind)
 
     response = TestClient(app).post(
         f"/attachments/{_ATTACHMENT_ID}/restore-request",
@@ -498,10 +585,11 @@ def test_restore_request_touches_session_on_fresh_thread(monkeypatch: pytest.Mon
     )
 
     assert response.status_code == 200
-    session_service.touch_session.assert_awaited_once()
-    assert session_service.touch_session.await_args.kwargs["thread_id"] == "thread-fresh-restore"
-    assert session_service.touch_session.await_args.kwargs["user_id"] == "user-1"
-    assert session_service.touch_session.await_args.kwargs["context_patch"]["last_operation"] == "attachment_restore_requested"
+    bind.assert_awaited_once()
+    kwargs = bind.await_args.kwargs
+    assert kwargs["thread_id"] == "thread-fresh-restore"
+    assert kwargs["last_operation"] == "attachment_restore_requested"
+    assert kwargs["session_service"] is resources.session_service
 
 
 def test_restore_request_rejects_malware_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -770,3 +858,95 @@ def test_dialog_turn_with_unusable_attachment_is_409(monkeypatch: pytest.MonkeyP
     )
 
     assert response.status_code == 409
+
+
+def test_dialog_turn_with_attachment_ids_but_no_thread_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The use-case refuses ids it cannot scope; the API reports it as a bad request shape."""
+    service = _RecordingIntentService(error=AttachmentThreadRequiredError())
+    client = _intents_client(monkeypatch, service)
+
+    response = client.post(
+        "/intents/process",
+        json={
+            "text": "Summarise the attached contract",
+            "thread_id": "thread-1",
+            "attachment_ids": [str(_ATTACHMENT_ID)],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "thread_id" in response.json()["detail"]
+
+
+def test_citation_locate_forwards_the_authenticated_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A citation is not a capability to read someone else's file (020, 060)."""
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        f"/attachments/{_ATTACHMENT_ID}/citation-locate",
+        json={"quote": "delivery terms", "source_range": [1200, 1237]},
+    )
+
+    assert response.status_code == 200
+    assert service.locate_calls == [
+        {
+            "attachment_id": _ATTACHMENT_ID,
+            "user_id": "user-1",
+            "quote": "delivery terms",
+            "declared_range": (1200, 1237),
+            "anchor": "char_location",
+        },
+    ]
+    body = response.json()
+    assert body["outcome"] == "quote_match"
+    assert (body["start"], body["end"]) == (1188, 1225)
+    # The window is absolute, so the client never recomputes offsets by itself.
+    assert (body["window_start"], body["window_end"], body["total_chars"]) == (900, 1600, 24110)
+
+
+def test_citation_locate_is_not_cacheable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fragment is confidential document text; a shared cache must not keep it."""
+    client, _ = _client(monkeypatch)
+
+    response = client.post(f"/attachments/{_ATTACHMENT_ID}/citation-locate", json={"quote": "delivery terms"})
+
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_citation_locate_hides_whether_a_foreign_attachment_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _ = _client(monkeypatch, error=AttachmentNotFoundError(_ATTACHMENT_ID))
+
+    response = client.post(f"/attachments/{_ATTACHMENT_ID}/citation-locate", json={"quote": "x"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "attachment not found"
+
+
+def test_citation_locate_without_extracted_text_is_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _ = _client(monkeypatch, error=AttachmentContentMissingError(_ATTACHMENT_ID))
+
+    response = client.post(f"/attachments/{_ATTACHMENT_ID}/citation-locate", json={"quote": "x"})
+
+    assert response.status_code == 409
+
+
+def test_citation_locate_with_empty_quote_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a quote nothing can be verified, so the request never reaches the service."""
+    client, service = _client(monkeypatch)
+
+    response = client.post(f"/attachments/{_ATTACHMENT_ID}/citation-locate", json={"quote": ""})
+
+    assert response.status_code == 422
+    assert service.locate_calls == []
+
+
+def test_citation_locate_with_backwards_range_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        f"/attachments/{_ATTACHMENT_ID}/citation-locate",
+        json={"quote": "x", "source_range": [1200, 1200]},
+    )
+
+    assert response.status_code == 422
+    assert service.locate_calls == []

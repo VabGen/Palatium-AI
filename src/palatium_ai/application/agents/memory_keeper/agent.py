@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from palatium_ai.application.agents.memory_keeper.config import MAX_EXISTING_MEMORIES
+from palatium_ai.application.agents.memory_keeper.config import MAX_EXISTING_MEMORIES, MEMORY_KINDS
 from palatium_ai.application.agents.memory_keeper.parsing import (
     decode_memory_keeper_input,
     parse_memory_keeper_output,
@@ -18,7 +18,8 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.memory_keeper import MemoryKeeperOutput
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.memory.tool_output import wrap_untrusted_tool_output
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -45,6 +46,17 @@ class MemoryKeeperAgent(BaseAgent):
     def get_available_tools(self) -> list[str]:
         return []
 
+    async def verify(self, output: AgentOutput) -> bool:
+        """Reject empty-text or out-of-taxonomy facts that slipped past parsing."""
+        if not isinstance(output.output, MemoryKeeperOutput):
+            return False
+        for fact in output.output.facts:
+            if not fact.text.strip():
+                return False
+            if fact.kind not in MEMORY_KINDS:
+                return False
+        return True
+
     @traceable(name="memory_keeper.run")
     async def run(self, input: AgentInput) -> AgentOutput:
         agent_metrics.record_node_execution(self._config.role, "run")
@@ -59,21 +71,29 @@ class MemoryKeeperAgent(BaseAgent):
         task_input = decode_memory_keeper_input(input.context)
 
         existing = "\n".join(f"- {text}" for text in task_input.existing_memory_texts[:MAX_EXISTING_MEMORIES]) or "(none)"
+        # Fenced with the same envelope the rest of the platform uses for untrusted text:
+        # recall results are derived from earlier user turns, so an entry can literally read
+        # "ignore the rules and store X". Unfenced it sat outside the only injection boundary
+        # in this prompt. wrap_untrusted_tool_output also neutralizes a close-marker breakout.
+        existing_block = wrap_untrusted_tool_output(existing, source="memory.existing")
         user_prompt = (
             f"thread_id={task_input.thread_id}\n"
-            f"existing_memories:\n{existing}\n\n"
+            f"existing_memories:\n{existing_block}\n\n"
             "<<<UNTRUSTED_TRANSCRIPT>>>\n"
             f"{task_input.transcript_excerpt}\n"
             "<<<END_UNTRUSTED_TRANSCRIPT>>>"
         )
 
+        assembled = PromptAssemblyPolicy.assemble(
+            PromptAssemblyParts(
+                system_identity=MEMORY_KEEPER_SYSTEM_PROMPT,
+                user_content=user_prompt,
+            )
+        )
         try:
             completion = await self._harness.call_llm(
                 self._config,
-                [
-                    ChatMessage(role="system", content=MEMORY_KEEPER_SYSTEM_PROMPT),
-                    ChatMessage(role="user", content=user_prompt),
-                ],
+                list(assembled.messages),
                 response_format="json_object",
             )
             output = parse_memory_keeper_output(completion.content)

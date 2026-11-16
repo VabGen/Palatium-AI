@@ -40,6 +40,19 @@ class SkillsConfig(BaseConfig):
         le=50_000,
         validation_alias="SKILLS_REFERENCE_MAX_CHARS",
     )
+    #: CMD4 — self-authored skills via ``skill_manage`` (HITL + lint). Default off until soak.
+    allow_self_authored: bool = Field(
+        default=False,
+        validation_alias="ALLOW_SELF_AUTHORED_SKILLS",
+        description="When false, mcp:platform.skill_manage returns Feature disabled.",
+    )
+    #: Product lock path (relative to cwd or absolute); separate from DX skills-lock.json.
+    product_lock_path: str = Field(
+        default="skills/procedural/skills-lock.json",
+        min_length=1,
+        max_length=512,
+        validation_alias="SKILLS_PRODUCT_LOCK_PATH",
+    )
 
     @field_validator("roots", mode="before")
     @classmethod

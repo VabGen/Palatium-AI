@@ -183,6 +183,16 @@ def _distinct_rules(report: PromptInjectionReport) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def count_fence_blocks(text: str) -> int:
+    """Number of complete fences carried by already-fenced untrusted text.
+
+    Observability for the 065 budgets: a consumer that clips untrusted text must be
+    able to tell how many documents it was handed (040), otherwise "one file is
+    missing" is indistinguishable from "we dropped it".
+    """
+    return len(_FENCE_BLOCK.findall(text))
+
+
 def budget_untrusted_text(text: str, *, max_chars: int) -> str:
     """Fit already-fenced untrusted text into a turn budget.
 

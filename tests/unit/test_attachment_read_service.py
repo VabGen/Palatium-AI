@@ -12,11 +12,13 @@ from palatium_ai.domain.attachments import (
     Attachment,
     AttachmentContent,
     AttachmentContentMetadata,
+    AttachmentIntegrityError,
     AttachmentNotFoundError,
     AttachmentReadRequest,
     AttachmentScanSummary,
     AttachmentTooLargeError,
 )
+from palatium_ai.domain.attachments.integrity import content_sha256_hex
 from palatium_ai.domain.attachments.policies import DEFAULT_ATTACHMENT_LIMITS
 from palatium_ai.domain.ports.document_parser import ParsedDocument, ParsedPage
 
@@ -177,6 +179,20 @@ async def test_size_ceiling() -> None:
         limits=_LIMITS,
     )
     with pytest.raises(AttachmentTooLargeError):
+        await svc.read(AttachmentReadRequest(attachment_id=row.id, user_id="owner"))
+
+
+@pytest.mark.asyncio()
+async def test_lazy_path_fails_closed_on_integrity_mismatch() -> None:
+    raw = b"%PDF-tampered"
+    row = _row(blob_key="attachments/raw", content_sha256=content_sha256_hex(b"%PDF-original"))
+    svc = AttachmentReadService(
+        repository=_FakeRepo({row.id: row}),  # type: ignore[arg-type]
+        blob_store=_FakeBlob({"attachments/raw": raw}),  # type: ignore[arg-type]
+        pipeline=_FakePipeline(_content("should not run")),  # type: ignore[arg-type]
+        limits=_LIMITS,
+    )
+    with pytest.raises(AttachmentIntegrityError):
         await svc.read(AttachmentReadRequest(attachment_id=row.id, user_id="owner"))
 
 

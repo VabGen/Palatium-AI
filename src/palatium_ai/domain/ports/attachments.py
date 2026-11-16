@@ -106,15 +106,22 @@ class AttachmentRepositoryPort(Protocol):
         cutoff: datetime,
         *,
         pending_before: datetime,
+        orphan_before: datetime,
         user_id: str,
         limit: int,
     ) -> list[Attachment]:
         """Oldest-first rows owned by ``user_id`` that retention may reclaim.
 
-        A row qualifies when **either** its TTL elapsed before ``cutoff`` **or** it
+        A row qualifies when **either** its TTL elapsed before ``cutoff``, **or** it
         is a ``pending`` upload created before ``pending_before`` and therefore can
         never receive its bytes — an abandoned intake would otherwise sit in the
         table for the full retention TTL, invisible to the sweep.
+
+        ``orphan_before`` covers the third dead state: an ``attach`` row with no
+        ``thread_id`` (or a blank one) is unreachable from every read path, so once
+        it is older than the grace window it can be reclaimed without waiting for
+        its TTL. ``index`` rows and in-flight uploads are deliberately excluded by
+        the adapter (see ``AttachmentRetentionPolicy.is_orphaned``).
 
         Deliberately user-scoped: ``attachments`` is under ``FORCE ROW LEVEL
         SECURITY``, so a cross-tenant maintenance query cannot be expressed with

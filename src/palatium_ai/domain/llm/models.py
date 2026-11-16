@@ -2,12 +2,50 @@
 
 """Доменные модели для LLM-взаимодействия."""
 
-from typing import Literal
+from typing import Literal, Self, get_args
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from palatium_ai.domain.content.citations import CitationRef
 
 # Provider-neutral structured output mode (maps to OpenAI-compatible response_format).
 LLMResponseFormat = Literal["text", "json_object", "json_schema"]
+
+#: Image formats the vision path may forward (ADR 0007). Closed on purpose: a mime the
+#: model does not accept is a 400 at the provider boundary, i.e. after cost was paid.
+ImageMime = Literal["image/png", "image/jpeg", "image/webp"]
+VISION_IMAGE_MIMES: frozenset[str] = frozenset(get_args(ImageMime))
+
+
+class ImagePart(BaseModel):
+    """Reference to an image attachment; bytes stay in the blob store (ADR 0007).
+
+    No base64 and no data URL here: the attachment pipeline already owns storage,
+    size limits and the decode guard, and a second copy of the bytes in the message
+    contract would leak into logs and traces (020).
+    """
+
+    model_config = {"frozen": True}
+
+    attachment_id: UUID
+    mime: ImageMime
+
+
+class DocumentPart(BaseModel):
+    """Citeable text attachment for provider document blocks (W3a grounding).
+
+    ``title`` must equal the citation chip label from ``citation_refs_from_untrusted_context``
+    so Anthropic ``document_title`` resolves to the same ``source_ref``. ``text`` is
+    already-admitted ``safe_text`` (budgeted at turn entry) — the same coordinate space
+    as ``CitationLocator`` (docs/source-citation-highlight.md).
+    """
+
+    model_config = {"frozen": True}
+
+    attachment_id: UUID
+    title: str = Field(min_length=1, max_length=255)
+    text: str = Field(min_length=1, max_length=200_000)
 
 
 class ChatMessage(BaseModel):
@@ -19,6 +57,26 @@ class ChatMessage(BaseModel):
     content: str
     #: Anthropic/LiteLLM prompt-cache hint for static system prefixes (P0.3).
     cache_control: Literal["ephemeral"] | None = None
+    #: Images the model should look at (ADR 0007). Additive: text-only callers are
+    #: unaffected, and an adapter without vision must reject rather than drop them.
+    image_parts: tuple[ImagePart, ...] = ()
+    #: Citeable documents (text attachments) for provider grounding annotations.
+    document_parts: tuple[DocumentPart, ...] = ()
+
+    @model_validator(mode="after")
+    def _media_only_in_user_messages(self) -> Self:
+        """User turns carry the ask; system/assistant media are never legitimate.
+
+        Allowing them would let retrieved or model-generated content smuggle an
+        "instruction" image/document past the point where prompt-injection gates look (020).
+        """
+        if self.image_parts and self.role != "user":
+            msg = "image_parts are only allowed on user messages"
+            raise ValueError(msg)
+        if self.document_parts and self.role != "user":
+            msg = "document_parts are only allowed on user messages"
+            raise ValueError(msg)
+        return self
 
 
 class LLMUsage(BaseModel):
@@ -29,6 +87,10 @@ class LLMUsage(BaseModel):
     prompt_tokens: int = Field(default=0, ge=0)
     completion_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
+    #: Provider prompt-cache accounting (OpenAI ``cached_tokens`` / Anthropic cache read).
+    #: Zero when the gateway omits details — never invent hits (040/CMD2).
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
 
 
 class LLMCompletion(BaseModel):
@@ -44,6 +106,10 @@ class LLMCompletion(BaseModel):
     # A gateway that routes opaque tier aliases (``tier-small`` → real model) is the ONLY
     # component that can price the call, so this is authoritative over any local price table.
     cost_usd: float | None = Field(default=None, ge=0.0)
+    #: Citations the provider attached to ``content`` (W3a). Empty is the honest
+    #: default: most providers report none, and a fabricated anchor is worse than no
+    #: anchor when the user clicks it.
+    citations: tuple[CitationRef, ...] = ()
 
 
 class LLMStreamDelta(BaseModel):
@@ -60,3 +126,5 @@ class LLMStreamDelta(BaseModel):
     usage: LLMUsage | None = None
     cost_usd: float | None = Field(default=None, ge=0.0)
     model: str | None = None
+    #: Citations often arrive only on the final stream chunk (provider annotations).
+    citations: tuple[CitationRef, ...] = ()

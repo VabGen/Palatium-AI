@@ -5,13 +5,14 @@ Gates (in order):
   1. ruff        — lint + security selectors (``S``), whole repo (matches ``tox -e lint``).
   2. ruff format — formatting drift check (pyproject: ``ruff format .``).
   3. markers     — debt markers must be ``<MARKER>(owner, ticket, date): …`` (rule 086).
-  4. layers      — hexagonal import contract from rule 000 (``scripts/check_import_layers.py``).
-  5. mypy        — ``--strict`` on the platform package.
-  6. pytest      — ``tests/`` suite (``slow`` load tests deselected — 080/075) + coverage.
-  7. coverage    — ``domain/policies`` >= 90% (docs/max-pro-level-tz.md §13/§15).
-  8. SLA math    — budget gate arithmetic.
-  9. agent evals — deterministic baseline.
-  10. PyJWT      — conflict guard (``jwt`` must not shadow ``PyJWT``).
+  4. skills-lock — product ``skills/procedural/skills-lock.json`` drift (CMD4; warn-only).
+  5. layers      — hexagonal import contract from rule 000 (``scripts/check_import_layers.py``).
+  6. mypy        — ``--strict`` on the platform package.
+  7. pytest      — ``tests/`` suite (``slow`` load tests deselected — 080/075) + coverage.
+  8. coverage    — ``domain/policies`` >= 90% (docs/max-pro-level-tz.md §13/§15).
+  9. SLA math    — budget gate arithmetic.
+  10. agent evals — deterministic baseline.
+  11. PyJWT      — conflict guard (``jwt`` must not shadow ``PyJWT``).
 
 SCA (pip-audit) lives in ``scripts/ci_security.py`` — separate CI job, separate concern.
 """
@@ -48,9 +49,27 @@ def _run(title: str, argv: list[str]) -> None:
         raise SystemExit(completed.returncode)
 
 
+def _installed_distribution_names() -> set[str]:
+    """Installed distribution names, lower-cased, tolerating metadata without ``Name``.
+
+    ``importlib.metadata`` on 3.14 returns ``None`` for a missing field instead of raising
+    ``KeyError``; an editable/local wheel without ``Name`` used to crash the guard with
+    ``AttributeError`` before it ever looked for the conflict it exists to catch.
+    """
+    names: set[str] = set()
+    for dist in metadata.distributions():
+        # ``.get`` instead of ``["Name"]``: 3.14 deprecates implicit-None ``__getitem__``
+        # and will raise ``KeyError`` for a missing field — the guard must not die on
+        # incomplete metadata either way.
+        name = dist.metadata.get("Name")
+        if name:
+            names.add(name.lower())
+    return names
+
+
 def _assert_pyjwt_not_shadowed() -> None:
     print("== conflict check: jwt vs PyJWT ==")
-    names = {dist.metadata["Name"].lower() for dist in metadata.distributions()}
+    names = _installed_distribution_names()
     if "jwt" in names and "pyjwt" in names:
         raise SystemExit(
             "Conflicting package 'jwt' is installed alongside PyJWT. Remove it (`uv remove jwt` then `uv sync`). Use PyJWT only."
@@ -124,6 +143,8 @@ def main() -> int:
     # Rule 086: a debt marker without owner/ticket/date is not a record. Cheap, whole-repo,
     # and it fails only on malformed markers — age is reported, not gated (see the script).
     _run("debt markers (086)", ["uv", "run", "python", "scripts/check_todos.py"])
+    # Warn-only until CMD4 soak; flip to --strict when ALLOW_SELF_AUTHORED_SKILLS leaves false.
+    _run("product skills-lock (CMD4)", ["uv", "run", "python", "scripts/check_skills_lock.py"])
     # Rule 000: application/ must not import infrastructure/, core/ imports nothing, etc.
     # Standalone checker instead of import-linter — see scripts/check_import_layers.py.
     _run("import layers (000)", ["uv", "run", "python", "scripts/check_import_layers.py"])

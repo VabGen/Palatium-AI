@@ -18,11 +18,11 @@ from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.intent import TaskKind
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.hitl.choice_resume import ChoiceResumePolicy, ParsedHitlChoiceResume
-from palatium_ai.domain.llm.models import ChatMessage
 from palatium_ai.domain.memory.budget import MemoryPromptBudget, clip_memory_hints
 from palatium_ai.domain.memory.contextualizer import ContextualizerOutput
 from palatium_ai.domain.memory.turns import DialogTurnWindow
 from palatium_ai.domain.policies import ContextualizerPolicy, ContinuityPolicy
+from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -82,10 +82,15 @@ class ContextualizerAgent(BaseAgent):
             "task_kind",
             "requires_mcp",
             "candidate_capabilities_json",
+            "has_attachment_context",
         ]
 
     def get_available_tools(self) -> list[str]:
         return []
+
+    async def verify(self, output: AgentOutput) -> bool:
+        """Type gate — ContinuationKind already closed by pydantic (ADR-0009)."""
+        return isinstance(output.output, ContextualizerOutput)
 
     @traceable(name="context_enricher.continuation.run")
     async def run(self, input: AgentInput) -> AgentOutput:
@@ -96,6 +101,9 @@ class ContextualizerAgent(BaseAgent):
         task_kind_raw = input.context.get("task_kind") or ""
         task_kind: TaskKind | None = task_kind_raw or None  # type: ignore[assignment]  # context собран из Literal-реестра (017)
         requires_mcp = input.context.get("requires_mcp", "false").lower() == "true"
+        # Without this flag the model sees an empty dialog and calls a real upload
+        # "missing" (continuation_kind=clarify), which also clears sticky pending (055).
+        has_attachment_context = input.context.get("has_attachment_context", "false").lower() == "true"
         caps_raw = (input.context.get("candidate_capabilities_json") or "").strip()
         candidate_capabilities: tuple[str, ...] = ()
         if caps_raw:
@@ -140,20 +148,24 @@ class ContextualizerAgent(BaseAgent):
                 output=output,
             )
 
-        dialog_history = dialog_window.as_prompt_block(
-            max_chars=prompt_budget.dialog_max_chars,
-            per_turn_max_chars=prompt_budget.per_turn_max_chars,
-            user_turn_max_chars=prompt_budget.user_turn_max_chars,
-        )
         clipped_hints = clip_memory_hints(
             memory_hints,
             max_items=prompt_budget.memory_max_items,
             max_chars=prompt_budget.memory_max_chars,
         )
+        # Scratchpad / recall hints double as identity pins when the last-K window
+        # has already dropped the intro turn (065 — Select ≠ dump).
+        dialog_history = dialog_window.as_prompt_block(
+            max_chars=prompt_budget.dialog_max_chars,
+            per_turn_max_chars=prompt_budget.per_turn_max_chars,
+            user_turn_max_chars=prompt_budget.user_turn_max_chars,
+            pinned_user_texts=clipped_hints,
+        )
         user_payload = {
             "user_text": input.instruction,
             "dialog_history": dialog_history,
             "memory_hints": list(clipped_hints),
+            "has_attachment_context": has_attachment_context,
         }
         _maybe_log_debug_payload(
             task_id=str(input.task_id),
@@ -164,10 +176,15 @@ class ContextualizerAgent(BaseAgent):
             user_payload=user_payload,
             output=None,
         )
-        messages = [
-            ChatMessage(role="system", content=CONTEXTUALIZER_SYSTEM_PROMPT),
-            ChatMessage(role="user", content=json.dumps(user_payload, ensure_ascii=False)),
-        ]
+        # Stable system + cache hint; dialog/memory stay in user JSON (prompt contract).
+        # Identity pins ride inside dialog_history via pinned_user_texts (065).
+        assembled = PromptAssemblyPolicy.assemble(
+            PromptAssemblyParts(
+                system_identity=CONTEXTUALIZER_SYSTEM_PROMPT,
+                user_content=json.dumps(user_payload, ensure_ascii=False),
+            )
+        )
+        messages = list(assembled.messages)
 
         try:
             completion = await self._harness.call_llm(

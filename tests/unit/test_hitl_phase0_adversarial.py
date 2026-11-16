@@ -16,6 +16,7 @@ from pydantic import SecretStr
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlCardGoneError, HitlService
 from palatium_ai.application.services.intent_service import _assistant_turn_payload
+from palatium_ai.application.services.intent_turn_helpers import FinalizedTurn
 from palatium_ai.core.config.security import SecurityConfig
 from palatium_ai.domain.agents.formatter import FormatterTaskResult
 from palatium_ai.domain.content import ContentDocument, DocumentMeta, HeadingBlock
@@ -80,23 +81,27 @@ def _client(
         revise_after_quality_reject=AsyncMock(),
         acknowledge_quality_approve=AsyncMock(),
         resume_after_tool_approval=AsyncMock(
-            return_value=FormatterTaskResult(
-                task_id="t1",
-                agent_role="formatter",
-                status="success",
-                confidence=0.9,
-                requires_review=False,
-                output=_doc(),
+            return_value=FinalizedTurn(
+                result=FormatterTaskResult(
+                    task_id="t1",
+                    agent_role="formatter",
+                    status="success",
+                    confidence=0.9,
+                    requires_review=False,
+                    output=_doc(),
+                )
             )
         ),
         process_hitl_choice=AsyncMock(
-            return_value=FormatterTaskResult(
-                task_id="t1",
-                agent_role="formatter",
-                status="success",
-                confidence=0.9,
-                requires_review=False,
-                output=_doc(),
+            return_value=FinalizedTurn(
+                result=FormatterTaskResult(
+                    task_id="t1",
+                    agent_role="formatter",
+                    status="success",
+                    confidence=0.9,
+                    requires_review=False,
+                    output=_doc(),
+                )
             )
         ),
     )

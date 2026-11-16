@@ -77,7 +77,7 @@ class GraphitiSdkTransport:
             from graphiti_core import Graphiti  # pyright: ignore[reportMissingImports]
         except ImportError as exc:
             raise ImportError(
-                "MEMORY_BACKEND=graphiti requires graphiti-core (poetry add graphiti-core) and a reachable Neo4j"
+                "MEMORY_BACKEND=graphiti requires graphiti-core (uv add graphiti-core) and a reachable Neo4j"
             ) from exc
         if not uri.strip() or not password:
             raise ValueError("GRAPHITI_NEO4J_URI and GRAPHITI_NEO4J_PASSWORD are required")
@@ -212,6 +212,26 @@ class GraphitiMemoryPort:
         """Graphiti adapter does not support keyed delete yet."""
         _ = namespace, key
         return False
+
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        """Graphiti adapter does not support bulk clear yet."""
+        _ = user_id, namespaces
+        return 0
+
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        """Graphiti adapter has no keyed listing (CMD3 audit requires postgres/in-memory)."""
+        _ = namespace, limit
+        return []
 
     async def aclose(self) -> None:
         """Close transport resources."""

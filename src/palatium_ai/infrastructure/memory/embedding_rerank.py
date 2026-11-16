@@ -8,7 +8,11 @@ import math
 
 from typing import TYPE_CHECKING
 
+from palatium_ai.core.logging import get_logger
 from palatium_ai.core.types.coerce import coerce_float
+from palatium_ai.domain.memory.promotion import DEFAULT_PROMOTE_CLAIM_SECONDS
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.ports import MemoryPort
@@ -58,7 +62,9 @@ class EmbeddingRerankMemoryPort:
         texts = [query.strip()] + [str(item.get("text", "")).strip() for item in candidates]
         try:
             vectors = await self._embeddings.embed(texts)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001  # rerank degrades to unranked hits when embed fails
+            # 050/040: a degraded rerank must be observable, not silently swallowed.
+            logger.warning("memory.rerank.embedding_failed", error_type=type(exc).__name__)
             return candidates[:safe_limit]
 
         if len(vectors) != len(texts) or not vectors[0]:
@@ -81,6 +87,29 @@ class EmbeddingRerankMemoryPort:
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         """Delegate delete to inner port."""
         return await self._inner.forget(namespace=namespace, key=key)
+
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        clear = getattr(self._inner, "clear_namespace", None)
+        if clear is None:
+            return 0
+        return int(await clear(user_id=user_id, namespaces=namespaces))
+
+    async def list_entries(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        limit: int = 32,
+    ) -> list[dict[str, object]]:
+        """Forward list when inner supports audit listing."""
+        listing = getattr(self._inner, "list_entries", None)
+        if listing is None:
+            return []
+        return list(await listing(namespace=namespace, limit=limit))
 
     async def bump_access(self, *, namespace: tuple[str, ...], key: str) -> int:
         """Forward access bump when inner supports promote tracking."""
@@ -109,6 +138,26 @@ class EmbeddingRerankMemoryPort:
                 limit=limit,
             )
         )
+
+    async def claim_promotion(
+        self,
+        *,
+        namespace: tuple[str, ...],
+        key: str,
+        lease_seconds: int = DEFAULT_PROMOTE_CLAIM_SECONDS,
+    ) -> bool:
+        """Forward the promote reservation when inner supports promote."""
+        claim = getattr(self._inner, "claim_promotion", None)
+        if claim is None:
+            return False
+        return bool(await claim(namespace=namespace, key=key, lease_seconds=lease_seconds))
+
+    async def release_promotion(self, *, namespace: tuple[str, ...], key: str) -> bool:
+        """Forward the reservation drop (non-promoting outcome)."""
+        release = getattr(self._inner, "release_promotion", None)
+        if release is None:
+            return False
+        return bool(await release(namespace=namespace, key=key))
 
     async def mark_promoted(self, *, namespace: tuple[str, ...], key: str) -> bool:
         """Forward promote stamp when inner supports promote."""

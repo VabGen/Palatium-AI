@@ -1,0 +1,45 @@
+# Red-team nightly (rules 020 / 075 / 082).
+#
+# One job, one question: do our own gates still refuse the attacks in
+# `tests/redteam/corpus.jsonl`? The corpus is deterministic (no live LLM, no keys), so a
+# red run means a gate regressed — not that a provider had a bad night. Negative controls
+# in the corpus keep the opposite failure honest too: a suite that refuses everything and
+# a suite that allows everything are both red.
+#
+# Outside the pull-request path on purpose (marker `slow`); `scripts/ci_quality.py` keeps
+# running `-m "not live and not llm_live and not slow"`. The job log is the report.
+#
+# Actions are pinned by commit SHA with a version comment (rule 025); `scripts/ci_security.py`
+# fails the build if that drifts.
+name: redteam-nightly
+
+on:
+  schedule:
+    - cron: "45 2 * * *" # daily, after the eval nightly (02:00) and before perf (03:30)
+  workflow_dispatch:
+
+concurrency:
+  group: redteam-nightly
+  cancel-in-progress: true
+
+jobs:
+  redteam:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # `--no-cov`: the nightly question is refusal behaviour, and a coverage threshold
+      # here would fail the job for a number nobody asked for (075).
+      - name: Red-team corpus
+        run: uv run pytest tests/redteam -q -m slow --no-cov

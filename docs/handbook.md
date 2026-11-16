@@ -164,16 +164,40 @@ uv run alembic upgrade head
 ### 5.2. Старт API
 
 ```bash
-# вариант A
-uv run python -m palatium_ai.main
-
-# вариант B
-uv run uvicorn palatium_ai.main:app --reload --host 127.0.0.1 --port 8000
+uv run python -m palatium_ai        # короткая форма
+uv run python -m palatium_ai.main   # то же самое, явный модуль
 ```
+
+`palatium_ai/main.py:main()` — единственная точка входа, которая настраивает event loop и
+reload-политику; `palatium_ai/__main__.py` — тонкий алиас на неё (своего `uvicorn.run` не
+заводит). Прямой `uvicorn palatium_ai.main:app` эти настройки пропускает: так
+стартует только контейнер на Linux, где asyncio и так даёт `SelectorEventLoop` (§5.2.1).
 
 API: http://127.0.0.1:8000  
 Swagger: http://127.0.0.1:8000/docs  
 Health: http://127.0.0.1:8000/health
+
+### 5.2.1. Event loop и hot-reload
+
+- psycopg async (LangGraph Postgres checkpointer) требует `add_reader` → на Windows нужен
+  `SelectorEventLoop`, а не дефолтный `ProactorEventLoop`. Поэтому `main()` передаёт
+  uvicorn `loop="palatium_ai.infrastructure.memory.checkpointer:create_psycopg_event_loop"`,
+  а bootstrap после старта проверяет фактический loop (`ensure_psycopg_compatible_loop`) и
+  пишет warning, если он несовместим.
+- Строка здесь — контракт uvicorn: `loop` типизирован как `LoopFactoryType | str` и
+  резолвится через `import_from_string`, callable не принимается. Значение не пишется
+  руками, а выводится из самой фабрики (`psycopg_loop_factory_spec()`), поэтому
+  переименование/перенос функции не расходится со ссылкой; перед `uvicorn.run`
+  ссылка проверяется (`resolve_loop_factory`) и при поломке процесс падает с её именем,
+  а не с generic `STARTUP_FAILURE`.
+- На POSIX кастомная фабрика не нужна и не передаётся: uvicorn получает штатный
+  `loop="asyncio"` (там selector-loop по умолчанию). Политики event loop
+  (`set_event_loop_policy`) не используются — deprecated в 3.14, удалены в 3.16.
+- `reload_dirs` = `<repo>/src` (только код приложения). Корень репозитория в watch
+  нельзя: `.venv`/`.tox`/`node_modules` заставляют WatchFiles штормить reload и boot
+  не завершается. Правка `docs/`, `web/`, env-файлов reload не вызывает.
+  `PALATIUM_UVICORN_RELOAD=0` выключает перезагрузчик (`scripts/dev-up.ps1` делает это:
+  на Windows reloader-child с редиректом stdio умирает на `WaitNamedPipe`).
 
 ### 5.3. Логи агентов
 
@@ -467,6 +491,8 @@ Off-graph memory: `POST /api/memory/save|forget|extract` → HITL →
 | `open_text` | свободное уточнение текстом, **без** fake-меню |
 
 Пример класса (не phrase-list): «сделай X на тему/типа/в формате» без значения слота → карточки на **первом** ходе.
+Информационные ходы (`capability_discovery`, `social_conversation`) исключены: их перечисление —
+это ответ («что ты умеешь»), а не селектор, поэтому карточку не порождает (`informational_answer`).
 
 | ID | Сценарий | Покрытие |
 |----|----------|----------|
@@ -564,11 +590,12 @@ Ops checklist before staging/prod: [`ops-readiness.md`](ops-readiness.md).
 | Contextualizer | rewrite/continuation до Intent + `MemoryPromptBudget` | — |
 | Checkpointer | Postgres `AsyncPostgresSaver` in staging/prod (or `LANGGRAPH_CHECKPOINT_POSTGRES=true`); `MemorySaver` in development; dual TTL `MEMORY_SESSION_TTL_SECONDS` + `RETENTION_CHECKPOINT_DAYS`; bake-off `scripts/bakeoff_checkpointer_workers.py` | — |
 | MemoryPort | Postgres `memory.entries` + FTS + pgvector; `MEMORY_HYBRID_FUSION`/`MEMORY_RRF_K` + search-time importance; opt-in `MEMORY_EMBEDDING_RERANK` | — |
-| Extract / promote | Durable `memory.extract_jobs` (SKIP LOCKED); promote = `python -m palatium_ai.jobs.memory_promote --user-id …` (not from extract) | — |
+| Extract / promote | Durable `memory.extract_jobs` (SKIP LOCKED); promote = `uv run python -m palatium_ai.jobs.memory_promote --user-id …` (not from extract) | — |
 | Procedural skills (L5) | JIT `skill_catalog` + MCP `skill_reference`; roots `SKILLS_ROOTS` (`skills/procedural`); `.agent/MEMORY.md` = Cursor DX only | — |
 | Budgeted recall | ≤4 hits / 800 chars, min confidence 0.7, thread+user+org ns | — |
 | DialogTurn payload | ContentDocument JSON for rich UI hydrate | — |
 | Sleep-time | MemoryKeeper queue (`frontier` / `gpt-oss:120b-cloud`), ADD-only | — |
+| Consolidation | `uv run python -m palatium_ai.jobs.memory_consolidate` — promote + `memory_*` retention plan (dry-run); compose profile `memory-jobs` | destructive execute — global retention job |
 | Chat UI transcript | localStorage thread/user/org + `GET .../turns` | — |
 | Eval gates | offline + live LongMemEval-lite (ACL/anaphora/format/keeper) | corpus growth as needed |
 | Graphiti | opt-in `MEMORY_BACKEND=graphiti` → `GraphitiMemoryPort` (Neo4j, `graphiti-core`) | — |

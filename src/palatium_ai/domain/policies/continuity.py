@@ -65,15 +65,26 @@ from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
 from palatium_ai.domain.policies.clarification import CLARIFY_MIN_CONFIDENCE, ClarificationGatePolicy
 from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import (
+    ATTACHMENT_SCOPE_DEFAULT,
+    FILE_REFERENCE_DEFAULT,
     GROUNDING_DEFAULT,
+    RESPONSE_SHAPE_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     TRANSFORMATION_DEFAULT,
+    AttachmentScope,
     ContinuationKind,
+    FileReferenceKind,
     GroundingMode,
+    ResponseShape,
     TaskKind,
     TransformationKind,
     UnderspecificationKind,
 )
+
+#: Intent ``attachment_scope`` values that mean the ask *explicitly* targets
+#: upload identity (singular pick or whole set). Bare ``auto`` + ``thread_file``
+#: is history-blind noise — Continuity demotes it (055 / evidence-first file axis).
+_EXPLICIT_FILE_SCOPES: frozenset[AttachmentScope] = frozenset({"single", "all"})
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.contextualizer import ContextualizerOutput
@@ -88,6 +99,14 @@ _HITL_RESUME_MARKER = "HITL_CHOICE_RESUME"
 # Rewrite enrichment beyond typo/whitespace cleanup → depends on prior (055 structural).
 _REWRITE_ENRICHMENT_MIN_CHARS = 24
 _REWRITE_NOVEL_TOKEN_MIN_CHARS = 4
+# A rewrite may enrich an underspecified ask; past this growth a **fully specified**
+# ask must keep most of its content words or the rewrite replaced the ask (055).
+_REWRITE_MAX_GROWTH = 2
+_REWRITE_MIN_BALLOON_CHARS = 48
+# A content-bearing ask token: long enough not to be a preposition/conjunction, and
+# compared on a prefix fold so inflection ("вопроса"/"вопрос") still matches.
+_ASK_TOKEN_MIN_CHARS = 5
+_ASK_TOKEN_PREFIX_CHARS = 5
 
 
 class EffectiveRoutingIntent(BaseModel):
@@ -103,6 +122,12 @@ class EffectiveRoutingIntent(BaseModel):
     grounding: GroundingMode = GROUNDING_DEFAULT
     grounding_reason: str = Field(default="", max_length=500)
     transformation: TransformationKind = TRANSFORMATION_DEFAULT
+    #: Form of the answer body (auto = no explicit constraint). Presentation axis only:
+    #: Continuity may remap task_kind, but never the requested form (ADR 0005).
+    response_shape: ResponseShape = RESPONSE_SHAPE_DEFAULT
+    #: Does the ask operate on a file already bound to the thread (storage re-read)?
+    #: Defaults to ``none``; a fenced upload turn owns its own file (055).
+    file_reference: FileReferenceKind = FILE_REFERENCE_DEFAULT
     continuation_kind: ContinuationKind = "new_topic"
     prior_context: str | None = Field(default=None, max_length=_PRIOR_CAP)
     # Intent may set requires_review due to history-blind clarify — suppress for follow-ups.
@@ -138,12 +163,55 @@ class ContinuityPolicy:
         attachment-blind and will anaphora-bind prior assistant topics into
         ``rewritten_query`` («дай сводку» → prior file summary), which then
         frames Researcher and option synthesizer away from the new document (055).
+
+        A rewrite may *enrich* an underspecified ask, never *replace* it: if it
+        dropped the user's own request, the raw ask wins (see
+        ``rewrite_preserves_ask``). Without this a mis-rewrite turns every
+        follow-up into the previous question and the turn is answered for an ask
+        the user never made.
         """
         raw = raw_user_text.strip()
         if has_turn_attachments and raw:
             return raw
         rewritten = rewritten_query.strip()
+        if rewritten and raw and not ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten=rewritten):
+            return raw
         return rewritten or raw
+
+    @staticmethod
+    def rewrite_preserves_ask(*, user_text: str, rewritten: str) -> bool:
+        """True when a Contextualizer rewrite still concerns the user's own ask.
+
+        Structural test, no phrase lists: at least one content-bearing token of the
+        user turn (>= ``_ASK_TOKEN_MIN_CHARS``, alphanumeric) must survive as a
+        prefix of some rewrite token. The prefix fold tolerates inflection
+        ("сводку"→"сводка", "текст"→"текста") while keeping distinct stems apart.
+
+        A rewrite that shares nothing with the ask replaced it: the model answered
+        an earlier question ("покажи текст файла" → "Кто является истцом…"), which
+        is the "replies with the previous answer" defect. Enrichment of an
+        underspecified ask ("дай короткую сводку" → "Сводка причин роста цен")
+        keeps at least one token and is allowed. An ask without content tokens is
+        underspecified by construction — any enrichment is allowed.
+
+        Inflation is a second structural signal: when the rewrite grows the ask past
+        ``_REWRITE_MAX_GROWTH`` and keeps less than half of its content words, it is a
+        topic substitution dressed as enrichment, not a rewrite of this ask. The raw
+        ask then wins (055 blocking, no phrase lists).
+        """
+        asked = _content_tokens(user_text)
+        if not asked:
+            return True
+        produced = _tokens(rewritten)
+        if not produced:
+            return False
+        survived = sum(
+            1 for token in asked if any(candidate.startswith(token[:_ASK_TOKEN_PREFIX_CHARS]) for candidate in produced)
+        )
+        if survived == 0:
+            return False
+        ballooned = _rewrite_ballooned(len(user_text), len(rewritten))
+        return not (ballooned and survived * 2 < len(asked))
 
     @staticmethod
     def prior_assistant_content(
@@ -374,13 +442,19 @@ class ContinuityPolicy:
         grounding: GroundingMode = GROUNDING_DEFAULT,
         grounding_reason: str = "",
         transformation: TransformationKind = TRANSFORMATION_DEFAULT,
+        response_shape: ResponseShape = RESPONSE_SHAPE_DEFAULT,
+        file_reference: FileReferenceKind = FILE_REFERENCE_DEFAULT,
         clarify_underspec_default: bool = False,
+        has_prior_dialog: bool = False,
+        has_attachment_context: bool = False,
+        user_text: str = "",
     ) -> EffectiveRoutingIntent:
         """Apply UserChoiceIntentPolicy (sole choice-axis owner) then build routing intent."""
         if clarify_underspec_default and underspec == "none":
             clarified: UnderspecificationKind = "discrete_choice" if requires_user_choice else "open_text"
             underspec = clarified
 
+        prior_present = bool((prior_context or "").strip())
         normalized = ClarificationGatePolicy.apply(
             UserChoiceIntentPolicy.normalize(
                 IntentClassifierOutput(
@@ -395,19 +469,43 @@ class ContinuityPolicy:
                     confidence=max(0.0, min(1.0, confidence)),
                     reasoning=(reasoning or "continuity")[:2000],
                 )
-            )
+            ),
+            has_prior_dialog=has_prior_dialog or prior_present,
+            has_attachment_context=has_attachment_context,
+            user_text=user_text,
         )
         # Trusted-prior follow-ups suppress history-blind Intent review unless choice HITL.
         suppress = trust_prior_for_workers and not normalized.requires_user_choice
+        # Thread-file re-read is a content operation executed by the worker via MCP:
+        # the Formatter template path cannot read storage, so it must not own this ask
+        # (same reasoning as expand/shorten/rewrite → knowledge_request, 055).
+        task_kind = normalized.task_kind
+        requires_mcp = normalized.requires_mcp
+        grounding = normalized.grounding
+        grounding_reason = normalized.grounding_reason
+        if file_reference == "thread_file":
+            if task_kind == "response_formatting":
+                task_kind = "knowledge_request"
+            requires_mcp = True
+        elif trust_prior_for_workers and grounding == "required":
+            # Dialog prior *is* the evidence (correction / follow-up). Keeping
+            # grounding=required forced empty search_knowledge → «нет данных»
+            # over VEGA-9 in prior (W10 2b). Thread-file branch above stays required.
+            grounding = "optional"
+            grounding_reason = (f"{(grounding_reason or '').rstrip()}; continuity→optional (trusted dialog prior is evidence)")[
+                :500
+            ]
         return EffectiveRoutingIntent(
-            task_kind=normalized.task_kind,
-            requires_mcp=normalized.requires_mcp,
+            task_kind=task_kind,
+            requires_mcp=requires_mcp,
             requires_user_choice=normalized.requires_user_choice,
             underspecification_kind=normalized.underspecification_kind,
             candidate_capabilities=normalized.candidate_capabilities,
-            grounding=normalized.grounding,
-            grounding_reason=normalized.grounding_reason,
+            grounding=grounding,
+            grounding_reason=grounding_reason,
             transformation=normalized.transformation,
+            response_shape=response_shape,
+            file_reference=file_reference,
             continuation_kind=continuation_kind,
             prior_context=cls._clip_prior(prior_context),
             suppress_intent_hitl=suppress,
@@ -424,6 +522,7 @@ class ContinuityPolicy:
         raw_intent: IntentClassifierOutput | None,
         has_turn_attachments: bool = False,
         user_text: str | None = None,
+        thread_file_named: bool = False,
     ) -> EffectiveRoutingIntent:
         """Сводит continuity + Intent в один EffectiveRoutingIntent.
 
@@ -434,8 +533,30 @@ class ContinuityPolicy:
 
         ``user_text``: raw turn ask (pre-rewrite). Used only to detect false
         ``new_topic`` when Contextualizer enriched the query from prior.
+
+        ``thread_file_named``: the ask deterministically names a file this dialog
+        holds (resolved in code, not by the model). Intent's ``file_reference`` is
+        history-blind and advisory: Continuity promotes storage re-read only on
+        code evidence (named) or on Intent's *explicit* plurality axis
+        (``attachment_scope`` ∈ {single, all}). Bare ``thread_file``+``auto`` is
+        demoted so dialog prior answers instead of a multi-file interrupt (055).
+        A fenced upload turn still owns its own file (``has_turn_attachments``).
         """
         snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
+        if thread_file_named:
+            snap.file_reference = "thread_file"
+            if snap.kind == "clarify":
+                # The named file IS the referent: there is nothing left to clarify, and
+                # a clarification turn would never dispatch the storage read (055).
+                snap.kind = "answer"
+        elif (
+            snap.file_reference == "thread_file"
+            and not has_turn_attachments
+            and snap.attachment_scope not in _EXPLICIT_FILE_SCOPES
+        ):
+            # Evidence-first file axis: Intent alone + auto scope cannot force a
+            # storage re-read / file-choice card (living assistant — dialog first).
+            snap.file_reference = FILE_REFERENCE_DEFAULT
         assistant_prior = cls.prior_assistant_content(contextualizer, dialog)
         if snap.choice_slot_filled:
             snap.requires_user_choice = False
@@ -473,6 +594,8 @@ class ContinuityPolicy:
         if answered is not None:
             return answered
 
+        gate_prior = bool(assistant_prior and assistant_prior.strip()) or bool(dialog is not None and dialog.turns)
+        gate_user = (user_text or "").strip()
         if snap.kind == "clarify":
             return cls._finalize(
                 task_kind="clarification_needed",
@@ -488,7 +611,12 @@ class ContinuityPolicy:
                 grounding=snap.grounding,
                 grounding_reason=snap.grounding_reason,
                 transformation=snap.transformation,
+                response_shape=snap.response_shape,
+                file_reference=snap.file_reference,
                 clarify_underspec_default=True,
+                has_prior_dialog=gate_prior,
+                has_attachment_context=has_turn_attachments,
+                user_text=gate_user,
             )
 
         return cls._finalize(
@@ -505,6 +633,11 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            response_shape=snap.response_shape,
+            file_reference=snap.file_reference,
+            has_prior_dialog=gate_prior,
+            has_attachment_context=has_turn_attachments,
+            user_text=gate_user,
         )
 
     @classmethod
@@ -554,6 +687,8 @@ class ContinuityPolicy:
         snap.refers_to_prior = False
         snap.requires_user_choice = False
         snap.underspec = "none"
+        # This turn carries its own fence; a storage re-read would fight it (055).
+        snap.file_reference = FILE_REFERENCE_DEFAULT
         snap.caps = tuple(c for c in snap.caps if c != "user_choice")
         if snap.raw_task == "clarification_needed":
             snap.raw_task = "knowledge_request"
@@ -561,8 +696,15 @@ class ContinuityPolicy:
 
     @staticmethod
     def _demote_false_format(snap: _ResolveSnapshot) -> None:
-        """Structural gate: Intent clarify-slot / social beats false Contextualizer format."""
+        """Structural gate: Intent clarify-slot / social / no-back-reference beats format."""
         if snap.kind != "format":
+            return
+        if not snap.refers_to_prior:
+            # Contextualizer contract: format ALWAYS transforms prior content, so it
+            # must report refers_to_prior=true. A format label without that flag is an
+            # inconsistent (or stale) classification; answering it from ``prior_context``
+            # replays the previous turn. Fail safe: treat the ask as self-contained.
+            snap.kind = "new_topic"
             return
         if snap.raw_task == "social_conversation":
             snap.kind = "new_topic"
@@ -620,6 +762,8 @@ class ContinuityPolicy:
                 grounding=snap.grounding,
                 grounding_reason=snap.grounding_reason,
                 transformation=snap.transformation,
+                response_shape=snap.response_shape,
+                file_reference=snap.file_reference,
             )
         user_prior = cls.prior_user_content(dialog)
         if user_prior is None:
@@ -638,6 +782,8 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            response_shape=snap.response_shape,
+            file_reference=snap.file_reference,
         )
 
     @classmethod
@@ -682,6 +828,8 @@ class ContinuityPolicy:
             grounding=snap.grounding,
             grounding_reason=snap.grounding_reason,
             transformation=snap.transformation,
+            response_shape=snap.response_shape,
+            file_reference=snap.file_reference,
         )
 
 
@@ -699,6 +847,9 @@ class _ResolveSnapshot:
     grounding: GroundingMode
     grounding_reason: str
     transformation: TransformationKind
+    response_shape: ResponseShape
+    file_reference: FileReferenceKind
+    attachment_scope: AttachmentScope
     intent_reasoning: str
     confidence: float
     choice_slot_filled: bool
@@ -724,11 +875,42 @@ class _ResolveSnapshot:
             transformation=(
                 TransformPolicy.coerce(raw_intent.transformation) if raw_intent is not None else TRANSFORMATION_DEFAULT
             ),
+            response_shape=(raw_intent.response_shape if raw_intent is not None else RESPONSE_SHAPE_DEFAULT),
+            file_reference=raw_intent.file_reference if raw_intent is not None else FILE_REFERENCE_DEFAULT,
+            attachment_scope=(
+                raw_intent.attachment_scope if raw_intent is not None else ATTACHMENT_SCOPE_DEFAULT
+            ),
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,
             ctx_confidence=float(contextualizer.confidence) if contextualizer is not None else 1.0,
         )
+
+
+def _tokens(text: str) -> tuple[str, ...]:
+    """Case-folded alphanumeric tokens (punctuation is not part of a token)."""
+    out: list[str] = []
+    current: list[str] = []
+    for ch in text.casefold():
+        if ch.isalnum():
+            current.append(ch)
+        elif current:
+            out.append("".join(current))
+            current = []
+    if current:
+        out.append("".join(current))
+    return tuple(out)
+
+
+def _content_tokens(text: str) -> tuple[str, ...]:
+    """Tokens long enough to carry the request (skips prepositions structurally)."""
+    return tuple(token for token in _tokens(text) if len(token) >= _ASK_TOKEN_MIN_CHARS)
+
+
+def _rewrite_ballooned(raw_chars: int, rewritten_chars: int) -> bool:
+    """True when a rewrite expands the ask beyond enrichment scale."""
+    threshold = max(raw_chars * _REWRITE_MAX_GROWTH, _REWRITE_MIN_BALLOON_CHARS)
+    return rewritten_chars >= threshold
 
 
 def _map_answer_task(

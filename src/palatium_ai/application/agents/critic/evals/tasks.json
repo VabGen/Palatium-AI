@@ -14,7 +14,9 @@
       "worker_summary": "Prior answer body",
       "user_input_chars": 0
     },
-    "expect": { "status": "success", "requires_review": false, "llm_invoked": false }
+    "expect": { "status": "success", "requires_review": false, "llm_invoked": false },
+    "deepeval": { "metric": "answer_relevancy", "threshold": 0.7 },
+    "expected_output": "Ответ пользователю оформлен таблицей по предыдущему ответу."
   },
   {
     "id": "answer_continuity_gate",
@@ -49,5 +51,29 @@
       "user_input_chars": 0
     },
     "expect": { "llm_invoked": true, "requires_review": true, "accuracy_score_min": 7 }
+  },
+  {
+    "id": "constitution_blocks_passthrough",
+    "cassette": "critic/noop.json",
+    "input": {
+      "user_text": "дай в виде таблицы",
+      "task_kind": "response_formatting",
+      "route": "formatter",
+      "route_plan": "Format prior answer",
+      "requires_mcp": false,
+      "selected_strategy": "format_only",
+      "continuation_kind": "format",
+      "classification_confidence": 0.95,
+      "worker_summary": "Prior answer for ivan.petrov@example.com formatted as a table.",
+      "user_input_chars": 0,
+      "worker_confidence": 0.95
+    },
+    "expect": {
+      "status": "partial",
+      "requires_review": true,
+      "llm_invoked": false,
+      "constitution_blocked": true,
+      "violations_contains": ["no_pii_echo_without_permission"]
+    }
   }
 ]

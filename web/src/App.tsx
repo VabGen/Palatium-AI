@@ -1,6 +1,6 @@
 import { Toaster } from 'react-hot-toast';
-import { Sparkles } from 'lucide-react';
 import { ChatShell } from './components/ChatShell';
+import { IconSpark } from './icons/kimiStroke';
 import { setPanelOpen } from './runtime/store';
 import { useAssistantRuntime } from './runtime/useRuntime';
 import { t } from './i18n';
@@ -25,7 +25,7 @@ export default function App() {
         onClick={() => setPanelOpen(true)}
         aria-label={t('launcher.open')}
       >
-        <Sparkles size={18} className="brand-mark" aria-hidden />
+        <IconSpark size={18} className="brand-mark" />
         {t('launcher.label')}
       </button>
       <Toaster position="bottom-right" toastOptions={{ duration: 3000 }} />

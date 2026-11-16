@@ -11,26 +11,31 @@ alwaysApply: false
 ## Принципы
 
 1. Streaming-First для UI-facing LLM (TTFT ≤ 500 ms на trivial path).
-2. `ContentDocument` — persistence + internal; SSE UI — Markdown (+ custom XML tags).
+2. `ContentDocument` — единственный UI-контракт; SSE target =
+   `structured_incremental` (`document_title` + `block_delta` → `BlockRenderer`).
+   `legacy_markdown` (`text_delta` / `answer_delta`) — kill-switch / canary fallback,
+   не целевой preview.
 3. Parallel over sequential where no data-dependency (`Send()` — Phase 2).
 4. Fail fast, fall back gracefully (worker prose / fallback stream).
 5. Every token has a price (tier `cost_per_token` — Phase 3).
 6. OpenTelemetry GenAI SemConv (`gen_ai.*` — Phase 3).
 7. Dynamic LLM timeouts: `base + prompt×0.01 + max_tokens×0.05`, cap 90s (Phase 4).
 
-## Phase 1 Hybrid SSE (норма)
+## Phase 1 Hybrid SSE (норма → structured cutover)
 
 | Event | Role |
 |---|---|
 | `hop` | Graph node started/updated — **name frozen; do not rename** |
-| `answer_delta` | Worker / fast-path prose; dual-emit during Formatter stream (migration) |
-| `text_delta` | Formatter GFM markdown tokens (`content`) — primary preview |
-| `result` | `FormatterTaskResult` with `ContentDocument` (parsed from final markdown) |
+| `document_title` / `block_delta` | Typed preview (`structured_incremental`); upsert open paragraphs |
+| `answer_delta` | Dual-emit / legacy prose; 0-LLM paths use `emit_content_document` |
+| `text_delta` | Legacy GFM tokens only (`FORMATTER_MODE=legacy` cohort) |
+| `result` | `FormatterTaskResult` with `ContentDocument` (superset of painted blocks) |
 | `error` / `done` | Unchanged |
 
-- Dual-emit `replace: true` **once**, when Formatter stream starts after prior worker `answer_delta`.
+- Under `structured_incremental`: `layout_shift_count == 0` (no replace of typed preview).
 - Clickable HITL cards only from server `result`, never from stream XML.
 - Qdrant forbidden (**060**); Phase 2 cache = Redis L1 + LiteLLM semantic.
+- Rollout: `FORMATTER_MODE` + `FORMATTER_ROLLOUT_PCT` (see `docs/formatter-schema-first.md`).
 
 ## Phase order
 

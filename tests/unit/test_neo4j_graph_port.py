@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from palatium_ai.domain.graph.temporal import ACTIVE_FACT_AS_OF_PREDICATE
 from palatium_ai.domain.graph.types import GraphQueryCommand
 from palatium_ai.infrastructure.graph.neo4j_graph_port import Neo4jGraphPort
 
@@ -89,6 +90,56 @@ async def test_neo4j_graph_port_forces_tenant_param() -> None:
     )
     assert transport.last_query is not None
     assert transport.last_query[1]["user_id"] == "u-actor"
+
+
+@pytest.mark.asyncio()
+async def test_neo4j_graph_port_binds_as_of_by_default() -> None:
+    """M5: every read carries a time anchor, even when the caller did not ask for one."""
+    transport = _FakeNeo4jTransport()
+    port = Neo4jGraphPort(transport)
+    await port.query(
+        GraphQueryCommand(
+            user_id="u1",
+            cypher="MATCH (f:Fact {user_id: $user_id}) RETURN f.text AS fact",
+            params={},
+        )
+    )
+    assert transport.last_query is not None
+    as_of = transport.last_query[1]["as_of"]
+    assert isinstance(as_of, str)
+    assert as_of.endswith("Z")
+
+
+@pytest.mark.asyncio()
+async def test_neo4j_graph_port_binds_requested_as_of() -> None:
+    from datetime import UTC, datetime
+
+    transport = _FakeNeo4jTransport()
+    port = Neo4jGraphPort(transport)
+    await port.query(
+        GraphQueryCommand(
+            user_id="u1",
+            cypher=("MATCH (f:MemoryFact) WHERE " + ACTIVE_FACT_AS_OF_PREDICATE + " RETURN f.text AS fact"),
+            params={"lim": 5},
+            as_of=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
+        )
+    )
+    assert transport.last_query is not None
+    assert transport.last_query[1]["as_of"] == "2026-01-02T03:04:05Z"
+
+
+@pytest.mark.asyncio()
+async def test_neo4j_graph_port_rejects_fact_read_without_as_of() -> None:
+    """M5 audit F1: the driver must never see an unfiltered ``:MemoryFact`` read."""
+    port = Neo4jGraphPort(_FakeNeo4jTransport())
+    with pytest.raises(ValueError, match="as_of"):
+        await port.query(
+            GraphQueryCommand(
+                user_id="u1",
+                cypher="MATCH (f:MemoryFact {user_id: $user_id}) RETURN f.text AS fact",
+                params={},
+            )
+        )
 
 
 @pytest.mark.asyncio()

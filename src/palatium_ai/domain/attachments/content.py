@@ -61,6 +61,10 @@ class AttachmentContent(BaseModel):
     #: Heuristic PII on extracted flow text (060); tier via ``ATTACHMENTS_PII_POLICY``
     #: (``tag`` / ``mask`` / ``reject``). Does not block under default ``tag``.
     contains_pii: bool = False
+    #: ``safe_text`` differs from the extracted text (injection redaction or PII mask).
+    #: Recorded at write time: deriving it from the *current* config on read would
+    #: describe a blob written under a different policy, i.e. lie about the text.
+    text_masked: bool = False
     #: Additive parser metadata (``ocr_engine`` etc.); absent on pre-migration blobs.
     metadata: AttachmentContentMetadata = Field(default_factory=AttachmentContentMetadata)
 

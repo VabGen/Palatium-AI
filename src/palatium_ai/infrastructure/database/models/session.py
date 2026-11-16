@@ -31,6 +31,7 @@ class SessionORM(UUIDPrimaryKeyMixin, TimestampMixin, UserTrackingMixin, Base):
     __table_args__ = (
         UniqueConstraint("thread_id"),
         Index("ix_sessions_status_created_at", "status", "created_at"),
+        Index("ix_sessions_user_project", "user_id", "project_id"),
         {"schema": DEFAULT_DB_SCHEMA},
     )
 
@@ -42,6 +43,8 @@ class SessionORM(UUIDPrimaryKeyMixin, TimestampMixin, UserTrackingMixin, Base):
         server_default=sa.text("'active'"),
     )
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Same string id as ``attachments.project_id`` / Projects API (no FK — P2).
+    project_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     context: Mapped[dict[str, Any]] = mapped_column(
         JSONB(astext_type=sa.Text()),
         nullable=False,

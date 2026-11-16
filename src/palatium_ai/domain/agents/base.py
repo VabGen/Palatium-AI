@@ -34,5 +34,12 @@ class BaseAgent(ABC):
         """Имена инструментов; RBAC применяет ToolExecutor по allowed_tools (070)."""
 
     async def verify(self, output: AgentOutput) -> bool:
-        """Семантическая самопроверка; False → partial + эскалация (030.7)."""
+        """Семантическая самопроверка; False → partial + эскалация (030.7).
+
+        Default ``True`` is intentional only when the agent is covered by another
+        deterministic gate (see ADR-0009 verify matrix). Prefer an override over
+        silent default for any agent that emits user-visible or route-critical
+        payloads. Called exclusively by Harness after ``run`` — agents cannot
+        skip this via the public harness API (verifier isolation).
+        """
         return True

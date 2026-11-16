@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from palatium_ai.application.agents.formatter.markdown_parser import markdown_to_content_document
+from palatium_ai.application.agents.formatter.markdown_parser import (
+    _split_row,
+    markdown_to_content_document,
+)
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content import CalloutBlock, ListBlock, ParagraphBlock, TableBlock
@@ -98,3 +101,28 @@ def test_list_bullets() -> None:
     doc = markdown_to_content_document(md, _task())
     assert isinstance(doc.blocks[0], ListBlock)
     assert len(doc.blocks[0].items) == 2
+
+
+def test_split_row_handles_escaped_pipe() -> None:
+    assert _split_row("| a \\| b | c |") == ["a | b", "c"]
+
+
+def test_split_row_no_outer_pipes() -> None:
+    assert _split_row("a | b | c") == ["a", "b", "c"]
+
+
+def test_empty_markdown_yields_empty_document() -> None:
+    doc = markdown_to_content_document("   \n  ", _task())
+    assert doc.blocks == ()
+    assert doc.meta.requires_review is True
+
+
+def test_json_lookalike_prose_is_not_a_document() -> None:
+    """The ``schema_version`` substring alone must not trigger the legacy JSON path."""
+    doc = markdown_to_content_document('Here is {"schema_version": 2} not a doc', _task())
+    assert any(isinstance(block, ParagraphBlock) for block in doc.blocks)
+
+
+def test_json_with_wrong_schema_version_is_not_a_document() -> None:
+    doc = markdown_to_content_document('{"schema_version": 2, "locale": "en-US"}', _task())
+    assert any(isinstance(block, ParagraphBlock) for block in doc.blocks)

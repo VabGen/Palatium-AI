@@ -30,3 +30,26 @@ def test_preference_kinds_preferred() -> None:
         hit_kinds=("fact", "preference"),
     )
     assert decision.hints == ("user prefers RU",)
+
+
+def test_known_kinds_without_preference_inject_nothing() -> None:
+    """Facts/pins are not personalisation: «сравни файлы» must not enter the composer."""
+    decision = FormatterMemoryMergePolicy.decide(
+        memory_hints=("привет я геннадий а ты", "сравни файлы"),
+        has_source_content=True,
+        hit_kinds=("fact", "fact"),
+    )
+    assert decision.hints == ()
+    assert decision.reason == "no_personalization_kinds_with_source"
+
+
+def test_content_transform_never_injects_hints() -> None:
+    """A rewrite of the prior answer must not be steered by remembered topics."""
+    decision = FormatterMemoryMergePolicy.decide(
+        memory_hints=("сравни файлы",),
+        has_source_content=True,
+        hit_kinds=("fact",),
+        content_transform=True,
+    )
+    assert decision.hints == ()
+    assert decision.reason == "content_transform_no_personalization"

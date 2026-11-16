@@ -116,6 +116,18 @@ groups:
           summary: "Memory promote batch errors"
           description: "medium→graph promote is failing (060/M7). Check Neo4j GraphWritePort and jobs.memory_promote."
 
+      # Not an error: the batch correctly refused to flip a PII fact without a human.
+      # Non-zero means facts are stuck in "candidate" until the HITL channel ships (M5 F3).
+      # info, not warning — nothing is broken, something is waiting for a decision.
+      - alert: PalatiumMemoryPromoteBlockedPii
+        expr: increase(palatium_memory_promote_blocked_pii_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "PII fact supersede withheld pending human approval"
+          description: "Promote candidates are held back because the flip would change a PII fact (M5 F3). Count is re-incremented every batch until resolved — treat the series as 'stuck facts', not 'events'."
+
   - name: palatium-adaptive-grounding
     interval: 30s
     rules:

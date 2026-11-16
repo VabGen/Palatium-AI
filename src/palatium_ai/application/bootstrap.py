@@ -12,18 +12,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from palatium_ai.application.services.attachment_reference_resolver import AttachmentReferenceResolver
 from palatium_ai.application.services.attachment_service import AttachmentService
 from palatium_ai.application.services.document_export_service import DocumentExportService
 from palatium_ai.application.services.feedback_service import FeedbackService
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.kill_switch import KillSwitchService
+from palatium_ai.application.services.memory_clear_service import MemoryClearService
 from palatium_ai.application.services.memory_extract_hitl_service import MemoryExtractHitlService
 from palatium_ai.application.services.memory_forget_service import MemoryForgetService
+from palatium_ai.application.services.memory_op_worker import MemoryOpWorker
+from palatium_ai.application.services.memory_promotion import MemoryPromotionService
 from palatium_ai.application.services.memory_save_service import MemorySaveService
+from palatium_ai.application.services.memory_verify_service import MemoryVerifyService
+from palatium_ai.application.services.project_service import ProjectService
 from palatium_ai.application.services.retention import retention_windows_from_settings
 from palatium_ai.application.services.session_service import SessionService
 from palatium_ai.application.services.session_timeline_service import SessionTimelineService
+from palatium_ai.application.services.skill_manage_service import SkillManageService
+from palatium_ai.application.services.vision_images import VisionImageService
 from palatium_ai.application.wiring import (
     AttachmentPorts,
     build_attachment_ports,
@@ -36,11 +44,13 @@ from palatium_ai.application.wiring import (
 from palatium_ai.core.config.settings import Settings
 from palatium_ai.core.logging import logger, setup_logging
 from palatium_ai.core.observability import setup_observability
+from palatium_ai.domain.memory.promotion import PromotionThresholds
 from palatium_ai.infrastructure.cache.redis import create_redis_client, ensure_redis_connection
 from palatium_ai.infrastructure.database.init_db import (
     ensure_database_and_schema,
 )
 from palatium_ai.infrastructure.database.message_feedback_repository import PostgresMessageFeedbackRepository
+from palatium_ai.infrastructure.database.project_repository import PostgresProjectRepository
 from palatium_ai.infrastructure.database.repositories import (
     McpToolCallRepository,
     SessionRepository,
@@ -50,6 +60,7 @@ from palatium_ai.infrastructure.embeddings.factory import create_embedding_clien
 from palatium_ai.infrastructure.export.pdf import ContentDocumentPdfExporter
 from palatium_ai.infrastructure.graph.factory import build_graph_ports
 from palatium_ai.infrastructure.knowledge.postgres_knowledge_port import PostgresKnowledgePort
+from palatium_ai.infrastructure.llm.shared_transport import aclose_shared_client_sessions
 from palatium_ai.infrastructure.mcp.consul_source import ConsulMCPSource
 from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
 from palatium_ai.infrastructure.mcp.registry import MCPRegistry
@@ -62,7 +73,9 @@ from palatium_ai.infrastructure.memory.dialog_turn_store import PostgresDialogTu
 from palatium_ai.infrastructure.memory.embedding_rerank import EmbeddingRerankMemoryPort
 from palatium_ai.infrastructure.memory.graphiti_adapter import GraphitiMemoryPort, GraphitiSdkTransport
 from palatium_ai.infrastructure.memory.mem0_adapter import Mem0HttpTransport, Mem0MemoryPort
+from palatium_ai.infrastructure.memory.memory_op_queue import PostgresMemoryOpQueue
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
+from palatium_ai.infrastructure.vision.blob_image_source import BlobVisionImageSource
 from palatium_ai.infrastructure.web.factory import build_web_search_port
 
 # 050: narrow the previously generic ``except Exception`` — embedding wiring is optional,
@@ -81,8 +94,10 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+    from palatium_ai.application.services.attachment_read_service import AttachmentReadService
     from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.intent_service import IntentService
+    from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.domain.graph.port import GraphPort
     from palatium_ai.domain.graph.write_port import GraphWritePort
@@ -113,6 +128,10 @@ class AppResources:
     document_ingest_service: DocumentIngestService | None = None
     memory_save_service: MemorySaveService | None = None
     memory_forget_service: MemoryForgetService | None = None
+    memory_verify_service: MemoryVerifyService | None = None
+    memory_clear_service: MemoryClearService | None = None
+    memory_op_worker: MemoryOpWorker | None = None
+    skill_manage_service: SkillManageService | None = None
     memory_extract_hitl_service: MemoryExtractHitlService | None = None
     checkpointer_handle: CheckpointerHandle | None = None
     background_tasks: tuple[asyncio.Task[None], ...] = field(default_factory=tuple)
@@ -127,7 +146,9 @@ class AppResources:
     web_search_port: WebSearchPort | None = None
     attachment_ports: AttachmentPorts | None = None
     attachment_service: AttachmentService | None = None
+    vision_images: VisionImageService | None = None
     feedback_service: FeedbackService | None = None
+    project_service: ProjectService | None = None
 
     # Legacy aliases (prefer memory_extract*).
     @property
@@ -223,10 +244,6 @@ def _build_memory_port(settings: Settings, session_factory: async_sessionmaker[A
 
         port = CrossEncoderRerankMemoryPort(port, TokenOverlapCrossEncoder())
         logger.info("MemoryPort: cross-encoder rerank enabled (M8)")
-    if settings.memory.binary_quantize_rerank:
-        # Helpers live in domain.memory.binary_quantize; bit(4096) column + HNSW
-        # is a separate migration (060). Flag is parsed so ops can flip without code churn.
-        logger.info("MEMORY_BINARY_QUANTIZE_RERANK set (Hamming helpers ready; ANN column not migrated)")
     return port
 
 
@@ -271,6 +288,7 @@ def _wire_platform_handler(
     web_search_port: WebSearchPort,
     skill_catalog: object | None = None,
     attachment_read: object | None = None,
+    skills_self_authored_enabled: bool = False,
 ) -> None:
     """Wire the platform handler."""
     # Track B: platform is always-on Host-local capability (no MCP_SERVERS URL required).
@@ -285,6 +303,7 @@ def _wire_platform_handler(
             web_search_port=web_search_port,
             skill_catalog=skill_catalog,  # type: ignore[arg-type]  # object|None → Protocol (017)
             attachment_read=attachment_read,  # type: ignore[arg-type]  # object|None → Protocol (017)
+            skills_self_authored_enabled=skills_self_authored_enabled,
         ),
     )
     logger.info("Platform MCP: local knowledge+memory+graph+web+skills+attachments handler registered")
@@ -318,6 +337,149 @@ def _hitl_signing_secret(settings: Settings) -> str:
     # Dev without JWT: still bind HITL actions; never empty.
     logger.warning("HITL signing secret falling back to derived local key")
     return f"dev-hitl-{settings.app.name}-local-only"
+
+
+@dataclass(frozen=True)
+class _AttachmentRuntime:
+    """Attachment + vision stack when blob ports are available."""
+
+    service: AttachmentService | None = None
+    read_service: AttachmentReadService | None = None
+    file_reference_resolver: AttachmentReferenceResolver | None = None
+    vision_image_source: BlobVisionImageSource | None = None
+    vision_images: VisionImageService | None = None
+
+
+def _build_attachment_runtime(
+    settings: Settings,
+    attachment_ports: AttachmentPorts | None,
+    *,
+    hitl_service: HitlService,
+    mcp_registry: MCPRegistry,
+    redis_client: Redis,
+    mcp_tool_call_repository: McpToolCallRepository,
+) -> _AttachmentRuntime:
+    """Wire attachment services + vision sources; empty when ports are unset."""
+    if attachment_ports is None:
+        return _AttachmentRuntime()
+    service = build_attachment_service(
+        settings,
+        attachment_ports,
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    read_service = build_attachment_read_service(settings, attachment_ports)
+    # Same repository the read path uses: the registry of what this thread holds
+    # is single-sourced, not a second store (050).
+    file_reference_resolver = AttachmentReferenceResolver(repository=attachment_ports.repository)
+    # ADR 0007: image parts are references; the blob store owns the bytes, so the
+    # LLM adapter gets a source, not a copy of an upload. Built only when a vision
+    # alias is configured — otherwise an image call stays a typed refusal.
+    vision_image_source = BlobVisionImageSource(
+        attachment_ports.blob_store,
+        max_image_bytes=settings.llm.vision_max_image_bytes,
+    )
+    vision_images = VisionImageService(
+        attachment_ports.blob_store,
+        vision_model=settings.llm.resolved_vision_model,
+        max_image_bytes=settings.llm.vision_max_image_bytes,
+        max_images=settings.llm.vision_max_images,
+        allow_pii_images=settings.llm.allow_pii_images,
+    )
+    if settings.llm.vision_configured:
+        logger.info("Vision route enabled", model=settings.llm.vision_model)
+    else:
+        logger.info("Vision route disabled (LLM_VISION_MODEL is empty)")
+    return _AttachmentRuntime(
+        service=service,
+        read_service=read_service,
+        file_reference_resolver=file_reference_resolver,
+        vision_image_source=vision_image_source,
+        vision_images=vision_images,
+    )
+
+
+def _build_memory_op_runtime(
+    settings: Settings,
+    *,
+    memory_port: MemoryPort | None,
+    graph_write: GraphWritePort | None,
+    hitl_service: HitlService,
+    memory_op_queue: PostgresMemoryOpQueue,
+    redis_client: Redis,
+) -> tuple[MemoryClearService | None, MemoryOpWorker | None]:
+    """Clear-HITL + promote worker when medium memory and graph write are both live."""
+    if memory_port is None or graph_write is None:
+        return None, None
+    clear_service = MemoryClearService(
+        hitl_service=hitl_service,
+        memory_port=memory_port,
+        memory_op_queue=memory_op_queue,
+        redis_client=redis_client,
+    )
+    worker: MemoryOpWorker | None = None
+    if getattr(memory_port, "claim_promotion", None) is not None:
+        worker = MemoryOpWorker(
+            queue=memory_op_queue,
+            memory_port=memory_port,
+            graph_write=graph_write,
+            promotion=MemoryPromotionService(
+                memory=memory_port,  # type: ignore[arg-type]
+                graph_write=graph_write,
+                thresholds=PromotionThresholds(
+                    min_access_frequency=settings.memory.promote_min_access_frequency,
+                    min_importance=settings.memory.promote_min_importance,
+                ),
+                xmemory_decouple=settings.memory.xmemory_decouple,
+                bayesian_trust=settings.memory.bayesian_trust,
+                origin_ceiling=settings.memory.origin_ceiling,
+            ),
+            promote_fast_min_score=settings.memory.promote_fast_min_score,
+        )
+    return clear_service, worker
+
+
+def _schedule_startup_workers(
+    background_tasks: list[asyncio.Task[None]],
+    *,
+    capability_index: MCPCapabilityIndex,
+    hitl_service: HitlService,
+    memory_extract: MemoryExtractService | None,
+    memory_op_worker: MemoryOpWorker | None,
+) -> None:
+    """Register non-blocking warmers / sweep / extract / promote loops."""
+    background_tasks.append(
+        asyncio.create_task(
+            warm_mcp_capability_cache(capability_index),
+            name="mcp-capability-warm",
+        )
+    )
+    logger.info("MCP capability cache warm scheduled")
+    background_tasks.append(
+        asyncio.create_task(
+            _hitl_sweep_loop(hitl_service),
+            name="hitl-ttl-sweep",
+        )
+    )
+    logger.info("HITL TTL sweep started", interval_seconds=_HITL_SWEEP_INTERVAL_SECONDS)
+    if memory_extract is not None:
+        background_tasks.append(
+            asyncio.create_task(
+                memory_extract.run_worker(),
+                name="memory-extract",
+            )
+        )
+        logger.info("Memory extract worker started")
+    if memory_op_worker is not None:
+        background_tasks.append(
+            asyncio.create_task(
+                memory_op_worker.run(),
+                name="memory-ops",
+            )
+        )
+        logger.info("Memory op worker started")
 
 
 async def startup(settings: Settings) -> AppResources:
@@ -357,6 +519,10 @@ async def startup(settings: Settings) -> AppResources:
     session_repository = SessionRepository(session_factory)
     mcp_tool_call_repository = McpToolCallRepository(session_factory)
     session_service = SessionService(session_repository)
+    project_service = ProjectService(
+        PostgresProjectRepository(session_factory),
+        session_service=session_service,
+    )
     hitl_signing = _hitl_signing_secret(settings)
     hitl_service = build_hitl_service(
         redis_client=redis_client,
@@ -374,19 +540,25 @@ async def startup(settings: Settings) -> AppResources:
     graph_ports = build_graph_ports(settings)
     await _ensure_neo4j_memory_schema(graph_ports)
     attachment_ports = await build_attachment_ports(settings, session_factory)
-    attachment_service: AttachmentService | None = None
-    attachment_read_service = None
-    if attachment_ports is not None:
-        attachment_service = build_attachment_service(
-            settings,
-            attachment_ports,
-            hitl_service=hitl_service,
-            mcp_registry=mcp_registry,
-            redis_client=redis_client,
-            mcp_tool_call_repository=mcp_tool_call_repository,
-        )
-        attachment_read_service = build_attachment_read_service(settings, attachment_ports)
-    intent_service, memory_extract, capability_index, document_ingest_service = build_intent_service(
+    attachments = _build_attachment_runtime(
+        settings,
+        attachment_ports,
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    memory_op_queue = PostgresMemoryOpQueue(session_factory)
+    (
+        intent_service,
+        memory_extract,
+        capability_index,
+        document_ingest_service,
+        memory_save_service,
+        memory_forget_service,
+        memory_verify_service,
+        skill_catalog,
+    ) = build_intent_service(
         settings,
         mcp_registry,
         session_service=session_service,
@@ -399,19 +571,18 @@ async def startup(settings: Settings) -> AppResources:
         memory_port=memory_port,
         checkpointer=checkpointer_handle.saver,
         graph_write=graph_ports.write,
-        attachment_service=attachment_service,
+        attachment_service=attachments.service,
+        file_reference_resolver=attachments.file_reference_resolver,
+        vision_image_source=attachments.vision_image_source,
+        vision_images=attachments.vision_images,
+        memory_op_queue=memory_op_queue,
     )
-    if attachment_service is not None and document_ingest_service is not None:
-        attachment_service.bind_document_ingest(document_ingest_service)
+    if attachments.service is not None and document_ingest_service is not None:
+        attachments.service.bind_document_ingest(document_ingest_service)
     hitl_service.bind_deny_resume(intent_service)
+    hitl_service.bind_session_service(session_service)
     graph_port = graph_ports.query
     web_search_port = build_web_search_port(settings)
-    from palatium_ai.infrastructure.skills.filesystem_skill_catalog import FilesystemSkillCatalog
-
-    skill_catalog = FilesystemSkillCatalog(
-        settings.skills.roots,
-        reference_max_chars=settings.skills.reference_max_chars,
-    )
     _wire_platform_handler(
         mcp_registry,
         knowledge_port,
@@ -421,26 +592,25 @@ async def startup(settings: Settings) -> AppResources:
         graph_write=graph_ports.write,
         web_search_port=web_search_port,
         skill_catalog=skill_catalog,
-        attachment_read=attachment_read_service,
+        attachment_read=attachments.read_service,
+        skills_self_authored_enabled=settings.skills.allow_self_authored,
     )
     mcp_registry.assert_local_handlers_wired()
+
+    async def _clear_edit_checkpoints(*, thread_id: str) -> int:
+        from palatium_ai.infrastructure.retention.checkpointer_handler import (
+            clear_checkpoints_for_thread,
+        )
+
+        return await clear_checkpoints_for_thread(session_factory, thread_id=thread_id)
 
     session_timeline_service = SessionTimelineService(
         dialog_turn_store=dialog_turn_store,
         mcp_tool_call_repository=mcp_tool_call_repository,
+        clear_checkpoints=_clear_edit_checkpoints,
     )
-    memory_save_service = MemorySaveService(
-        hitl_service=hitl_service,
-        mcp_registry=mcp_registry,
-        redis_client=redis_client,
-        mcp_tool_call_repository=mcp_tool_call_repository,
-    )
-    memory_forget_service = MemoryForgetService(
-        hitl_service=hitl_service,
-        mcp_registry=mcp_registry,
-        redis_client=redis_client,
-        mcp_tool_call_repository=mcp_tool_call_repository,
-    )
+    # Reuse the instances the graph's memory-mutation gate already stashed pendings in;
+    # a second pair would mint cards whose task ids no service can resume (060).
     memory_extract_hitl_service: MemoryExtractHitlService | None = None
     if memory_extract is not None:
         memory_extract_hitl_service = MemoryExtractHitlService(
@@ -449,40 +619,42 @@ async def startup(settings: Settings) -> AppResources:
             redis_client=redis_client,
             mcp_tool_call_repository=mcp_tool_call_repository,
         )
+    skill_manage_service = SkillManageService(
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        enabled=settings.skills.allow_self_authored,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    memory_clear_service, memory_op_worker = _build_memory_op_runtime(
+        settings,
+        memory_port=memory_port,
+        graph_write=graph_ports.write,
+        hitl_service=hitl_service,
+        memory_op_queue=memory_op_queue,
+        redis_client=redis_client,
+    )
     hitl_respond_facade = HitlRespondFacade(
         hitl_service=hitl_service,
         intent_service=intent_service,
         document_ingest_service=document_ingest_service,
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
+        memory_verify_service=memory_verify_service,
+        memory_clear_service=memory_clear_service,
+        skill_manage_service=skill_manage_service,
         memory_consolidate_service=memory_extract_hitl_service,
-        attachment_index_service=attachment_service,
+        attachment_index_service=attachments.service,
+        session_service=session_service,
     )
 
-    background_tasks.append(
-        asyncio.create_task(
-            warm_mcp_capability_cache(capability_index),
-            name="mcp-capability-warm",
-        )
+    _schedule_startup_workers(
+        background_tasks,
+        capability_index=capability_index,
+        hitl_service=hitl_service,
+        memory_extract=memory_extract,
+        memory_op_worker=memory_op_worker,
     )
-    logger.info("MCP capability cache warm scheduled")
-
-    background_tasks.append(
-        asyncio.create_task(
-            _hitl_sweep_loop(hitl_service),
-            name="hitl-ttl-sweep",
-        )
-    )
-    logger.info("HITL TTL sweep started", interval_seconds=_HITL_SWEEP_INTERVAL_SECONDS)
-
-    if memory_extract is not None:
-        background_tasks.append(
-            asyncio.create_task(
-                memory_extract.run_worker(),
-                name="memory-extract",
-            )
-        )
-        logger.info("Memory extract worker started")
 
     return AppResources(
         settings=settings,
@@ -500,6 +672,10 @@ async def startup(settings: Settings) -> AppResources:
         document_ingest_service=document_ingest_service,
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
+        memory_verify_service=memory_verify_service,
+        memory_clear_service=memory_clear_service,
+        memory_op_worker=memory_op_worker,
+        skill_manage_service=skill_manage_service,
         memory_extract_hitl_service=memory_extract_hitl_service,
         checkpointer_handle=checkpointer_handle,
         background_tasks=tuple(background_tasks),
@@ -511,8 +687,10 @@ async def startup(settings: Settings) -> AppResources:
         graph_ports=graph_ports,
         web_search_port=web_search_port,
         attachment_ports=attachment_ports,
-        attachment_service=attachment_service,
+        attachment_service=attachments.service,
+        vision_images=attachments.vision_images,
         feedback_service=feedback_service,
+        project_service=project_service,
     )
 
 
@@ -526,7 +704,7 @@ async def _ensure_neo4j_memory_schema(graph_ports: GraphPorts) -> None:
         from palatium_ai.infrastructure.memory.neo4j_schema import ensure_memory_schema
 
         await ensure_memory_schema(driver)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # schema bootstrap is best-effort: API boots without indexes (082)
         # App stays up; queries work without indexes, just slower (Phase 4 DoD).
         logger.exception("neo4j.schema_bootstrap_failed", error=str(exc))
 
@@ -546,7 +724,7 @@ async def _hitl_sweep_loop(hitl_service: HitlService) -> None:
                 )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # sweep loop must survive a failed cycle (060)
             logger.error("HITL sweep failed", error=str(exc))
 
 
@@ -566,6 +744,9 @@ async def shutdown(resources: AppResources) -> None:
     if resources.memory_extract is not None:
         with contextlib.suppress(Exception):
             await resources.memory_extract.stop()
+    if resources.memory_op_worker is not None:
+        with contextlib.suppress(Exception):
+            await resources.memory_op_worker.stop()
     if resources.checkpointer_handle is not None and resources.checkpointer_handle.aclose is not None:
         with contextlib.suppress(Exception):
             await resources.checkpointer_handle.aclose()
@@ -585,4 +766,6 @@ async def shutdown(resources: AppResources) -> None:
         await _aclose_optional(resources.graph_port)
         await _aclose_optional(resources.graph_write_port)
     await _aclose_optional(resources.web_search_port)
+    # Last: no LLM call may outlive the loop; closes the session shared by all agents.
+    await aclose_shared_client_sessions()
     logger.info("Goodbye")

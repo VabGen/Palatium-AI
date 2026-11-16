@@ -1,0 +1,109 @@
+{
+  "schema_version": 3,
+  "description": "[baseline-refresh] W7–W8: hop/handoff + measured context_ratio; cost null (cassette_unmeasured). actual_*==max_* for measurable fields.",
+  "refresh_policy": {
+    "marker": "[baseline-refresh]",
+    "rule": "PRs that change actual_* or max_* MUST include [baseline-refresh] in the title or body and cite why (new graph node, intentional hop, removed edge, cost/context ceiling). Silent upward drift is forbidden.",
+    "owners": [
+      "application/agents/evals",
+      "orchestration"
+    ]
+  },
+  "max_subagent_depth_global": 2,
+  "context_ratios": {
+    "context_enricher->researcher": {
+      "actual_context_ratio": 1.42,
+      "max_context_ratio": 1.42,
+      "notes": "measured 2026-11-10 via agent_bridge+minimal ContextPacket (reason_only); ratio=size regression guard (isolation=allow-list assert)"
+    },
+    "context_enricher->coder": {
+      "actual_context_ratio": 1.25,
+      "max_context_ratio": 1.25,
+      "notes": "measured 2026-11-10 via agent_bridge+minimal ContextPacket; ratio=size regression guard (isolation=allow-list assert)"
+    },
+    "context_enricher->analyst": {
+      "actual_context_ratio": 1.25,
+      "max_context_ratio": 1.25,
+      "notes": "measured 2026-11-10 via agent_bridge+minimal ContextPacket; ratio=size regression guard (isolation=allow-list assert)"
+    }
+  },
+  "routes": {
+    "social_format_only": {
+      "actual_steps": 6,
+      "actual_handoffs": 2,
+      "max_steps": 6,
+      "max_handoffs": 2,
+      "max_subagent_depth": 0,
+      "actual_cost_usd": null,
+      "max_cost_usd": null,
+      "notes": "measured: Intent→…→Weaver→Critic→Formatter; weave→critic + critic→formatter; cost_channel=cassette_unmeasured",
+      "cost_channel": "cassette_unmeasured"
+    },
+    "response_formatting_skip_critic_edge": {
+      "actual_steps": 5,
+      "actual_handoffs": 1,
+      "max_steps": 5,
+      "max_handoffs": 1,
+      "max_subagent_depth": 0,
+      "actual_cost_usd": null,
+      "max_cost_usd": null,
+      "notes": "measured: Critic edge skipped; weave→formatter only; cost_channel=cassette_unmeasured",
+      "cost_channel": "cassette_unmeasured"
+    },
+    "reason_only": {
+      "actual_steps": 7,
+      "actual_handoffs": 2,
+      "max_steps": 7,
+      "max_handoffs": 2,
+      "max_subagent_depth": 0,
+      "actual_cost_usd": null,
+      "max_cost_usd": null,
+      "notes": "measured: +Researcher; weave→researcher + critic→formatter; cost_channel=cassette_unmeasured",
+      "cost_channel": "cassette_unmeasured"
+    },
+    "code_sandbox": {
+      "actual_steps": 7,
+      "actual_handoffs": 2,
+      "max_steps": 7,
+      "max_handoffs": 2,
+      "max_subagent_depth": 0,
+      "actual_cost_usd": null,
+      "max_cost_usd": null,
+      "notes": "measured: +Coder; weave→coder + critic→formatter; cost_channel=cassette_unmeasured",
+      "cost_channel": "cassette_unmeasured"
+    },
+    "data_analysis": {
+      "actual_steps": 7,
+      "actual_handoffs": 2,
+      "max_steps": 7,
+      "max_handoffs": 2,
+      "max_subagent_depth": 0,
+      "actual_cost_usd": null,
+      "max_cost_usd": null,
+      "notes": "measured: +Analyst; weave→analyst + critic→formatter; cost_channel=cassette_unmeasured",
+      "cost_channel": "cassette_unmeasured"
+    },
+    "quality_revision_once": {
+      "actual_steps": 9,
+      "actual_handoffs": 4,
+      "max_steps": 9,
+      "max_handoffs": 4,
+      "max_subagent_depth": 1,
+      "actual_cost_usd": null,
+      "max_cost_usd": null,
+      "notes": "measured: +one revision loop (worker+critic again); cost_channel=cassette_unmeasured",
+      "cost_channel": "cassette_unmeasured"
+    },
+    "high_confidence_no_revision": {
+      "actual_steps": 7,
+      "actual_handoffs": 2,
+      "max_steps": 7,
+      "max_handoffs": 2,
+      "max_subagent_depth": 0,
+      "actual_cost_usd": null,
+      "max_cost_usd": null,
+      "notes": "measured: same as reason_only; quality_revision must stay 0; cost_channel=cassette_unmeasured",
+      "cost_channel": "cassette_unmeasured"
+    }
+  }
+}

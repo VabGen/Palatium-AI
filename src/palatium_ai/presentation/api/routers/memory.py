@@ -13,7 +13,7 @@ from palatium_ai.application.services.hitl_service import HitlInvalidActionError
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal
-from palatium_ai.presentation.security.ownership import load_session_for_principal
+from palatium_ai.presentation.security.ownership import ensure_session_for_principal
 
 router = APIRouter()
 
@@ -56,6 +56,14 @@ class MemoryExtractRequest(BaseModel):
     )
 
 
+class MemoryClearRequest(BaseModel):
+    """Request to stage a full memory clear pending HITL approval (W11)."""
+
+    model_config = {"frozen": True}
+
+    thread_id: str = Field(min_length=1, max_length=128)
+
+
 def _http_error_for_memory_validation(exc: Exception) -> HTTPException:
     detail = str(exc)
     code = (
@@ -74,12 +82,12 @@ async def request_memory_save(body: MemorySaveRequest, request: Request) -> HITL
     if resources.memory_save_service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Memory save unavailable")
 
-    await load_session_for_principal(
+    await ensure_session_for_principal(
         request=request,
         principal=principal,
         session_service=resources.session_service,
         thread_id=body.thread_id,
-        allow_missing=False,
+        last_operation="memory_save",
     )
 
     try:
@@ -109,12 +117,12 @@ async def request_memory_forget(body: MemoryForgetRequest, request: Request) -> 
             detail="Memory forget unavailable",
         )
 
-    await load_session_for_principal(
+    await ensure_session_for_principal(
         request=request,
         principal=principal,
         session_service=resources.session_service,
         thread_id=body.thread_id,
-        allow_missing=False,
+        last_operation="memory_forget",
     )
 
     try:
@@ -141,13 +149,18 @@ async def request_memory_extract(body: MemoryExtractRequest, request: Request) -
             detail="Memory extract enqueue unavailable",
         )
 
-    await load_session_for_principal(
+    session = await ensure_session_for_principal(
         request=request,
         principal=principal,
         session_service=resources.session_service,
         thread_id=body.thread_id,
-        allow_missing=False,
+        last_operation="memory_extract",
     )
+    if _session_use_memory_disabled(session):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="use_memory is disabled for this session",
+        )
 
     try:
         return await resources.memory_consolidate_service.request_extract(
@@ -158,3 +171,43 @@ async def request_memory_extract(body: MemoryExtractRequest, request: Request) -
         )
     except (ValueError, HitlInvalidActionError) as exc:
         raise _http_error_for_memory_validation(exc) from exc
+
+
+@router.delete("/clear", response_model=HITLCardView)
+async def request_memory_clear(body: MemoryClearRequest, request: Request) -> HITLCardView:
+    """HITL card for Clear Memories (Medium purge + async Neo4j cascade)."""
+    principal = get_principal(request)
+    resources = get_app_resources(request.app)
+    if resources.memory_clear_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Memory clear unavailable",
+        )
+
+    await ensure_session_for_principal(
+        request=request,
+        principal=principal,
+        session_service=resources.session_service,
+        thread_id=body.thread_id,
+        last_operation="memory_clear",
+    )
+
+    try:
+        return await resources.memory_clear_service.request_clear(
+            thread_id=body.thread_id,
+            owner_user_id=principal.subject,
+            org_id=principal.org_id,
+        )
+    except (ValueError, HitlInvalidActionError) as exc:
+        raise _http_error_for_memory_validation(exc) from exc
+
+
+def _session_use_memory_disabled(session: object | None) -> bool:
+    """Fail-closed for W11 isolation when the last turn set use_memory=false."""
+    if session is None:
+        return False
+    context = getattr(session, "context", None)
+    if not isinstance(context, dict):
+        return False
+    flag = context.get("use_memory")
+    return flag is False or flag == "false" or flag == "0"

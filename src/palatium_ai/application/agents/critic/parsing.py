@@ -1,58 +1,36 @@
 # src/palatium_ai/application/agents/critic/parsing.py
 
-"""Parse Critic LLM JSON."""
+"""Decode Critic input; derive confidence from scores.
+
+Critic LLM output is decoded via provider structured output
+(``response_format="json_schema"`` + ``response_model=CriticOutput``) inside the
+agent and then through the shared ``parse_llm_response`` contract: the provider is
+asked for the shape, but a model that wraps its JSON in a Markdown fence still gets
+decoded there instead of failing the review (055).
+"""
 
 from __future__ import annotations
 
+import json
+
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.critic import CriticInput, CriticOutput
-from palatium_ai.domain.llm.json_codec import loads_llm_json
-
-_SUMMARY_MAX_CHARS = 2000
-
-
-def coerce_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "1"}
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return False
-
-
-def coerce_score(value: object, default: float = 0.0) -> int:
-    if not isinstance(value, (int, float, str)):
-        return int(default)
-    try:
-        score = float(value)
-    except TypeError, ValueError:
-        return int(default)
-    if score != score or score in (float("inf"), float("-inf")):
-        return int(default)
-    return int(min(max(score, 0.0), 10.0))
-
-
-def parse_critic_output(raw_content: str) -> CriticOutput:
-    payload = loads_llm_json(raw_content)
-    if not isinstance(payload, dict):
-        raise ValueError("Critic JSON must be an object")
-
-    raw_summary = payload.get("summary", "No summary provided")
-    summary = str(raw_summary).strip() or "No summary provided"
-    if len(summary) > _SUMMARY_MAX_CHARS:
-        summary = summary[:_SUMMARY_MAX_CHARS].rstrip() + "…"
-
-    return CriticOutput(
-        accuracy_score=coerce_score(payload.get("accuracy_score")),
-        safety_score=coerce_score(payload.get("safety_score")),
-        requires_review=coerce_bool(payload.get("requires_review")),
-        summary=summary,
-    )
 
 
 def confidence_from_scores(output: CriticOutput) -> float:
     return min(max((output.accuracy_score / 10 + output.safety_score / 10) / 2, 0.0), 1.0)
+
+
+def _decode_memory_hints(raw: str | None) -> tuple[str, ...]:
+    if not raw or not raw.strip():
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(str(hint) for hint in parsed if str(hint).strip())
 
 
 def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
@@ -90,4 +68,5 @@ def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
         continuation_kind=continuation,
         user_input_chars=user_input_chars,
         worker_confidence=worker_confidence,
+        memory_hints=_decode_memory_hints(input_context.get("memory_hints_json")),
     )

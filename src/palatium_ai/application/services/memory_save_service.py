@@ -9,20 +9,29 @@ import json
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from palatium_ai.application.services.pii_gate import classify_for_write
 from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.core.security.secret_scanner import scan_text
+from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.mcp.tool_policy import risk_score_for_tier
-from palatium_ai.domain.memory.pii import resolve_contains_pii
+from palatium_ai.domain.memory.namespaces import org_namespace, thread_namespace, user_namespace
 from palatium_ai.domain.memory.save_payload import MemorySavePayload
+from palatium_ai.domain.memory.types import (
+    MEMORY_EXPLICIT_WRITE_KEY,
+    MEMORY_ORIGIN_KEY,
+    MEMORY_TRUST_KEY,
+)
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
     from palatium_ai.application.services.hitl_service import HitlService
+    from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
+    from palatium_ai.domain.memory.memory_op_queue import MemoryOpQueuePort
     from palatium_ai.domain.ports.mcp import MCPRegistryPort, McpToolCallRecorderPort
 
 logger = get_logger(__name__)
@@ -34,6 +43,7 @@ _SAVE_TOOL = "save_memory"
 MEM_SAVE_TASK_PREFIX = "mem-save-"
 _VALID_NAMESPACE_KINDS = frozenset({"thread", "user", "org"})
 _VALID_MEMORY_TYPES = frozenset({"preference", "fact", "incident", "episode"})
+_DEFAULT_FAST_MIN_SCORE = 0.85
 
 
 class MemorySaveService:
@@ -46,11 +56,17 @@ class MemorySaveService:
         mcp_registry: MCPRegistryPort,
         redis_client: Redis | None = None,
         mcp_tool_call_repository: McpToolCallRecorderPort | None = None,
+        scratchpad: SessionScratchpadService | None = None,
+        memory_op_queue: MemoryOpQueuePort | None = None,
+        promote_fast_min_score: float = _DEFAULT_FAST_MIN_SCORE,
     ) -> None:
         self._hitl = hitl_service
         self._mcp_registry = mcp_registry
         self._redis = redis_client
         self._mcp_tool_call_repository = mcp_tool_call_repository
+        self._scratchpad = scratchpad
+        self._memory_op_queue = memory_op_queue
+        self._promote_fast_min_score = max(0.0, min(1.0, promote_fast_min_score))
         self._memory_pending: dict[str, MemorySavePayload] = {}
 
     @traceable(name="memory_save.request")
@@ -81,7 +97,7 @@ class MemorySaveService:
             msg = "text is required"
             raise ValueError(msg)
         scan_text(text_value, field="memory_save_text")
-        pii_flag = resolve_contains_pii(text=text_value, client_flag=contains_pii)
+        pii_flag = classify_for_write(text=text_value, client_flag=contains_pii)
 
         binding = MemoryNamespacePolicy.bind_scope(
             namespace_kind=kind,
@@ -106,6 +122,11 @@ class MemorySaveService:
             # User-approved HITL write — trusted for Select min_confidence gate.
             "confidence": 1.0,
             "importance": 1.0,
+            # Deliberate durable memory: recall may cross threads for this entry even
+            # when it is a fact (inferred facts stay thread-scoped — P0-B bleed).
+            MEMORY_EXPLICIT_WRITE_KEY: True,
+            MEMORY_ORIGIN_KEY: "user_hitl",
+            MEMORY_TRUST_KEY: "verified",
         }
         task_id = f"{MEM_SAVE_TASK_PREFIX}{uuid4().hex[:12]}"
         payload = MemorySavePayload(
@@ -176,18 +197,83 @@ class MemorySaveService:
         if outcome.is_error:
             msg = "save_memory MCP call failed"
             raise RuntimeError(msg)
+        superseded = await self._supersede_thread_cache(payload)
+        fast_enqueued = await self._maybe_enqueue_fast_promote(payload)
         logger.info(
             "memory_save.committed",
             task_id=task_id,
             thread_id=payload.thread_id,
             entry_key=payload.entry_key,
+            scratchpad_superseded=len(superseded),
+            fast_promote_enqueued=fast_enqueued,
         )
         return {
             "content": outcome.content,
             "entry_key": payload.entry_key,
             "namespace_kind": payload.namespace_kind,
             "scope_id": payload.scope_id,
+            "scratchpad_superseded": len(superseded),
+            "fast_promote_enqueued": fast_enqueued,
         }
+
+    async def _maybe_enqueue_fast_promote(self, payload: MemorySavePayload) -> bool:
+        """W11: verified HITL row with score ≥ threshold → durable promote_entry (not Neo4j sync)."""
+        if self._memory_op_queue is None:
+            return False
+        try:
+            value = json.loads(payload.value_json)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(value, dict):
+            return False
+        if str(value.get(MEMORY_TRUST_KEY, "")).strip().lower() != "verified":
+            return False
+        score = max(
+            coerce_float(value.get("importance", 0.0)),
+            coerce_float(value.get("confidence", 0.0)),
+        )
+        if score < self._promote_fast_min_score:
+            return False
+        namespace = _namespace_for(payload)
+        result = await self._memory_op_queue.enqueue(
+            kind="promote_entry",
+            user_id=payload.user_id,
+            entry_key=payload.entry_key,
+            namespace=namespace,
+            reason="immediate_verified",
+        )
+        logger.info(
+            "memory_save.fast_promote_enqueue",
+            entry_key=payload.entry_key,
+            result=result,
+            reason="immediate_verified",
+            score=score,
+        )
+        return result == "queued"
+
+    async def _supersede_thread_cache(self, payload: MemorySavePayload) -> tuple[str, ...]:
+        """Drop thread pins that the approved write just made stale (060: write fans out).
+
+        Medium/L4 now hold the new value, but recall injects scratchpad pins *ahead*
+        of durable hits — a pre-write pin would keep answering the old value in the
+        same thread. Best-effort: a cache miss must not turn a committed write into
+        a reported failure.
+        """
+        if self._scratchpad is None:
+            return ()
+        try:
+            value = json.loads(payload.value_json)
+        except json.JSONDecodeError:
+            logger.warning("memory_save.value_json_corrupt", task_id=payload.task_id)
+            return ()
+        text = str(value.get("text") or "").strip() if isinstance(value, dict) else ""
+        if not text:
+            return ()
+        try:
+            return await self._scratchpad.supersede_matching(thread_id=payload.thread_id, text=text)
+        except Exception as exc:  # noqa: BLE001  # cache cleanup must not fake a failed write (060)
+            logger.warning("memory_save.scratchpad_supersede_failed", thread_id=payload.thread_id, error=str(exc))
+            return ()
 
     async def discard_pending(self, *, task_id: str) -> None:
         await self._delete_pending(task_id)
@@ -215,3 +301,11 @@ class MemorySaveService:
         self._memory_pending.pop(task_id, None)
         if self._redis is not None:
             await self._redis.delete(f"{_PENDING_PREFIX}{task_id}")
+
+
+def _namespace_for(payload: MemorySavePayload) -> tuple[str, ...]:
+    if payload.namespace_kind == "user":
+        return user_namespace(payload.scope_id)
+    if payload.namespace_kind == "org":
+        return org_namespace(payload.scope_id)
+    return thread_namespace(payload.scope_id)

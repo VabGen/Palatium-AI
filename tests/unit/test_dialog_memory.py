@@ -39,6 +39,15 @@ class _FakeDialogTurnStore:
         items = self._turns.get(thread_id, [])[-limit:]
         return DialogTurnWindow(thread_id=thread_id, turns=tuple(items), limit=limit)
 
+    async def truncate_keeping(self, *, thread_id: str, keep: int) -> int:
+        items = self._turns.get(thread_id, [])
+        safe_keep = max(0, keep)
+        if safe_keep >= len(items):
+            return 0
+        deleted = len(items) - safe_keep
+        self._turns[thread_id] = items[:safe_keep]
+        return deleted
+
 
 @pytest.mark.asyncio()
 async def test_fake_dialog_store_orders_turns() -> None:
@@ -48,3 +57,72 @@ async def test_fake_dialog_store_orders_turns() -> None:
     window = await store.list_recent_turns(thread_id="t", limit=10)
     assert [turn.role for turn in window.turns] == ["user", "assistant"]
     assert window.as_prompt_block().startswith("user:")
+
+
+def test_as_prompt_block_pins_identity_absent_from_trimmed_window() -> None:
+    """Scratchpad / recall hints survive last-K trim so name recall stays grounded (065)."""
+    now = datetime.now(UTC)
+    # Window holds only recent noise; identity lived in an earlier turn already dropped.
+    window = DialogTurnWindow(
+        thread_id="t-pin",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-pin",
+                role="user",
+                content="какой сегодня план?",
+                seq=10,
+                created_at=now,
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-pin",
+                role="assistant",
+                content="сначала разберём задачи",
+                seq=11,
+                created_at=now,
+            ),
+        ),
+        limit=12,
+    )
+    block = window.as_prompt_block(
+        max_chars=2000,
+        pinned_user_texts=("привет меня зовут геннадий а тебя как?",),
+    )
+    assert "user: привет меня зовут геннадий а тебя как?" in block
+    assert block.index("геннадий") < block.index("какой сегодня план")
+
+
+@pytest.mark.asyncio()
+async def test_fake_dialog_store_truncate_keeping_rewinds_edit() -> None:
+    store = _FakeDialogTurnStore()
+    await store.append_turn(thread_id="t", role="user", content="q1")
+    await store.append_turn(thread_id="t", role="assistant", content="a1")
+    await store.append_turn(thread_id="t", role="user", content="q2")
+    await store.append_turn(thread_id="t", role="assistant", content="a2")
+    deleted = await store.truncate_keeping(thread_id="t", keep=2)
+    assert deleted == 2
+    window = await store.list_recent_turns(thread_id="t", limit=10)
+    assert [turn.content for turn in window.turns] == ["q1", "a1"]
+    assert await store.truncate_keeping(thread_id="t", keep=2) == 0
+    assert await store.truncate_keeping(thread_id="t", keep=0) == 2
+
+
+def test_as_prompt_block_skips_pin_already_in_window() -> None:
+    now = datetime.now(UTC)
+    window = DialogTurnWindow(
+        thread_id="t-dup",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-dup",
+                role="user",
+                content="меня зовут геннадий",
+                seq=0,
+                created_at=now,
+            ),
+        ),
+        limit=12,
+    )
+    block = window.as_prompt_block(pinned_user_texts=("меня зовут геннадий",))
+    assert block.count("меня зовут геннадий") == 1

@@ -104,6 +104,52 @@ async def test_pipeline_masks_pii_in_safe_text() -> None:
     assert outcome.content.contains_pii is True
     assert "bob@example.com" not in outcome.content.safe_text
     assert "[EMAIL]" in outcome.content.safe_text
+    # The blob records that its body is an edited view (W3b-2) — deriving this from
+    # the current policy at read time would misdescribe blobs written under another one.
+    assert outcome.content.text_masked is True
+
+
+@pytest.mark.asyncio()
+async def test_pipeline_records_unedited_text_as_full() -> None:
+    pipeline = AttachmentPipeline(
+        blob_store=_Blob(b"plain body"),
+        malware_scanner=_Scanner(),
+        document_parser=_Parser("plain body"),
+        pii_policy="mask",
+    )
+    outcome = await pipeline.run(_attachment(), limits=AttachmentLimits())
+    assert outcome.content is not None
+    # ``mode`` is "mask" for every upload under that policy; the flag must track the
+    # text, so a document with no PII stays "full".
+    assert outcome.content.text_masked is False
+
+
+@pytest.mark.asyncio()
+async def test_pipeline_prompt_body_is_marker_free() -> None:
+    """Live leak: ``[[page 1]]`` from extracted text reached the answer verbatim.
+
+    Page addresses exist so citations stay traceable; they are never prompt content.
+    """
+
+    class _TwoPageParser(_Parser):
+        async def parse(self, data: bytes, *, mime_type: str, filename: str) -> ParsedDocument:
+            _ = data, mime_type, filename
+            return ParsedDocument(
+                pages=(ParsedPage(number=1, text="филиал СЭД"), ParsedPage(number=2, text="на листах")),
+                extraction_source="text_layer",
+            )
+
+    pipeline = AttachmentPipeline(
+        blob_store=_Blob(b"two pages"),
+        malware_scanner=_Scanner(),
+        document_parser=_TwoPageParser(""),
+    )
+    outcome = await pipeline.run(_attachment(), limits=AttachmentLimits())
+    assert outcome.admitted
+    assert outcome.content is not None
+    assert "[[" not in outcome.content.safe_text
+    assert "филиал СЭД" in outcome.content.safe_text
+    assert "на листах" in outcome.content.safe_text
 
 
 @pytest.mark.asyncio()

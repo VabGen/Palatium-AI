@@ -6,7 +6,8 @@ Agent-agnostic by construction (3.2 / OCP): the node roster arrives as `GraphAge
 (`agent_registry.py`), this module only compiles nodes and declares the topology.
 
 P0.1 latency: Intent classifies raw text first so Contextualizer receives task_kind and
-can skip LLM on social/capability; low-risk strategies skip Critic (see route_after_context).
+can skip LLM on social/capability. Critic edge skip is narrow (clarify / format_only+
+response_formatting); social format_only still enters Critic (see route_after_context).
 """
 
 from __future__ import annotations
@@ -23,12 +24,14 @@ from palatium_ai.application.orchestration.node_runtime import reset_node_circui
 from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.core.types.graph_nodes import (
     NODE_ANALYST,
+    NODE_ATTACHMENT_SELECTION,
     NODE_CODER,
     NODE_CONTEXT_ENRICHER_CONTINUATION,
     NODE_CONTEXT_ENRICHER_WEAVING,
     NODE_CRITIC,
     NODE_FORMATTER,
     NODE_INTENT_CLASSIFIER,
+    NODE_MEMORY_MUTATION,
     NODE_PARALLEL_WORKERS,
     NODE_QUALITY_REVISION,
     NODE_RESEARCHER,
@@ -83,7 +86,15 @@ def _wire_agent_edges(graph: Any) -> None:
     only the graph handle is dynamic.
     """
     graph.add_edge(START, NODE_INTENT_CLASSIFIER)
-    graph.add_edge(NODE_INTENT_CLASSIFIER, NODE_CONTEXT_ENRICHER_CONTINUATION)
+    # Explicit memory mutations leave the pipeline before retrieval/generation: the
+    # gate stages a HITL card (060; no prose "I remembered it"). A mixed ask (question
+    # next to the command) continues to the normal pipeline so the question is answered
+    # too — see route_after_memory_mutation.
+    graph.add_conditional_edges(NODE_INTENT_CLASSIFIER, nodes.route_after_intent)
+    # Multi-file turns pass the attachment stage first: selection/map-reduce may end
+    # the turn with a file-choice card, otherwise the pipeline continues unchanged.
+    graph.add_conditional_edges(NODE_ATTACHMENT_SELECTION, nodes.route_after_attachment_selection)
+    graph.add_conditional_edges(NODE_MEMORY_MUTATION, nodes.route_after_memory_mutation)
     graph.add_edge(NODE_CONTEXT_ENRICHER_CONTINUATION, NODE_SUPERVISOR)
     graph.add_edge(NODE_SUPERVISOR, NODE_CONTEXT_ENRICHER_WEAVING)
     graph.add_conditional_edges(NODE_CONTEXT_ENRICHER_WEAVING, nodes.route_after_context)

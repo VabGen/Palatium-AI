@@ -14,15 +14,18 @@ import json
 import re
 
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 from palatium_ai.application.services.memory_extract import MemoryExtractJob
+from palatium_ai.application.services.pii_gate import classify_for_write
 from palatium_ai.application.tools.mcp import MCPToolCallParams, call_mcp_tool
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.security.secret_scanner import SecretScanError, scan_text
 from palatium_ai.domain.agents.memory_keeper import MemoryFactCandidate
-from palatium_ai.domain.memory.pii import resolve_contains_pii
-from palatium_ai.domain.memory.types import MemoryType
+from palatium_ai.domain.memory.types import (
+    MEMORY_ORIGIN_KEY,
+    MEMORY_TRUST_KEY,
+    MemoryType,
+)
 from palatium_ai.domain.policies.memory_namespace import MemoryNamespacePolicy
 
 if TYPE_CHECKING:
@@ -33,6 +36,7 @@ logger = get_logger(__name__)
 _PLATFORM_SERVER = "platform"
 _SAVE_MEMORY_TOOL = "save_memory"
 _CANONICAL_MEMORY_TYPES: frozenset[str] = frozenset({"preference", "fact", "incident", "episode"})
+_WHITESPACE = re.compile(r"\s+")
 
 
 class MemoryFactPersistenceService:
@@ -99,7 +103,7 @@ class MemoryFactPersistenceService:
             return False
 
         memory_type = _canonical_memory_type(fact.kind)
-        pii_flag = resolve_contains_pii(text=text_value, client_flag=False)
+        pii_flag = classify_for_write(text=text_value)
         value = {
             "text": text_value,
             "kind": fact.kind,
@@ -109,6 +113,9 @@ class MemoryFactPersistenceService:
             "user_id": job.user_id,
             "org_id": job.org_id,
             "contains_pii": pii_flag,
+            # Sleep-time extract: inferred until corroboration / HITL (ADR 0008).
+            MEMORY_ORIGIN_KEY: "extract",
+            MEMORY_TRUST_KEY: "inferred",
         }
         outcome = await call_mcp_tool(
             MCPToolCallParams(
@@ -152,7 +159,7 @@ def _resolve_fact_scope(*, fact: MemoryFactCandidate, job: MemoryExtractJob) -> 
     """Map fact kind to MCP namespace_kind + scope_id (same routing as consolidation worker)."""
     if job.user_id and fact.kind == "preference":
         return "user", job.user_id.strip()
-    if job.org_id and fact.kind == "entity":
+    if job.org_id and fact.kind == "incident":
         return "org", job.org_id.strip()
     return "thread", job.thread_id.strip()
 
@@ -181,5 +188,10 @@ def _memory_key(key_hint: str | None, text: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", key_hint.strip().lower()).strip("-")[:80]
         if slug:
             return f"add-{slug}"
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    return f"add-{digest}-{uuid4().hex[:8]}"
+    # Deterministic on purpose (M3 audit E3): the queue is at-least-once, so a reclaimed
+    # job re-persists the same fact. A random suffix would manufacture a new entry on every
+    # retry. Identity scope already comes from the namespace (thread/user/org), so the
+    # normalized text digest is enough — whitespace must not split one fact into two keys.
+    normalized = _WHITESPACE.sub(" ", text).strip()
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return f"add-{digest}"

@@ -12,7 +12,11 @@ from palatium_ai.domain.agents.coder import CoderInput
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.critic import CriticInput
 from palatium_ai.domain.agents.formatter import FormatterInput
-from palatium_ai.domain.agents.researcher import ResearcherInput
+from palatium_ai.domain.agents.researcher import (
+    ATTACHMENT_REFERENCE_UNRESOLVED,
+    GROUNDING_REQUIRED_EMPTY,
+    ResearcherInput,
+)
 from palatium_ai.domain.agents.supervisor import SupervisorInput
 
 if TYPE_CHECKING:
@@ -29,6 +33,8 @@ def build_supervisor_input(snapshot: OrchestrationSnapshot) -> SupervisorInput:
         requires_mcp=snapshot.requires_mcp,
         candidate_capabilities=snapshot.candidate_capabilities,
         classification_confidence=snapshot.classification.confidence,
+        file_reference=snapshot.file_reference,
+        has_attachment_context=snapshot.has_attachment_context,
     )
 
 
@@ -46,10 +52,14 @@ def build_context_weaver_input(
         route_plan=snapshot.route_plan,
         requires_mcp=snapshot.requires_mcp,
         candidate_capabilities=snapshot.candidate_capabilities,
+        response_shape=snapshot.response_shape,
+        file_reference=snapshot.file_reference,
+        attachment_scope=snapshot.attachment_scope,
         grounding=selectors.resolved_grounding(state),
         grounding_reason=selectors.resolved_grounding_reason(state),
-        has_attachment_context=bool((state.get("untrusted_context") or "").strip()),
+        has_attachment_context=selectors.uploads_in_scope(state) and bool((state.get("untrusted_context") or "").strip()),
         has_trusted_prior=bool(routing is not None and routing.trust_prior_for_workers),
+        composer_mode=state.get("composer_mode"),
     )
 
 
@@ -125,6 +135,7 @@ def build_critic_input(
         continuation_kind=selectors.resolved_continuation_kind(state),
         user_input_chars=len(selectors.resolved_user_text(state)),
         worker_confidence=selectors.resolved_worker_confidence(state),
+        memory_hints=selectors.memory_hints(state),
     )
 
 
@@ -138,11 +149,13 @@ def build_formatter_input(
     intent_review = snapshot.classification.requires_review and not selectors.suppress_intent_hitl(state)
     worker_summary = snapshot.worker_summary
     execution = state.get("execution")
+    policy_refusal = _is_policy_refusal_execution(execution)
     if (
         execution is not None
         and getattr(execution, "grounding_degraded", False)
         and worker_summary
         and not getattr(execution, "cannot_answer_without_source", False)
+        and not policy_refusal
     ):
         # Provenance: answer was not backed by retrieval hits.
         disclaimer = "Ответ без подтверждения во внешних источниках.\n\n"
@@ -165,4 +178,36 @@ def build_formatter_input(
         response_locale=selectors.resolved_response_locale(state),
         dialog_window=state.get("dialog_window"),
         memory_hints=selectors.memory_hints(state),
+        memory_hint_kinds=selectors.memory_hint_kinds(state),
+        transformation=selectors.resolved_transformation(state),
+        prior_context=selectors.resolved_prior_assistant_content(state),
+        allow_worker_fallback=_allow_worker_fallback(state),
+        policy_refusal=policy_refusal,
     )
+
+
+def _is_policy_refusal_execution(execution: object | None) -> bool:
+    """True when the worker already authored the final user-facing refusal copy."""
+    if execution is None:
+        return False
+    if getattr(execution, "cannot_answer_without_source", False):
+        return True
+    reason = getattr(execution, "error", None)
+    return isinstance(reason, str) and reason in {
+        ATTACHMENT_REFERENCE_UNRESOLVED,
+        GROUNDING_REQUIRED_EMPTY,
+    }
+
+
+def _allow_worker_fallback(state: AgentGraphState) -> bool:
+    """Whether the Formatter may paint the worker draft before its first token.
+
+    The fallback is a legacy TTFT bridge; under an active single-writer contract with
+    the Formatter as owner it would be replaced by the Formatter answer (055). When
+    the axis is off (``mode_formatter``) or this thread is outside the rollout, the
+    legacy behaviour stays.
+    """
+    reason = state.get("presentation_owner_reason")
+    if reason in (None, "mode_formatter", "rollout_excluded"):
+        return True
+    return state.get("presentation_owner") != "formatter"

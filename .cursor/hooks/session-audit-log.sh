@@ -11,8 +11,8 @@ INPUT="$(cat)"
 if command -v jq >/dev/null 2>&1; then
   CONVERSATION_ID="$(echo "$INPUT" | jq -r '.conversation_id // "unknown"')"
 else
-  echo "⚠️  session-audit-log: jq не найден — извлекаю conversation_id через python3 (audit-chain запись будет пропущена)." >&2
-  CONVERSATION_ID="$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('conversation_id') or 'unknown')" 2>/dev/null || echo "unknown")"
+  echo "⚠️  session-audit-log: jq не найден — извлекаю conversation_id через python (uv) (audit-chain запись будет пропущена)." >&2
+  CONVERSATION_ID="$(printf '%s' "$INPUT" | py_json_field conversation_id 2>/dev/null || echo "unknown")"
 fi
 
 audit_append_event "session_stop" "conversation_id" "$CONVERSATION_ID" || true

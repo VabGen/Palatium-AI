@@ -65,7 +65,7 @@ async def retry_async[T](
     async for attempt in AsyncRetrying(
         stop=stop_after_attempt(max(1, policy.max_attempts)),
         wait=wait_exponential_jitter(
-            initial=max(0.0, policy.initial_delay_seconds),
+            multiplier=max(0.0, policy.initial_delay_seconds),
             max=max(policy.initial_delay_seconds, policy.max_delay_seconds),
         ),
         retry=retry_if_exception(is_retryable),

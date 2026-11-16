@@ -109,6 +109,36 @@ def test_assembler_fail_closed_when_choice_required_without_options() -> None:
     assert assembled.plan.reason == "formatter_output_invalid"
 
 
+def test_assembler_delivers_fact_answer_with_over_flagged_choice() -> None:
+    """E2E-07: over-tagged choice must not block or wrap a delivered fact answer."""
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        title="Порт QA-базы",
+        blocks=(ParagraphBlock(type="paragraph", text="QA-база слушает порт 5433."),),
+        actions=(),
+        meta=DocumentMeta(
+            confidence=0.9,
+            requires_review=False,
+            source_refs=(),
+            interaction="choice",
+        ),
+    )
+    assembled = InteractionAssembler.assemble(
+        doc,
+        requires_review=False,
+        task_kind="knowledge_request",
+        selected_strategy="direct",
+        requires_user_choice=True,
+    )
+    assert assembled.invalid is False
+    assert assembled.plan.choice_actions == ()
+    assert assembled.plan.ignored_user_choice is True
+    assert assembled.document is not None
+    assert assembled.document.meta.interaction == "none"
+    assert interaction_plan_log_fields(assembled)["ignored_user_choice"] is True
+
+
 def test_assembler_downgrades_rhetorical_choice_to_informational() -> None:
     doc = ContentDocument(
         schema_version=1,
@@ -157,3 +187,20 @@ def test_heading_plus_list_still_menu_shaped() -> None:
     plan = HitlInteractionPolicy.plan(doc, requires_review=False, task_kind="knowledge_request")
     assert plan.menu_shaped is True
     assert len(plan.choice_actions) == 4
+
+
+def test_assembler_keeps_capability_list_as_the_answer() -> None:
+    """Informational turn: list stays in the document, no card, no stripping."""
+    doc = _topic_menu_doc(items=["Работа с документами", "Анализ данных", "Память"])
+    assembled = InteractionAssembler.assemble(
+        doc,
+        requires_review=False,
+        task_kind="capability_discovery",
+        selected_strategy="reason_only",
+    )
+    assert assembled.invalid is False
+    assert assembled.strip_exclusive_menu is False
+    assert assembled.plan.reason == "informational_answer"
+    assert assembled.document is not None
+    assert any(block.type == "list" for block in assembled.document.blocks)
+    assert assembled.document.meta.interaction == "none"

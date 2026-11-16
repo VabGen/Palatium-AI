@@ -31,7 +31,7 @@ platform NEVER proxied
 
 | Phase | Цель | Статус | Ключевой результат |
 |-------|------|--------|-------------------|
-| **1** | Один транспорт FastMCP HTTP | **DONE** | `fastmcp==4.0.0`; stubs Streamable HTTP; Host `Client(mode=auto)` |
+| **1** | Один транспорт FastMCP HTTP | **DONE** | `fastmcp==4.1.3` (пин поднят с 4.0.0 из-за GHSA-7xgj-8392-5q4r / GHSA-vqqp-x5qm-5qp4); stubs Streamable HTTP; Host `Client(mode=auto)` |
 | **2** | Один path execute platform | **DONE** | stub discovery-only refuse; `PlatformHandlerNotWiredError`; no fake write |
 | **3** | Auth 2026 JWT audience | **DONE** | `aud=mcp:<server>`; MultiAuth JWT+static; `MCP_AUTH_REQUIRED` |
 | **4** | Единый schema SoT | **DONE** | `domain/mcp/*_schemas.py`; удалены `contract.py` / `schema_util` |

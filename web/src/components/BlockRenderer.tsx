@@ -1,13 +1,19 @@
-import { memo } from 'react';
+import { memo, useMemo, type ReactNode } from 'react';
 import { TokenIcon } from '../icons/TokenIcon';
+import { IconLightbulb } from '../icons/kimiStroke';
+import { iconForStepStatus, iconForTone } from '../icons/semanticIcons';
 import { InlineMarkdown } from './InlineMarkdown';
 import { WidgetEmbed } from './WidgetEmbed';
+import { t } from '../i18n';
+import { isRecommendationChrome } from '../lib/recommendations';
+import { changedBlockIndices } from '../lib/revision';
 import type {
   CalloutBlock,
   ChartBlock,
   CodeBlock,
   ContentBlock,
   ContentDocument,
+  DocumentRevision,
   FormulaBlock,
   HeadingBlock,
   KeyValueBlock,
@@ -20,9 +26,61 @@ import type {
 
 type BlockRendererProps = {
   document: ContentDocument;
+  /**
+   * Diff против предыдущего ответа (W7b). Индексы изменённых блоков приходят с
+   * сервера — см. `DocumentRevision.changed_block_indices`.
+   */
+  revision?: DocumentRevision | null;
 };
 
-export const BlockRenderer = memo(({ document }: BlockRendererProps) => {
+/**
+ * Long answers: render every section inline — kimi.ai never folds answer H2s
+ * into bordered boxes (live `/chat` shows all headings in flow).
+ * Exception: heading with IconToken ``check`` + body → cream tip card
+ * (typed chrome, not title phrase match — 055 / OpenAI·Anthropic·Kimi 2026).
+ */
+
+type DocSegment =
+  | { kind: 'single'; index: number }
+  | { kind: 'recommendations'; headingIndex: number; bodyIndices: readonly number[] };
+
+function segmentDocumentBlocks(blocks: readonly ContentBlock[]): DocSegment[] {
+  const segments: DocSegment[] = [];
+  let index = 0;
+  while (index < blocks.length) {
+    const block = blocks[index];
+    if (block?.type === 'heading' && isRecommendationChrome(block.icon)) {
+      const headingIndex = index;
+      const bodyIndices: number[] = [];
+      index += 1;
+      while (index < blocks.length && blocks[index]?.type !== 'heading') {
+        bodyIndices.push(index);
+        index += 1;
+      }
+      segments.push({ kind: 'recommendations', headingIndex, bodyIndices });
+      continue;
+    }
+    segments.push({ kind: 'single', index });
+    index += 1;
+  }
+  return segments;
+}
+
+export const BlockRenderer = memo(({ document, revision }: BlockRendererProps) => {
+  const changed = useMemo(() => changedBlockIndices(revision), [revision]);
+  const sourceRefs = document.meta.source_refs ?? [];
+  const segments = useMemo(() => segmentDocumentBlocks(document.blocks), [document.blocks]);
+
+  const wrapChanged = (index: number, node: ReactNode) => {
+    if (!changed.has(index)) return node;
+    return (
+      <div className="doc-block-changed" data-revision="changed">
+        <span className="sr-only">{t('revision.changedBlock')}</span>
+        {node}
+      </div>
+    );
+  };
+
   return (
     <article className="doc" lang={document.locale}>
       {document.title && (
@@ -31,34 +89,68 @@ export const BlockRenderer = memo(({ document }: BlockRendererProps) => {
         </header>
       )}
       <div className="doc-blocks">
-        {document.blocks.map((block, index) => (
-          <BlockView key={`${block.type}-${index}`} block={block} />
-        ))}
+        {segments.map(segment => {
+          if (segment.kind === 'single') {
+            const block = document.blocks[segment.index];
+            if (!block) return null;
+            return (
+              <div key={`${block.type}-${segment.index}`}>
+                {wrapChanged(segment.index, <BlockView block={block} sourceRefs={sourceRefs} />)}
+              </div>
+            );
+          }
+          const body = segment.bodyIndices.map(bodyIndex => {
+            const block = document.blocks[bodyIndex];
+            if (!block) return null;
+            return (
+              <div key={`${block.type}-${bodyIndex}`}>
+                {wrapChanged(bodyIndex, <BlockView block={block} sourceRefs={sourceRefs} />)}
+              </div>
+            );
+          });
+          return (
+            <RecommendationsCard key={`rec-${segment.headingIndex}`}>{body}</RecommendationsCard>
+          );
+        })}
       </div>
     </article>
   );
 });
 
-const BlockView = memo(({ block }: { block: ContentBlock }) => {
+function RecommendationsCard({ children }: { children: ReactNode }) {
+  return (
+    <aside className="block-recommendations" aria-label={t('doc.recommendations')}>
+      <header className="block-recommendations__header">
+        <IconLightbulb size={18} aria-hidden className="block-recommendations__icon" />
+        <span className="block-recommendations__title">{t('doc.recommendations')}</span>
+      </header>
+      <div className="block-recommendations__body">{children}</div>
+    </aside>
+  );
+}
+
+type WithSources = { sourceRefs: readonly string[] };
+
+const BlockView = memo(({ block, sourceRefs }: { block: ContentBlock } & WithSources) => {
   switch (block.type) {
     case 'heading':
-      return <HeadingView block={block} />;
+      return <HeadingView block={block} sourceRefs={sourceRefs} />;
     case 'paragraph':
-      return <ParagraphView block={block} />;
+      return <ParagraphView block={block} sourceRefs={sourceRefs} />;
     case 'list':
-      return <ListView block={block} />;
+      return <ListView block={block} sourceRefs={sourceRefs} />;
     case 'table':
-      return <TableView block={block} />;
+      return <TableView block={block} sourceRefs={sourceRefs} />;
     case 'callout':
-      return <CalloutView block={block} />;
+      return <CalloutView block={block} sourceRefs={sourceRefs} />;
     case 'code':
       return <CodeView block={block} />;
     case 'formula':
       return <FormulaView block={block} />;
     case 'kv':
-      return <KeyValueView block={block} />;
+      return <KeyValueView block={block} sourceRefs={sourceRefs} />;
     case 'steps':
-      return <StepsView block={block} />;
+      return <StepsView block={block} sourceRefs={sourceRefs} />;
     case 'chart':
       return <ChartView block={block} />;
     case 'divider':
@@ -71,53 +163,93 @@ const BlockView = memo(({ block }: { block: ContentBlock }) => {
 });
 
 // ---- Вьюхи с мемоизацией ----
-const HeadingView = memo(({ block }: { block: HeadingBlock }) => {
+const HeadingView = memo(({ block, sourceRefs }: { block: HeadingBlock } & WithSources) => {
   const Tag = `h${block.level}` as 'h1' | 'h2' | 'h3';
   return (
     <Tag className={`block-heading level-${block.level}`}>
       <TokenIcon token={block.icon} size={block.level === 1 ? 22 : 18} />
       <span>
-        <InlineMarkdown text={block.text} />
+        <InlineMarkdown text={block.text} sourceRefs={sourceRefs} />
       </span>
     </Tag>
   );
 });
 
-const ParagraphView = memo(({ block }: { block: ParagraphBlock }) => (
+const ParagraphView = memo(({ block, sourceRefs }: { block: ParagraphBlock } & WithSources) => (
   <p className="block-paragraph">
     <TokenIcon token={block.icon} size={16} />
     <span>
-      <InlineMarkdown text={block.text} />
+      <InlineMarkdown text={block.text} sourceRefs={sourceRefs} />
     </span>
   </p>
 ));
 
-const ListView = memo(({ block }: { block: ListBlock }) => {
+/** Legacy text marker before ``ListItem.level`` existed (server still strips it). */
+const NESTED_ITEM_PREFIX = '· ';
+
+function listItemPresentation(item: ListBlock['items'][number]): {
+  text: string;
+  level: number;
+} {
+  let text = item.text;
+  let level = typeof item.level === 'number' && item.level > 0 ? Math.min(item.level, 2) : 0;
+  while (text.startsWith(NESTED_ITEM_PREFIX)) {
+    text = text.slice(NESTED_ITEM_PREFIX.length);
+    level = Math.max(level, 1);
+  }
+  return { text, level };
+}
+
+/**
+ * Collapse 「Title — Title」 when the model copied ``emphasis`` into ``text``.
+ * Mirror of ``kvDisplayParts`` for list chrome — exact duplicate only; a longer
+ * body that merely starts with the title stays ``Title — full sentence``.
+ */
+function listItemDisplayParts(
+  emphasis: string | null | undefined,
+  text: string
+): { lead: string | null; body: string | null } {
+  const lead = (emphasis ?? '').trim();
+  const body = text.trim();
+  if (!lead) return { lead: null, body: body || null };
+  if (!body || body.toLocaleLowerCase() === lead.toLocaleLowerCase()) {
+    return { lead, body: null };
+  }
+  return { lead, body };
+}
+
+const ListView = memo(({ block, sourceRefs }: { block: ListBlock } & WithSources) => {
   const Tag = block.style === 'ordered' ? 'ol' : 'ul';
   return (
     <Tag className={`block-list style-${block.style}`}>
-      {block.items.map((item, i) => (
-        <li key={i}>
-          <TokenIcon token={item.icon} size={16} />
-          <span>
-            {item.emphasis && <strong>{item.emphasis}</strong>}
-            {item.emphasis && ' — '}
-            <InlineMarkdown text={item.text} />
-          </span>
-        </li>
-      ))}
+      {block.items.map((item, i) => {
+        const { text, level } = listItemPresentation(item);
+        const { lead, body } = listItemDisplayParts(item.emphasis, text);
+        const nestedClass = level > 0 ? ` nested level-${level}` : '';
+        const hasIcon = Boolean(item.icon);
+        return (
+          <li key={i} className={`block-list-item${nestedClass}${hasIcon ? ' has-token-icon' : ''}`}>
+            {hasIcon ? <TokenIcon token={item.icon} size={16} /> : null}
+            <span>
+              {lead ? <strong>{lead}</strong> : null}
+              {lead && body ? ' — ' : null}
+              {body ? <InlineMarkdown text={body} sourceRefs={sourceRefs} /> : null}
+            </span>
+          </li>
+        );
+      })}
     </Tag>
   );
 });
 
-const TableView = memo(({ block }: { block: TableBlock }) => (
+const TableView = memo(({ block, sourceRefs }: { block: TableBlock } & WithSources) => (
   <div className="block-table-wrap">
     <table className="block-table">
       <thead>
         <tr>
           {block.columns.map(col => (
             <th key={col}>
-              <InlineMarkdown text={col} />
+              <InlineMarkdown text={col} sourceRefs={sourceRefs} />
             </th>
           ))}
         </tr>
@@ -127,7 +259,7 @@ const TableView = memo(({ block }: { block: TableBlock }) => (
           <tr key={ri}>
             {row.map((cell, ci) => (
               <td key={ci}>
-                <InlineMarkdown text={cell} />
+                <InlineMarkdown text={cell} sourceRefs={sourceRefs} />
               </td>
             ))}
           </tr>
@@ -137,27 +269,33 @@ const TableView = memo(({ block }: { block: TableBlock }) => (
   </div>
 ));
 
-const CalloutView = memo(({ block }: { block: CalloutBlock }) => {
-  const icon =
-    block.icon ??
-    (block.tone === 'danger'
-      ? 'danger'
-      : block.tone === 'warning'
-        ? 'warning'
-        : block.tone === 'success'
-          ? 'success'
-          : 'info');
+const CalloutView = memo(({ block, sourceRefs }: { block: CalloutBlock } & WithSources) => {
+  if (isRecommendationChrome(block.icon)) {
+    return (
+      <aside className="block-recommendations" aria-label={t('doc.recommendations')}>
+        <header className="block-recommendations__header">
+          <IconLightbulb size={18} aria-hidden className="block-recommendations__icon" />
+          <span className="block-recommendations__title">{t('doc.recommendations')}</span>
+        </header>
+        <div className="block-recommendations__body">
+          <p className="block-recommendations__text">
+            <InlineMarkdown text={block.body} sourceRefs={sourceRefs} />
+          </p>
+        </div>
+      </aside>
+    );
+  }
   return (
     <aside className={`block-callout tone-${block.tone}`}>
-      <TokenIcon token={icon} size={18} animated />
+      <TokenIcon token={block.icon ?? iconForTone(block.tone)} size={18} animated />
       <div>
         {block.title && (
           <strong>
-            <InlineMarkdown text={block.title} />
+            <InlineMarkdown text={block.title} sourceRefs={sourceRefs} />
           </strong>
         )}
         <p>
-          <InlineMarkdown text={block.body} />
+          <InlineMarkdown text={block.body} sourceRefs={sourceRefs} />
         </p>
       </div>
     </aside>
@@ -165,9 +303,14 @@ const CalloutView = memo(({ block }: { block: CalloutBlock }) => {
 });
 
 const CodeView = memo(({ block }: { block: CodeBlock }) => (
-  <pre className="block-code">
-    <code data-language={block.language}>{block.content}</code>
-  </pre>
+  <figure className="block-code">
+    <figcaption className="block-code__meta">
+      <span className="block-code__lang">{block.language}</span>
+    </figcaption>
+    <pre className="block-code__pre">
+      <code data-language={block.language}>{block.content}</code>
+    </pre>
+  </figure>
 ));
 
 const FormulaView = memo(({ block }: { block: FormulaBlock }) => (
@@ -176,39 +319,71 @@ const FormulaView = memo(({ block }: { block: FormulaBlock }) => (
   </div>
 ));
 
-const KeyValueView = memo(({ block }: { block: KeyValueBlock }) => (
+/** Collapse «Технологии — Технологии и IT» when the value already carries the label. */
+function kvDisplayParts(label: string, value: string): { title: string; detail: string | null } {
+  const labelText = label.trim();
+  const valueText = value.trim();
+  const labelL = labelText.toLocaleLowerCase();
+  const valueL = valueText.toLocaleLowerCase();
+  if (!labelText) return { title: valueText, detail: null };
+  if (!valueText) return { title: labelText, detail: null };
+  if (valueL === labelL || valueL.startsWith(labelL)) {
+    return { title: valueText, detail: null };
+  }
+  return { title: labelText, detail: valueText };
+}
+
+const KeyValueView = memo(({ block, sourceRefs }: { block: KeyValueBlock } & WithSources) => (
   <dl className="block-kv">
-    {block.items.map(item => (
-      <div className="kv-row" key={`${item.label}-${item.value}`}>
-        <dt>
-          <TokenIcon token={item.icon} size={14} />
-          <InlineMarkdown text={item.label} />
-        </dt>
-        <dd>
-          <InlineMarkdown text={item.value} />
-        </dd>
-      </div>
-    ))}
+    {block.items.map(item => {
+      const { title, detail } = kvDisplayParts(item.label, item.value);
+      return (
+        <div
+          className={`kv-row${detail ? '' : ' kv-row--single'}`}
+          key={`${item.label}-${item.value}`}
+        >
+          <dt>
+            <TokenIcon token={item.icon} size={16} />
+            <span className="kv-row__label">
+              <InlineMarkdown text={title} sourceRefs={sourceRefs} />
+            </span>
+          </dt>
+          {detail ? (
+            <dd>
+              <InlineMarkdown text={detail} sourceRefs={sourceRefs} />
+            </dd>
+          ) : null}
+        </div>
+      );
+    })}
   </dl>
 ));
 
-const StepsView = memo(({ block }: { block: StepsBlock }) => (
+const StepsView = memo(({ block, sourceRefs }: { block: StepsBlock } & WithSources) => (
   <ol className="block-steps">
-    {block.items.map((item, i) => (
-      <li key={i} className={`step status-${item.status}`}>
-        <div className="step-marker">
-          <TokenIcon token={item.icon ?? 'check'} size={16} />
-        </div>
-        <div className="step-body">
-          <strong>
-            <InlineMarkdown text={item.title} />
-          </strong>
-          <p>
-            <InlineMarkdown text={item.body} />
-          </p>
-        </div>
-      </li>
-    ))}
+    {block.items.map((item, i) => {
+      const icon = item.icon ?? iconForStepStatus(item.status);
+      return (
+        <li key={i} className={item.status ? `step status-${item.status}` : 'step'}>
+          <div className="step-marker">
+            {/*
+              Маркер несёт порядковый номер, пока не известно состояние: номер —
+              факт из данных, а иконка статуса без статуса была бы выдумкой
+              (и одинаковой у всех строк).
+            */}
+            {icon ? <TokenIcon token={icon} size={16} /> : <span aria-hidden>{i + 1}</span>}
+          </div>
+          <div className="step-body">
+            <strong>
+              <InlineMarkdown text={item.title} sourceRefs={sourceRefs} />
+            </strong>
+            <p>
+              <InlineMarkdown text={item.body} sourceRefs={sourceRefs} />
+            </p>
+          </div>
+        </li>
+      );
+    })}
   </ol>
 ));
 

@@ -412,7 +412,7 @@ bi-temporal graph, честное имя extract-tool — без сноса Post
 | Metric | Target | Status |
 |---|---|---|
 | Recall@k (spine eval) | > 0.85 | ✅ `tests/eval/test_memory_failure_modes_m7.py` + Gauge |
-| Query p95 | < 200 ms (nightly) | ✅ already `PalatiumMemoryQueryLatencyHigh` |
+| Query p95 | < 200 ms (nightly) | ✅ гейт `tests/perf/test_memory_query_latency.py` (job `memory-query-latency`, реальный pgvector, `slow`) + alert `PalatiumMemoryQueryLatencyHigh`; baseline **p95 117.5 ms / p50 98.4 ms** @400 фактов (Windows + Docker Desktop — худшая среда матрицы) |
 | Faithfulness / context precision (optional LLM-judge) | ≥ 0.85 / ≥ 0.80 — **не** hard CI | ✅ deterministic G7 lite in eval; LLM-judge remains optional |
 | Token / char budget on recall | within `recall_max_*` | ✅ G1 context degradation + spine |
 | Extract DLQ / promote errors | alert | ✅ `PalatiumMemoryExtractDeadLetter` / `PalatiumMemoryPromoteErrors` |
@@ -427,8 +427,9 @@ Production-audit memory section updated (bi-temporal / fan-out / Recall@k).
 Cross-encoder wrap (`MEMORY_CROSS_ENCODER_RERANK`); binary quantize helpers
 (`domain/memory/binary_quantize`, flag reserved until `bit(4096)` migration);
 τ-decay (`MEMORY_IMPORTANCE_HALF_LIFE_DAYS`); xMemory decouple; Bayesian α/β;
-Hebbian edge bump; optional `emotional_valence` on save. All flags **OFF** by
-default. **Cognee** — только после нового ADR (struck).
+Hebbian edge bump; optional `emotional_valence` on save. Переключатели **OFF** by
+default, кроме `MEMORY_XMEMORY_DECOUPLE`: он включён по eval-гейту M9 §5.5
+(duplicate rate 0.25 → 0.0 без потери фактов). **Cognee** — только после нового ADR (struck).
 
 ---
 
@@ -530,3 +531,78 @@ bi-temporal Neo4j + HITL + evals). Полный рефакторинг = вол�
 | **SB5** | Eval gates sticky-poison / doc-format / identity+task / L4 select | DONE |
 
 Не меняет ADR 0004 / hybrid SoT. Детали — план Super Brain Memory (отдельный артефакт).
+
+---
+
+## 14. M9 — in progress (eval-gated flags)
+
+Статус: **in progress**. Дизайн — [m9-eval-design.md](../../docs/plans/m9-eval-design.md).
+Шаг 3 выполнен для `MEMORY_XMEMORY_DECOUPLE` (один флаг), остальные — `false` с блокерами.
+
+Аудит M5/M3 (2026-10-20) дал вход в M9 и уточнил инвентарь §6:
+
+- `MEMORY_IMPORTANCE_HALF_LIFE_DAYS` — **не флаг**, а значение (default `7.0`), τ-decay активен
+  всегда; формулировку «All flags OFF» в §6 читать как «переключатели OFF».
+- `MEMORY_BINARY_QUANTIZE_RERANK` — was a no-op until the `bit(4096)` migration (log-only) →
+  **ручка удалена 2026-10-20** (§9.2, 050); helpers остались.
+- `MEMORY_HEBBIAN_EDGE_BUMP` — the weight was written but Select never read it → **ручка
+  удалена 2026-10-20** (§9.2, 050); доменный хелпер и порт остались без вызывающего.
+- `MEMORY_BAYESIAN_TRUST` — вызывается только `observe_success`, поэтому confidence растёт
+  монотонно; без `observe_failure` на supersede флаг измеряет число промоутов, не доверие.
+- `MEMORY_CROSS_ENCODER_RERANK` — в проде подключается лексический `TokenOverlapCrossEncoder`,
+  а не cross-encoder.
+
+Условие перевода любого флага в `true`: метрика + порог + откат зафиксированы в
+[m9-eval-design.md](../../docs/plans/m9-eval-design.md) §5, baseline снят при `false`, числа «до/после» в PR.
+Гейт — `tests/eval/test_m9_flag_gates.py`: закрытый флаг с `default=True` или включённый без
+чисел роняет тест.
+
+**Шаг 3 (2026-10-20).** `MEMORY_XMEMORY_DECOUPLE` включён (`default=True` + env `true`):
+duplicate rate **0.25 → 0.0** (−100% при пороге −50%), near-rate **0.375 → 0.167**, множество
+промоутнутых фактов не изменилось. Гейт гоняет реальный `MemoryPromotionService.run_batch`.
+`MEMORY_EMBEDDING_RERANK` остаётся `false`: precision-часть гейта зелёная (0.5 → 1.0), но
+порог `p95 × 1.5` требует живого embedding-gateway и не измерен.
+**Прунинг (§9.2).** `MEMORY_BINARY_QUANTIZE_RERANK` и `MEMORY_HEBBIAN_EDGE_BUMP` удалены из
+`MemoryConfig`/env/bootstrap как no-op; `domain/memory/{binary_quantize,hebbian}.py` и порт
+`bump_hebbian_on_entry` остались под будущую волну, возврат ручки запрещён тестом
+`test_gate_pruned_knobs_stay_removed`.
+
+**Шаги 1–2 (2026-10-20): baseline снят при всех флагах `false`.**
+`domain/memory/eval_metrics.py` — `supersede_precision` / `supersede_recall` /
+`reinforcement_lift`; `domain/memory/duplicates.py` — `duplicate_rate` / `near_duplicate_rate`.
+Числа на реальном коде, не на моках: supersede precision **1.0** / recall **0.5** (корпус с одним
+PII-противоречием — измеренный долг F3), context precision@2 после реранка **0.5 → 1.0**,
+reinforcement lift **0.0** (потребителя веса в ранжировании нет), duplicate rate **0.25 → 0.0**
+после batch-collapse при near-rate **0.375 → 0.167**. Файлы:
+`tests/eval/test_m9_eval_metrics.py`, `tests/eval/test_memory_extract_dedup.py`.
+
+**query p95 (шаг 1 закрыт):** `tests/perf/test_memory_query_latency.py` — 400 фактов,
+`limit=8`, 25 замеров после прогрева: **p95 117.5 мс / p50 98.4 мс** на Windows + Docker
+Desktop (для сравнения: голый pgvector-план 400×4096 в том же контейнере — 6.7 мс; разрыв —
+чтение/детоаст строк и клиентская сериализация вектора, по частям не профилировалось).
+Гейты: SLO-бюджет 060 (200 мс) и детерминированный инвариант «`SELECT` на запрос = 4 и не
+зависит от размера корпуса» (N+1). Job `memory-query-latency` в perf-nightly поднимает свой
+pgvector, гоняет миграции и `PALATIUM_REQUIRE_DB=1`, чтобы потерянный `DATABASE_URL` был
+красным, а не skip.
+
+## 15. Аудит M5/M3 — статус исправлений
+
+Артефакты: [m5-verification.md](../../docs/audit/m5-verification.md),
+[m3-verification.md](../../docs/audit/m3-verification.md).
+
+| Находка | Класс | Статус |
+|---|---|---|
+| E1 — `claim()` не проверяет `attempts`, DLQ недостижим при crash-loop | M3-bug | **fixed** — `_bury_exhausted_leases` + `attempts < max_attempts`, in-memory выровнен |
+| E2 | Lease 300 с не продлевается, бюджет job больше lease | M3-bug | **fixed** — `renew()` + heartbeat lease/3, abort по `ExtractLeaseLostError` |
+| E2b — нет fencing-token на стороне записи (`save_memory`) | M9-candidate | **окно сужено** 2026-10-20 (ownership-probe перед `persist_facts` резервирует lease); полный fence требует правки контракта 070 |
+| E3 | Ключ факта не детерминирован (`uuid4`) → дубликаты при retry | M3-bug | **fixed** — `add-<sha256(normalized text)[:16]>` |
+| E6 — enqueue не атомарен (`IntegrityError` наружу, гонка ёмкости) | M3-bug | **fixed** — `pg_advisory_xact_lock` + `ON CONFLICT DO NOTHING` |
+| E4 — `PostgresExtractJobQueue` без тестов | M3-bug | **tests added** — `tests/integration/test_memory_extract_jobs_queue.py` |
+| E4b — интеграционные тесты не исполняются в CI | M3-bug | **fixed** — CI-job `integration-db` (pgvector digest = compose, `alembic upgrade head`, `PALATIUM_REQUIRE_DB=1`); контракт job'а — `tests/unit/test_ci_integration_db_job.py` |
+| F1 — `graph_query` отдаёт superseded/expired факты | M5-bug | **fixed** — fail-closed guard по `$as_of` + автобинд в портах |
+| F1b — `$as_of` в тексте не гарантирует полный предикат | M5-bug | **fixed** — guard требует все 3 конъюнкта (+`IS NULL`) на каждый alias `:MemoryFact`; анонимный узел и «пара фактов без предиката» отклоняются |
+| F2 — `invalid_at` = системное время (не valid-time нового факта) | M9-candidate | **fixed** — valid-time cut + FIND учитывает будущий `invalid_at` как активный |
+| F3 — PII-supersede блокируется без HITL-канала | M9-candidate | наблюдаемость **fixed** (отдельный исход + 1 warning/батч + `palatium_memory_promote_blocked_pii_total` + alert); карточка — блок на `org_id` в promote (решение владельца) |
+| F4 — upsert продлевает PII-retention и снимает `contains_pii` | M5-bug | **fixed** — conflict-ветка `put()`: липкий `contains_pii` (`existing OR incoming`) + `expires_at = LEAST(existing, incoming)` для PII; regression на реальном Postgres (`tests/integration/test_memory_postgres_retention.py`); non-PII слайд окна сохранён |
+| E5 — `existing_memory_texts` без инструкции дедупа | M9-candidate | **fixed** — контракт `Deduplication (mandatory)` + fence recall-блока; метрика `duplicate_rate`/`near_duplicate_rate` + baseline 0.25/0.375 (`tests/eval/test_memory_extract_dedup.py`) |
+| E7 — глобальный `max_queue` без tenant-квоты | M9-candidate | **fixed** — `ExtractQueueCapacity` (fair share `max_queue // MIN_TENANT_SLOTS`; конфиг `MEMORY_EXTRACT_MAX_QUEUE[_PER_TENANT]`), обе проверки в самом INSERT под тем же advisory lock (E6); контракт `ExtractEnqueueResult` (`queued`/`queue_full`/`tenant_full`) + `palatium_memory_extract_enqueue_refused_total{reason}`; regression — unit + реальный Postgres |

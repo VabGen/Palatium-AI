@@ -44,3 +44,9 @@ cd web && npm run verify                  # типы, ESLint, Prettier, Vitest (
 - [ ] новый долг помечен `TODO(owner, ticket, date):` и проверен `scripts/check_todos.py` (086)
 - [ ] поведение изменилось → док/правило обновлены в этом же PR (086)
 - [ ] CI зелёный; merge при красном CI запрещён (082)
+
+## Markers (когда применимо)
+
+- [ ] `[baseline-refresh]` — изменены `actual_*` / `max_*` в `behavioral.json` (ADR-0010/0011)
+- [ ] `[constitution-update]` — правки Constitution / verify-промптов + hash в ADR-0010
+- [ ] `[pricing-update]` — смена `core/config/llm_pricing.py` / FinOps rates

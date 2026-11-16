@@ -37,6 +37,7 @@ class InteractionAssembler:
         task_kind: str | None = None,
         requires_user_choice: bool = False,
         has_turn_attachments: bool = False,
+        response_shape: str | None = None,
     ) -> AssembledInteraction:
         """Plan cards and strip exclusive menus when choice will be minted."""
         _ = cls
@@ -47,6 +48,7 @@ class InteractionAssembler:
             task_kind=task_kind,
             requires_user_choice=requires_user_choice,
             has_turn_attachments=has_turn_attachments,
+            response_shape=response_shape,
         )
         if plan.reason == "formatter_output_invalid":
             return AssembledInteraction(
@@ -58,7 +60,12 @@ class InteractionAssembler:
         if document is None:
             return AssembledInteraction(document=None, plan=plan)
 
-        if plan.reason in {"interaction_downgraded_informational", "attachment_grounds_ask"}:
+        if plan.reason in {
+            "interaction_downgraded_informational",
+            "attachment_grounds_ask",
+            "informational_answer",
+            "catalogue_answer",
+        }:
             # Clear the soft choice/confirm tag so the UI does not expect cards.
             clean = document.model_copy(
                 update={
@@ -96,6 +103,7 @@ def interaction_plan_log_fields(assembled: AssembledInteraction) -> dict[str, ob
         "promoted_from": plan.promoted_from,
         "force_structural": plan.force_structural,
         "required_choice": plan.required_choice,
+        "ignored_user_choice": plan.ignored_user_choice,
         "invalid": assembled.invalid,
         "strip_exclusive_menu": assembled.strip_exclusive_menu,
     }

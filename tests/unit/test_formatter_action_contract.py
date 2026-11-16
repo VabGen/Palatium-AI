@@ -18,18 +18,32 @@ from palatium_ai.application.agents.formatter.prompts import FORMATTER_SYSTEM_PR
 from palatium_ai.domain.content import ActionKind, ActionSpec, ActionStyle, ContentDocument
 from palatium_ai.infrastructure.llm.litellm_adapter import build_provider_response_format
 
-_BASELINE_CHARS = 11_625
+#: The prompt this file used to guard against was an 11,625-char monolith. Each wave
+#: that spends prompt space re-baselines the ceiling to today +5 % instead of "60 % of
+#: the monolith": W6/W7 landed near 7.9k; kimi-answer-formatting added document_analysis
+#: few-shot (2026-11-11). Guard still forbids a return to the 11.6k monolith.
+_CEILING_CHARS = 9_400
 
 
-def test_formatter_prompt_shrunk_at_least_forty_percent() -> None:
-    assert len(FORMATTER_SYSTEM_PROMPT) <= int(_BASELINE_CHARS * 0.6)
+def test_formatter_prompt_stays_below_the_documented_ceiling() -> None:
+    """Few-shot examples are paid on every turn: growth past the ceiling is a decision."""
+    assert len(FORMATTER_SYSTEM_PROMPT) <= _CEILING_CHARS
+
+
+def test_formatter_prompt_keeps_transform_rule_for_shorten_rewrite() -> None:
+    # Regression: "перепиши ответ короче" was answered as a file comparison because
+    # the composer saw no explicit transform intent and pulled the thread topic (055).
+    assert "transformation ∈ {expand, shorten, rewrite}" in FORMATTER_SYSTEM_PROMPT
+    assert "compare files" in FORMATTER_SYSTEM_PROMPT
 
 
 def test_formatter_prompt_keeps_behavior_and_drops_format_rules() -> None:
+    # Security fence + the current GFM-era input marker and style hints stay; the legacy
+    # JSON-prompt tokens (closed enums in prose, JSON-only output) must never come back.
     assert "<<<UNTRUSTED_TOOL_OUTPUT>>>" in FORMATTER_SYSTEM_PROMPT
-    assert "<input_contract>" in FORMATTER_SYSTEM_PROMPT
-    assert "status_callout" in FORMATTER_SYSTEM_PROMPT
-    assert "sections_unordered" in FORMATTER_SYSTEM_PROMPT
+    assert "<formatter_input>" in FORMATTER_SYSTEM_PROMPT
+    assert "plain_text" in FORMATTER_SYSTEM_PROMPT
+    assert "document_generation" in FORMATTER_SYSTEM_PROMPT
     assert "metrics_kv" not in FORMATTER_SYSTEM_PROMPT
     assert "choice_hitl" not in FORMATTER_SYSTEM_PROMPT
     assert "OUTPUT: ONLY one JSON" not in FORMATTER_SYSTEM_PROMPT

@@ -31,6 +31,20 @@ class AttachmentIntakeRejectedError(AttachmentError):
         super().__init__(message)
 
 
+class AttachmentThreadRequiredError(AttachmentError):
+    """An attach-mode upload arrived without a dialog thread (020).
+
+    ``attach`` rows are reachable only through ``thread_id`` (``list_for_thread`` /
+    ``get_many`` / the reference resolver). A row created with ``thread_id=NULL``
+    can still be parsed, but no future turn can bind it, so it is dead weight the
+    moment it is written. The API schema already requires the id; this error keeps
+    the same rule in the use-case layer for any non-HTTP caller (055).
+    """
+
+    def __init__(self) -> None:
+        super().__init__("thread_id is required for attach mode")
+
+
 class AttachmentUploadTooLargeError(AttachmentError):
     """A proxied upload body is bigger than the configured intake cap (020).
 
@@ -131,16 +145,29 @@ class AttachmentContentMissingError(AttachmentError):
         super().__init__(f"derived content missing for attachment {attachment_id}")
 
 
+class AttachmentIntegrityError(AttachmentError):
+    """Stored blob bytes no longer match the sealed ``content_sha256`` (020).
+
+    Fail-closed: do not serve or re-parse a tampered object.
+    """
+
+    def __init__(self, attachment_id: UUID) -> None:
+        self.attachment_id = attachment_id
+        super().__init__(f"attachment {attachment_id} failed content integrity check")
+
+
 __all__ = [
     "AttachmentChunkedUploadError",
     "AttachmentConnectorUnavailableError",
     "AttachmentContentMissingError",
     "AttachmentError",
     "AttachmentIntakeRejectedError",
+    "AttachmentIntegrityError",
     "AttachmentModeMismatchError",
     "AttachmentNotFoundError",
     "AttachmentNotUsableError",
     "AttachmentRestoreNotAllowedError",
+    "AttachmentThreadRequiredError",
     "AttachmentTooLargeError",
     "AttachmentUploadTooLargeError",
 ]

@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 from palatium_ai.domain.agents.agent_config import AgentConfig
 from palatium_ai.domain.llm.models import (
@@ -117,6 +118,8 @@ def make_platform_mcp_registry(
     memory_port: object | None = None,
     knowledge_port: object | None = None,
     consolidation: object | None = None,
+    skill_catalog: object | None = None,
+    skills_self_authored_enabled: bool = False,
 ) -> PlatformKnowledgeMcpRegistry:
     from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
     from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
@@ -126,6 +129,8 @@ def make_platform_mcp_registry(
         knowledge_port=knowledge_port or InMemoryKnowledgePort(),  # type: ignore[arg-type]
         memory_port=memory_port or InMemoryMemoryPort(),  # type: ignore[arg-type]
         consolidation=consolidation,  # type: ignore[arg-type]
+        skill_catalog=skill_catalog,  # type: ignore[arg-type]
+        skills_self_authored_enabled=skills_self_authored_enabled,
     )
     return PlatformKnowledgeMcpRegistry(handler)
 
@@ -160,6 +165,7 @@ def make_memory_hitl_stack() -> tuple[object, object, object, object, object]:
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.memory_forget_service import MemoryForgetService
     from palatium_ai.application.services.memory_save_service import MemorySaveService
+    from palatium_ai.application.services.session_scratchpad import SessionScratchpadService
     from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
     from palatium_ai.infrastructure.knowledge.in_memory_knowledge_port import InMemoryKnowledgePort
     from palatium_ai.infrastructure.mcp.platform_tool_handler import PlatformToolHandler
@@ -169,8 +175,17 @@ def make_memory_hitl_stack() -> tuple[object, object, object, object, object]:
     handler = PlatformToolHandler(knowledge_port=InMemoryKnowledgePort(), memory_port=port)
     registry = PlatformKnowledgeMcpRegistry(handler)
     hitl = HitlService(InMemoryHitlCardStore(), signing_secret="unit-test-hitl-hmac-key-32bytes!!")
-    save = MemorySaveService(hitl_service=hitl, mcp_registry=registry)
-    forget = MemoryForgetService(hitl_service=hitl, mcp_registry=registry)
+    save = MemorySaveService(
+        hitl_service=hitl,
+        mcp_registry=registry,
+        scratchpad=SessionScratchpadService(port),
+    )
+    forget = MemoryForgetService(
+        hitl_service=hitl,
+        mcp_registry=registry,
+        memory_port=port,
+        scratchpad=SessionScratchpadService(port),
+    )
     return save, forget, port, hitl, handler
 
 
@@ -369,6 +384,15 @@ class FakeDialogTurnStore:
         items = self._turns.get(thread_id, [])[-limit:]
         return DialogTurnWindow(thread_id=thread_id, turns=tuple(items), limit=limit)
 
+    async def truncate_keeping(self, *, thread_id: str, keep: int) -> int:
+        items = self._turns.get(thread_id, [])
+        safe_keep = max(0, keep)
+        if safe_keep >= len(items):
+            return 0
+        deleted = len(items) - safe_keep
+        self._turns[thread_id] = items[:safe_keep]
+        return deleted
+
 
 class FakeMCPRegistry:
     """In-memory MCP registry for unit-tests."""
@@ -444,6 +468,21 @@ def _reset_settings_cache():
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _close_llm_transport() -> AsyncIterator[None]:
+    """Close the loop-scoped LiteLLM HTTP session after every test.
+
+    ``asyncio_default_fixture_loop_scope = function`` means each async test owns a loop;
+    a session kept in the module registry would outlive that loop and surface later as
+    an "Unclosed client session" warning — which ``filterwarnings = error`` rejects.
+    The fixture runs while the test's loop is still alive, so the close can be awaited.
+    """
+    from palatium_ai.infrastructure.llm.shared_transport import aclose_shared_client_sessions
+
+    yield
+    await aclose_shared_client_sessions()
 
 
 def make_graph_checkpointer():

@@ -101,3 +101,8 @@ class ObservabilityConfig(BaseConfig):
         validation_alias="OTEL_CAPTURE_RAW_QUERY",
         description="Dev-only: attach redacted query string to OTel spans. Never on staging/prod.",
     )
+    llm_prompt_archive_enabled: bool = Field(
+        default=False,
+        validation_alias="LLM_PROMPT_ARCHIVE_ENABLED",
+        description=("Dev-only: log redacted truncated LLM prompts for debug replay. Never enable on staging/prod (020 PII)."),
+    )

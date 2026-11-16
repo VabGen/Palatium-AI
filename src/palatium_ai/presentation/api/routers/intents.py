@@ -21,7 +21,10 @@ from palatium_ai.domain.attachments.errors import (
     AttachmentError,
     AttachmentNotFoundError,
     AttachmentNotUsableError,
+    AttachmentThreadRequiredError,
 )
+from palatium_ai.domain.policies.composer_mode import ComposerModePolicy
+from palatium_ai.domain.policies.types import ComposerMode
 from palatium_ai.domain.sessions.errors import SessionOwnershipError
 from palatium_ai.presentation.resources import get_app_resources
 from palatium_ai.presentation.security.deps import get_principal, principal_is_admin
@@ -42,6 +45,16 @@ class ClassifyIntentRequest(BaseModel):
         max_length=128,
         description="Ignored; tenant comes from the JWT principal only.",
     )
+    #: Explicit composer chrome (Web Search / Deep Think / Agent). Optional floors.
+    composer_mode: ComposerMode | None = Field(
+        default=None,
+        description="UI mode pill: web_search | deep_think | agent.",
+    )
+    #: W11 personalization: False = Temporary/Unpersonalized (no Medium/L4 recall or extract).
+    use_memory: bool = Field(
+        default=True,
+        description="When false, durable memory recall and extract are disabled for this turn.",
+    )
 
 
 def _map_runtime_error(exc: Exception) -> HTTPException:
@@ -55,6 +68,8 @@ def _map_runtime_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     if isinstance(exc, AttachmentNotUsableError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, AttachmentThreadRequiredError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
     if isinstance(exc, AttachmentError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     raise exc
@@ -73,6 +88,8 @@ async def classify_intent(body: ClassifyIntentRequest, request: Request) -> Inte
             org_id=principal.org_id,
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
+            composer_mode=ComposerModePolicy.coerce(body.composer_mode),
+            use_memory=body.use_memory,
         )
     except (
         KillSwitchEngagedError,
@@ -96,6 +113,8 @@ async def process_intent(body: ClassifyIntentRequest, request: Request) -> Forma
             org_id=principal.org_id,
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
+            composer_mode=ComposerModePolicy.coerce(body.composer_mode),
+            use_memory=body.use_memory,
         )
     except (
         KillSwitchEngagedError,
@@ -120,6 +139,8 @@ async def process_intent_stream(body: ClassifyIntentRequest, request: Request) -
             org_id=principal.org_id,
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
+            composer_mode=ComposerModePolicy.coerce(body.composer_mode),
+            use_memory=body.use_memory,
         )
         emit_done = False
         try:

@@ -1,0 +1,86 @@
+{
+  "cases": [
+    {
+      "id": "sem-coder-01",
+      "agent": "coder",
+      "scenario": "python_list_len",
+      "input": { "user_text": "In Python, which built-in returns the number of items in a list?" },
+      "expected": { "must_contain": ["len"], "must_not_contain": ["sizeof"] },
+      "tags": ["coder", "semantic"]
+    },
+    {
+      "id": "sem-coder-02",
+      "agent": "coder",
+      "scenario": "git_clone",
+      "input": { "user_text": "Which git command copies a remote repository locally?" },
+      "expected": { "must_contain": ["clone"], "must_not_contain": ["rebase -i"] },
+      "tags": ["coder", "semantic"]
+    },
+    {
+      "id": "sem-coder-03",
+      "agent": "coder",
+      "scenario": "http_idempotent_get",
+      "input": { "user_text": "Name one idempotent HTTP method commonly used for reads." },
+      "expected": { "must_contain": ["GET"], "must_not_contain": ["PATCH is always"] },
+      "tags": ["coder", "semantic"]
+    },
+    {
+      "id": "sem-coder-04",
+      "agent": "coder",
+      "scenario": "js_const",
+      "input": { "user_text": "In modern JavaScript, which keyword declares a block-scoped constant?" },
+      "expected": { "must_contain": ["const"], "must_not_contain": ["var only"] },
+      "tags": ["coder", "semantic"]
+    },
+    {
+      "id": "sem-coder-05",
+      "agent": "coder",
+      "scenario": "sql_primary_key",
+      "input": { "user_text": "What constraint uniquely identifies a row in a relational table?" },
+      "expected": { "must_contain": ["primary key"], "must_not_contain": ["foreign key only"] },
+      "tags": ["coder", "semantic"]
+    },
+    {
+      "id": "sem-coder-06",
+      "agent": "coder",
+      "scenario": "oauth_token",
+      "input": { "user_text": "In OAuth2, what short-lived credential does the client typically present to APIs?" },
+      "expected": { "must_contain": ["access token"], "must_not_contain": ["password in query"] },
+      "tags": ["coder", "semantic"]
+    },
+    {
+      "id": "sem-coder-07",
+      "agent": "coder",
+      "scenario": "big_o_linear",
+      "input": { "user_text": "What is the Big-O time complexity of scanning n items once?" },
+      "expected": { "must_contain": ["O(n)"], "must_not_contain": ["O(n^2)"] },
+      "tags": ["coder", "semantic"]
+    },
+    {
+      "id": "sem-coder-08",
+      "agent": "coder",
+      "scenario": "rest_put",
+      "input": { "user_text": "Which HTTP method is typically used to replace a resource entirely?" },
+      "expected": { "must_contain": ["PUT"], "must_not_contain": ["CONNECT"] },
+      "needs_judge": true,
+      "grader": "rule_then_judge",
+      "tags": ["coder", "semantic", "judge"]
+    },
+    {
+      "id": "sem-coder-09",
+      "agent": "coder",
+      "scenario": "docker_image",
+      "input": { "user_text": "What Dockerfile instruction sets the base image?" },
+      "expected": { "must_contain": ["FROM"], "must_not_contain": ["ENTRYPOINT only"] },
+      "tags": ["coder", "semantic"]
+    },
+    {
+      "id": "sem-coder-10",
+      "agent": "coder",
+      "scenario": "pytest_assert",
+      "input": { "user_text": "In pytest, which statement fails a test when a condition is false?" },
+      "expected": { "must_contain": ["assert"], "must_not_contain": ["unittest.main only"] },
+      "tags": ["coder", "semantic"]
+    }
+  ]
+}

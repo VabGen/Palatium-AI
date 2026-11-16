@@ -37,6 +37,14 @@ def test_unclosed_fence_flushed() -> None:
     assert "line1" in blocks[0].content
 
 
+def test_empty_fence_is_dropped() -> None:
+    """Whitespace-only fences must not become CodeBlock (W10.1 P0.1a)."""
+    _, blocks = prose_to_blocks("Before\n\n```python\n\n```\n\nAfter")
+    assert all(block.type != "code" for block in blocks)
+    assert any(block.type == "paragraph" and "Before" in block.text for block in blocks)
+    assert any(block.type == "paragraph" and "After" in block.text for block in blocks)
+
+
 def test_plain_passthrough_single_paragraph() -> None:
     title, blocks = prose_to_blocks("Just a sentence.")
     assert title is None

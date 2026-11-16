@@ -1,0 +1,86 @@
+{
+  "cases": [
+    {
+      "id": "sem-analyst-01",
+      "agent": "analyst",
+      "scenario": "mean_of_series",
+      "input": { "user_text": "What is the arithmetic mean of 2, 4, and 6?" },
+      "expected": { "must_contain": ["4"], "must_not_contain": ["mean is 12", "average is 12"] },
+      "tags": ["analyst", "semantic"]
+    },
+    {
+      "id": "sem-analyst-02",
+      "agent": "analyst",
+      "scenario": "percent_increase",
+      "input": { "user_text": "A metric goes from 50 to 75. What is the percent increase?" },
+      "expected": { "must_contain": ["50"], "must_not_contain": ["25%"] },
+      "tags": ["analyst", "semantic"]
+    },
+    {
+      "id": "sem-analyst-03",
+      "agent": "analyst",
+      "scenario": "median_odd",
+      "input": { "user_text": "What is the median of 1, 3, 9?" },
+      "expected": { "must_contain": ["3"], "must_not_contain": ["median is 9", "median is 1"] },
+      "tags": ["analyst", "semantic"]
+    },
+    {
+      "id": "sem-analyst-04",
+      "agent": "analyst",
+      "scenario": "ratio_simplify",
+      "input": { "user_text": "Simplify the ratio 10:5." },
+      "expected": { "must_contain": ["2:1"], "must_not_contain": ["5:10"] },
+      "tags": ["analyst", "semantic"]
+    },
+    {
+      "id": "sem-analyst-05",
+      "agent": "analyst",
+      "scenario": "false_positive",
+      "input": { "user_text": "In binary classification, what do we call a negative instance predicted as positive?" },
+      "expected": { "must_contain": ["false positive"], "must_not_contain": ["true negative only"] },
+      "tags": ["analyst", "semantic"]
+    },
+    {
+      "id": "sem-analyst-06",
+      "agent": "analyst",
+      "scenario": "cagr_concept",
+      "input": { "user_text": "What does CAGR stand for in finance analytics?" },
+      "expected": { "must_contain": ["Compound Annual Growth Rate"], "must_not_contain": ["Cost Average Gross Return"] },
+      "tags": ["analyst", "semantic"]
+    },
+    {
+      "id": "sem-analyst-07",
+      "agent": "analyst",
+      "scenario": "stddev_vs_var",
+      "input": { "user_text": "Is standard deviation the square root of variance? Answer yes or no." },
+      "expected": { "must_contain": ["yes"], "must_not_contain": ["no, variance is"] },
+      "tags": ["analyst", "semantic"]
+    },
+    {
+      "id": "sem-analyst-08",
+      "agent": "analyst",
+      "scenario": "correlation_bound",
+      "input": { "user_text": "Pearson correlation ranges between which two numbers?" },
+      "expected": { "must_contain": ["-1", "1"], "must_not_contain": ["0 and 100"] },
+      "needs_judge": true,
+      "grader": "rule_then_judge",
+      "tags": ["analyst", "semantic", "judge"]
+    },
+    {
+      "id": "sem-analyst-09",
+      "agent": "analyst",
+      "scenario": "cohort_def",
+      "input": { "user_text": "In product analytics, what is a cohort?" },
+      "expected": { "must_contain": ["group"], "must_not_contain": ["random forest"] },
+      "tags": ["analyst", "semantic"]
+    },
+    {
+      "id": "sem-analyst-10",
+      "agent": "analyst",
+      "scenario": "p95_latency",
+      "input": { "user_text": "What does p95 latency mean in one sentence?" },
+      "expected": { "must_contain": ["95"], "must_not_contain": ["average only"] },
+      "tags": ["analyst", "semantic"]
+    }
+  ]
+}

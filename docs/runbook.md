@@ -75,7 +75,7 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api dow
 |---|---|---|
 | **Host** | `docker compose up -d postgres redis neo4j litellm` + `dev-up.ps1` | Ежедневная разработка (hot-reload) |
 | **Docker** | `docker compose --profile docker-mcp --profile docker-api up -d` | CI, демо, prod-like (без вложений) |
-| **Docker + вложения** | `make up` (меню: STACK → *Start stack*) | Дефолтный запуск: AV/S3-путь вложений «из коробки» (§16.8). Обязателен при `ATTACHMENTS_BLOB_BACKEND=minio` — без store API падает на boot |
+| **Docker + вложения** | `make up` (меню: STACK → *Start stack*) | Дефолтный запуск: AV/S3-путь вложений «из коробки» (§16.8) + promote-петля `memory-jobs` (иначе L3 не наполняется). Обязателен при `ATTACHMENTS_BLOB_BACKEND=minio` — без store API падает на boot |
 | **Docker + вложения + observability** | `make up-full` (меню: STACK → *Start full stack*) | Трассировка Langfuse v3; требует VM ≥ ~9.1 GiB (§16.10) |
 | **Gateway** | `.\scripts\dev-up.ps1 -WithGateway` | Тест политик MCP |
 
@@ -167,20 +167,15 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 LICENSE копируется, импорт проверяется, `graphiti` проверяется при `WITH_GRAPHITI=1`,
 `|| true` не висит в конце install-цепочки).
 
-#### 3.1.2. `mcp_servers` в `[tool.poetry].packages`
+#### 3.1.2. `mcp_servers` в пакетах сборки
 
-**Причина:** `pyproject.toml` когда-то содержал `{ include = "mcp_servers" }`, но корневой
+**Причина:** старая конфигурация пакетов включала `mcp_servers`, но корневой
 `Dockerfile` не копирует `mcp_servers/` → `uv sync --frozen` падает целиком →
 `palatium_ai` не устанавливается.
 
-**Статус: ✅ исправлено.** `mcp_servers` исключён из пакетов (`[tool.poetry]`):
-
-```toml
-packages = [
-    { include = "palatium_ai", from = "src" },
-#    { include = "mcp_servers" },
-]
-```
+**Статус: ✅ исправлено.** Пакетом объявлен только `palatium_ai` (layout `src/`,
+backend `uv_build` — `[build-system]` в `pyproject.toml`); `mcp_servers` собирается
+своим `Dockerfile` и подключается через `PYTHONPATH=/app`.
 
 #### Диагностика (решает обе причины одним способом)
 
@@ -746,18 +741,57 @@ docker compose --env-file env/.env exec -T postgres `
 ### 3.17b. `hop_budget_exceeded` / turn ~20–30 s
 
 **Симптом:** в логе `agent.turn.hops` с `hop_budget_exceeded=True`,
-`hop_slowest_node` = `formatter` или `researcher`, бюджет `TURN_HOP_BUDGET_MS`
-(default 15000).
+`hop_slowest_node` = `formatter` или `researcher`, бюджет `hop_budget_ms`
+(база — `TURN_HOP_BUDGET_MS`, default 15000, × множитель стратегии).
 
-**Это soft SLO**, не hard-fail: Critic LLM и Formatter repair уже soft-degrade
-при нехватке бюджета; Formatter presentation LLM **намеренно не** гейтится
-(бренд UI). Основная длительность — latency корпоративного LLM + MCP.
+**Что именно сравнивается.** Бюджет считает работу агентов, а не ожидание
+внешних систем:
 
-**Что делать:** смотреть `hop_ms` по узлам; не поднимать `max_wal_size` и не
-менять транспорт на «WebSocket Responses» ради этого. Опции: быстрее tier для
-Formatter, меньше repair, `web_fallback` только при пустом local (и skip при
-уже превышенном бюджете). Поднять `TURN_HOP_BUDGET_MS` — только если осознанно
-сдвигаете алерт `PalatiumTurnHopBudgetExceeded`, не «ускорение».
+- `hop_total_ms` — суммарное время в узлах графа;
+- `hop_io_ms` — его часть, ушедшая на внешний I/O (`attachment_parse` — парсинг/OCR
+  документа, до 25 с на два скана). Эти спаны пишет `AttachmentPipeline` и коллектор
+  вычитает их: OCR не «шаг агента»;
+- `hop_agent_ms = hop_total_ms − hop_io_ms` — **только это** сравнивается с
+  `hop_budget_ms` и только это гейтит soft-degrade (Critic LLM, Formatter repair,
+  `web_fallback`).
+
+Отсюда два разных вердикта:
+
+- `hop_budget_exceeded=True` + warning `agent.turn.slow` (поле `reason="agent_work"`)
+  и счётчик `PalatiumTurnHopBudgetExceeded` — **агенты** вышли за бюджет: смотреть
+  `hop_ms` по узлам, `hop_agent_ms`, ретраи LLM (ниже);
+- `hop_wall_over_budget=True` + INFO `agent.turn.slow_io` — ход долгий из-за
+  внешнего I/O (`hop_io_ms_by_kind`), это факт для отчёта, а не дефект графа.
+  Алерт на счётчик не срабатывает намеренно: иначе каждая задача с PDF-сканом
+  гасит сигнал.
+
+**Бюджет по классу нагрузки.** `HopBudgetPolicy.effective_budget_ms` масштабирует
+базу по стратегии: `format_only` 0.6, `clarify` 0.5, `ack_only` 0.4 — low-risk ходы
+деградируют раньше; worker-проход (`retrieve_then_reason`, `direct_tool_call`,
+`code_sandbox`, `data_analysis` — continuation + intent + weaving + supervisor +
+worker + critic + formatter) — 2.0, `reason_only` — 1.6. Без масштаба вверх один
+и тот же 15-секундный порог был превышен **по построению** на каждом research-ходе,
+и алерт перестал быть сигналом.
+
+**Это soft SLO**, не hard-fail: Critic LLM и Formatter repair soft-degrade при
+нехватке бюджета; Formatter presentation LLM **намеренно не** гейтится (бренд UI).
+Основная длительность — latency корпоративного LLM + MCP.
+
+**Что делать:** смотреть `hop_ms` по узлам и `hop_agent_ms`; не поднимать
+`max_wal_size` и не менять транспорт на «WebSocket Responses» ради этого. Опции:
+быстрее tier для Formatter, меньше repair, `web_fallback` только при пустом local
+(и skip при уже превышенном бюджете). Поднять `TURN_HOP_BUDGET_MS` — только если
+осознанно сдвигаете алерт `PalatiumTurnHopBudgetExceeded`, не «ускорение».
+Медленный ход **без** `hop_budget_exceeded`, но с большим `hop_io_ms` — это I/O
+(OCR/парсинг), чинится кэшем/движком распознавания, не бюджетом.
+
+**Медленный узел на LLM — retry или холодный провайдер?** Смотреть
+`llm.attempt_failed` (WARNING, `agent_role`, `attempt`, `max_retries`,
+`error_type`, `retrying`): метрика `palatium_agent_errors_total{error_type="llm_attempt_failed"}`.
+Есть строки с `retrying=True` → время ушло на ретрай (5xx/сброс, холодный гейтвей),
+лечится прогревом/повтором; нет строк, но узел медленный → один медленный
+completion у провайдера (tier/сеть), ретраев не было. Без этого сигнала оба
+случая в логе выглядят одинаково: успешный ход пишет только финальный `200`.
 
 ### 3.17c. ClamAV `freshclam` → HTTP 403 / 429 от CDN
 
@@ -805,6 +839,39 @@ OPENAI_EMBEDDING_BASE_URL="https://api.openai.com/v1"
 Проверка: `docker compose exec minio df -h /data` — место и mount; повторы → SMART
 хоста / место на Docker disk image / права volume.
 
+**Почему это роняет загрузку файлов целиком.** Профиль `attachments-s3` поднимает
+Silo/MinIO **с одним диском** (`/data`), без erasure-кодирования: кворум здесь — сам
+диск, поэтому `taking drive offline` = хранилище недоступно, а не «деградация до
+одного узла». API в этот момент падает на blob-операциях (`ensure_bucket`, presign,
+put), и retry помогает только после `bringing drive … online`. `IncompleteBody` /
+`.usage-cache.bin has incomplete body` — последствие того же обрыва записи, лечится
+перезапуском сервиса, а не `down -v`.
+
+### 3.17f. LiteLLM: `Attempting Prisma DB reconnect` / пропуски фоновых job
+
+**Симптомы:** `db_health_watchdog_connection_error`, `httpx.ConnectTimeout`,
+`LiteLLM Redis Caching: Got exception from REDIS: Timeout connecting to server`,
+`Execution of job "ProxyConfig.reload_mcp_servers_from_db …" skipped: maximum number
+of running instances reached`.
+
+**Причина:** это не дефект LiteLLM, а его реакция на недоступный Postgres (и, если
+Redis на том же томе, на общий I/O-столл). Prisma-клиент пересоздаётся, а фоновый poll
+MCP-серверов не укладывается в свой 30-секундный интервал и пропускает запуск. Все
+три строки уходят вместе с восстановлением Postgres.
+
+**Что уже сделано:** `litellm` в compose зависит от `postgres: condition:
+service_healthy` (тест `test_litellm_waits_for_postgres_before_its_prisma_migrations`):
+холодный старт больше не прогоняет `prisma migrate deploy` по восстанавливающемуся
+кластеру. Поднимать интервал `reload_mcp_servers_from_db` не нужно — это скрыло бы
+латентность БД, а не устранило её.
+
+**`Found 0 MCP servers in database` — ожидаемо, не баг.** По 070 платформенные
+инструменты живут в Host-local реестре (`PlatformToolHandler`), а EDMS/analytics — это
+отдельные контейнеры `mcp-edms` / `mcp-analytics`, а не MCP-серверы, зарегистрированные
+в БД LiteLLM. Пустой список — нормальное состояние стека; наполнять его вручную нельзя
+(иначе второй источник истины рядом с пинами 070).
+
+
 ### 3.18. MinIO / ClamAV недоступны из API
 
 **MinIO.** Endpoint проверяется **на старте** (`ensure_bucket()`): неверный адрес/креды →
@@ -817,6 +884,34 @@ Test-NetConnection -ComputerName localhost -Port 9000
 docker compose --env-file env/.env exec api `
     python -c "import socket; socket.create_connection(('host.docker.internal', 9000), 3).close(); print('ok')"
 ```
+
+**`Failed to resolve 'minio'` / `Temporary failure in name resolution`.** Адрес в конфиге
+верный, а контейнер `minio` остался **без endpoint'а в сети** (бывает после сбоя
+Docker Desktop/WSL при пересоздании сети): `NetworkSettings.Networks` пуст, хотя
+`NetworkMode=palatium-net`, контейнер при этом `Up (healthy)`. Имени `minio` в сети
+нет ни для кого — `api` падает на `ensure_bucket()`, `silo-init` — на `lookup minio …
+server misbehaving`. Retry тут не лечит: адреса нет вообще, а не «медленно».
+
+```powershell
+# Пустая сеть у контейнера против остальных сервисов в palatium-net — это и есть симптом
+docker inspect palatium-ai-minio-1 --format '{{json .NetworkSettings.Networks}}'
+docker network inspect palatium-net --format '{{range .Containers}}{{.Name}} {{end}}'
+
+# Вернуть в сеть С АЛИАСОМ: без --alias имя `minio` не появится, будет только имя контейнера
+docker network disconnect palatium-net palatium-ai-minio-1
+docker network connect --alias minio palatium-net palatium-ai-minio-1
+docker restart palatium-ai-api-1
+```
+
+Проверять резолв — из соседнего контейнера (`api` в этот момент в crash-loop):
+
+```powershell
+docker exec palatium-ai-mcp-edms-1 python -c "import socket; print(socket.gethostbyname('minio'))"
+```
+
+Канонический путь (вернёт и алиасы, и `depends_on`-порядок) — пересоздать сервис:
+`docker compose --env-file env/.env --profile attachments-s3 up -d --force-recreate minio`,
+затем `silo-init` (он `restart: "no"`, сам не перезапустится) и `api`.
 
 **ClamAV.** Контактируется **в момент `complete`**, не при старте: мёртвый `clamd` не
 ломает boot, но каждый upload получает `status="quarantined"`,
@@ -878,6 +973,61 @@ docker exec palatium-ai-redis-1 valkey-cli config get maxmemory-policy   # → n
 > `maxmemory-policy noeviction` — не тюнинг, а часть контракта: при `allkeys-lru` ключ
 > `palatium:kill_switch:engaged` может быть вытеснен под давлением, и аварийная остановка
 > молча перестанет действовать (020, fail-closed). Не менять на `allkeys-*`.
+
+### 3.20. Langfuse: `Reached heap limit` в цикле / worker `ERR AUTH`
+
+**Симптом:** `langfuse-web` перезапускается каждые 40–90 с, в логах
+`FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory`
+(heap ≈ 380 MB); `langfuse-worker` после рестарта Redis пишет
+`ERR AUTH <password> called without any password configured for the default user`
+и не разбирает очереди.
+
+**Причины — две и независимые:**
+
+1. **Устаревший контейнер.** `restart: unless-stopped` перезапускает *тот же* контейнер,
+   поэтому правки `mem_limit` / `NODE_OPTIONS` в compose к уже созданному контейнеру
+   **не применяются**. V8 выводит old space из cgroup, и при старом `mem_limit: 768m`
+   heap упирается в ~384 MB — ровно цифра из лога. Лечится только пересозданием.
+2. **Пустой, но заданный `REDIS_AUTH`.** `REDIS_AUTH=""` — это не «без пароля»:
+   клиент отправляет фрейм `AUTH ""`, а Valkey без `requirepass` отвечает ошибкой
+   (проверено: `valkey-cli AUTH ""`). Поэтому Langfuse получает
+   `REDIS_CONNECTION_STRING` без userinfo, а не трио `REDIS_HOST/PORT/AUTH`.
+
+**Диагностика (сначала посмотреть, а не тюнить):**
+
+```powershell
+# потолок и heap у РАБОТАЮЩЕГО контейнера, а не в compose
+docker inspect palatium-ai-langfuse-web-1 `
+  --format 'mem={{.HostConfig.Memory}} oom={{.State.OOMKilled}} restarts={{.RestartCount}}'
+docker inspect palatium-ai-langfuse-web-1 --format '{{json .Config.Env}}' | Select-String NODE_OPTIONS
+
+# что реально отрендерилось из compose
+docker compose --env-file env/.env --profile observability config |
+  Select-String 'REDIS_CONNECTION_STRING|max-old-space-size'
+```
+
+Если `HostConfig.Memory` не совпадает с `mem_limit` из compose — контейнер устарел,
+и `docker restart` ничего не изменит.
+
+**Фикс — пересоздать, не перезапускать:**
+
+```powershell
+docker compose --env-file env/.env --profile observability up -d --force-recreate --no-deps `
+  langfuse-web langfuse-worker
+
+# проверка: heap задан явно, потолок новый, AUTH-предупреждений нет
+docker inspect palatium-ai-langfuse-web-1 --format 'mem={{.HostConfig.Memory}}'
+docker stats --no-stream palatium-ai-langfuse-web-1
+docker logs --tail 50 palatium-ai-langfuse-web-1
+```
+
+Если OOM повторяется **при явном heap 2 GiB** — это утечка или аномально тяжёлый ingest:
+нужен heap snapshot, а не очередное увеличение потолка (050).
+
+> Сумма потолков core + observability (~11.9 GiB) не влезает в дефолтную Docker-VM
+> (7884 MiB): `make up-full` требует VM ≥ 12 GiB (`%USERPROFILE%\.wslconfig`,
+> `memory=12GB`). На меньшей VM потолок `langfuse-web` не спасает — срабатывает
+> OOM-killer всей VM и выбирает самый крупный RSS (обычно Postgres).
 
 ---
 
@@ -994,6 +1144,37 @@ docker logs palatium-ai-api-1 --since 2m | Select-String "AuthenticationError|ag
 
 OCR vision timeout (P2.16): `ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS` default **30**;
 чат (`/intents/process`) не ждёт OCR — только attachment ids со статусом ready.
+
+### 5.3. Vision-маршрут чата (ADR 0007)
+
+Два разных алиаса, не путать:
+
+| Переменная | Что делает | Обязательна |
+|---|---|---|
+| `LLM_VISION_MODEL` | vision-модель для `image_parts` **в chat-вызове** (ответ по картинке) | нет; пусто → маршрут выключен |
+| `ATTACHMENTS_IMAGE_OCR_MODEL` | vision-модель для **OCR-пайплайна** вложений (текст из картинки) | при `ATTACHMENTS_IMAGE_OCR_BACKEND=gateway` |
+
+```powershell
+# В env (dev/prod): алиас подтверждён владельцем
+LLM_VISION_MODEL="vision-tier"
+LLM_VISION_MAX_IMAGE_BYTES=10485760   # потолок на одно изображение (после blob stat)
+LLM_VISION_MAX_IMAGES=4               # изображений на один chat-вызов
+```
+
+Семантика:
+
+- пустой `LLM_VISION_MODEL` → image-вызов **отклоняется** (`VisionUnsupportedError`),
+  картинка остаётся OCR-текстом; тихого «ответа без картинки» нет;
+- vision-вызов **не** уходит в `LLM_FALLBACK_PROVIDERS`: алиас принадлежит gateway,
+  фоллбэк на текстовую модель исказил бы ответ (решение владельца 2026-10-25);
+- PII-изображения блокируются безусловно (`pii_blocked`), пока владелец не разрешит
+  PII-класс на gateway;
+- отказы видны в `palatium_vision_image_total{outcome,reason}` — «модель не увидела
+  картинку» диагностируется по `reason`, а не по догадке;
+- в логах только количество и суммарные байты: data URL/base64 в логи не попадают.
+
+Проверка при старте API: строка `Vision route enabled model=vision-tier` (или
+`Vision route disabled (LLM_VISION_MODEL is empty)` — маршрут выключен).
 
 ---
 
@@ -1256,7 +1437,7 @@ Select-String -Path docker-compose.yml -Pattern "MCP_MODULE"
 
 Что собирает: версии Docker/Compose, контейнеры (с профилями и без), сети,
 volumes, образы, занятость портов, логи `api` / `mcp-edms` / `mcp-analytics` /
-`litellm`, секции `[tool.poetry]` и `dockerfile:`, host-процессы из
+`litellm`, секции `[project]` и `dockerfile:`, host-процессы из
 `scripts/.dev/processes.json`.
 
 Перед записью вывод прогоняется через redaction: `Bearer …`, `sk-*`,
@@ -1296,8 +1477,8 @@ $(docker compose --env-file env/.env @profiles logs mcp-analytics --tail 50 2>&1
 === litellm logs ===
 $(docker compose --env-file env/.env logs litellm --tail 30 2>&1)
 
-=== pyproject.toml [tool.poetry] ===
-$((Select-String -Path pyproject.toml -Pattern "\[tool.poetry\]" -Context 0,10).Context.PostContext -join "`n")
+=== pyproject.toml [project] ===
+$((Select-String -Path pyproject.toml -Pattern "^\[project\]" -Context 0,30).Context.PostContext -join "`n")
 
 === docker-compose.yml MCP sections ===
 $((Select-String -Path docker-compose.yml -Pattern "dockerfile:" -Context 2,2 | Out-String))
@@ -1397,7 +1578,7 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `ATTACHMENTS_MAX_PARSED_CHARS` / `_PAGES` | `2000000` / `500` | границы парсинга |
 | `ATTACHMENTS_SWEEP_BATCH_SIZE` | `200` | строк за один retention-проход |
 | `ATTACHMENTS_IMAGE_OCR_BACKEND` | `auto` | `disabled` \| `auto` \| `gateway` \| `tesseract`; `disabled` не подключает парсер картинок (§16.3) |
-| `ATTACHMENTS_IMAGE_OCR_MODEL` | — | алиас vision-модели **в gateway** (напр. `tier-vision`); обязателен при `gateway`, опционален при `auto` |
+| `ATTACHMENTS_IMAGE_OCR_MODEL` | — | алиас vision-модели **в gateway** (напр. `vision-tier`); обязателен при `gateway`, опционален при `auto`. Это OCR-путь вложений, не chat-vision (`LLM_VISION_MODEL`, §5.3) |
 | `ATTACHMENTS_IMAGE_OCR_MAX_BYTES` | `8388608` (8 MiB) | предел **исходных** байт, уходящих в модель (лимит приёма — 50 MiB) |
 | `ATTACHMENTS_IMAGE_OCR_TIMEOUT_SECONDS` | `30` | таймаут вызова vision-модели (P2.16) |
 | `ATTACHMENTS_OCR_MIN_CHARS` | `12` | quality gate: эскалация на Vision, если OCR дал меньше символов |
@@ -1405,11 +1586,16 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `ATTACHMENTS_OCR_MIN_CONFIDENCE` | `55` | quality gate: эскалация при mean word confidence Tesseract ниже порога (латинский мусор с рукописной кириллицы) |
 | `ATTACHMENTS_PDF_MIN_AVG_CHARS_PER_PAGE` | `200` | ниже порога PDF считается сканом → OCR-путь |
 | `ATTACHMENTS_TESSERACT_CMD` | — | абсолютный путь к `tesseract`, если не в `PATH` |
+| `ATTACHMENTS_TESSERACT_TIMEOUT_SECONDS` | `30` | жёсткий kill одного вызова Tesseract (страница PDF / одно изображение). Истёкшая страница остаётся пустой и уходит в Vision **постранично**; остальные страницы сохраняют OCR-текст (раньше таймаут останавливал весь документ) |
+| `ATTACHMENTS_PDF_OCR_BUDGET_SECONDS` | `300` | бюджет OCR на один PDF: прочитанные страницы сохраняются (`truncated`), остальные не читаются. Страница, начатая после исчерпания бюджета, не OCR-ится; её таймаут урезается остатком бюджета |
+| `ATTACHMENTS_OCR_MAX_CONCURRENCY` | `1` | слотов локального OCR на процесс API (PDF + изображения делят один семафор). Слот берётся **на страницу**, не на документ: при `>1` один многолистовой скан идёт параллельно, а не только параллельные загрузки. Tesseract занимает ядро на страницу — поднимать только при реально свободных ядрах и запасе памяти контейнера |
+| `ATTACHMENTS_PARSE_TIMEOUT_SECONDS` | `420` | жёсткий потолок одного парсинга (text layer + OCR + Vision); истечение → `parse_failed`, а не висящий `POST /complete` |
 | `ATTACHMENTS_PDF_VISION_MAX_PAGES` | `20` | потолок страниц PDF для vision (G14) |
 | `ATTACHMENTS_PDF_FIGURE_ENRICHMENT` | `true` | VLM-дополнение страниц с фигурами при живом text layer |
 | `ATTACHMENTS_PDF_FIGURE_MAX_PAGES` | `8` | soft-cap vision-вызовов на фигуры |
 | `ATTACHMENTS_ANALYSIS_BACKEND` | `disabled` | `disabled` \| `local` (G15 ADA: dataframe summary CSV/XLSX под HITL) |
 | `ATTACHMENTS_PII_POLICY` | `tag` | G06: `tag` (только флаг) \| `mask` (редакция в `safe_text`) \| `reject` (`pii_detected`) |
+| `ATTACHMENTS_FILE_REREAD_PCT` | `0` | 055/070: покрытие повторного чтения файла из треда. `0` — выключено (**откат одной переменной**), `1..99` — sticky-canary по `hash8(user_id)`, `100` — все вызовы. См. §16.11 |
 
 > Хранилище: `minio` — любой S3-совместимый endpoint. Собственные реестры MinIO
 > **не отдают образы анонимно** — проверено 2026-09: Docker Hub `minio/minio` → denied,
@@ -1475,11 +1661,19 @@ default 200), без классификатора:
 |---|---|
 | `text/*`, `docx`, `xlsx`, `pptx`, `html` | text layer |
 | PDF с достаточным слоем | text layer (`pypdf`); опционально figure enrichment (VLM) |
-| PDF-скан / пустой слой | **Tesseract OCR → Vision** (quality gate) → `parse_failed` |
+| PDF-скан / пустой слой | **Tesseract OCR → Vision** (постранично для таймаутнувших/нечитаемых страниц; quality gate) → `parse_failed` |
 | `image/*` | **Tesseract → Vision** (`auto`); `gateway` = Vision first |
 
 Provenance пишется в `ParsedDocument.extraction_source` и в метрику
 `palatium_attachment_parse_total{extraction_source, media_kind}`.
+
+**Кодировка текстовых вложений.** Текст декодируется по цепочке
+`utf-8-sig → utf-8 → cp1251`; если ни одна не подошла, остаётся
+`utf-8, errors="replace"` (U+FFFD) — аплоад не падает, но текст **лоссовый**.
+Каждый такой fallback инкрементирует
+`palatium_utf8_decode_failures_total{kind="text|html"}`: ненулевой прирост =
+реальный дефект кодировки (кракозябры, битый OCR), а не шум. Смотреть при жалобах
+«в ответе вместо кириллицы `?`» и в canary по новым источникам файлов.
 
 **Tesseract runtime.** Python-пакеты `pytesseract`/`Pillow`/`pymupdf` входят в
 Poetry-группу `attachments`. Сам бинарник ставится в образ при
@@ -1519,6 +1713,12 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 1. `POST /api/attachments/init` — intake-политика (размер, MIME↔расширение, лимит на тред,
    санитайзинг имени) → строка + presigned PUT. Audit: `attachment_init`. Отказ политики —
    400 и `palatium_agent_errors_total{error_type="intake_<reason>"}`.
+
+   `mode=attach` **требует** непустой `thread_id` (схема запроса + guard в
+   `AttachmentService.init_upload`, отказ — 422 `AttachmentThreadRequiredError`). Все пути
+   чтения (`list_for_thread`, `get_many`, reference resolver) thread-scoped, поэтому строка
+   без треда недостижима: её нельзя ни перечислить, ни повторно прочитать, ни сфенсить
+   в следующий ход. `mode=index` от треда не зависит и по-прежнему допускает `thread_id=None`.
 
    Лимит на `init` считает **только in-flight** загрузки треда: `status='pending'` с
    `created_at > now() - ATTACHMENTS_PRESIGNED_TTL_SECONDS`. Уже загруженные/готовые строки
@@ -1568,6 +1768,9 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
    (`prepare_fenced_attachment`: полный scan → mask+admit при любом severity;
    только truncated scan → quarantine; текст в ход всегда в `<<<UNTRUSTED_TOOL_OUTPUT>>>`) →
    persist derived text → fencing на чтение в ход.
+   В persisted-текст пишется и `text_masked` (W3b-2): тело отличается от извлечённого
+   (injection-редакция или PII-маска). Флаг фиксируется при записи, а не вычисляется при
+   чтении из текущей политики — блоб мог быть записан при другой (060).
    Статус строки на время пайплайна — `scanning` (UI может показывать фазу до ответа).
    Audit: `attachment_completed`.
 5. Файл либо участвует в ходе диалога (§16.5), либо его индексация запрашивается через HITL.
@@ -1605,6 +1808,7 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 | `GET /api/attachments?thread_id=…` | 200 | вложения треда (перед чтением — ленивый retention) |
 | `GET /api/attachments/{id}` | 200 | одно вложение |
 | `GET /api/attachments/{id}/download` | 200 | presigned GET оригинала (audit `attachment_download_issued`) |
+| `POST /api/attachments/{id}/citation-locate` | 200 | окно текста вокруг цитаты (W3b-2); `Cache-Control: no-store`; 409 — нет извлечённого текста |
 | `POST /api/attachments/{id}/index` | 200 | одноразовая HITL-карточка; **ничего не пишет** |
 | `POST /api/attachments/{id}/restore-request` | 200 | HITL на восстановление из карантина (`injection_detected`); approve → masked `ready` |
 | `GET /api/attachments/compliance-export?thread_id=…` | 200 | JSON-сводка вложений треда (роль manager) |
@@ -1615,6 +1819,7 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 
 Ошибки: 404 `AttachmentNotFoundError`; 409 `AttachmentModeMismatchError` /
 `AttachmentNotUsableError`; 413 `AttachmentUploadTooLargeError` (прокси-загрузка сверх лимита);
+422 `AttachmentThreadRequiredError` (`attach` без непустого `thread_id`) и схема запроса;
 400 прочие типизированные; 503 подсистема выключена.
 Каждый запрос проверяет владельца треда (`load_session_for_principal`), и каждый запрос
 к репозиторию явно несёт `user_id` (060 — RLS не отменяет явный предикат).
@@ -1655,9 +1860,17 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
   Если удаление объекта падает — строка **не** удаляется и попадёт в следующий проход (`failed`),
   остальные строки прохода продолжают обрабатываться.
 - Отбор детерминирован: все строки прохода сравниваются с одним tz-aware UTC `now`
-  (`AttachmentRetentionPolicy.is_due`), поэтому живая строка не может быть purged из-за
+  (`AttachmentRetentionPolicy.reclaim_reason`), поэтому живая строка не может быть purged из-за
   пересчёта часов.
-- Audit: `attachment_expired` (reason `retention_expired`); метрика `retention_sweep_failed`.
+- **Осиротевшие `attach`-строки.** Строка `mode=attach` с `thread_id IS NULL` или пустым
+  (после `btrim`) не адресуема ни одним read-path. После `ATTACHMENTS_ORPHAN_GRACE_SECONDS`
+  (default 24h) её забирает тот же sweep (`reason=orphaned_attach`), не дожидаясь `expires_at`.
+  `mode=index` под правило не попадает (может владеть knowledge-документами), in-flight
+  статусы (`pending`/`uploaded`/`scanning`) — тоже: `pending` разбирает правило истёкшего
+  presigned-тикета. SQL — `palatium_ai.retention_{list,count}_orphan_attachments`
+  (миграция `i9d0e1f2a3b4`), частичный индекс `ix_attachments_attach_orphan_created_at`.
+- Audit: `attachment_expired` (`reason` = `retention_expired` / `abandoned_upload` /
+  `orphaned_attach`); метрика `retention_sweep_failed`.
 
 ### 16.7. Наблюдаемость и проверка
 
@@ -1673,12 +1886,15 @@ default 3). Cross-encoder (`sentence-transformers`) в Host не подключ�
 | `attachment_download_issued` | выдан presigned GET оригинала |
 | `attachment_restore_requested` | создана HITL-карточка восстановления |
 | `attachment_restore_approved` | карантин снят, текст замаскирован, `ready` |
+| `attachment_citation_located` | открыто место цитаты (W3b-2): `outcome`, длины цитаты и текста — **без** содержимого |
 
 Метрики: `palatium_agent_errors_total{agent_type="attachments", error_type=…}`, где
 `error_type` ∈ `intake_<reason>` · `pipeline_<reason>` · `retention_sweep_failed` ·
 `retention_sweep_read_path_failed`; плюс
 `palatium_attachment_parse_total{extraction_source, media_kind}` на успешный parse
 (`extraction_source` ∈ `text_layer|vision|ocr|none`, `media_kind` ∈ `image|pdf|text|office|other`).
+Подсветка цитат: `palatium_citation_highlight_total{outcome}` — знаменатель включает отказы
+(`ambiguous_quote` / `quote_not_found` / `no_text`), иначе доля «растёт» отказом от трудных цитат.
 
 ```powershell
 # Распределение статусов и причин отказов
@@ -1896,8 +2112,8 @@ loopback: своей авторизации, кроме root-кредов, у н
 компоненты по отдельности и печатает, что именно лежит:
 
 ```powershell
-python scripts/attachments_probe.py            # API /health, clamd zPING, S3 /minio/health/live, silo-init
-python scripts/attachments_probe.py --preflight-image   # только проверка образа
+uv run --no-project python scripts/attachments_probe.py            # API /health, clamd zPING, S3 /minio/health/live, silo-init
+uv run --no-project python scripts/attachments_probe.py --preflight-image   # только проверка образа
 ```
 
 Проверка clamd — не TCP-connect, а `zPING` с ожиданием `PONG`: clamd принимает соединение
@@ -1915,6 +2131,95 @@ python scripts/attachments_probe.py --preflight-image   # только пров�
   прогон с ненулевым кодом заваливал бы `make up`;
 - при `--skip-s3` проба пропускается вместе с остальными проверками store — этот флаг
   помечает прогон, который init-контейнер не пересоздаёт (`make rebuild-app`).
+
+### 16.11. Повторное чтение файла из треда (055/070)
+
+Запрос «а из БД взять этот файл и ещё раз прочитать» — это отдельная ось Intent
+(`file_reference=thread_file`), а не подсказка в промпте: `ExecutionPlanner` планирует
+прямой `platform.read_attachment`, а `AttachmentReferenceResolver` достаёт `attachment_id`
+из `AttachmentRepositoryPort` (owner + thread, RLS) — **модель никогда не выбирает файл**.
+Если референт неоднозначен, ответ — типизированный отказ с именами файлов; «файл
+отсутствует» без строки в БД и «файл недоступен в хранилище» — разные сообщения (020).
+
+Покрытие регулирует **один** ключ, `ATTACHMENTS_FILE_REREAD_PCT` (sticky по
+`hash8(user_id)`, как `FORMATTER_ROLLOUT_PCT`):
+
+| Значение | Поведение | Когда |
+|---|---|---|
+| `0` | путь выключен, ход идёт прежним маршрутом | **откат**: правка одной переменной, без деплоя |
+| `5` | ~5% пользователей (sticky) | canary |
+| `100` | все вызовы | полный cutover |
+
+Рампа без деплоя: `5 → 25 → 50 → 100`. Метрика исхода резолва —
+`palatium_attachment_read_total{kind="reference_resolved|reference_ambiguous|..."}`
+(новых имён метрик не вводим, 040); отказ резолвера виден в логе
+`attachment_reference.resolve` и в `researcher.file_reference_unresolved`.
+
+**Неоднозначность (несколько файлов в треде).** Если референт не разрешился
+(`reference_ambiguous`) и в треде ≥2 различных имени файлов, вместо текстового
+отказа поднимается HITL-карточка «Выберите файл» (`FileChoiceCardPolicy`,
+`domain/hitl/file_choice.py`). Варианты — это **имена файлов из БД**
+(`AttachmentRepositoryPort.list_for_thread`, owner + RLS), `action_id` —
+чистый ординал `filesel_1..N` (UUID в UI не уходит). Ответ карточки не проходит
+через LLM: `IntentHitlFlow.process_hitl_choice` резолвит имя детерминированно
+(`AttachmentReferenceResolver.resolve_explicit`, при дублях — самая новая строка)
+и вызывает `process_turn(attachment_ids=[...])`. Диагностика:
+
+- карточка не появилась → ожидаемо, если запрос называет чужой документ
+  (`names_foreign_document` / `no_match`): это **fail-closed**, читать другой файл нельзя;
+- карточка есть, ответ не сработал → смотреть `hitl.choice` (одноразовость,
+  TTL) и `attachment_reference.resolve` c `mode="explicit"`.
+
+**Явная множественность («сравни оба файла»).** Ось `attachment_scope="all"`
+(её ставит Intent, а не эвристика по глаголу сравнения — иначе «сравни эти два
+подхода» ложно тянуло бы файлы) вместе с `file_reference=thread_file` означает
+«все файлы диалога». Тогда шаг плана помечается как покрывающий всё множество,
+а worker читает файлы **по одному** (`AttachmentReferenceResolver.resolve(
+all_requested=True)` → `attachment_ids`), после чего синтез идёт один раз по
+объединённому evidence:
+
+- бюджет символов одного `read_attachment` (`READ_ATTACHMENT_OUTPUT_MAX_CHARS`)
+  **делится** между файлами (`12000 // N`), иначе второй документ молча выпадал бы
+  из промпта; усечение видно модели через `truncated` в payload;
+- потолок — `_MAX_PLURAL_READ_FILES` (4 файла) в одном ходе: при большем числе
+  пишется warning `researcher.plural_read_capped` (тихое усечение запрещено, 040);
+- файл, который не прочитался, не отменяет сравнение остальных:
+  `researcher.plural_read_file_failed`; если не прочитался ни один — типизированный
+  отказ (`MCP_TOOL_ERROR`);
+- диагностика: `researcher.plural_read_resolved` (сколько файлов), затем обычные
+  `mcp.*` спаны и `attachment_reference.resolve` с `all_requested=true`.
+
+Проверка: в треде с двумя файлами «сравни оба файла» должен дать ответ,
+опирающийся на оба документа (два `read_attachment` в трассе), а не отказ
+«неоднозначно» и не ответ по одному файлу.
+
+**Гейт F2 (structured streaming).** `palatium_sse_layout_shift_total{contract}` —
+не просто счётчик: для `contract="structured_incremental"` это **алерт при
+`increase(...[5m]) > 0`** (см. `.cursor/plans/structured-streaming.md` §3).
+Рампа `STREAMING_CONTRACT_ROLLOUT_PCT` останавливается на первом ненулевом
+инкременте: ненулевой shift на структурном контракте = нарушение инварианта
+«показанный кадр не переписывается», а не «терпимый шум» (для `legacy_markdown`
+shift ожидаем и алертом не считается).
+
+Проверка после флипа: в треде с одним загруженным файлом запрос «перечитай этот файл»
+должен дать ответ по содержимому файла, а не «файл не приложен к диалогу».
+
+### 16.12. P5-гигиена: шум в логах PDF, skills в образе, один `build_turn_context` за ход
+
+Четыре сигнала выглядели как ошибки, но были шумом/сборкой. Что теперь правда:
+
+| Сигнал | Было | Стало |
+|---|---|---|
+| `The **fitz** API is deprecated…` | адаптеры импортировали deprecated-алиас | `pymupdf_compat.pymupdf()` грузит `pymupdf` (алиас — только для старого пина); в образе проверяется `import PIL, pytesseract, pymupdf` |
+| `Multiple definitions in dictionary … key /Info` | MuPDF писал в stderr мимо structlog на каждую страницу | `mupdf_display_warnings(False)` при импорте; **errors не глушим** (035: реальный сбой рендера обязан быть виден) |
+| `skill_catalog.root_missing /app/skills/procedural` | дерева не было в образе (`read_only` + нет COPY) | `COPY skills` в builder и runtime, `chmod -R a-w`; регресс-тест в `test_dockerfile_build_contract.py` |
+| `attachment.build_turn_context` дважды за ход | имя лога решения в continuation-узле совпадало с именем span'а сервисного вызова; плюс rehydrate заново читал те же id | лог переименован в `attachment.sticky_decision`; rehydrate тех же id возвращает уже собранный fence — лог `attachment.rehydrate_reused` |
+
+Проверка: на PDF-ходе в логе один `trace.start attachment.build_turn_context`;
+`fitz`-deprecation и `/Info` отсутствуют; `skill_catalog` не пуст
+(`skill_reference` отвечает). Если `attachment.rehydrate_reused` нет, а
+`build_turn_context` за ход всё равно дважды — это уже реальное двойное чтение:
+смотреть, кто передаёт другой набор id (`attachment.sticky_decision`).
 
 ---
 
@@ -1949,6 +2254,60 @@ uv run python -m palatium_ai.jobs.retention --class checkpointer --class attachm
 # uv run python -m palatium_ai.jobs.retention --execute --class attachment_index
 # uv run python -m palatium_ai.jobs.retention --execute --class knowledge_orphan
 ```
+
+Sleep consolidation (corroborate → promote → `memory_*` retention). The compose loop is
+part of the default stack (`make up` / menu "Start stack", profile `memory-jobs`); run it
+by hand only to scope a single pass:
+
+```powershell
+# Promotable-owner discovery (FORCE RLS: a plain SELECT DISTINCT user_id sees one tenant).
+uv run python -m palatium_ai.jobs.memory_promote --all-users
+# Corroborate inferred→verified, promote named users, then one memory retention sweep (dry-run).
+uv run python -m palatium_ai.jobs.memory_consolidate --user-id <uuid> --user-id <uuid>
+# Skip ADR 0008 corroboration (promote + retention only):
+# uv run python -m palatium_ai.jobs.memory_consolidate --user-id <uuid> --skip-corroboration
+# Whole stand (compose loop): owners are discovered each pass.
+# docker compose --profile memory-jobs up -d memory-consolidate
+# Logs of the loop (`down` leaves it alone): docker compose --profile memory-jobs logs -f memory-consolidate
+# Apply retention in the same pass (staging only, after reviewing the dry-run):
+# uv run python -m palatium_ai.jobs.memory_consolidate --all-users --execute
+```
+
+### 17.1 Memory origin ceiling (ADR 0008 / ASI-06)
+
+| Flag / window | Default | Effect |
+|---|---|---|
+| `MEMORY_ORIGIN_CEILING` | `true` | Hot-path demotes `trust=inferred`, excludes `quarantined`; promote gates respect trust |
+| `RETENTION_MEMORY_INFERRED_DAYS` | `7` | Cap TTL for extract/compact `inferred` rows (never exceeds class window; upsert uses `LEAST`) |
+| consolidate corroboration | on when ceiling | Batch upgrade `inferred→verified` on verified-overlap / peer-extract before promote (same `memory-consolidate` CronJob; not a separate service) |
+| `memory.corroboration_owner_ids` | migration `l2a3b4c5d6e7` | `--all-users` also discovers inferred-only tenants (FORCE RLS) |
+
+Rollback soak: set `MEMORY_ORIGIN_CEILING=false` (recall/promote behave as pre-CMD1). Keep
+ADR 0008 **proposed** until staging soak + ASI-06 eval green; do not flip to `accepted` on
+dev alone. Corroboration-only skip: `--skip-corroboration` on `memory_consolidate`.
+
+Related: [`adr/0008-memory-origin-trust-ceiling.md`](adr/0008-memory-origin-trust-ceiling.md),
+[`.cursor/plans/context-memory-dialog-2026.md`](../.cursor/plans/context-memory-dialog-2026.md).
+
+### 17.2 Memory scope & curation (ADR 0013 / W11)
+
+| Flag / surface | Default | Effect |
+|---|---|---|
+| `use_memory` on classify/process/stream | `true` | `false` = Temporary/Unpersonalized: no durable Medium/L4 recall, no sleep-time extract; dialog/scratchpad of the thread stay; Medium/Neo4j **not** deleted |
+| Settings `learnFromChats` (web) | on | Maps to API `use_memory` |
+| `DELETE /api/memory/clear` | HITL | Medium purge for principal → enqueue `clear_user_graph` (`memory.ops`) |
+| `MEMORY_PROMOTE_FAST_MIN_SCORE` | `0.85` | After HITL `save_memory` with `trust=verified`, enqueue `promote_entry` when `max(importance, confidence) ≥` threshold; **never** from sleep-time `inferred` extract |
+| `memory.ops` (Alembic `o5p6q7r8s9t0`) | required | Durable SKIP LOCKED queue; drained by API-process Memory op worker (not Celery / `BackgroundTasks`) |
+
+Slow-path promote remains `memory-consolidate` + `PromotionPolicy` + OriginCeiling (unchanged thresholds).
+
+Live smoke (API with W11 image + migrated `memory.ops`):
+
+```powershell
+uv run python scripts/smoke_w11_memory_scope.py --base-url http://127.0.0.1:8000
+```
+
+Related: [`adr/0013-memory-scope-and-curation.md`](adr/0013-memory-scope-and-curation.md).
 
 ---
 

@@ -23,3 +23,19 @@ class SkillCatalogPort(Protocol):
     def format_catalog(self, *, max_chars: int) -> str:
         """Compact catalog string for ContextBuilder key ``skill_catalog``."""
         ...
+
+
+class WritableSkillCatalogPort(SkillCatalogPort, Protocol):
+    """Optional write surface for HITL ``skill_manage`` (CMD4). Read-only catalogs omit this."""
+
+    def upsert_skill(self, *, name: str, content: str) -> SkillSummary:
+        """Atomically write ``SKILL.md`` under the product root; refresh index + lock."""
+        ...
+
+    def delete_skill(self, *, name: str) -> bool:
+        """Remove a self-authored skill directory; True when something was deleted."""
+        ...
+
+    def invalidate_index(self) -> None:
+        """Drop cached index so the next read rescans the filesystem."""
+        ...

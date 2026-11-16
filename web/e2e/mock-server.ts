@@ -55,6 +55,9 @@ type RouteSpec = { key: string; method: string; pattern: RegExp };
 const ROUTES: readonly RouteSpec[] = [
   { key: 'auth.dev-token', method: 'POST', pattern: /^\/auth\/dev-token$/ },
   { key: 'sessions.turns', method: 'GET', pattern: /^\/sessions\/[^/]+\/turns$/ },
+  // SSE-путь — тот, куда ходит виджет. JSON-двойник оставлен как контракт
+  // fallback'а: клиент уходит в него только на 404/405 от стрима.
+  { key: 'intents.process.stream', method: 'POST', pattern: /^\/intents\/process\/stream$/ },
   { key: 'intents.process', method: 'POST', pattern: /^\/intents\/process$/ },
   { key: 'hitl.card', method: 'GET', pattern: /^\/hitl\/[^/]+$/ },
   { key: 'hitl.step-up', method: 'POST', pattern: /^\/hitl\/[^/]+\/step-up-challenge$/ },
@@ -63,6 +66,7 @@ const ROUTES: readonly RouteSpec[] = [
   { key: 'memory.forget', method: 'POST', pattern: /^\/memory\/forget$/ },
   { key: 'memory.extract', method: 'POST', pattern: /^\/memory\/extract$/ },
   { key: 'attachments.init', method: 'POST', pattern: /^\/attachments\/init$/ },
+  { key: 'attachments.connectors', method: 'GET', pattern: /^\/attachments\/connectors$/ },
   { key: 'attachments.content', method: 'PUT', pattern: /^\/attachments\/[^/]+\/content$/ },
   { key: 'attachments.complete', method: 'POST', pattern: /^\/attachments\/[^/]+\/complete$/ },
   { key: 'attachments.delete', method: 'DELETE', pattern: /^\/attachments\/[^/]+$/ },
@@ -72,6 +76,19 @@ const ROUTES: readonly RouteSpec[] = [
 
 /** Ответ на незамоканный вызов: упасть тестом «виджет ходит мимо контракта». */
 const UNMATCHED: Reply = { status: 404, json: { detail: 'e2e: endpoint is not mocked' } };
+
+/**
+ * SSE-конверт вокруг сценарного JSON.
+ *
+ * Транспорт — не фикстура: сценарий по-прежнему описывает ОДИН результат
+ * (`FormatterTaskResult`), а `result`+`done` — формат доставки. Поэтому мок
+ * оборачивает его сам, а не заставляет каждый тест писать свои `data:`-строки.
+ * Побочный эффект полезен: если клиент перестанет читать SSE, все сценарии
+ * упадут разом, а не тихо пройдут через JSON-fallback.
+ */
+function sseFromResult(result: unknown): string {
+  return `event: result\ndata: ${JSON.stringify({ result })}\n\nevent: done\ndata: {}\n\n`;
+}
 
 export class MockServer {
   /** Все вызовы в порядке поступления — для проверки тела, токена и счётчиков. */
@@ -139,7 +156,7 @@ export class MockServer {
 
         const reply = spec ? this.#resolve(spec.key) : UNMATCHED;
         if (reply.delayMs) await new Promise(resolve => setTimeout(resolve, reply.delayMs));
-        await route.fulfill(toFulfill(reply));
+        await route.fulfill(toFulfill(reply, spec?.key === 'intents.process.stream'));
       }
     );
   }
@@ -164,7 +181,10 @@ function safeJson(body: string | null): unknown {
   }
 }
 
-function toFulfill(reply: Reply): {
+function toFulfill(
+  reply: Reply,
+  asStream = false
+): {
   status: number;
   json?: unknown;
   body?: string;
@@ -177,6 +197,11 @@ function toFulfill(reply: Reply): {
       body: reply.text,
       contentType: reply.contentType ?? 'text/plain; charset=utf-8',
     };
+  }
+  // Ошибку стрима отдаём обычным JSON: клиент падает на `!res.ok` до чтения тела,
+  // и SSE-обёртка вокруг `{detail}` только запутала бы разбор.
+  if (asStream && status < 300) {
+    return { status, body: sseFromResult(reply.json ?? {}), contentType: 'text/event-stream' };
   }
   return { status, json: reply.json ?? {} };
 }

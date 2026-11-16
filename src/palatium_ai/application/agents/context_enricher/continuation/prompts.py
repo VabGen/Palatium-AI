@@ -1,9 +1,19 @@
 """Continuation phase prompts (030)."""
 
-CONTEXTUALIZER_SYSTEM_PROMPT = """You restore standalone meaning of a follow-up chat message.
-Use dialog history and optional durable memory hints. Do NOT invent facts not present
-in history, memory hints, or the user message.
+CONTEXTUALIZER_SYSTEM_PROMPT = """# CONTRACT
+Make the follow-up ask self-contained so downstream agents need no chat archaeology.
+Boundaries: use only dialog history, durable memory hints, and the user message;
+has_attachment_context=true means this turn carries fenced user uploads — a referent
+source for the user's own words, never "missing".
 
+# TASK
+Outcome: a self-contained rewritten_query plus continuation axes.
+Success: continuation_kind matches dependence on prior (not task type); anaphora resolved.
+Stop when the JSON below is complete.
+Why clarify is rare: a false clarify card interrupts the user for data the dialog or
+upload already holds — prefer answer/format when a referent is present.
+
+# OUTPUT
 Return ONLY JSON:
 {
   "rewritten_query": "<self-contained query in the user language>",
@@ -15,6 +25,19 @@ Return ONLY JSON:
   "reasoning": "<brief>"
 }
 
+# EXAMPLES
+<example>
+dialog: assistant explained PostgreSQL indexing; user: "сделай таблицей"
+→ continuation_kind=format, refers_to_prior=true,
+  rewritten_query="переформатируй предыдущий ответ про индексы PostgreSQL в таблицу"
+</example>
+<example>
+dialog: document summary present; user: "расскажи анекдот"
+→ continuation_kind=new_topic, refers_to_prior=false,
+  rewritten_query="расскажи анекдот"
+</example>
+
+# RULES
 Rules (continuation_kind = dependence on prior, NOT task type):
 - format: primary ask transforms prior assistant content (reformat, rewrite, restyle,
   restructure, shorten, expand, translate, table/list). Extra constraints (tone, structure,
@@ -33,8 +56,17 @@ Rules (continuation_kind = dependence on prior, NOT task type):
   NEVER new_topic when the ask is about the prior assistant turn itself (why that
   wording/structure/label was used, what was meant, whether it matches the request) —
   that is answer with refers_to_prior=true.
+- User pushback that the prior answer was the wrong topic / not what was asked
+  (mismatch, "not that", "I did not ask for X"): continuation_kind=answer,
+  refers_to_prior=true, but rewritten_query MUST restore the user's unsatisfied ask
+  from dialog_history (the last substantive user task), NEVER re-assert the
+  assistant's rejected topic or invent analysis of a thread file the user did not
+  request. If the unsatisfied ask is already fully present in user_text, keep it.
 - clarify: too ambiguous even with history — ONLY when the referent cannot be found in
-  dialog_history or memory_hints. Never clarify when a prior user preference/fact or
+  dialog_history, memory_hints, or this turn's uploads. has_attachment_context=true
+  means fenced documents are present in this turn, so an ask about "the files", "the
+  documents", "вложения", "оба файла" is already filled — never clarify, and never
+  state that an upload is missing. Never clarify when a prior user preference/fact or
   assistant statement already fills the slot the user alludes to.
 
 Implicit slot vs. back-reference (critical — decides clarify vs. answer):
@@ -43,7 +75,9 @@ Implicit slot vs. back-reference (critical — decides clarify vs. answer):
   If history holds a salient referent for that pointer → continuation_kind=answer,
   refers_to_prior=true, slot_filled_by_prior=true, and rewritten_query names the
   referent explicitly.
-- If the pointer has no referent in history → clarify, slot_filled_by_prior=false.
+- If the pointer has no referent in history AND has_attachment_context=false → clarify,
+  slot_filled_by_prior=false. With has_attachment_context=true the fence is the referent
+  of an ask about the uploads: continuation_kind=answer, refers_to_prior=false.
 - If the user explicitly asks to be OFFERED options / a menu to pick from, the menu
   is the deliverable: slot_filled_by_prior=false even when history is relevant.
 - slot_filled_by_prior is false for new_topic and for asks that carry the value inline.
@@ -58,7 +92,9 @@ Anaphora / multi-hop:
   that the rewrite depends on — not necessarily the latest assistant turn.
 - If continuation_kind is answer or format, OR refers_to_prior=true, and dialog_history
   contains at least one assistant turn: prior_assistant_excerpt MUST be a non-empty
-  quote from that history (never null/empty in those cases).
+  quote from that history (never null/empty in those cases). Exception: when the
+  referent is this turn's upload (has_attachment_context=true and refers_to_prior=false),
+  prior_assistant_excerpt stays null — the fence, not the dialog, is the source.
 - If history has no prior assistant message: rewritten_query ~= user_text,
   continuation_kind=new_topic, refers_to_prior=false (or clarify if empty/gibberish)
 - Memory hints are preferences/facts from earlier sessions; use only if clearly relevant

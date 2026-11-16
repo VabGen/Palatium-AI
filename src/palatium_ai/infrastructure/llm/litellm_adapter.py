@@ -4,25 +4,34 @@
 
 from __future__ import annotations
 
+import base64
 import math
 
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 import structlog
 
 from litellm import acompletion
 
 from palatium_ai.core.logging.redact import redact_text
-from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
+from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError, VisionUnsupportedError
 from palatium_ai.domain.llm.models import (
     ChatMessage,
+    DocumentPart,
+    ImagePart,
     LLMCompletion,
     LLMResponseFormat,
     LLMStreamDelta,
     LLMUsage,
 )
-from palatium_ai.domain.llm.structured_output import response_model_for_schema
+from palatium_ai.domain.llm.structured_output import response_model_for_schema, strict_json_schema
+from palatium_ai.infrastructure.llm.citation_mapping import (
+    citations_from_response,
+    citations_from_stream_chunk,
+)
 from palatium_ai.infrastructure.llm.litellm_model import resolve_litellm_model
+from palatium_ai.infrastructure.llm.shared_transport import shared_client_session
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -30,6 +39,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from palatium_ai.core.config.llm.base import LLMProviderConfig
+    from palatium_ai.domain.ports.vision import VisionImageSourcePort
 
 logger = structlog.get_logger(__name__)
 
@@ -62,7 +72,9 @@ def build_provider_response_format(
             "type": "json_schema",
             "json_schema": {
                 "name": model.__name__,
-                "schema": model.model_json_schema(),
+                # strict: True only binds when the schema actually matches the strict
+                # contract (all props required, additionalProperties: false, no defaults).
+                "schema": strict_json_schema(model),
                 "strict": True,
             },
         }
@@ -80,10 +92,70 @@ def _raise_if_unsupported(exc: Exception, *, response_format: LLMResponseFormat 
         raise StructuredOutputUnsupportedError(redact_text(str(exc))) from exc
 
 
-def _to_litellm_messages(messages: list[ChatMessage]) -> list[dict[str, object]]:
-    """Map domain messages; attach Anthropic-style cache_control on system prefixes."""
+def _content_as_text(content: object) -> str:
+    """Flatten OpenAI-style content (str | multipart) to plain text for merges."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [str(part.get("text") or "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+        return "\n\n".join(p for p in parts if p)
+    return str(content or "")
+
+
+def _coalesce_leading_system_messages(
+    messages: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Merge consecutive leading ``system`` messages into one.
+
+    CMD2 assembly emits stable/context/volatile as separate system turns for
+    Anthropic-style prefix cache. OpenAI-compatible corporate gateways (Qwen)
+    reject any system message that is not index 0 with
+    «System message must be at the beginning» — collapsing the leading run keeps
+    the tier text while satisfying that contract.
+    """
+    if len(messages) < 2:
+        return messages
+    leading: list[dict[str, object]] = []
+    idx = 0
+    while idx < len(messages) and messages[idx].get("role") == "system":
+        leading.append(messages[idx])
+        idx += 1
+    if len(leading) <= 1:
+        return messages
+    merged_text = "\n\n".join(text for text in (_content_as_text(m.get("content")) for m in leading) if text.strip())
+    # Drop structured cache_control: coalesced body is for OpenAI-compat endpoints
+    # that already rejected multi-system; Anthropic cache is irrelevant there.
+    return [{"role": "system", "content": merged_text}, *messages[idx:]]
+
+
+def _supports_native_document_blocks(provider: str) -> bool:
+    """Anthropic document content blocks; OpenAI-compat gateways reject ``type=document``."""
+    return provider.strip().lower() == "anthropic"
+
+
+def _to_litellm_messages(
+    messages: list[ChatMessage],
+    *,
+    image_urls: dict[UUID, str] | None = None,
+    provider: str = "",
+) -> list[dict[str, object]]:
+    """Map domain messages; attach Anthropic-style cache_control on system prefixes.
+
+    ``image_urls`` carries already-resolved data URLs for the turn's image parts. A
+    part without a resolved URL is a hard error, never a silently text-only message:
+    the model would answer "the picture is empty" and sound certain about it (ADR 0007).
+
+    Document parts stay native Anthropic citeable blocks only when ``provider`` is
+    anthropic; otherwise they become plain ``text`` parts so OpenAI-compatible
+    gateways (gateway / qwen / openai) do not 400 on ``type=document``.
+    """
+    resolved = image_urls or {}
+    native_docs = _supports_native_document_blocks(provider)
     out: list[dict[str, object]] = []
     for message in messages:
+        images = [_image_url_part(part, resolved) for part in message.image_parts]
+        documents = [_document_content_part(part, native_document=native_docs) for part in message.document_parts]
+        media = [*documents, *images]
         if message.cache_control is not None and message.role == "system":
             out.append(
                 {
@@ -97,9 +169,51 @@ def _to_litellm_messages(messages: list[ChatMessage]) -> list[dict[str, object]]
                     ],
                 }
             )
+        elif media:
+            out.append(
+                {
+                    "role": message.role,
+                    "content": [{"type": "text", "text": message.content}, *media],
+                }
+            )
         else:
             out.append({"role": message.role, "content": message.content})
-    return out
+    return _coalesce_leading_system_messages(out)
+
+
+def _image_url_part(part: ImagePart, resolved: dict[UUID, str]) -> dict[str, object]:
+    """One OpenAI-compatible image part from a resolved data URL."""
+    url = resolved.get(part.attachment_id)
+    if not url:
+        raise VisionUnsupportedError(
+            f"no vision image source resolved attachment {part.attachment_id}",
+        )
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
+def _document_content_part(part: DocumentPart, *, native_document: bool) -> dict[str, object]:
+    """Map an admitted document body for the provider wire format.
+
+    Anthropic: citeable ``document`` block (``title`` = citation chip; W3a).
+    OpenAI-compat: plain ``text`` part — corporate gateways reject ``type=document``.
+    Body is already admitted ``safe_text``, never the fence wrapper.
+    """
+    if native_document:
+        return {
+            "type": "document",
+            "source": {"type": "text", "media_type": "text/plain", "data": part.text},
+            "title": part.title,
+            "citations": {"enabled": True},
+        }
+    title = (part.title or "").strip()
+    body = part.text
+    return {"type": "text", "text": f"[{title}]\n{body}" if title else body}
+
+
+def _data_url(data: bytes, *, mime_type: str) -> str:
+    """Inline data URL: no second upload round-trip and no attacker-controlled URL."""
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def _parse_usage(usage_obj: object | None) -> LLMUsage:
@@ -109,20 +223,42 @@ def _parse_usage(usage_obj: object | None) -> LLMUsage:
         prompt = usage_obj.get("prompt_tokens", 0)
         completion = usage_obj.get("completion_tokens", 0)
         total = usage_obj.get("total_tokens", 0)
+        details = usage_obj.get("prompt_tokens_details")
+        cache_read = usage_obj.get("cache_read_input_tokens", 0)
+        cache_write = usage_obj.get("cache_creation_input_tokens", 0)
     else:
         prompt = getattr(usage_obj, "prompt_tokens", 0)
         completion = getattr(usage_obj, "completion_tokens", 0)
         total = getattr(usage_obj, "total_tokens", 0)
+        details = getattr(usage_obj, "prompt_tokens_details", None)
+        cache_read = getattr(usage_obj, "cache_read_input_tokens", 0)
+        cache_write = getattr(usage_obj, "cache_creation_input_tokens", 0)
     prompt_tokens = prompt if isinstance(prompt, int) else 0
     completion_tokens = completion if isinstance(completion, int) else 0
     total_tokens = total if isinstance(total, int) else 0
     if total_tokens <= 0:
         total_tokens = prompt_tokens + completion_tokens
+    cache_read_tokens = _coerce_nonneg_int(cache_read)
+    cache_write_tokens = _coerce_nonneg_int(cache_write)
+    # OpenAI-compatible: prompt_tokens_details.cached_tokens
+    if cache_read_tokens == 0 and details is not None:
+        if isinstance(details, dict):
+            cache_read_tokens = _coerce_nonneg_int(details.get("cached_tokens", 0))
+        else:
+            cache_read_tokens = _coerce_nonneg_int(getattr(details, "cached_tokens", 0))
     return LLMUsage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
     )
+
+
+def _coerce_nonneg_int(raw: object) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 0
+    return max(0, raw)
 
 
 def _coerce_cost_usd(raw: object) -> float | None:
@@ -151,7 +287,16 @@ def _parse_response_cost(response: object) -> float | None:
         import litellm
 
         computed = litellm.completion_cost(completion_response=response)
-    except TypeError, ValueError, AttributeError, KeyError, RuntimeError:
+    except Exception as exc:  # noqa: BLE001  # cost is best-effort telemetry; the LLM call must not fail (040)
+        # Cost is best-effort telemetry: a missing price card must never fail the LLM
+        # call. LiteLLM raises ModelNotMappedError for gateway tier aliases that are
+        # absent from its table — the gateway is the only component that can price
+        # them, so an unreported cost stays None (never invent a rate, 050).
+        logger.debug(
+            "llm.cost.compute_failed",
+            reason="model_not_in_price_table",
+            detail=redact_text(str(exc)),
+        )
         return from_hidden
     from_table = _coerce_cost_usd(computed)
     if from_table is not None and from_table > 0.0:
@@ -187,6 +332,7 @@ def _parse_completion(response: object) -> LLMCompletion:
         usage=usage,
         finish_reason=finish_reason,
         cost_usd=_parse_response_cost(response),
+        citations=citations_from_response(response),
     )
 
 
@@ -223,19 +369,59 @@ def _parse_stream_delta(chunk: object) -> LLMStreamDelta:
         usage=usage,
         cost_usd=_parse_response_cost(chunk),
         model=model,
+        citations=citations_from_stream_chunk(chunk),
     )
 
 
 class LiteLLMAdapter:
     """Реализация LLMPort через LiteLLM для любого LLMProviderConfig."""
 
-    def __init__(self, config: LLMProviderConfig) -> None:
+    def __init__(
+        self,
+        config: LLMProviderConfig,
+        *,
+        vision_model: str | None = None,
+        image_source: VisionImageSourcePort | None = None,
+    ) -> None:
         self._config = config
         self._api_key = config.get_api_key()
         self._base_url = config.get_base_url()
         self._default_model = config.get_default_model()
         self._provider = config.provider_name
         self._timeout_seconds = config.get_timeout_seconds()
+        # ADR 0007: the vision alias is provider-level config, not an agent tier — an
+        # image call must not inherit ``tier-small`` from the calling agent.
+        self._vision_model = (vision_model or "").strip() or None
+        self._image_source = image_source
+
+    async def _vision_image_urls(self, messages: list[ChatMessage]) -> dict[UUID, str] | None:
+        """Resolve image parts into data URLs; ``None`` when the call carries no images.
+
+        Every refusal is typed and happens before the provider call: an unconfigured
+        alias, a missing source, or a blob that fails storage checks (020, ADR 0007).
+        """
+        parts = [part for message in messages for part in message.image_parts]
+        if not parts:
+            return None
+        if self._vision_model is None:
+            raise VisionUnsupportedError("LLM_VISION_MODEL is not configured")
+        if self._image_source is None:
+            raise VisionUnsupportedError("vision image source is not wired")
+
+        urls: dict[UUID, str] = {}
+        total_bytes = 0
+        for part in parts:
+            data = await self._image_source.read(part.attachment_id, expected_mime=part.mime)
+            urls[part.attachment_id] = _data_url(data, mime_type=part.mime)
+            total_bytes += len(data)
+        # Counts and sizes only: the payload itself must never reach a log (020).
+        logger.debug(
+            "LLM vision request",
+            provider=self._provider,
+            images=len(parts),
+            image_bytes=total_bytes,
+        )
+        return urls
 
     def _build_params(
         self,
@@ -260,6 +446,9 @@ class LiteLLMAdapter:
             "api_key": self._api_key,
             "api_base": self._base_url,
         }
+        # A shared session is what keeps LiteLLM from opening (and leaking) one aiohttp
+        # session per request; the loop-scoped registry lives in shared_transport.
+        params["shared_session"] = shared_client_session()
         # Per-call dynamic timeout wins over provider default (Phase 4).
         effective_timeout = timeout_seconds if timeout_seconds is not None else self._timeout_seconds
         if effective_timeout is not None:
@@ -284,16 +473,21 @@ class LiteLLMAdapter:
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
     ) -> LLMCompletion:
-        """Выполняет синхронную генерацию текста."""
+        """Выполняет синхронную генерацию текста (или vision-вызов при image_parts)."""
+        image_urls = await self._vision_image_urls(messages)
         params = self._build_params(
-            model=model,
+            model=self._vision_model if image_urls else model,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
             response_model=response_model,
             timeout_seconds=timeout_seconds,
         )
-        params["messages"] = _to_litellm_messages(messages)
+        params["messages"] = _to_litellm_messages(
+            messages,
+            image_urls=image_urls,
+            provider=self._provider,
+        )
         logger.debug(
             "LLM request",
             provider=self._provider,
@@ -328,13 +522,14 @@ class LiteLLMAdapter:
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
-        """Возвращает поток частичных ответов."""
+        """Возвращает поток частичных ответов (vision-вызов при image_parts)."""
         from time import perf_counter
 
         from palatium_ai.core.observability.metrics import agent_metrics
 
+        image_urls = await self._vision_image_urls(messages)
         params = self._build_params(
-            model=model,
+            model=self._vision_model if image_urls else model,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
@@ -343,7 +538,11 @@ class LiteLLMAdapter:
         )
         # OpenAI-compatible: last chunk carries usage (and LiteLLM may attach cost).
         params["stream_options"] = {"include_usage": True}
-        params["messages"] = _to_litellm_messages(messages)
+        params["messages"] = _to_litellm_messages(
+            messages,
+            image_urls=image_urls,
+            provider=self._provider,
+        )
         started = perf_counter()
         first_token = True
         # stream=True as Literal selects CustomStreamWrapper; cast keeps async-for typed

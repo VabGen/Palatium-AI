@@ -77,21 +77,44 @@ class DialogTurnWindow(BaseModel):
                 return content
         return None
 
-    def as_prompt_block(
+    def as_prompt_block(  # noqa: C901 — multi-axis turn formatting; split tracked separately
         self,
         *,
         max_chars: int = 12_000,
         per_turn_max_chars: int = 1200,
         user_turn_max_chars: int | None = None,
+        pinned_user_texts: tuple[str, ...] | list[str] = (),
+        max_pins: int = 4,
     ) -> str:
-        """Компактный текст истории для LLM (newest-first char budget)."""
-        if not self.turns:
+        """Компактный текст истории для LLM (newest-first char budget).
+
+        ``pinned_user_texts`` (scratchpad / identity pins) that are absent from the
+        selected window are prepended as synthetic ``user:`` lines so a 12-turn
+        trim cannot erase «меня зовут …» while medium hints still know it (065).
+        """
+        if not self.turns and not pinned_user_texts:
             return "(no prior turns)"
+        # W10 P1.1 / Big Tech: drop superseded claims before budgeting (055 policy).
+        from palatium_ai.domain.policies.dialog_correction import DialogCorrectionPolicy
+
+        turns = DialogCorrectionPolicy.redact_superseded(self.turns)
+        raw_pins = tuple(str(p).strip() for p in pinned_user_texts if str(p).strip())
+        # Scratchpad/medium pins must not re-introduce values the dialog corrected.
+        pinned_user_texts = DialogCorrectionPolicy.filter_superseded_texts(raw_pins, self.turns)
+        if not turns and not pinned_user_texts:
+            return "(no prior turns)"
+        # After a correction strip, forbid restating dropped entity values (W10 2b).
+        correction_guard = ""
+        if turns != self.turns or pinned_user_texts != raw_pins:
+            correction_guard = (
+                "(dialog_policy: prior assertions were superseded — "
+                "answer only with the latest corrected facts; do not name retracted values)\n"
+            )
         user_cap = user_turn_max_chars if user_turn_max_chars is not None else max(per_turn_max_chars, 8_000)
         selected: list[str] = []
         used = 0
         # Prefer recent turns when the window exceeds the char budget.
-        for turn in reversed(self.turns):
+        for turn in reversed(turns):
             body = turn.content
             turn_cap = user_cap if turn.role == "user" else per_turn_max_chars
             if len(body) > turn_cap:
@@ -109,4 +132,26 @@ class DialogTurnWindow(BaseModel):
             selected.append(line)
             used += extra
         selected.reverse()
-        return "\n".join(selected)
+        haystack = "\n".join(selected).casefold()
+        pins: list[str] = []
+        for raw in pinned_user_texts:
+            text = str(raw).strip()
+            if not text or len(text) < 3:
+                continue
+            if text.casefold() in haystack:
+                continue
+            body = text if len(text) <= user_cap else f"{text[:user_cap]}…"
+            line = f"user: {body}"
+            pins.append(line)
+            if len(pins) >= max(0, max_pins):
+                break
+        if pins:
+            pin_block = "\n".join(pins)
+            if used + len(pin_block) + (1 if selected else 0) <= max_chars:
+                selected = [*pins, *selected]
+            elif not selected:
+                selected = pins[:1]
+        if not selected:
+            return "(no prior turns)"
+        body = "\n".join(selected)
+        return f"{correction_guard}{body}" if correction_guard else body

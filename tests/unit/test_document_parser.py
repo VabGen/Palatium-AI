@@ -96,6 +96,38 @@ async def test_plain_text_parser_never_raises_on_undecodable_bytes() -> None:
     assert parsed.page_count == 1
 
 
+async def test_plain_text_parser_flags_lossy_decode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Silent ``errors="replace"`` must be visible: a fallback prints U+FFFD in the answer."""
+    from palatium_ai.infrastructure.parsing import document_parser
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        document_parser.agent_metrics,
+        "record_utf8_decode_failure",
+        lambda *, kind: calls.append(kind),
+    )
+    parser = PlainTextParser(media_types=("text/plain",), max_chars=1000)
+    # 0x98 is undefined in cp1251 and an invalid UTF-8 start byte, so every
+    # encoding in the chain fails and the lossy fallback runs.
+    parsed = await parser.parse(b"\x98\x98test", mime_type="text/plain", filename="a.txt")
+    assert "\ufffd" in parsed.pages[0].text
+    assert calls == ["text"]
+
+
+async def test_plain_text_parser_does_not_flag_a_clean_decode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from palatium_ai.infrastructure.parsing import document_parser
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        document_parser.agent_metrics,
+        "record_utf8_decode_failure",
+        lambda *, kind: calls.append(kind),
+    )
+    parser = PlainTextParser(media_types=("text/plain",), max_chars=1000)
+    await parser.parse("отчёт".encode("cp1251"), mime_type="text/plain", filename="a.txt")
+    assert calls == []
+
+
 async def test_plain_text_parser_records_truncation_instead_of_dropping_silently() -> None:
     parser = PlainTextParser(media_types=("text/plain",), max_chars=10)
     parsed = await parser.parse(b"x" * 50, mime_type="text/plain", filename="a.txt")
@@ -155,6 +187,39 @@ async def test_docx_parser_extracts_paragraphs_and_table_cells() -> None:
     parsed = await parser.parse(_make_docx(), mime_type=_DOCX_MIME, filename="a.docx")
     assert "Project status report" in parsed.pages[0].text
     assert "Owner" in parsed.pages[0].text
+
+
+async def test_docx_parser_emits_a_merged_cell_once() -> None:
+    """``_Row.cells`` repeats a merged cell per spanned column (observed as 4x text)."""
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    table = document.add_table(rows=1, cols=4)
+    table.cell(0, 0).merge(table.cell(0, 3)).text = "Докладные записки по премированию"
+    buffer = BytesIO()
+    document.save(buffer)
+
+    parsed = await DocxParser(max_chars=10_000).parse(buffer.getvalue(), mime_type=_DOCX_MIME, filename="a.docx")
+
+    assert parsed.pages[0].text.count("Докладные записки по премированию") == 1
+
+
+async def test_docx_parser_keeps_separate_cells_with_the_same_text() -> None:
+    """Dedup is by cell identity: two real cells may legitimately say the same words."""
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    table = document.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].text = "нет"
+    table.rows[0].cells[1].text = "нет"
+    buffer = BytesIO()
+    document.save(buffer)
+
+    parsed = await DocxParser(max_chars=10_000).parse(buffer.getvalue(), mime_type=_DOCX_MIME, filename="a.docx")
+
+    assert parsed.pages[0].text == "нет\tнет"
 
 
 async def test_docx_parser_rejects_corrupt_package_with_a_typed_error() -> None:

@@ -135,7 +135,7 @@ Add-Section -Title "mcp-analytics logs" -Body { docker compose @composeArgs @Pro
 Add-Section -Title "litellm logs"     -Body { docker compose @composeArgs logs litellm --tail $Tail }
 
 Add-Section -Title "pyproject.toml [project]" -Body {
-    (Select-String -Path (Join-Path $RepoRoot "pyproject.toml") -Pattern "\[tool\.poetry\]" -Context 0,10).Context.PostContext -join "`n"
+    (Select-String -Path (Join-Path $RepoRoot "pyproject.toml") -Pattern "^\[project\]" -Context 0,30).Context.PostContext -join "`n"
 }
 
 Add-Section -Title "docker-compose.yml MCP sections" -Body {

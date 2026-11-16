@@ -1,0 +1,21 @@
+# Trivy triage allowlist — accepted image findings (rule 025).
+#
+# One vulnerability ID per line (CVE-…, GHSA-…). `#` starts a comment, and an optional
+# `exp:<YYYY-MM-DD>` suffix carries the review date: once it has passed, Trivy stops honouring
+# the entry, so an acceptance cannot silently outlive its review.
+#
+# Consumed by scripts/ci_supply_chain.py as `--ignorefile` for the blocking image scan.
+#
+# Empty by default: an unlisted fixable HIGH/CRITICAL FAILS CI. Adding a line is an explicit,
+# reviewable risk-acceptance decision — not a way to make the gate green.
+# Required alongside every entry: reason + tracking issue + expiry.
+#
+# Two classes never belong here, because the scan already handles them on purpose:
+#   * unfixed findings — the gate blocks only findings with a published fix
+#     (`fixable_findings` in scripts/ci_supply_chain.py); the rest stay visible in
+#     artifacts/trivy-report.json and close with a base-image bump, not with triage;
+#   * pip's vendored bundle — `--skip-dirs` over pip/_vendor, which is not an installed
+#     distribution and is unreachable from the application's venv.
+#
+# Example (do not uncomment without triage):
+# CVE-2026-12345 exp:2026-12-01  # util-linux in base image; unreachable non-root; PAL-1234

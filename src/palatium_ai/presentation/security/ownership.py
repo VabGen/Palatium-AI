@@ -68,3 +68,37 @@ async def load_session_for_principal(
         allow_missing=allow_missing,
         allow_claim=allow_claim,
     )
+
+
+async def ensure_session_for_principal(
+    *,
+    request: Request,
+    principal: AuthPrincipal,
+    session_service: SessionService,
+    thread_id: str,
+    last_operation: str,
+) -> SessionRecord | None:
+    """Owner-check a client-minted thread and materialise its session row.
+
+    A thread id is minted by the client, so a first action can arrive before any
+    chat turn: attachment upload, memory HITL card, and later ``GET /hitl/{card}``
+    (``allow_missing=False``). ``allow_missing=True`` alone leaves no row, and the
+    follow-up read then 404s *after* a successful mutation. One helper owns that
+    contract so the ordering cannot drift per router (055).
+    """
+    # Ownership gate only: the row is not read for data, the call raises before the
+    # mutation below. Binding it to a variable invited "return the checked row" — but a
+    # fresh client-minted thread has no row yet, so the touched one is the answer (055).
+    await load_session_for_principal(
+        request=request,
+        principal=principal,
+        session_service=session_service,
+        thread_id=thread_id,
+        allow_missing=True,
+    )
+    return await session_service.touch_session(
+        thread_id=thread_id,
+        user_id=principal.subject,
+        context_patch={"last_operation": last_operation},
+        status="active",
+    )
