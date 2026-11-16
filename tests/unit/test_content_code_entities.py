@@ -117,6 +117,47 @@ def test_already_formatted_python_is_untouched() -> None:
     assert normalize_code_content(source, language="python") == source
 
 
+def test_python_comment_glued_to_statement_splits() -> None:
+    """Partial newlines must not skip repair — comment+body on one line stays unreadable."""
+    raw = (
+        "def remove_duplicates_and_sort(numbers):\n"
+        "# Создаем множество из списка, чтобы убрать дубликаты unique_numbers = set(numbers)\n"
+        "# Сортируем множество и преобразуем его обратно в список return sorted(unique_numbers)\n"
+        "# Пример использования:my_list = [5, 2, 8, 2, 9, 5, 1]"
+        "result = remove_duplicates_and_sort(my_list)print(result)"
+    )
+    out = normalize_code_content(raw, language="python")
+    assert "дубликаты\nunique_numbers = set(numbers)" in out
+    assert "список\nreturn sorted(unique_numbers)" in out
+    assert "использования:\nmy_list = [5, 2, 8, 2, 9, 5, 1]" in out
+    assert "]\nresult = remove_duplicates_and_sort(my_list)" in out
+    assert ")\nprint(result)" in out
+
+
+def test_html_style_css_props_soft_break_with_other_newlines() -> None:
+    """Tags already wrapped must not block CSS declaration un-minify."""
+    raw = (
+        "<!DOCTYPE html>\n<html>\n<head>\n<style>\n"
+        "body { display: flex; justify-content: center; align-items: center; "
+        "height: 100vh; margin: 0; background-color: #f0f0f0; }\n"
+        "</style>\n</head>\n<body>\n<button>Нажми меня</button>\n</body>\n</html>"
+    )
+    out = normalize_code_content(raw, language="html")
+    assert "body {\n" in out
+    assert "display: flex;\n" in out
+    assert "justify-content: center;\n" in out
+    assert out.index("display: flex") < out.index("</style>")
+
+
+def test_indent_shaped_literal_newline_expands_alongside_real_breaks() -> None:
+    raw = 'print("hi")\\n    x = 1'
+    # One real-looking structure via partial escape — expand indent-shaped \\n.
+    out = normalize_code_content(raw, language="python")
+    # No real newline yet → full expand path; keep assertion on readable body.
+    assert "\n" in out
+    assert "x = 1" in out
+
+
 def test_heading_before_code_gets_document_icon_not_chart() -> None:
     doc = ContentDocument(
         schema_version=1,

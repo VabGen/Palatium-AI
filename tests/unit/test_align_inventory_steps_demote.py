@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from palatium_ai.application.agents.formatter.parsing import align_formatter_meta
+from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.formatter import FormatterInput
 from palatium_ai.domain.content.content_document import (
@@ -79,7 +82,10 @@ def test_align_demotes_advice_steps_to_checklist_not_kv() -> None:
     aligned = align_formatter_meta(document, _formatter_input(response_shape="document_analysis"))
     assert isinstance(aligned.blocks[1], ListBlock)
     assert aligned.blocks[1].style == "unordered"
-    assert aligned.blocks[1].items[0].icon == "check"
+    # Demote drops row icons — check chrome stays on the heading (density prune).
+    assert aligned.blocks[1].items[0].icon is None
+    assert aligned.blocks[0].icon == "check"
+    assert aligned.blocks[1].type == "list"
 
 
 def test_align_keeps_steps_for_plan_shape() -> None:
@@ -96,4 +102,28 @@ def test_align_keeps_steps_for_plan_shape() -> None:
         meta=DocumentMeta(confidence=0.9, kind="guide"),
     )
     aligned = align_formatter_meta(document, _formatter_input(response_shape="plan"))
+    assert isinstance(aligned.blocks[0], StepsBlock)
+
+
+def test_align_skips_steps_demote_after_structured_preview_painted() -> None:
+    """Once block_delta painted Steps, align must not snap them to List (040)."""
+    document = ContentDocument(
+        locale="ru-RU",
+        blocks=(
+            StepsBlock(
+                items=(
+                    StepItem(title="Платформа", body="Сервисы."),
+                    StepItem(title="UI", body="Формы."),
+                )
+            ),
+        ),
+        meta=DocumentMeta(confidence=0.9, kind="analysis"),
+    )
+    bridge = TurnSseBridge(stream_contract="structured_incremental")
+    bridge.sse_first_block_recorded = True
+    with patch(
+        "palatium_ai.application.services.turn_sse_bridge.get_turn_sse_bridge",
+        return_value=bridge,
+    ):
+        aligned = align_formatter_meta(document, _formatter_input(response_shape="document_analysis"))
     assert isinstance(aligned.blocks[0], StepsBlock)

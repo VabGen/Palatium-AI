@@ -36,17 +36,11 @@ def neo4j_snapshot() -> Neo4jSnapshot:
         rels = int(rels_row["c"])
         kinds = [
             {"kind": row["k"], "c": row["c"]}
-            for row in session.run(
-                "MATCH (n:MemoryFact) "
-                "RETURN coalesce(n.kind, '?') AS k, count(*) AS c ORDER BY c DESC"
-            )
+            for row in session.run("MATCH (n:MemoryFact) RETURN coalesce(n.kind, '?') AS k, count(*) AS c ORDER BY c DESC")
         ]
         sources = [
             {"source_type": row["s"], "c": row["c"]}
-            for row in session.run(
-                "MATCH (n:MemoryFact) "
-                "RETURN coalesce(n.source_type, '?') AS s, count(*) AS c ORDER BY c DESC"
-            )
+            for row in session.run("MATCH (n:MemoryFact) RETURN coalesce(n.source_type, '?') AS s, count(*) AS c ORDER BY c DESC")
         ]
     driver.close()
     return {"facts": facts, "rels": rels, "kinds": kinds, "sources": sources}

@@ -241,6 +241,83 @@ textarea {
     max-width var(--duration-base) ease-in-out;
 }
 
+/*
+ * Side-console width drag handle (Color System Separators + elevated grip).
+ * Pill sits on the hairline between chat column and pane — Big Tech 2026 splitter.
+ */
+.side-console-resizer {
+  position: relative;
+  flex: 0 0 0;
+  width: 0;
+  align-self: stretch;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.side-console-resizer__hit {
+  pointer-events: auto;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -7px;
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.side-console-resizer__hit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+.side-console-resizer__grip {
+  box-sizing: border-box;
+  width: 4px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid color-mix(in srgb, var(--kimi-ink, var(--text)) 13%, transparent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--kimi-ink, var(--text)) 8%, transparent);
+  opacity: 0.72;
+  transform: scaleY(1);
+  transition:
+    opacity var(--duration-press) var(--ease-out),
+    border-color var(--duration-press) var(--ease-out),
+    box-shadow var(--duration-press) var(--ease-out);
+}
+
+.side-console-resizer__hit:hover .side-console-resizer__grip,
+.side-console-resizer.is-active .side-console-resizer__grip,
+.side-console-resizer__hit:focus-visible .side-console-resizer__grip {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--kimi-ink, var(--text)) 22%, transparent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--kimi-ink, var(--text)) 12%, transparent);
+}
+
+body.is-side-console-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .artifact-pane,
+body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-preview-pane {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-console-resizer__grip {
+    transition: none;
+  }
+}
+
 .artifact-pane {
   display: flex;
   flex-direction: column;
@@ -888,6 +965,11 @@ textarea {
     border-radius: 12px;
     border: 1px solid var(--stroke-strong);
     box-shadow: var(--shadow-soft);
+  }
+
+  /* Overlay pane owns the viewport — drag split is N/A. */
+  .side-console-resizer {
+    display: none;
   }
 
   .shell.is-artifact-open .shell-workspace > .file-preview-pane.is-fullscreen {
@@ -2072,10 +2154,11 @@ textarea {
 }
 
 /*
- * Индикатор ожидания: thinking-orbs canvas в слоте 64×64 (chat-avatar preset).
- * Размер задаёт проп `size` библиотеки — width/height здесь не дублируем.
+ * Индикатор ожидания: орб (геометрия thinking-orbs, непрерывный RAF фазы) +
+ * видимая подпись. Fade подписи — GPU opacity (Brand Book Motion); под
+ * prefers-reduced-motion fade гасится, орб крутится по EXCEPTION 2026-11-12.
  */
-/* Waiting = orb row only (no bubble / avatar chrome). */
+/* Waiting = orb + phase label (no bubble / avatar chrome). */
 .msg.is-waiting {
   padding-left: 0;
   align-items: center;
@@ -2090,14 +2173,36 @@ textarea {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: var(--space-2);
+  width: auto;
+  min-height: 64px;
+}
+
+.thinking-indicator__orb {
+  flex-shrink: 0;
   width: 64px;
   height: 64px;
 }
 
-/* Подпись фазы для скринридера. Тот же класс делает её видимой при
-   `prefers-reduced-motion`, где движение выключено и текста нечем заменить
-   (084: состояние не передаётся одной лишь анимацией). */
+/* Смена фазы: короткий fade подписи (GPU-only; key на элементе в TSX). */
+.thinking-indicator__label {
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  animation: thinking-label-in var(--duration-fast) var(--ease-out);
+}
+
+@keyframes thinking-label-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -2111,20 +2216,8 @@ textarea {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .thinking-indicator .sr-only {
-    position: static;
-    width: auto;
-    height: auto;
-    margin: 0 0 0 8px;
-    overflow: visible;
-    clip-path: none;
-    color: var(--text-muted);
-    font-size: 0.9rem;
-  }
-
-  /* Текст рядом со слотом занимает место, а не вылезает из 64px бокса. */
-  .thinking-indicator {
-    width: auto;
+  .thinking-indicator__label {
+    animation: none;
   }
 }
 
@@ -2467,6 +2560,12 @@ textarea {
   background: var(--accent-soft);
 }
 
+.memory-mode--danger.is-active {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--stroke));
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-soft));
+  color: var(--danger);
+}
+
 .memory-input,
 .memory-textarea {
   width: 100%;
@@ -2514,6 +2613,29 @@ textarea {
 .memory-submit:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.memory-submit--danger {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+
+.memory-submit--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 82%, var(--kimi-ink));
+}
+
+.memory-hint--danger {
+  color: color-mix(in srgb, var(--danger) 70%, var(--text));
+}
+
+.settings-button--danger {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--stroke));
+}
+
+.settings-button--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
 }
 
 .composer textarea {
@@ -3533,6 +3655,13 @@ textarea {
   padding: 10px 0;
   border-bottom: 1px solid var(--stroke);
 }
+/* Collapsed option row: label already carries the value (no «A — A and B»). */
+.kv-row--single {
+  grid-template-columns: 1fr;
+}
+.kv-row--single dt {
+  color: var(--kimi-labels-primary, var(--text));
+}
 .kv-row:last-child {
   border-bottom: 0;
 }
@@ -3903,6 +4032,21 @@ textarea {
   color: var(--kimi-labels-secondary);
   line-height: 20px;
   font-size: 13px;
+  white-space: pre-wrap;
+}
+/* Quoted payload from known tools (memory text) — consequence body stays above. */
+.hitl-header p.hitl-quote {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  background: var(--kimi-fill-f1, var(--bg-soft));
+  color: var(--kimi-labels-primary, var(--text));
+  font-size: 14px;
+  line-height: 20px;
+}
+.hitl-risk-chip {
+  color: var(--warning);
+  font-weight: 500;
 }
 .hitl-mark {
   color: var(--kimi-labels-tertiary);
@@ -5164,8 +5308,7 @@ button.history-sidebar__project-row.is-active {
 
   /* СОХРАНЯЕТСЯ намеренно: `.spin` (индикатор загрузки) — без него пропадает
      единственный сигнал, что запрос выполняется. Орб `thinking-indicator` под
-     reduced-motion замирает статичным кадром по контракту библиотеки, поэтому
-     подпись фазы рядом перестаёт быть sr-only и показывается текстом. */
+     reduced-motion рисует статичный кадр; статус несёт видимая подпись фазы. */
 }
 
 /* =====================================================================

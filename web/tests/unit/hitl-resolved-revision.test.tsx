@@ -126,4 +126,57 @@ describe('HitlCards resolved event', () => {
     await waitFor(() => expect(events).toHaveLength(1));
     expect(events[0].revision).toBeNull();
   });
+
+  it('shows purpose-matched busy copy on file choice — never «Сохраняем…»', async () => {
+    let finish!: (value: HitlRespondResponse) => void;
+    respondHitlCard.mockImplementation(
+      () =>
+        new Promise<HitlRespondResponse>(resolve => {
+          finish = resolve;
+        })
+    );
+
+    render(
+      <HitlCards
+        cards={[
+          card({
+            purpose: 'user_choice',
+            title: 'Выберите файл',
+            options: [
+              {
+                action_id: 'file:a',
+                label: 'Договор оказания услуг.docx',
+                kind: 'custom',
+                style: 'primary',
+                action_token: 'token-token-token-token-aaaa',
+              },
+              {
+                action_id: 'file:b',
+                label: 'Договор_2.docx',
+                kind: 'custom',
+                style: 'secondary',
+                action_token: 'token-token-token-token-bbbb',
+              },
+            ],
+          }),
+        ]}
+        onResolved={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Договор_2\.docx/ }));
+    expect(await screen.findByText('Выбираем…')).toBeTruthy();
+    expect(screen.queryByText('Сохраняем…')).toBeNull();
+
+    finish({
+      resolve: {
+        card: card({ purpose: 'user_choice', status: 'resolved' }),
+        replayed: false,
+        message: 'ok',
+      },
+      resumed: null,
+      revision: null,
+    });
+    await waitFor(() => expect(screen.queryByText('Выбираем…')).toBeNull());
+  });
 });

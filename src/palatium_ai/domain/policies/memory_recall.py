@@ -61,8 +61,13 @@ class MemoryRecallPolicy:
         task_kind: TaskKind | None,
         requires_mcp: bool,
         transformation: TransformationKind | str | None = TRANSFORMATION_DEFAULT,
+        use_memory: bool = True,
     ) -> MemoryRecallDecision:
         """Return whether durable recall (pgvector/FTS + L4 graph) should run."""
+        # W11 / ChatGPT Temporary Unpersonalized: hide durable personalization;
+        # same-thread dialog + scratchpad still flow via other state keys.
+        if not use_memory:
+            return MemoryRecallDecision(allowed=False, reason="use_memory_disabled")
         if TransformPolicy.needs_reason_over_prior(transformation):
             kind = TransformPolicy.coerce(transformation)
             # The prior answer is the only source of a content transform: a fact or a

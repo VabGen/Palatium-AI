@@ -43,3 +43,13 @@ def test_short_substantive_turn_is_admitted() -> None:
     decision = ExtractAdmissionPolicy.decide(task_kind="knowledge_request", strategy="reason_only")
 
     assert decision.admit is True
+
+
+def test_use_memory_false_blocks_extract() -> None:
+    """W11 Temporary/Unpersonalized: hide durable write without deleting Medium."""
+    decision = ExtractAdmissionPolicy.decide(
+        task_kind="knowledge_request",
+        strategy="retrieve_then_reason",
+        use_memory=False,
+    )
+    assert decision == ExtractAdmissionDecision(admit=False, reason="use_memory_disabled")

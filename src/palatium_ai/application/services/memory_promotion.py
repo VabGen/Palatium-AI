@@ -19,6 +19,7 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.graph.write_port import GraphFactUpsert
 from palatium_ai.domain.memory.bayesian_trust import BetaTrust
 from palatium_ai.domain.memory.promotion import DEFAULT_PROMOTE_CLAIM_SECONDS, PromotionThresholds
+from palatium_ai.domain.memory.types import coerce_memory_trust
 from palatium_ai.domain.memory.xmemory import decouple_before_aggregate
 from palatium_ai.domain.policies.promotion import PromotionPolicy
 
@@ -96,6 +97,68 @@ class MemoryPromotionService:
                 entry_keys_truncated=len(blocked) > _BLOCKED_SAMPLE_SIZE,
             )
         return promoted
+
+    @traceable(name="memory_promotion.promote_verified_fast")
+    async def promote_verified_fast(
+        self,
+        candidate: PromotionCandidate,
+        *,
+        min_score: float,
+        reason: str = "immediate_verified",
+    ) -> PromoteOutcome:
+        """W11 fast-path: verified + score threshold → claim/upsert/mark (no access bar).
+
+        Slow-path ``run_batch`` still uses ``PromotionPolicy.should_promote`` unchanged.
+        Never call this for ``inferred`` extract rows — OriginCeiling + trust gate fail-closed.
+        """
+        trust = coerce_memory_trust(candidate.trust) or "inferred"
+        if trust != "verified":
+            logger.info(
+                "memory_promotion.fast_skipped",
+                reason="not_verified",
+                entry_key=candidate.entry_key,
+                trust=trust,
+            )
+            return "skipped"
+        score = max(candidate.importance, candidate.confidence)
+        if score < min_score:
+            logger.info(
+                "memory_promotion.fast_skipped",
+                reason="below_score",
+                entry_key=candidate.entry_key,
+                score=score,
+                min_score=min_score,
+            )
+            return "skipped"
+        if self._origin_ceiling and not PromotionPolicy.origin_ceiling_allows(
+            candidate,
+            min_access_frequency=self._thresholds.min_access_frequency,
+        ):
+            agent_metrics.record_memory_origin_ceiling(action="promote_blocked")
+            return "skipped"
+        if candidate.promoted_at is not None or not candidate.text.strip():
+            return "skipped"
+        claimed = await self._memory.claim_promotion(
+            namespace=candidate.namespace,
+            key=candidate.entry_key,
+            lease_seconds=self._claim_seconds,
+        )
+        if not claimed:
+            return "skipped"
+        outcome: PromoteOutcome = "skipped"
+        try:
+            outcome = await self._promote_claimed(candidate)
+            if outcome == "promoted":
+                logger.info(
+                    "memory_promotion.promoted",
+                    entry_key=candidate.entry_key,
+                    user_id=candidate.user_id,
+                    reason=reason,
+                )
+        finally:
+            if outcome != "promoted":
+                await self._release_claim(candidate)
+        return outcome
 
     async def _try_promote(self, candidate: PromotionCandidate) -> PromoteOutcome:
         if not PromotionPolicy.should_promote(

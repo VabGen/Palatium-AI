@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ClipboardEvent, ReactElement } from 'react';
+import type { ClipboardEvent, CSSProperties, ReactElement } from 'react';
 import toast from 'react-hot-toast';
 import { AttachmentFileIcon, attachmentFileKind } from '../icons/fileTypeIcons';
 import { IconChevronDown, IconLoader, IconX } from '../icons/kimiStroke';
@@ -32,6 +32,7 @@ import {
   messagesKeptForRegenerate,
 } from '../lib/turnRewind';
 import { shareAnswerText } from '../lib/shareAnswer';
+import { readSettingsPrefs } from '../lib/settingsPrefs';
 import type {
   ContentBlock,
   ContentDocument,
@@ -57,6 +58,12 @@ import { BrandWordmark } from './BrandWordmark';
 import { CitationSources } from './CitationSources';
 import { DialogueNav } from './DialogueNav';
 import { FilePreviewPane } from './FilePreviewPane';
+import { SideConsoleResizer } from './SideConsoleResizer';
+import {
+  readSideConsoleWidthPct,
+  SIDE_CONSOLE_WIDTH_DEFAULT,
+  writeSideConsoleWidthPct,
+} from '../lib/sideConsoleWidth';
 import { KimiDialog } from './KimiDialog';
 import { LiveAnnouncer } from './LiveAnnouncer';
 import { StreamMarkdownPreview } from './StreamMarkdownPreview';
@@ -106,6 +113,7 @@ import {
   attachmentRefusalReason,
   createPastedTextFile,
   displaySourceRefs,
+  sourceRefFingerprint,
   refusalLabel,
   revokeAttachmentPreview,
   revokeAttachmentPreviews,
@@ -411,6 +419,12 @@ export function ChatShell() {
     | { mode: 'list' }
     | { mode: 'preview'; id: string; filename: string; page?: number }
   >(null);
+  /** kimi dual-pane: user-resizable side-console width (% of workspace). */
+  const [sideConsoleWidthPct, setSideConsoleWidthPct] = useState(readSideConsoleWidthPct);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const canResizeSideConsole = Boolean(
+    (artifactMessageId || filesRail) && filesRail?.mode !== 'list'
+  );
 
   // Wire model reserved for future explicit model routing; intensity+chip map composer_mode today.
   void resolveWireModelId(intensity);
@@ -1167,6 +1181,7 @@ export function ChatShell() {
       const result = await processIntentStream(text, threadId, userId, orgId, attachmentIds, {
         signal: abort.signal,
         composerMode: effectiveComposerMode,
+        useMemory: readSettingsPrefs().learnFromChats,
         onDocumentTitle: title => {
           hasTypedPreview = true;
           setStreamTitle(title);
@@ -1315,6 +1330,7 @@ export function ChatShell() {
           {
             signal: abort.signal,
             composerMode: effectiveComposerMode,
+            useMemory: readSettingsPrefs().learnFromChats,
             onDocumentTitle: title => {
               hasTypedPreview = true;
               setStreamTitle(title);
@@ -1400,12 +1416,12 @@ export function ChatShell() {
       orgId,
       effectiveComposerMode,
       clearStreamPreview,
+      clearMarkdownStreamPreview,
       appendStreamBlock,
       scheduleStreamPreview,
       lockStreamBubbleHeight,
       clearStreamBubbleHeight,
       a11y,
-      t,
     ]
   );
 
@@ -1461,20 +1477,17 @@ export function ChatShell() {
       () => toast.success(t('action.copied')),
       () => undefined
     );
-  }, [t]);
+  }, []);
 
-  const shareMessageContent = useCallback(
-    async (message: ChatMessage) => {
-      if (message.role !== 'assistant' || !message.document) return;
-      const text = getDocumentPlainText(message.document);
-      if (!text) return;
-      const title = message.document.title?.trim() || t('action.share');
-      const result = await shareAnswerText({ title, text });
-      if (result === 'copied') toast.success(t('action.shareCopied'));
-      else if (result === 'failed') toast.error(t('action.shareFailed'));
-    },
-    [t]
-  );
+  const shareMessageContent = useCallback(async (message: ChatMessage) => {
+    if (message.role !== 'assistant' || !message.document) return;
+    const text = getDocumentPlainText(message.document);
+    if (!text) return;
+    const title = message.document.title?.trim() || t('action.share');
+    const result = await shareAnswerText({ title, text });
+    if (result === 'copied') toast.success(t('action.shareCopied'));
+    else if (result === 'failed') toast.error(t('action.shareFailed'));
+  }, []);
 
   const copyUserMessage = useCallback((message: ChatMessage) => {
     if (message.role !== 'user') return;
@@ -1512,7 +1525,7 @@ export function ChatShell() {
         toast.success(t('toast.messageReadyToEdit'));
       })();
     },
-    [busy, messages, threadId, userId, orgId, t]
+    [busy, messages, threadId, userId, orgId]
   );
 
   // Никакого `window.location.reload()`: виджет встроен в страницу СЭД и не имеет
@@ -1547,9 +1560,16 @@ export function ChatShell() {
     setRenameBusy(true);
     try {
       await renameSession(renameTarget.id, next, userId, orgId);
-      setSessionShelf(prev =>
-        prev.map(row => (row.id === renameTarget.id ? { ...row, title: next } : row))
-      );
+      const renamedId = renameTarget.id;
+      setSessionShelf(prev => {
+        const now = new Date().toISOString();
+        const updated = prev.map(row =>
+          row.id === renamedId ? { ...row, title: next, updatedAt: now } : row
+        );
+        // Persist rename even if the live thread was not yet on the shelf.
+        if (updated.some(row => row.id === renamedId)) return updated;
+        return [{ id: renamedId, title: next, projectId: projectId.trim() || null, updatedAt: now }, ...updated];
+      });
       setRenameTarget(null);
       toast.success(t('sidebar.renameDone'));
     } catch (err) {
@@ -1558,7 +1578,7 @@ export function ChatShell() {
     } finally {
       setRenameBusy(false);
     }
-  }, [orgId, renameBusy, renameDraft, renameTarget, userId]);
+  }, [orgId, projectId, renameBusy, renameDraft, renameTarget, userId]);
 
   const submitArchiveThread = useCallback(async () => {
     if (!archiveTarget || archiveBusy) return;
@@ -1732,12 +1752,16 @@ export function ChatShell() {
     /**
      * Only surface the live thread once it has content or the server already
      * knows it — kimi.ai never lists the blank "New chat" you are typing into.
+     * Renamed shelf titles must not be overwritten by first-message derivation.
      */
     const known = sessionShelf.some(row => row.id === threadId);
     const merged =
       !known && messages.length === 0
         ? sessionShelf
-        : mergeShelfWithLiveThread(sessionShelf, threadId, liveTitle, projectId.trim() || null);
+        : mergeShelfWithLiveThread(sessionShelf, threadId, liveTitle, projectId.trim() || null, [
+            t('sidebar.untitled'),
+            t('sidebar.emptyTitle'),
+          ]);
     const filterId = projectId.trim();
     if (!filterId) return merged;
     return merged.filter(row => row.projectId === filterId || row.id === threadId);
@@ -1784,6 +1808,16 @@ export function ChatShell() {
 
   const navDrawerOpen = isNarrowShell && !sidebarCollapsed;
 
+  const setSideConsoleWidth = useCallback((pct: number) => {
+    setSideConsoleWidthPct(pct);
+    writeSideConsoleWidthPct(pct);
+  }, []);
+
+  const resetSideConsoleWidth = useCallback(() => {
+    setSideConsoleWidthPct(SIDE_CONSOLE_WIDTH_DEFAULT);
+    writeSideConsoleWidthPct(SIDE_CONSOLE_WIDTH_DEFAULT);
+  }, []);
+
   /* kimi.ai serves settings as a full page: the left rail becomes the settings
      nav, so the history sidebar and stage are replaced entirely. */
   if (shellView === 'settings') {
@@ -1793,6 +1827,10 @@ export function ChatShell() {
         onSection={navigateSettings}
         onBack={() => navigateShell('chat')}
         userName={userName}
+        threadId={threadId}
+        userId={userId}
+        orgId={orgId}
+        onMemoryCardCreated={handleMemoryCardCreated}
       />
     );
   }
@@ -1803,8 +1841,17 @@ export function ChatShell() {
         filesRail?.mode === 'list' ? ' is-files-list' : ''
       }${filesRail?.mode === 'preview' ? ' is-files-preview' : ''}${
         artifactMessage && !filesRail ? ' is-artifact-doc' : ''
-      }${navDrawerOpen ? ' is-nav-open' : ''}${isNarrowShell ? ' is-narrow' : ''}`}
+      }${navDrawerOpen ? ' is-nav-open' : ''}${isNarrowShell ? ' is-narrow' : ''}${
+        canResizeSideConsole ? ' is-side-console-resizable' : ''
+      }`}
       part="shell"
+      style={
+        canResizeSideConsole
+          ? ({
+              ['--side-console-width']: `${sideConsoleWidthPct}%`,
+            } as CSSProperties)
+          : undefined
+      }
     >
       {/*
         Full Kimi frame (K3): ZONE_NAV history shelf + stage
@@ -1887,7 +1934,11 @@ export function ChatShell() {
       />
 
       <div className="shell-stage">
-        {sidebarCollapsed ? (
+        {/*
+          Desktop collapsed rail: stage expand control (kimi `.sidebar-main-trigger`).
+          Narrow: TopBar ``showNavToggle`` owns open/close — do not render both.
+        */}
+        {sidebarCollapsed && !isNarrowShell ? (
           <span className="sidebar-main-trigger">
             <button
               type="button"
@@ -1960,7 +2011,7 @@ export function ChatShell() {
           kimi.ai: workspace = chat column (messages+composer) | side-console.
           TopBar stays on the stage so home landing CSS keeps working.
         */}
-        <div className="shell-workspace">
+        <div className="shell-workspace" ref={workspaceRef}>
           <div className="shell-chat-column">
             {/* [ZONE_BODY] — лента / marketplace */}
             <div className="shell-main" data-zone="ZONE_BODY">
@@ -2157,14 +2208,18 @@ export function ChatShell() {
                   : citationAnchors.map(citation => citation.source_ref);
                 const primaryAnswerFile =
                   answerSourceNames
-                    .map(ref =>
-                      threadAttachments.find(
-                        file =>
+                    .map(ref => {
+                      const refFp = sourceRefFingerprint(ref);
+                      return threadAttachments.find(file => {
+                        const fileFp = sourceRefFingerprint(file.filename);
+                        return (
                           file.filename === ref ||
+                          (Boolean(refFp) && refFp === fileFp) ||
                           ref.endsWith(file.filename) ||
                           file.filename.endsWith(ref)
-                      )
-                    )
+                        );
+                      });
+                    })
                     .find(Boolean) ?? null;
 
                 const isStreamingBubble =
@@ -2235,12 +2290,16 @@ export function ChatShell() {
                               ) : sourceChips.length > 0 ? (
                                 <ul className="source-ref-chips" aria-label={t('attach.sources')}>
                                   {sourceChips.map((ref, index) => {
-                                    const matched = threadAttachments.find(
-                                      file =>
+                                    const refFp = sourceRefFingerprint(ref);
+                                    const matched = threadAttachments.find(file => {
+                                      const fileFp = sourceRefFingerprint(file.filename);
+                                      return (
                                         file.filename === ref ||
+                                        (Boolean(refFp) && refFp === fileFp) ||
                                         ref.endsWith(file.filename) ||
                                         file.filename.endsWith(ref)
-                                    );
+                                      );
+                                    });
                                     return (
                                       <li
                                         key={ref}
@@ -2577,6 +2636,15 @@ export function ChatShell() {
           </div>
         ) : null}
           </div>
+
+          {canResizeSideConsole ? (
+            <SideConsoleResizer
+              workspaceRef={workspaceRef}
+              widthPercent={sideConsoleWidthPct}
+              onWidthPercentChange={setSideConsoleWidth}
+              onReset={resetSideConsoleWidth}
+            />
+          ) : null}
 
           {filesRail ? (
             <FilePreviewPane

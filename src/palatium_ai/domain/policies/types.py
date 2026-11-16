@@ -56,9 +56,10 @@ GROUNDING_DEFAULT: GroundingMode = "optional"
 
 # Whether the ask operates on a file already bound to this dialog thread
 # (re-read from storage) instead of one fenced into the current turn.
-# Intent owns the value (structural hint: has_thread_files); ExecutionPlanner maps
-# ``thread_file`` to a direct ``platform.read_attachment`` call. Identity of the file
-# is resolved deterministically in the application layer — never by the LLM (055).
+# Intent *suggests* the value; Continuity evidence-gates it (named match via
+# FileReferencePolicy, or explicit attachment_scope single/all). Bare Intent
+# ``thread_file``+``auto`` is demoted so dialog prior wins (055). ExecutionPlanner
+# maps kept ``thread_file`` to ``platform.read_attachment``; identity is never LLM.
 FileReferenceKind = Literal["none", "thread_file"]
 FILE_REFERENCE_DEFAULT: FileReferenceKind = "none"
 

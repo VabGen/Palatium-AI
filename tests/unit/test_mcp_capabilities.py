@@ -32,6 +32,33 @@ async def test_discover_skips_failed_server_and_keeps_available_capabilities() -
 
     assert any(binding.server_name == "edms" for binding in bindings)
     assert all(binding.server_name != "analytics" for binding in bindings)
+    assert index.degraded_servers() == ("analytics",)
+
+
+@pytest.mark.asyncio()
+async def test_discover_lists_servers_sequentially() -> None:
+    """Discovery must not open concurrent Streamable HTTP sessions (race/timeout)."""
+    order: list[str] = []
+
+    class _OrderedRegistry(FakeMCPRegistry):
+        async def list_tool_summaries(self, server_name: str, *, force_refresh: bool = False) -> list[object]:
+            order.append(f"start:{server_name}")
+            result = await super().list_tool_summaries(server_name, force_refresh=force_refresh)
+            order.append(f"end:{server_name}")
+            return result
+
+    registry = _OrderedRegistry()
+    registry._tools["analytics"] = list(registry._tools["edms"])  # type: ignore[attr-defined]
+    servers = registry.list_servers()
+    assert servers == ["edms", "analytics"]
+    index = MCPCapabilityIndex(registry)
+    await index.discover(force_refresh=True)
+    assert order == [
+        "start:edms",
+        "end:edms",
+        "start:analytics",
+        "end:analytics",
+    ]
 
 
 @pytest.mark.asyncio()

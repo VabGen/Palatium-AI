@@ -213,6 +213,16 @@ class GraphitiMemoryPort:
         _ = namespace, key
         return False
 
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        """Graphiti adapter does not support bulk clear yet."""
+        _ = user_id, namespaces
+        return 0
+
     async def list_entries(
         self,
         *,

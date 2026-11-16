@@ -23,21 +23,45 @@ describe('P1b session shelf mapping', () => {
     ]);
   });
 
-  it('keeps live thread first even when not yet on the server', () => {
+  it('keeps live thread first and preserves a durable shelf title', () => {
     expect(
       mergeShelfWithLiveThread(
         [
           { id: 'old', title: 'Yesterday', projectId: null },
-          { id: 'live', title: 'stale', projectId: 'p1' },
+          { id: 'live', title: 'Renamed by user', projectId: 'p1' },
         ],
         'live',
-        'New chat',
+        'first user message…',
         'p1'
       )
     ).toEqual([
-      { id: 'live', title: 'New chat', projectId: 'p1' },
+      { id: 'live', title: 'Renamed by user', projectId: 'p1' },
       { id: 'old', title: 'Yesterday', projectId: null },
     ]);
+  });
+
+  it('seeds title from the live thread when the row is new or still untitled', () => {
+    expect(
+      mergeShelfWithLiveThread(
+        [{ id: 'old', title: 'Yesterday', projectId: null }],
+        'live',
+        'Hello there',
+        null
+      )
+    ).toEqual([
+      { id: 'live', title: 'Hello there', projectId: null },
+      { id: 'old', title: 'Yesterday', projectId: null },
+    ]);
+
+    expect(
+      mergeShelfWithLiveThread(
+        [{ id: 'live', title: 'Untitled', projectId: null }],
+        'live',
+        'Hello there',
+        null,
+        ['Untitled', 'New chat']
+      )
+    ).toEqual([{ id: 'live', title: 'Hello there', projectId: null }]);
   });
 });
 

@@ -1130,6 +1130,71 @@ def test_named_thread_file_forces_the_storage_axis() -> None:
     assert effective.requires_mcp is True
 
 
+def test_intent_thread_file_auto_scope_is_demoted_without_code_evidence() -> None:
+    """Evidence-first: bare Intent ``thread_file``+``auto`` cannot force storage re-read."""
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        file_reference="thread_file",
+        attachment_scope="auto",
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="history-blind over-fire",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="текст который передал в чат",
+        thread_file_named=False,
+    )
+    assert effective.file_reference == "none"
+
+
+def test_intent_thread_file_kept_for_explicit_singular_scope() -> None:
+    """``attachment_scope=single`` is Intent's closed plurality axis — keep re-read."""
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        file_reference="thread_file",
+        attachment_scope="single",
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="one of several uploads",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="перечитай документ",
+        thread_file_named=False,
+    )
+    assert effective.file_reference == "thread_file"
+
+
+def test_intent_thread_file_kept_for_explicit_all_scope() -> None:
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        file_reference="thread_file",
+        attachment_scope="all",
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="compare both uploads",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="сравни оба файла",
+        thread_file_named=False,
+    )
+    assert effective.file_reference == "thread_file"
+
+
 def test_named_thread_file_does_not_override_a_new_upload() -> None:
     """A fenced upload owns the turn; an old thread file must not be re-read."""
     raw = IntentClassifierOutput(

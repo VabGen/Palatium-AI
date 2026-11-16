@@ -98,4 +98,16 @@ describe('displaySourceRefs', () => {
       'Обращение.docx',
     ]);
   });
+
+  it('collapses space and underscore aliases of the same basename', async () => {
+    const { displaySourceRefs } = await import('../../src/lib/attachments');
+    expect(
+      displaySourceRefs([
+        'Договор оказания услуг_2.docx',
+        'Договор оказания услуг.docx',
+        'Договор_оказания_услуг_2.docx',
+        'Договор_оказания_услуг.docx',
+      ])
+    ).toEqual(['Договор_оказания_услуг_2.docx', 'Договор_оказания_услуг.docx']);
+  });
 });

@@ -2289,6 +2289,26 @@ dev alone. Corroboration-only skip: `--skip-corroboration` on `memory_consolidat
 Related: [`adr/0008-memory-origin-trust-ceiling.md`](adr/0008-memory-origin-trust-ceiling.md),
 [`.cursor/plans/context-memory-dialog-2026.md`](../.cursor/plans/context-memory-dialog-2026.md).
 
+### 17.2 Memory scope & curation (ADR 0013 / W11)
+
+| Flag / surface | Default | Effect |
+|---|---|---|
+| `use_memory` on classify/process/stream | `true` | `false` = Temporary/Unpersonalized: no durable Medium/L4 recall, no sleep-time extract; dialog/scratchpad of the thread stay; Medium/Neo4j **not** deleted |
+| Settings `learnFromChats` (web) | on | Maps to API `use_memory` |
+| `DELETE /api/memory/clear` | HITL | Medium purge for principal → enqueue `clear_user_graph` (`memory.ops`) |
+| `MEMORY_PROMOTE_FAST_MIN_SCORE` | `0.85` | After HITL `save_memory` with `trust=verified`, enqueue `promote_entry` when `max(importance, confidence) ≥` threshold; **never** from sleep-time `inferred` extract |
+| `memory.ops` (Alembic `o5p6q7r8s9t0`) | required | Durable SKIP LOCKED queue; drained by API-process Memory op worker (not Celery / `BackgroundTasks`) |
+
+Slow-path promote remains `memory-consolidate` + `PromotionPolicy` + OriginCeiling (unchanged thresholds).
+
+Live smoke (API with W11 image + migrated `memory.ops`):
+
+```powershell
+uv run python scripts/smoke_w11_memory_scope.py --base-url http://127.0.0.1:8000
+```
+
+Related: [`adr/0013-memory-scope-and-curation.md`](adr/0013-memory-scope-and-curation.md).
+
 ---
 
 ## См. также

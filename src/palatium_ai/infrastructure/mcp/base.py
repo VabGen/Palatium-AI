@@ -36,6 +36,21 @@ T = TypeVar("T")
 
 logger = structlog.get_logger(__name__)
 
+# FastMCP Streamable HTTP sessions race when two Clients open the same URL
+# concurrently (late JSON-RPC id, cancel, spurious -32000). One lock per URL.
+_session_locks: dict[str, asyncio.Lock] = {}
+_session_locks_guard = asyncio.Lock()
+
+
+async def _session_lock_for(server_url: str) -> asyncio.Lock:
+    """Return the per-URL lock that serializes FastMCP Client sessions."""
+    async with _session_locks_guard:
+        lock = _session_locks.get(server_url)
+        if lock is None:
+            lock = asyncio.Lock()
+            _session_locks[server_url] = lock
+        return lock
+
 
 def _normalize_server_url(url: str) -> str:
     """FastMCP Client expects a trailing slash when MCP is mounted at ``/``."""
@@ -201,13 +216,19 @@ class MCPJsonRpcClient:
 
         logger.debug("mcp.client.list_tools", server_url=self._server_url)
         timeout = self._timeout_seconds()
+        lock = await _session_lock_for(self._server_url)
         try:
-            async with asyncio.timeout(timeout):
-                async with Client(
+            # Timeout covers tools/list only — not Streamable HTTP handshake in
+            # Client.__aenter__ (startup warm otherwise false-timeouts EDMS).
+            async with (
+                lock,
+                Client(
                     self._server_url,
                     auth=self._auth_token(),
                     mode="auto",
-                ) as client:
+                ) as client,
+            ):
+                async with asyncio.timeout(timeout):
                     tools = await client.list_tools()
         except TimeoutError as exc:
             raise _timeout_error("tools/list", timeout) from exc
@@ -224,13 +245,17 @@ class MCPJsonRpcClient:
             tool=tool_call.name,
         )
         timeout = self._timeout_seconds(tool_call.name)
+        lock = await _session_lock_for(self._server_url)
         try:
-            async with asyncio.timeout(timeout):
-                async with Client(
+            async with (
+                lock,
+                Client(
                     self._server_url,
                     auth=self._auth_token(),
                     mode="auto",
-                ) as client:
+                ) as client,
+            ):
+                async with asyncio.timeout(timeout):
                     result = await client.call_tool(tool_call.name, tool_call.arguments)
         except TimeoutError as exc:
             raise _timeout_error(f"tools/call {tool_call.name}", timeout) from exc

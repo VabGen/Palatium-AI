@@ -19,8 +19,11 @@ from palatium_ai.application.services.feedback_service import FeedbackService
 from palatium_ai.application.services.hitl_respond_facade import HitlRespondFacade
 from palatium_ai.application.services.hitl_service import HitlService
 from palatium_ai.application.services.kill_switch import KillSwitchService
+from palatium_ai.application.services.memory_clear_service import MemoryClearService
 from palatium_ai.application.services.memory_extract_hitl_service import MemoryExtractHitlService
 from palatium_ai.application.services.memory_forget_service import MemoryForgetService
+from palatium_ai.application.services.memory_op_worker import MemoryOpWorker
+from palatium_ai.application.services.memory_promotion import MemoryPromotionService
 from palatium_ai.application.services.memory_save_service import MemorySaveService
 from palatium_ai.application.services.memory_verify_service import MemoryVerifyService
 from palatium_ai.application.services.project_service import ProjectService
@@ -41,6 +44,7 @@ from palatium_ai.application.wiring import (
 from palatium_ai.core.config.settings import Settings
 from palatium_ai.core.logging import logger, setup_logging
 from palatium_ai.core.observability import setup_observability
+from palatium_ai.domain.memory.promotion import PromotionThresholds
 from palatium_ai.infrastructure.cache.redis import create_redis_client, ensure_redis_connection
 from palatium_ai.infrastructure.database.init_db import (
     ensure_database_and_schema,
@@ -69,6 +73,7 @@ from palatium_ai.infrastructure.memory.dialog_turn_store import PostgresDialogTu
 from palatium_ai.infrastructure.memory.embedding_rerank import EmbeddingRerankMemoryPort
 from palatium_ai.infrastructure.memory.graphiti_adapter import GraphitiMemoryPort, GraphitiSdkTransport
 from palatium_ai.infrastructure.memory.mem0_adapter import Mem0HttpTransport, Mem0MemoryPort
+from palatium_ai.infrastructure.memory.memory_op_queue import PostgresMemoryOpQueue
 from palatium_ai.infrastructure.memory.postgres_memory_port import PostgresMemoryPort
 from palatium_ai.infrastructure.vision.blob_image_source import BlobVisionImageSource
 from palatium_ai.infrastructure.web.factory import build_web_search_port
@@ -89,8 +94,10 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+    from palatium_ai.application.services.attachment_read_service import AttachmentReadService
     from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.intent_service import IntentService
+    from palatium_ai.application.services.mcp_capabilities import MCPCapabilityIndex
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.domain.graph.port import GraphPort
     from palatium_ai.domain.graph.write_port import GraphWritePort
@@ -122,6 +129,8 @@ class AppResources:
     memory_save_service: MemorySaveService | None = None
     memory_forget_service: MemoryForgetService | None = None
     memory_verify_service: MemoryVerifyService | None = None
+    memory_clear_service: MemoryClearService | None = None
+    memory_op_worker: MemoryOpWorker | None = None
     skill_manage_service: SkillManageService | None = None
     memory_extract_hitl_service: MemoryExtractHitlService | None = None
     checkpointer_handle: CheckpointerHandle | None = None
@@ -330,6 +339,149 @@ def _hitl_signing_secret(settings: Settings) -> str:
     return f"dev-hitl-{settings.app.name}-local-only"
 
 
+@dataclass(frozen=True)
+class _AttachmentRuntime:
+    """Attachment + vision stack when blob ports are available."""
+
+    service: AttachmentService | None = None
+    read_service: AttachmentReadService | None = None
+    file_reference_resolver: AttachmentReferenceResolver | None = None
+    vision_image_source: BlobVisionImageSource | None = None
+    vision_images: VisionImageService | None = None
+
+
+def _build_attachment_runtime(
+    settings: Settings,
+    attachment_ports: AttachmentPorts | None,
+    *,
+    hitl_service: HitlService,
+    mcp_registry: MCPRegistry,
+    redis_client: Redis,
+    mcp_tool_call_repository: McpToolCallRepository,
+) -> _AttachmentRuntime:
+    """Wire attachment services + vision sources; empty when ports are unset."""
+    if attachment_ports is None:
+        return _AttachmentRuntime()
+    service = build_attachment_service(
+        settings,
+        attachment_ports,
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    read_service = build_attachment_read_service(settings, attachment_ports)
+    # Same repository the read path uses: the registry of what this thread holds
+    # is single-sourced, not a second store (050).
+    file_reference_resolver = AttachmentReferenceResolver(repository=attachment_ports.repository)
+    # ADR 0007: image parts are references; the blob store owns the bytes, so the
+    # LLM adapter gets a source, not a copy of an upload. Built only when a vision
+    # alias is configured — otherwise an image call stays a typed refusal.
+    vision_image_source = BlobVisionImageSource(
+        attachment_ports.blob_store,
+        max_image_bytes=settings.llm.vision_max_image_bytes,
+    )
+    vision_images = VisionImageService(
+        attachment_ports.blob_store,
+        vision_model=settings.llm.resolved_vision_model,
+        max_image_bytes=settings.llm.vision_max_image_bytes,
+        max_images=settings.llm.vision_max_images,
+        allow_pii_images=settings.llm.allow_pii_images,
+    )
+    if settings.llm.vision_configured:
+        logger.info("Vision route enabled", model=settings.llm.vision_model)
+    else:
+        logger.info("Vision route disabled (LLM_VISION_MODEL is empty)")
+    return _AttachmentRuntime(
+        service=service,
+        read_service=read_service,
+        file_reference_resolver=file_reference_resolver,
+        vision_image_source=vision_image_source,
+        vision_images=vision_images,
+    )
+
+
+def _build_memory_op_runtime(
+    settings: Settings,
+    *,
+    memory_port: MemoryPort | None,
+    graph_write: GraphWritePort | None,
+    hitl_service: HitlService,
+    memory_op_queue: PostgresMemoryOpQueue,
+    redis_client: Redis,
+) -> tuple[MemoryClearService | None, MemoryOpWorker | None]:
+    """Clear-HITL + promote worker when medium memory and graph write are both live."""
+    if memory_port is None or graph_write is None:
+        return None, None
+    clear_service = MemoryClearService(
+        hitl_service=hitl_service,
+        memory_port=memory_port,
+        memory_op_queue=memory_op_queue,
+        redis_client=redis_client,
+    )
+    worker: MemoryOpWorker | None = None
+    if getattr(memory_port, "claim_promotion", None) is not None:
+        worker = MemoryOpWorker(
+            queue=memory_op_queue,
+            memory_port=memory_port,
+            graph_write=graph_write,
+            promotion=MemoryPromotionService(
+                memory=memory_port,  # type: ignore[arg-type]
+                graph_write=graph_write,
+                thresholds=PromotionThresholds(
+                    min_access_frequency=settings.memory.promote_min_access_frequency,
+                    min_importance=settings.memory.promote_min_importance,
+                ),
+                xmemory_decouple=settings.memory.xmemory_decouple,
+                bayesian_trust=settings.memory.bayesian_trust,
+                origin_ceiling=settings.memory.origin_ceiling,
+            ),
+            promote_fast_min_score=settings.memory.promote_fast_min_score,
+        )
+    return clear_service, worker
+
+
+def _schedule_startup_workers(
+    background_tasks: list[asyncio.Task[None]],
+    *,
+    capability_index: MCPCapabilityIndex,
+    hitl_service: HitlService,
+    memory_extract: MemoryExtractService | None,
+    memory_op_worker: MemoryOpWorker | None,
+) -> None:
+    """Register non-blocking warmers / sweep / extract / promote loops."""
+    background_tasks.append(
+        asyncio.create_task(
+            warm_mcp_capability_cache(capability_index),
+            name="mcp-capability-warm",
+        )
+    )
+    logger.info("MCP capability cache warm scheduled")
+    background_tasks.append(
+        asyncio.create_task(
+            _hitl_sweep_loop(hitl_service),
+            name="hitl-ttl-sweep",
+        )
+    )
+    logger.info("HITL TTL sweep started", interval_seconds=_HITL_SWEEP_INTERVAL_SECONDS)
+    if memory_extract is not None:
+        background_tasks.append(
+            asyncio.create_task(
+                memory_extract.run_worker(),
+                name="memory-extract",
+            )
+        )
+        logger.info("Memory extract worker started")
+    if memory_op_worker is not None:
+        background_tasks.append(
+            asyncio.create_task(
+                memory_op_worker.run(),
+                name="memory-ops",
+            )
+        )
+        logger.info("Memory op worker started")
+
+
 async def startup(settings: Settings) -> AppResources:
     """Инициализирует логирование, БД, Redis и MCP-реестр."""
     ensure_psycopg_compatible_loop()
@@ -388,42 +540,15 @@ async def startup(settings: Settings) -> AppResources:
     graph_ports = build_graph_ports(settings)
     await _ensure_neo4j_memory_schema(graph_ports)
     attachment_ports = await build_attachment_ports(settings, session_factory)
-    attachment_service: AttachmentService | None = None
-    attachment_read_service = None
-    file_reference_resolver: AttachmentReferenceResolver | None = None
-    vision_image_source: BlobVisionImageSource | None = None
-    vision_images: VisionImageService | None = None
-    if attachment_ports is not None:
-        attachment_service = build_attachment_service(
-            settings,
-            attachment_ports,
-            hitl_service=hitl_service,
-            mcp_registry=mcp_registry,
-            redis_client=redis_client,
-            mcp_tool_call_repository=mcp_tool_call_repository,
-        )
-        attachment_read_service = build_attachment_read_service(settings, attachment_ports)
-        # Same repository the read path uses: the registry of what this thread holds
-        # is single-sourced, not a second store (050).
-        file_reference_resolver = AttachmentReferenceResolver(repository=attachment_ports.repository)
-        # ADR 0007: image parts are references; the blob store owns the bytes, so the
-        # LLM adapter gets a source, not a copy of an upload. Built only when a vision
-        # alias is configured — otherwise an image call stays a typed refusal.
-        vision_image_source = BlobVisionImageSource(
-            attachment_ports.blob_store,
-            max_image_bytes=settings.llm.vision_max_image_bytes,
-        )
-        vision_images = VisionImageService(
-            attachment_ports.blob_store,
-            vision_model=settings.llm.resolved_vision_model,
-            max_image_bytes=settings.llm.vision_max_image_bytes,
-            max_images=settings.llm.vision_max_images,
-            allow_pii_images=settings.llm.allow_pii_images,
-        )
-        if settings.llm.vision_configured:
-            logger.info("Vision route enabled", model=settings.llm.vision_model)
-        else:
-            logger.info("Vision route disabled (LLM_VISION_MODEL is empty)")
+    attachments = _build_attachment_runtime(
+        settings,
+        attachment_ports,
+        hitl_service=hitl_service,
+        mcp_registry=mcp_registry,
+        redis_client=redis_client,
+        mcp_tool_call_repository=mcp_tool_call_repository,
+    )
+    memory_op_queue = PostgresMemoryOpQueue(session_factory)
     (
         intent_service,
         memory_extract,
@@ -446,13 +571,14 @@ async def startup(settings: Settings) -> AppResources:
         memory_port=memory_port,
         checkpointer=checkpointer_handle.saver,
         graph_write=graph_ports.write,
-        attachment_service=attachment_service,
-        file_reference_resolver=file_reference_resolver,
-        vision_image_source=vision_image_source,
-        vision_images=vision_images,
+        attachment_service=attachments.service,
+        file_reference_resolver=attachments.file_reference_resolver,
+        vision_image_source=attachments.vision_image_source,
+        vision_images=attachments.vision_images,
+        memory_op_queue=memory_op_queue,
     )
-    if attachment_service is not None and document_ingest_service is not None:
-        attachment_service.bind_document_ingest(document_ingest_service)
+    if attachments.service is not None and document_ingest_service is not None:
+        attachments.service.bind_document_ingest(document_ingest_service)
     hitl_service.bind_deny_resume(intent_service)
     hitl_service.bind_session_service(session_service)
     graph_port = graph_ports.query
@@ -466,7 +592,7 @@ async def startup(settings: Settings) -> AppResources:
         graph_write=graph_ports.write,
         web_search_port=web_search_port,
         skill_catalog=skill_catalog,
-        attachment_read=attachment_read_service,
+        attachment_read=attachments.read_service,
         skills_self_authored_enabled=settings.skills.allow_self_authored,
     )
     mcp_registry.assert_local_handlers_wired()
@@ -500,6 +626,14 @@ async def startup(settings: Settings) -> AppResources:
         redis_client=redis_client,
         mcp_tool_call_repository=mcp_tool_call_repository,
     )
+    memory_clear_service, memory_op_worker = _build_memory_op_runtime(
+        settings,
+        memory_port=memory_port,
+        graph_write=graph_ports.write,
+        hitl_service=hitl_service,
+        memory_op_queue=memory_op_queue,
+        redis_client=redis_client,
+    )
     hitl_respond_facade = HitlRespondFacade(
         hitl_service=hitl_service,
         intent_service=intent_service,
@@ -507,36 +641,20 @@ async def startup(settings: Settings) -> AppResources:
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
         memory_verify_service=memory_verify_service,
+        memory_clear_service=memory_clear_service,
         skill_manage_service=skill_manage_service,
         memory_consolidate_service=memory_extract_hitl_service,
-        attachment_index_service=attachment_service,
+        attachment_index_service=attachments.service,
         session_service=session_service,
     )
 
-    background_tasks.append(
-        asyncio.create_task(
-            warm_mcp_capability_cache(capability_index),
-            name="mcp-capability-warm",
-        )
+    _schedule_startup_workers(
+        background_tasks,
+        capability_index=capability_index,
+        hitl_service=hitl_service,
+        memory_extract=memory_extract,
+        memory_op_worker=memory_op_worker,
     )
-    logger.info("MCP capability cache warm scheduled")
-
-    background_tasks.append(
-        asyncio.create_task(
-            _hitl_sweep_loop(hitl_service),
-            name="hitl-ttl-sweep",
-        )
-    )
-    logger.info("HITL TTL sweep started", interval_seconds=_HITL_SWEEP_INTERVAL_SECONDS)
-
-    if memory_extract is not None:
-        background_tasks.append(
-            asyncio.create_task(
-                memory_extract.run_worker(),
-                name="memory-extract",
-            )
-        )
-        logger.info("Memory extract worker started")
 
     return AppResources(
         settings=settings,
@@ -555,6 +673,8 @@ async def startup(settings: Settings) -> AppResources:
         memory_save_service=memory_save_service,
         memory_forget_service=memory_forget_service,
         memory_verify_service=memory_verify_service,
+        memory_clear_service=memory_clear_service,
+        memory_op_worker=memory_op_worker,
         skill_manage_service=skill_manage_service,
         memory_extract_hitl_service=memory_extract_hitl_service,
         checkpointer_handle=checkpointer_handle,
@@ -567,8 +687,8 @@ async def startup(settings: Settings) -> AppResources:
         graph_ports=graph_ports,
         web_search_port=web_search_port,
         attachment_ports=attachment_ports,
-        attachment_service=attachment_service,
-        vision_images=vision_images,
+        attachment_service=attachments.service,
+        vision_images=attachments.vision_images,
         feedback_service=feedback_service,
         project_service=project_service,
     )
@@ -624,6 +744,9 @@ async def shutdown(resources: AppResources) -> None:
     if resources.memory_extract is not None:
         with contextlib.suppress(Exception):
             await resources.memory_extract.stop()
+    if resources.memory_op_worker is not None:
+        with contextlib.suppress(Exception):
+            await resources.memory_op_worker.stop()
     if resources.checkpointer_handle is not None and resources.checkpointer_handle.aclose is not None:
         with contextlib.suppress(Exception):
             await resources.checkpointer_handle.aclose()

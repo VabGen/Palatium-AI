@@ -16,7 +16,7 @@ guesses (020 fail-closed).
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -43,6 +43,73 @@ _MAX_LISTED_NAMES = 5
 _NAMED_REFERENCE_REASONS = frozenset({"name_in_turn_text", "explicit_filename"})
 #: Punctuation stripped from a word before it is read as a document name.
 _TOKEN_TRIM = ".,;:!?()[]{}«»\"'"  # noqa: S105 — punctuation set, not a credential (017)
+#: Closed morphological set of the *document-role* noun (ru/en). When the user
+#: omits the space after it («файлаобращение», «fileappeal»), the stem still
+#: counts as a named reference. Not an open phrase list — only the role word that
+#: structurally introduces a file title (055). Longest-first so ``файлами`` wins
+#: over ``файл``.
+_DOC_ROLE_PREFIXES: Final[tuple[str, ...]] = tuple(
+    sorted(
+        {
+            "файл",
+            "файла",
+            "файлу",
+            "файлом",
+            "файле",
+            "файлы",
+            "файлов",
+            "файлам",
+            "файлами",
+            "файлах",
+            "документ",
+            "документа",
+            "документу",
+            "документом",
+            "документе",
+            "документы",
+            "документов",
+            "документам",
+            "документами",
+            "документах",
+            "file",
+            "files",
+            "document",
+            "documents",
+            "doc",
+            "docs",
+        },
+        key=len,
+        reverse=True,
+    )
+)
+_DOC_ROLE_TOKENS: Final[frozenset[str]] = frozenset(_DOC_ROLE_PREFIXES)
+#: Closed set of *name-pointer* words («с названием 3», «by name 3»). Structural
+#: introducers of a filename token — not an open phrase list (055).
+_NAME_POINTER_TOKENS: Final[frozenset[str]] = frozenset(
+    {
+        "название",
+        "названия",
+        "названию",
+        "названием",
+        "названии",
+        "названиями",
+        "имя",
+        "имени",
+        "именем",
+        "name",
+        "named",
+        "filename",
+        "dbname",
+        "бд",
+        "базе",
+        "базы",
+        "базу",
+        "storage",
+        "minio",
+    }
+)
+#: Max alphabetic junk after a doc-role stem in a typo token («файлет» → файл+ет).
+_DOC_ROLE_TYPO_SUFFIX_MAX = 2
 
 
 class FileRefCandidate(BaseModel):
@@ -263,7 +330,7 @@ class FileReferencePolicy:
             stem = _normalize_name(_strip_extension(item.filename))
             if (
                 _occurs_as_bounded_token(haystack, name)
-                or _stem_token_matches(haystack, stem)
+                or _stem_token_matches(haystack, stem, haystack_words=haystack_words)
                 or _name_run_matches(haystack_words, stem)
             ):
                 strong.append(item)
@@ -289,14 +356,93 @@ def _strip_extension(filename: str) -> str:
     return head if separator and head else filename
 
 
-def _stem_token_matches(haystack: str, stem: str) -> bool:
+def _stem_token_matches(
+    haystack: str,
+    stem: str,
+    *,
+    haystack_words: Sequence[str] | None = None,
+) -> bool:
     """True when the full extension-stripped stem occurs as a bounded token in the ask.
 
     Single plain stems (``обращение`` for ``Обращение.docx``) are allowed: among
     several thread files uniqueness still gates resolution. Inflected prose
-    (``обращением``) stays unbounded and does not match (055).
+    (``обращением``) stays unbounded and does not match (055). A missing space
+    after the document-role noun (``файлаобращение``) is still a named reference:
+    the role prefix is structural, not a title inflection.
+
+    Digit-only / otherwise-too-short stems (``3.pdf``) match only when the ask
+    *introduces* them as a file name — doc-role, name-pointer, or glued role —
+    so bare «за 3 минуты» does not steal ``3.pdf`` (055).
     """
-    return len(stem) >= _MIN_NAME_MATCH_CHARS and _occurs_as_bounded_token(haystack, stem)
+    words = list(haystack_words) if haystack_words is not None else _name_words(haystack)
+    if len(stem) >= _MIN_NAME_MATCH_CHARS:
+        if _occurs_as_bounded_token(haystack, stem):
+            return True
+        return _occurs_glued_after_doc_role(haystack, stem)
+    if not stem or not stem.isalnum():
+        return False
+    if _short_stem_introduced_in_ask(words, stem):
+        return True
+    return _occurs_glued_after_doc_role(haystack, stem, allow_short=True)
+
+
+def _short_stem_introduced_in_ask(haystack_words: Sequence[str], stem: str) -> bool:
+    """True when ``stem`` is a bounded token right after a file-name introducer.
+
+    Covers «файл 3», «файле 3», «файлет 3» (role typo), «с названием 3», «в БД 3».
+    """
+    stem_l = stem.casefold()
+    for index, word in enumerate(haystack_words):
+        if word != stem_l:
+            continue
+        if index == 0:
+            continue
+        prev = haystack_words[index - 1]
+        if prev in _DOC_ROLE_TOKENS or prev in _NAME_POINTER_TOKENS:
+            return True
+        if _token_extends_doc_role(prev):
+            return True
+    return False
+
+
+def _token_extends_doc_role(token: str) -> bool:
+    """True for a doc-role token with a short alphabetic typo suffix («файлет»)."""
+    if token in _DOC_ROLE_TOKENS:
+        return True
+    for prefix in _DOC_ROLE_PREFIXES:
+        if not token.startswith(prefix):
+            continue
+        rem = token[len(prefix) :]
+        if 0 < len(rem) <= _DOC_ROLE_TYPO_SUFFIX_MAX and rem.isalpha():
+            return True
+    return False
+
+
+def _occurs_glued_after_doc_role(
+    haystack: str,
+    stem: str,
+    *,
+    allow_short: bool = False,
+) -> bool:
+    """True when a haystack token is exactly ``<doc-role><stem>`` (omitted space).
+
+    ``файлаобращение`` → role ``файла`` + stem ``обращение``. Ordinary compounds
+    that merely *contain* the stem (``обращением``) stay unmatched: they have no
+    document-role prefix from the closed set. ``allow_short`` covers ``файл3``.
+    """
+    if len(stem) < _MIN_NAME_MATCH_CHARS and not allow_short:
+        return False
+    if not stem:
+        return False
+    for token in _name_words(haystack):
+        if len(token) <= len(stem):
+            continue
+        for prefix in _DOC_ROLE_PREFIXES:
+            if len(token) != len(prefix) + len(stem):
+                continue
+            if token.startswith(prefix) and token.endswith(stem):
+                return True
+    return False
 
 
 def _leading_title_token_matches(haystack: str, stem: str) -> bool:

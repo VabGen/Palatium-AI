@@ -65,11 +65,13 @@ from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
 from palatium_ai.domain.policies.clarification import CLARIFY_MIN_CONFIDENCE, ClarificationGatePolicy
 from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import (
+    ATTACHMENT_SCOPE_DEFAULT,
     FILE_REFERENCE_DEFAULT,
     GROUNDING_DEFAULT,
     RESPONSE_SHAPE_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     TRANSFORMATION_DEFAULT,
+    AttachmentScope,
     ContinuationKind,
     FileReferenceKind,
     GroundingMode,
@@ -78,6 +80,11 @@ from palatium_ai.domain.policies.types import (
     TransformationKind,
     UnderspecificationKind,
 )
+
+#: Intent ``attachment_scope`` values that mean the ask *explicitly* targets
+#: upload identity (singular pick or whole set). Bare ``auto`` + ``thread_file``
+#: is history-blind noise — Continuity demotes it (055 / evidence-first file axis).
+_EXPLICIT_FILE_SCOPES: frozenset[AttachmentScope] = frozenset({"single", "all"})
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.contextualizer import ContextualizerOutput
@@ -529,9 +536,11 @@ class ContinuityPolicy:
 
         ``thread_file_named``: the ask deterministically names a file this dialog
         holds (resolved in code, not by the model). Intent's ``file_reference`` is
-        one LLM judgement over a free-form ask and misses paraphrases; a named
-        thread file is a fact, so it sets the axis before any remap. A fenced
-        upload turn still owns its own file (``has_turn_attachments``).
+        history-blind and advisory: Continuity promotes storage re-read only on
+        code evidence (named) or on Intent's *explicit* plurality axis
+        (``attachment_scope`` ∈ {single, all}). Bare ``thread_file``+``auto`` is
+        demoted so dialog prior answers instead of a multi-file interrupt (055).
+        A fenced upload turn still owns its own file (``has_turn_attachments``).
         """
         snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
         if thread_file_named:
@@ -540,6 +549,14 @@ class ContinuityPolicy:
                 # The named file IS the referent: there is nothing left to clarify, and
                 # a clarification turn would never dispatch the storage read (055).
                 snap.kind = "answer"
+        elif (
+            snap.file_reference == "thread_file"
+            and not has_turn_attachments
+            and snap.attachment_scope not in _EXPLICIT_FILE_SCOPES
+        ):
+            # Evidence-first file axis: Intent alone + auto scope cannot force a
+            # storage re-read / file-choice card (living assistant — dialog first).
+            snap.file_reference = FILE_REFERENCE_DEFAULT
         assistant_prior = cls.prior_assistant_content(contextualizer, dialog)
         if snap.choice_slot_filled:
             snap.requires_user_choice = False
@@ -832,6 +849,7 @@ class _ResolveSnapshot:
     transformation: TransformationKind
     response_shape: ResponseShape
     file_reference: FileReferenceKind
+    attachment_scope: AttachmentScope
     intent_reasoning: str
     confidence: float
     choice_slot_filled: bool
@@ -859,6 +877,9 @@ class _ResolveSnapshot:
             ),
             response_shape=(raw_intent.response_shape if raw_intent is not None else RESPONSE_SHAPE_DEFAULT),
             file_reference=raw_intent.file_reference if raw_intent is not None else FILE_REFERENCE_DEFAULT,
+            attachment_scope=(
+                raw_intent.attachment_scope if raw_intent is not None else ATTACHMENT_SCOPE_DEFAULT
+            ),
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,

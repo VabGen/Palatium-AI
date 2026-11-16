@@ -101,6 +101,18 @@ class PresentationIconPolicy:
         return document.model_copy(update=updates)
 
     @classmethod
+    def prune_block_row_chrome(cls, block: ContentBlock) -> ContentBlock:
+        """Strip list/kv/step/paragraph icons — same density rule as ``enrich``.
+
+        Used by ``prepare_block_for_stream_paint`` so ``block_delta`` already matches
+        the final document (040: ``layout_shift_count == 0``). Lead-heading fill and
+        non-lead heading prune need document position + ``meta.kind`` — those stay in
+        ``enrich`` and are synced by re-emitting the aligned document.
+        """
+        # ``is_lead_heading=True`` preserves heading icons (unknown position mid-stream).
+        return cls._prune_block(block, is_lead_heading=True)
+
+    @classmethod
     def _enrich_blocks(
         cls,
         blocks: tuple[ContentBlock, ...],

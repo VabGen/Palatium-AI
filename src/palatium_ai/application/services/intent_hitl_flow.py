@@ -913,6 +913,15 @@ class IntentHitlFlow:
             # ``no_match`` means the ask named another document: offering this
             # thread's files would invite the wrong read (fail-closed, 020).
             return None
+        # Evidence-first: a card is for identity ambiguity the ask *engaged*
+        # (named subset, or Continuity-kept singular/all → several_thread_files).
+        # Unknown reasons stay fail-closed without interrupting the dialog (055).
+        if resolution.reason not in {
+            "several_names_in_turn_text",
+            "several_thread_files",
+            "explicit_filename_ambiguous",
+        }:
+            return None
         names = FileChoiceCardPolicy.distinct_names(resolution.candidates)
         if not FileChoiceCardPolicy.mintable(names):
             return None

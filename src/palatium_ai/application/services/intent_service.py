@@ -328,6 +328,7 @@ class IntentService:
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
         composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
     ) -> IntentTaskResult:
         """Возвращает platform-level классификацию задачи."""
         resolved_task_id = task_id or str(uuid4())
@@ -350,6 +351,7 @@ class IntentService:
                 "last_task_id": resolved_task_id,
                 "last_user_text": session_user_text_preview(text),
                 "org_id": org_id or "",
+                "use_memory": use_memory,
             },
         )
         turn_attachments = await self._turn_attachment_context(
@@ -367,6 +369,7 @@ class IntentService:
             untrusted_context=turn_attachments.fenced_text,
             attachment_context=turn_attachments,
             composer_mode=composer_mode,
+            use_memory=use_memory,
         )
         classification = final_state.get("classification")
         critic = final_state.get("critic")
@@ -508,6 +511,7 @@ class IntentService:
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
         composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
     ) -> FormatterTaskResult:
         """Возвращает финальный отформатированный ответ платформы."""
         turn = await self.finalize_turn(
@@ -519,6 +523,7 @@ class IntentService:
             is_admin=is_admin,
             attachment_ids=attachment_ids,
             composer_mode=composer_mode,
+            use_memory=use_memory,
         )
         return turn.result
 
@@ -533,6 +538,7 @@ class IntentService:
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
         composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
     ) -> FinalizedTurn:
         """Run one turn and hand back the agent result with the diff it produced.
 
@@ -581,6 +587,7 @@ class IntentService:
                     "last_task_id": resolved_task_id,
                     "last_user_text": session_user_text_preview(text),
                     "org_id": org_id or "",
+                    "use_memory": use_memory,
                     **self._attachment_context_patch(resolved_attachments),
                 },
             )
@@ -622,6 +629,7 @@ class IntentService:
                 untrusted_context=untrusted_context,
                 attachment_context=turn_attachments,
                 composer_mode=composer_mode,
+                use_memory=use_memory,
             )
         interrupted = _extract_interrupt(final_state)
         revision: DocumentRevision | None = None
@@ -745,6 +753,7 @@ class IntentService:
         is_admin: bool = False,
         attachment_ids: Sequence[UUID] | None = None,
         composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
     ) -> AsyncGenerator[dict[str, Any]]:
         """SSE-oriented process: yield hop events, then a final FormatterTaskResult payload."""
         started = perf_counter()
@@ -789,6 +798,7 @@ class IntentService:
                     "last_task_id": resolved_task_id,
                     "last_user_text": session_user_text_preview(text),
                     "org_id": org_id or "",
+                    "use_memory": use_memory,
                     **self._attachment_context_patch(resolved_attachments),
                 },
             )
@@ -834,6 +844,7 @@ class IntentService:
                 untrusted_context=untrusted,
                 attachment_context=turn_attachments,
                 composer_mode=composer_mode,
+                use_memory=use_memory,
             ):
                 if event.get("event") == "final_state":
                     final_state = cast("AgentGraphState", event["state"])

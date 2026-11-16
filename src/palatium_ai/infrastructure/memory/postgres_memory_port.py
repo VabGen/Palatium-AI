@@ -351,6 +351,28 @@ class PostgresMemoryPort:
             await session.commit()
             return bool(getattr(result, "rowcount", 0))
 
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        """Bulk-delete medium rows for ``user_id`` (RLS); optional namespace filter."""
+        uid = user_id.strip()
+        if not uid:
+            return 0
+        async with self._session_factory() as session:
+            await set_rls_user_scope(session, uid)
+            clause = [MemoryEntryORM.user_id == uid]
+            if namespaces is not None:
+                encoded = [encode_namespace(ns) for ns in namespaces]
+                if not encoded:
+                    return 0
+                clause.append(MemoryEntryORM.namespace.in_(encoded))
+            result = await session.execute(delete(MemoryEntryORM).where(*clause))
+            await session.commit()
+            return int(getattr(result, "rowcount", 0) or 0)
+
     async def bump_access(self, *, namespace: tuple[str, ...], key: str) -> int:
         """Increment access_frequency; return new count (0 if missing)."""
         user_id = resolve_user_id(namespace)

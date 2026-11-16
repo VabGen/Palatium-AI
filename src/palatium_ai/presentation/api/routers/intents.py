@@ -50,6 +50,11 @@ class ClassifyIntentRequest(BaseModel):
         default=None,
         description="UI mode pill: web_search | deep_think | agent.",
     )
+    #: W11 personalization: False = Temporary/Unpersonalized (no Medium/L4 recall or extract).
+    use_memory: bool = Field(
+        default=True,
+        description="When false, durable memory recall and extract are disabled for this turn.",
+    )
 
 
 def _map_runtime_error(exc: Exception) -> HTTPException:
@@ -84,6 +89,7 @@ async def classify_intent(body: ClassifyIntentRequest, request: Request) -> Inte
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
             composer_mode=ComposerModePolicy.coerce(body.composer_mode),
+            use_memory=body.use_memory,
         )
     except (
         KillSwitchEngagedError,
@@ -108,6 +114,7 @@ async def process_intent(body: ClassifyIntentRequest, request: Request) -> Forma
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
             composer_mode=ComposerModePolicy.coerce(body.composer_mode),
+            use_memory=body.use_memory,
         )
     except (
         KillSwitchEngagedError,
@@ -133,6 +140,7 @@ async def process_intent_stream(body: ClassifyIntentRequest, request: Request) -
             is_admin=principal_is_admin(request, principal),
             attachment_ids=list(body.attachment_ids),
             composer_mode=ComposerModePolicy.coerce(body.composer_mode),
+            use_memory=body.use_memory,
         )
         emit_done = False
         try:

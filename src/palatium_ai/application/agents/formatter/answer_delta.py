@@ -94,7 +94,13 @@ def emit_document_block(*, index: int, block: ContentBlock) -> None:
     instead of re-parsing prose (one renderer, one contract). Like the prose frames,
     ``block_delta`` is append-only and never carries ``replace``: the final document
     is a superset of the painted blocks (040: ``layout_shift_count == 0``).
+
+    Before the frame leaves, apply the same per-block promote / nesting normalize /
+    row-icon prune the finished document gets in ``align_formatter_meta`` — otherwise
+    the preview paints a raw list (or search-icon rows) and ``result`` snaps chrome.
     """
+    from palatium_ai.application.agents.formatter.stream_paint import prepare_block_for_stream_paint
+
     bridge = get_turn_sse_bridge()
     if bridge is None:
         return
@@ -103,7 +109,8 @@ def emit_document_block(*, index: int, block: ContentBlock) -> None:
         # Only our own notation was in the block (page address / style keyword):
         # there is nothing to paint, and the final document will not contain it.
         return
-    bridge.emit_nowait({"event": "block_delta", "index": index, "block": clean.model_dump(mode="json")})
+    painted = prepare_block_for_stream_paint(clean)
+    bridge.emit_nowait({"event": "block_delta", "index": index, "block": painted.model_dump(mode="json")})
     if not bridge.sse_first_block_recorded:
         bridge.sse_first_block_recorded = True
         agent_metrics.record_sse_first_block(time.perf_counter() - bridge.started_at)

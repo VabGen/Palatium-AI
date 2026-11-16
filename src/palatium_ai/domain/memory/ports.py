@@ -75,3 +75,16 @@ class MemoryPort(Protocol):
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         """Delete one memory item; returns True when a row was removed."""
         ...
+
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        """Bulk-delete medium rows for ``user_id`` (RLS); optional namespace filter.
+
+        ``namespaces=None`` clears every medium entry owned by the user.
+        Returns deleted row count.
+        """
+        ...

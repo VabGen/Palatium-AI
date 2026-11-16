@@ -121,6 +121,28 @@ class InMemoryMemoryPort:
             self._meta.pop(slot, None)
             return self._items.pop(slot, None) is not None
 
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        """Bulk-delete medium rows for one owner (optional namespace filter)."""
+        uid = user_id.strip()
+        if not uid:
+            return 0
+        allowed = set(namespaces) if namespaces is not None else None
+        async with self._lock:
+            to_drop = [
+                slot
+                for slot, value in self._items.items()
+                if resolve_user_id(slot[0], value) == uid and (allowed is None or slot[0] in allowed)
+            ]
+            for slot in to_drop:
+                self._items.pop(slot, None)
+                self._meta.pop(slot, None)
+            return len(to_drop)
+
     async def bump_access(self, *, namespace: tuple[str, ...], key: str) -> int:
         """Increment access_frequency; return new count (0 if missing)."""
         async with self._lock:

@@ -16,6 +16,7 @@
  * информацию о месте, которую дал провайдер, а `none` — честное «неизвестно»
  * (никогда не 0 и не «начало документа»).
  */
+import { preferSourceRefLabel, sourceRefFingerprint } from './attachments';
 import type { CitationRef } from '../types/contentDocument';
 
 /** Одна карточка-источник: citations одного `source_ref` в порядке документа. */
@@ -85,6 +86,7 @@ export function citationKey(citation: CitationRef): string {
  *
  * Группировка нужна потому, что в ответе один документ цитируется несколько раз:
  * пять одинаковых чипов «Договор.pdf» — это не пять источников.
+ * Пробелы и `_` в basename — один файл (LLM часто дублирует title и upload-name).
  */
 export function groupCitations(citations: readonly CitationRef[]): CitationGroup[] {
   const groups = new Map<string, CitationGroup>();
@@ -93,12 +95,15 @@ export function groupCitations(citations: readonly CitationRef[]): CitationGroup
     const key = citationKey(citation);
     if (seen.has(key)) continue;
     seen.add(key);
-    const existing = groups.get(citation.source_ref);
+    const fp = sourceRefFingerprint(citation.source_ref) || citation.source_ref;
+    const existing = groups.get(fp);
     if (existing) {
       existing.citations.push(citation);
+      existing.sourceRef = preferSourceRefLabel(existing.sourceRef, citation.source_ref);
+      existing.href = safeSourceHref(existing.sourceRef);
       continue;
     }
-    groups.set(citation.source_ref, {
+    groups.set(fp, {
       sourceRef: citation.source_ref,
       href: safeSourceHref(citation.source_ref),
       citations: [citation],

@@ -98,7 +98,12 @@ async def enqueue_turn_extract(
         return "disabled"
     task_kind = resolved_turn_kind(final_state)
     strategy = orch_selectors.selected_strategy(final_state)
-    admission = ExtractAdmissionPolicy.decide(task_kind=task_kind, strategy=strategy)
+    use_memory = bool(final_state.get("use_memory", True))
+    admission = ExtractAdmissionPolicy.decide(
+        task_kind=task_kind,
+        strategy=strategy,
+        use_memory=use_memory,
+    )
     if admission.admit:
         await consolidation.enqueue(
             thread_id=thread_id,

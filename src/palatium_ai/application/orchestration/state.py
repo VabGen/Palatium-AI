@@ -83,3 +83,5 @@ class AgentGraphState(TypedDict, total=False):
     presentation_owner_reason: str
     #: Explicit composer mode pills (Track P); applied in Continuity before routing.
     composer_mode: ComposerMode
+    #: W11: client personalization toggle (default True). False → no durable recall/extract.
+    use_memory: bool

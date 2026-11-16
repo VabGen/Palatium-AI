@@ -26,6 +26,7 @@
 | **[adr/0010-agents-audit-w1-w6-closure.md](adr/0010-agents-audit-w1-w6-closure.md)** | ADR: закрытие аудита agents W1–W6 — baseline refresh, PII fail-soft, reserve triggers (2026-11-10) |
 | **[adr/0011-observability-cost-contracts.md](adr/0011-observability-cost-contracts.md)** | ADR: observability / cost / contracts W7–W8 — LLM chokepoint, freshness, retry, caps (2026-11-10) |
 | **[adr/0012-product-quality-evals.md](adr/0012-product-quality-evals.md)** | ADR: product-quality evals W9 — semantic / context / multi-turn / formatter (2026-11-10) |
+| **[adr/0013-memory-scope-and-curation.md](adr/0013-memory-scope-and-curation.md)** | ADR: memory scope (`use_memory`) + verified fast-path promote / HITL clear (W11, 2026-11-12) |
 | **[../.cursor/plans/canvas-vision-phase-7.md](../.cursor/plans/canvas-vision-phase-7.md)** | План Phase 7: Canvas закрыт решением, vision заблокирован открытыми вопросами (2026-10-25) |
 | **[../.cursor/plans/response-shapes.md](../.cursor/plans/response-shapes.md)** | План: ось формы ответа, `ShapeRecipePolicy`, волны 1–4 (актуально на 2026-10-19) |
 | **[grounding-mvp-deferrals.md](grounding-mvp-deferrals.md)** | Adaptive Grounding MVP: осознанные deferrals + критерий возврата + staging A/B gate (2026-10-14) |

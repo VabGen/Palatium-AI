@@ -1,11 +1,13 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { IconChevronDown, IconPlus, IconSearch, IconTrash } from '../icons/kimiStroke';
+import toast from 'react-hot-toast';
+import { IconChevronDown, IconLoader, IconPlus, IconSearch, IconTrash } from '../icons/kimiStroke';
 import {
   SettingsGlyph,
   SettingsChromeGlyph,
   type SettingsGlyphName,
   type SettingsChromeName,
 } from '../icons/kimiSettingsGlyphs';
+import { requestMemoryClear } from '../api/client';
 import { getI18nLocale, resolveLanguage, t } from '../i18n';
 import type { MessageKey } from '../i18n/messages';
 import { setLangOverride } from '../runtime/store';
@@ -26,6 +28,7 @@ import themePreviewLight from '../assets/theme/theme-preview-light.png';
 import themePreviewSystem from '../assets/theme/theme-preview-system.png';
 import themePreviewDark from '../assets/theme/theme-preview-dark.png';
 import type { SettingsSectionId } from '../lib/shellView';
+import type { HITLCardView } from '../types/contentDocument';
 
 type SettingsNavItem = {
   readonly id: SettingsSectionId;
@@ -76,6 +79,11 @@ type SettingsPageProps = {
   onSection: (section: SettingsSectionId) => void;
   onBack: () => void;
   userName: string | null;
+  /** Current chat thread — required for HITL Clear Memories (session ownership). */
+  threadId?: string | null;
+  userId?: string | null;
+  orgId?: string | null;
+  onMemoryCardCreated?: (card: HITLCardView, label: string) => void;
 };
 
 /**
@@ -86,7 +94,16 @@ type SettingsPageProps = {
  * measured from the live product: 224×36 nav rows (r12), 768px cards (r16, 3%
  * fill), 48px rows, 44×24 switches.
  */
-export function SettingsPage({ section, onSection, onBack, userName }: SettingsPageProps) {
+export function SettingsPage({
+  section,
+  onSection,
+  onBack,
+  userName,
+  threadId = null,
+  userId = null,
+  orgId = null,
+  onMemoryCardCreated,
+}: SettingsPageProps) {
   const [prefs, setPrefs] = useState<SettingsPrefs>(readSettingsPrefs);
   const [notice, setNotice] = useState<'logout' | 'delete' | null>(null);
 
@@ -159,7 +176,17 @@ export function SettingsPage({ section, onSection, onBack, userName }: SettingsP
             {section === 'speech' ? <SpeechSection prefs={prefs} update={update} /> : null}
             {section === 'shortcuts' ? <ShortcutsSection /> : null}
             {section === 'features' ? <FeaturesSection prefs={prefs} update={update} /> : null}
-            {section === 'memory' ? <MemorySection prefs={prefs} update={update} /> : null}
+            {section === 'memory' ? (
+              <MemorySection
+                prefs={prefs}
+                update={update}
+                threadId={threadId}
+                userId={userId}
+                orgId={orgId}
+                onMemoryCardCreated={onMemoryCardCreated}
+                onBack={onBack}
+              />
+            ) : null}
             {section === 'chat' ? <ChatSettingsSection prefs={prefs} update={update} /> : null}
             {section === 'prompts' ? <PromptsSection prefs={prefs} update={update} /> : null}
           </div>
@@ -594,10 +621,41 @@ function FeaturesSection({
 function MemorySection({
   prefs,
   update,
+  threadId,
+  userId,
+  orgId,
+  onMemoryCardCreated,
+  onBack,
 }: {
   prefs: SettingsPrefs;
   update: (patch: Partial<SettingsPrefs>) => void;
+  threadId: string | null;
+  userId: string | null;
+  orgId: string | null;
+  onMemoryCardCreated?: (card: HITLCardView, label: string) => void;
+  onBack: () => void;
 }) {
+  const [clearOpen, setClearOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const canClear = Boolean(threadId && userId && onMemoryCardCreated);
+
+  async function confirmClear() {
+    if (!canClear || !threadId || !userId || !onMemoryCardCreated || busy) return;
+    setBusy(true);
+    setClearOpen(false);
+    try {
+      const card = await requestMemoryClear({ thread_id: threadId }, userId, orgId);
+      onMemoryCardCreated(card, t('memory.label.clear'));
+      toast.success(t('memory.toast.cardCreated'));
+      onBack();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      toast.error(detail.slice(0, 180) || t('memory.error.requestFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <div className="settings-card">
@@ -621,6 +679,54 @@ function MemorySection({
           </div>
         </div>
       </div>
+      <div className="settings-card settings-card--spaced">
+        <div className="settings-row settings-row--stack">
+          <div className="settings-row__leading">
+            <span className="settings-row__label">{t('settings.memory.clear')}</span>
+            <p className="settings-row__desc">{t('settings.memory.clearDesc')}</p>
+          </div>
+          <div className="settings-row__control">
+            <button
+              type="button"
+              className="settings-button settings-button--danger"
+              disabled={!canClear || busy}
+              onClick={() => setClearOpen(true)}
+            >
+              {busy ? <IconLoader className="spin" size={14} /> : null}
+              <span>{t('settings.memory.clear')}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <KimiDialog
+        open={clearOpen}
+        title={t('memory.clearConfirm.title')}
+        description={t('memory.clearConfirm.description')}
+        closeLabel={t('memory.clearConfirm.cancel')}
+        onClose={() => setClearOpen(false)}
+        footer={
+          <>
+            <button
+              type="button"
+              className="kimi-btn kimi-btn--ghost"
+              disabled={busy}
+              onClick={() => setClearOpen(false)}
+            >
+              {t('memory.clearConfirm.cancel')}
+            </button>
+            <button
+              type="button"
+              className="kimi-btn kimi-btn--danger"
+              disabled={busy}
+              data-autofocus
+              onClick={() => void confirmClear()}
+            >
+              {busy ? <IconLoader className="spin" size={14} /> : null}
+              <span>{t('memory.clearConfirm.confirm')}</span>
+            </button>
+          </>
+        }
+      />
     </>
   );
 }

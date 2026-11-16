@@ -145,7 +145,7 @@ export const STATE_MATRIX: readonly WidgetState[] = [
     id: 'pending',
     title: 'Запрос в работе',
     proves:
-      'Пока агенты работают, в ленте только орб состояния — без облака и подписи, а отправка заблокирована.',
+      'Пока агенты работают, в ленте орб + подпись фазы (без облака), а отправка заблокирована.',
     api: [
       {
         key: 'intents.process.stream',
@@ -158,8 +158,9 @@ export const STATE_MATRIX: readonly WidgetState[] = [
       // Облака нет: индикатор стоит на месте аватара, а не внутри пузыря.
       { kind: 'count', selector: '.msg.is-waiting .bubble', count: 0 },
       { kind: 'count', selector: '.msg.is-waiting .avatar', count: 0 },
-      // Подпись фазы существует только для скринридера (084).
+      // Подпись фазы видна и озвучивается (084).
       { kind: 'text', selector: '.msg.is-waiting [role="status"]', contains: 'Думаю' },
+      { kind: 'visible', selector: '.thinking-indicator__label' },
       {
         kind: 'attr',
         selector: '.thinking-indicator canvas',

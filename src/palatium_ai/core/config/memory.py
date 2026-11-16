@@ -155,6 +155,16 @@ class MemoryConfig(BaseConfig):
         le=128,
         validation_alias="MEMORY_PROMOTE_BATCH_LIMIT",
     )
+    promote_fast_min_score: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MEMORY_PROMOTE_FAST_MIN_SCORE",
+        description=(
+            "W11: HITL verified save enqueues promote_entry when max(importance, confidence) "
+            "of the stored row is at least this score (not extract LLM confidence)."
+        ),
+    )
     origin_ceiling: bool = Field(
         default=True,
         validation_alias="MEMORY_ORIGIN_CEILING",

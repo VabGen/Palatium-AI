@@ -128,8 +128,13 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     document = strip_citation_markers(document, source_count=len(merged_refs))
     # Passport label-bullets → kv first; then inventory Steps → unordered bullets/checks
     # so demoted catalogues are not re-folded into kv panels (dots stay dots).
+    # Promote is idempotent with ``prepare_block_for_stream_paint`` (already on
+    # ``block_delta``). Steps↔list chrome needs ``response_shape`` and must NOT run
+    # after typed blocks are on screen — that swap is the stream→final format flip
+    # Hybrid SSE forbids (040 / layout_shift_count == 0).
     document = _promote_label_lists_to_kv(document)
-    document = _align_list_vs_steps_chrome(document, task_input)
+    if not _structured_blocks_already_painted():
+        document = _align_list_vs_steps_chrome(document, task_input)
 
     aligned = document.model_copy(
         update={
@@ -162,6 +167,14 @@ def clamp_confidence(value: float) -> float:
     if not math.isfinite(value):
         return 0.0
     return min(max(value, 0.0), 1.0)
+
+
+def _structured_blocks_already_painted() -> bool:
+    """True when at least one typed ``block_delta`` already reached the client."""
+    from palatium_ai.application.services.turn_sse_bridge import get_turn_sse_bridge
+
+    bridge = get_turn_sse_bridge()
+    return bridge is not None and bridge.sse_first_block_recorded
 
 
 def _align_list_vs_steps_chrome(document: ContentDocument, task_input: FormatterInput) -> ContentDocument:

@@ -108,6 +108,8 @@ Live W10 case `2c`: после 10 filler-ходов факт `BGT-42` из T1 н
 1. `dialog_window_size=12` — к T12 user-turn T1 уже вне окна;
 2. «Запомни» уходит в HITL `POST /api/memory/save` path / card, а не pin в window;
 3. Neo4j promote по-прежнему out-of-band (ADR-0009/0010 off-graph MK).
+   W11 (ADR 0013) добавляет **verified fast-path** через durable `MemoryOpQueue`
+   после HITL save — chat по-прежнему **не** делает sync Neo4j MERGE на request span.
 
 **Accepted limitation (choice C):** 2c fail в live chat — by design при текущем
 окне + HITL persistence. Пересмотр → choice A (retention + HITL параллельно) или

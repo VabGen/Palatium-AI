@@ -39,19 +39,31 @@ export function mapSessionsToShelf(
   return out;
 }
 
-/** Merge API shelf with the live thread (may not be persisted yet). */
+/**
+ * Merge API shelf with the live thread (may not be persisted yet).
+ *
+ * Shelf title wins once it is a real name — otherwise rename → immediate UI
+ * update is wiped by `deriveThreadTitle(first user message)` until reload.
+ * Live title only seeds a new row or replaces placeholder untitled/empty labels.
+ */
 export function mergeShelfWithLiveThread(
   shelf: readonly SessionShelfItem[],
   liveThreadId: string,
   liveTitle: string,
-  liveProjectId?: string | null
+  liveProjectId?: string | null,
+  placeholderTitles: readonly string[] = []
 ): SessionShelfItem[] {
+  const placeholders = new Set(
+    placeholderTitles.map(label => label.trim()).filter(label => label.length > 0)
+  );
   const byId = new Map<string, SessionShelfItem>();
   for (const item of shelf) byId.set(item.id, item);
   const prior = byId.get(liveThreadId);
+  const priorTitle = prior?.title?.trim() ?? '';
+  const keepShelfTitle = Boolean(prior && priorTitle && !placeholders.has(priorTitle));
   byId.set(liveThreadId, {
     id: liveThreadId,
-    title: liveTitle,
+    title: keepShelfTitle && prior ? prior.title : liveTitle,
     projectId: liveProjectId !== undefined ? liveProjectId : (prior?.projectId ?? null),
     updatedAt: prior?.updatedAt,
   });

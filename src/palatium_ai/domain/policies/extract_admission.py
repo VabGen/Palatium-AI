@@ -50,12 +50,16 @@ class ExtractAdmissionPolicy:
         *,
         task_kind: TaskKind | str | None,
         strategy: str | None,
+        use_memory: bool = True,
     ) -> ExtractAdmissionDecision:
         """Skip recall-empty turns; admit everything substantive.
 
         Unknown/missing axes admit: refusing on absent evidence would silently stop
         learning from turns the caller simply did not classify (fail-open on purpose).
+        ``use_memory=False`` always denies extract (W11 isolation — hide, do not write).
         """
+        if not use_memory:
+            return ExtractAdmissionDecision(admit=False, reason="use_memory_disabled")
         kind = (task_kind or "").strip()
         if kind in _NON_RECALLABLE_TASK_KINDS:
             return ExtractAdmissionDecision(admit=False, reason=f"task_kind:{kind}")

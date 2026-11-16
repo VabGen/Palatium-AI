@@ -190,6 +190,7 @@ class IntentGraphRunner:
         untrusted_context: str = "",
         attachment_context: AttachmentTurnContext | None = None,
         composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AgentGraphState:
@@ -204,6 +205,7 @@ class IntentGraphRunner:
             untrusted_context=untrusted_context,
             attachment_context=attachment_context,
             composer_mode=composer_mode,
+            use_memory=use_memory,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )
@@ -245,6 +247,7 @@ class IntentGraphRunner:
         untrusted_context: str = "",
         attachment_context: AttachmentTurnContext | None = None,
         composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
@@ -259,6 +262,7 @@ class IntentGraphRunner:
             untrusted_context=untrusted_context,
             attachment_context=attachment_context,
             composer_mode=composer_mode,
+            use_memory=use_memory,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )
@@ -436,6 +440,7 @@ class IntentGraphRunner:
         untrusted_context: str,
         attachment_context: AttachmentTurnContext | None,
         composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> dict[str, Any]:
@@ -493,8 +498,12 @@ class IntentGraphRunner:
             prior_locale=prior_locale,
             ui_locale=ui_locale,
         )
+        # Defense in depth: when personalization is off, durable ports stay None so
+        # a policy miss cannot still search Medium/L4 (W11).
+        durable_port = self._memory_port if use_memory else None
+        durable_graph = self._graph_write if use_memory else None
         recall_ctx = TurnRecallContext(
-            memory_port=self._memory_port,
+            memory_port=durable_port,
             thread_id=thread_id,
             query=text,
             user_id=user_id,
@@ -503,7 +512,7 @@ class IntentGraphRunner:
             max_chars=self._recall_max_chars,
             min_confidence=self._recall_min_confidence,
             scratchpad=pad,
-            graph_write=self._graph_write,
+            graph_write=durable_graph,
             as_of=datetime.now(UTC),
             origin_ceiling=self._origin_ceiling,
         )
@@ -528,6 +537,7 @@ class IntentGraphRunner:
                 thread_id=thread_id,
                 user_id=user_id,
             ),
+            "use_memory": use_memory,
         }
         if composer_mode is not None:
             graph_input["composer_mode"] = composer_mode

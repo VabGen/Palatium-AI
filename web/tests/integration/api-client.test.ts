@@ -173,6 +173,21 @@ describe('processIntent', () => {
     await expect(processIntent('привет', 'th-1')).rejects.toThrow('bad request');
     expect(attempts).toBe(1);
   });
+
+  it('sends use_memory=false when personalization is off (W11)', async () => {
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.post(PROCESS_URL, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(RESULT);
+      })
+    );
+
+    await expect(
+      processIntent('привет', 'th-1', null, null, [], null, false)
+    ).resolves.toEqual(RESULT);
+    expect(body).toMatchObject({ use_memory: false, thread_id: 'th-1' });
+  });
 });
 
 describe('401 handling', () => {

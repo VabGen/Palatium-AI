@@ -107,6 +107,16 @@ describe('groupCitations', () => {
   it('returns nothing for an empty list', () => {
     expect(groupCitations([])).toEqual([]);
   });
+
+  it('merges space and underscore aliases of the same basename', () => {
+    const groups = groupCitations([
+      citation({ source_ref: 'Договор оказания услуг.docx', quote: 'С пробелами' }),
+      citation({ source_ref: 'Договор_оказания_услуг.docx', quote: 'С подчёркиваниями' }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.sourceRef).toBe('Договор_оказания_услуг.docx');
+    expect(groups[0]?.citations).toHaveLength(2);
+  });
 });
 
 describe('citationKey', () => {

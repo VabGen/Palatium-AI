@@ -108,13 +108,41 @@ def _fence_entries(untrusted_context: str) -> list[tuple[str, str]]:
     return entries
 
 
+def _source_ref_fingerprint(name: str) -> str:
+    """One chip key for ``Договор_a.docx`` vs ``Договор a.docx`` (LLM aliases)."""
+    text = name.strip()
+    if not text:
+        return ""
+    if text.lower().startswith(("http://", "https://")):
+        return text.lower()
+    return re.sub(r"[_\s]+", " ", text.lower())
+
+
+def _prefer_source_ref_label(current: str, candidate: str) -> str:
+    """Prefer filesystem basenames (underscores) over spaced prose titles."""
+
+    def _score(value: str) -> int:
+        return (2 if "_" in value else 0) + (0 if any(ch.isspace() for ch in value) else 1)
+
+    return candidate if _score(candidate) > _score(current) else current
+
+
 def sanitize_source_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
     """Drop bare UUIDs / page noise; collapse ``file#id#pN`` to user-facing chips.
 
     Prefer plain filenames. Keep ``filename#id8`` only when the merged set has
-    more than one distinct id for the same filename (same-name uploads).
+    more than one distinct id for the same file fingerprint (same-name uploads).
+    Space↔underscore aliases of one basename collapse to a single chip.
     """
-    parsed: list[tuple[str, str]] = []
+    parsed = _collect_parsed_source_refs(refs)
+    if not parsed:
+        return ()
+    return _collapse_parsed_source_refs(parsed)
+
+
+def _collect_parsed_source_refs(refs: tuple[str, ...]) -> list[tuple[str, str, str]]:
+    """``(filename, id8, fingerprint)`` for each usable ref."""
+    parsed: list[tuple[str, str, str]] = []
     for ref in refs:
         label = (ref or "").strip()
         if not label or _BARE_UUID_RE.match(label):
@@ -123,25 +151,40 @@ def sanitize_source_refs(refs: tuple[str, ...]) -> tuple[str, ...]:
         if parts is None:
             continue
         filename, id8 = parts
-        parsed.append((filename, id8))
+        fingerprint = _source_ref_fingerprint(filename)
+        if not fingerprint:
+            continue
+        parsed.append((filename, id8, fingerprint))
+    return parsed
 
-    if not parsed:
-        return ()
 
-    ids_by_name: dict[str, set[str]] = defaultdict(set)
-    for filename, id8 in parsed:
+def _collapse_parsed_source_refs(parsed: list[tuple[str, str, str]]) -> tuple[str, ...]:
+    """Merge aliases and emit at most one chip per fingerprint (or per id when colliding)."""
+    preferred: dict[str, str] = {}
+    ids_by_fp: dict[str, set[str]] = defaultdict(set)
+    for filename, id8, fingerprint in parsed:
+        preferred[fingerprint] = _prefer_source_ref_label(preferred.get(fingerprint, filename), filename)
         if id8:
-            ids_by_name[filename].add(id8)
+            ids_by_fp[fingerprint].add(id8)
 
     cleaned: list[str] = []
     seen: set[str] = set()
-    for filename, id8 in parsed:
-        needs_id = len(ids_by_name[filename]) > 1
-        display = f"{filename}#{id8}" if needs_id and id8 else filename
-        if display in seen:
-            continue
-        seen.add(display)
-        cleaned.append(display)
+    for _filename, id8, fingerprint in parsed:
+        name = preferred[fingerprint]
+        needs_id = len(ids_by_fp[fingerprint]) > 1
+        if needs_id:
+            if not id8:
+                continue
+            display = f"{name}#{id8}"
+            if display in seen:
+                continue
+            seen.add(display)
+            cleaned.append(display)
+        else:
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            cleaned.append(name)
         if len(cleaned) >= _MAX_REFS:
             break
     return tuple(cleaned)

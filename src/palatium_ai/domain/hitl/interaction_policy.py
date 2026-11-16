@@ -18,10 +18,13 @@ from palatium_ai.domain.content import (
     CalloutBlock,
     DividerBlock,
     HeadingBlock,
+    IconToken,
+    KeyValueBlock,
     ListBlock,
     ParagraphBlock,
     StepsBlock,
 )
+from palatium_ai.domain.content.content_document import KeyValueItem
 
 if TYPE_CHECKING:
     from palatium_ai.domain.content import ContentDocument
@@ -29,7 +32,7 @@ if TYPE_CHECKING:
 
 
 DocumentInteraction = Literal["none", "choice", "confirm"]
-PromotedFrom = Literal["actions", "list", "steps", "callouts", "none"]
+PromotedFrom = Literal["actions", "list", "steps", "callouts", "kv", "none"]
 
 
 def _strategy_value(selected_strategy: ExecutionStrategy | str | None) -> str | None:
@@ -72,9 +75,7 @@ class HitlInteractionPolicy:
     #: Explicit ``response_shape`` whose structure *is* the answer body (W10 p1_list).
     #: A catalogue ListBlock must not be rewritten into exclusive HITL options —
     #: that axis lives on Intent ``response_shape``, not phrase lists (055).
-    _CATALOGUE_SHAPES: frozenset[str] = frozenset(
-        {"inventory", "plan", "document_analysis", "comparison_table", "prose"}
-    )
+    _CATALOGUE_SHAPES: frozenset[str] = frozenset({"inventory", "plan", "document_analysis", "comparison_table", "prose"})
 
     @classmethod
     def plan(
@@ -355,12 +356,14 @@ class HitlInteractionPolicy:
         if len(labels) < cls._MIN_CHOICE_OPTIONS or len(labels) > cls._MAX_PROMOTED_OPTIONS:
             return (), "none"
 
+        icons = cls._exclusive_option_icons(document, source=source, count=len(labels))
         actions = tuple(
             ActionSpec(
                 action_id=f"choice_{index}",
                 label=label[:200],
                 kind="custom",
                 style="primary" if index == 0 else "secondary",
+                icon=icons[index - 1] if index - 1 < len(icons) else None,
             )
             for index, label in enumerate(labels, start=1)
         )
@@ -373,15 +376,18 @@ class HitlInteractionPolicy:
         *,
         choice_count: int,
     ) -> ContentDocument:
-        """Keep title/framing; remove exclusive menu list/steps/callouts (HITL cards own selection)."""
+        """Keep title/framing; remove exclusive menu blocks (HITL cards own selection)."""
         labels, source = cls._exclusive_option_labels_with_source(document)
         drop_callouts = source == "callouts" and len(labels) >= cls._MIN_CHOICE_OPTIONS
+        drop_kv = source == "kv" and len(labels) >= cls._MIN_CHOICE_OPTIONS
 
         framing: list[object] = []
         for block in document.blocks:
             if isinstance(block, ListBlock | StepsBlock):
                 continue
             if drop_callouts and isinstance(block, CalloutBlock):
+                continue
+            if drop_kv and isinstance(block, KeyValueBlock):
                 continue
             framing.append(block)
         if not framing:
@@ -403,7 +409,7 @@ class HitlInteractionPolicy:
     @classmethod
     def _is_menu_shaped(cls, document: ContentDocument) -> bool:
         """Return True when primary content is one exclusive option list plus light framing."""
-        labels, _source = cls._exclusive_option_labels_with_source(document)
+        labels, source = cls._exclusive_option_labels_with_source(document)
         if len(labels) < cls._MIN_CHOICE_OPTIONS or len(labels) > cls._MAX_PROMOTED_OPTIONS:
             return False
         framing = 0
@@ -412,6 +418,8 @@ class HitlInteractionPolicy:
                 continue
             if isinstance(block, CalloutBlock):
                 # Callout rows are the exclusive options when labels came from them.
+                continue
+            if source == "kv" and isinstance(block, KeyValueBlock):
                 continue
             if isinstance(block, HeadingBlock | ParagraphBlock | DividerBlock):
                 framing += 1
@@ -426,25 +434,100 @@ class HitlInteractionPolicy:
         return labels
 
     @classmethod
+    def _exclusive_option_icons(
+        cls,
+        document: ContentDocument,
+        *,
+        source: PromotedFrom,
+        count: int,
+    ) -> tuple[IconToken | None, ...]:
+        """Preserve row icons when promoting kv/callout menus into HITL actions."""
+        _ = cls
+        if count <= 0:
+            return ()
+        pad = tuple(None for _ in range(count))
+        if source == "kv":
+            kv_blocks = [block for block in document.blocks if isinstance(block, KeyValueBlock)]
+            if len(kv_blocks) != 1:
+                return pad
+            icons = tuple(item.icon for item in kv_blocks[0].items[:count])
+            return icons + pad[len(icons) :]
+        if source == "callouts":
+            callouts = [block for block in document.blocks if isinstance(block, CalloutBlock)]
+            icons = tuple(block.icon for block in callouts[:count])
+            return icons + pad[len(icons) :]
+        return pad
+
+    @staticmethod
+    def _choice_label_from_kv_item(item: KeyValueItem) -> str:
+        """One option text: drop «Технологии — Технологии и IT» duplication (Big Tech 020)."""
+        label = item.label.strip()
+        value = item.value.strip()
+        if not value:
+            return label
+        if not label:
+            return value
+        label_l = label.casefold()
+        value_l = value.casefold()
+        if value_l == label_l or value_l.startswith(label_l):
+            return value
+        # Short distinct pairs still pick the human option (value), not the key.
+        if len(value) <= 120:
+            return value
+        return label
+
+    @classmethod
+    def _kv_looks_like_choice_menu(cls, items: tuple[KeyValueItem, ...]) -> bool:
+        """True for topic pickers; False for data panels (Срок/30 дней, inventory kv)."""
+        if len(items) < cls._MIN_CHOICE_OPTIONS or len(items) > cls._MAX_PROMOTED_OPTIONS:
+            return False
+        expansions = 0
+        for item in items:
+            if len(item.value.strip()) > 160:
+                return False
+            label_l = item.label.strip().casefold()
+            value_l = item.value.strip().casefold()
+            if value_l == label_l or value_l.startswith(label_l):
+                expansions += 1
+        return expansions >= max(cls._MIN_CHOICE_OPTIONS, (len(items) + 1) // 2)
+
+    @classmethod
     def _exclusive_option_labels_with_source(
         cls,
         document: ContentDocument,
     ) -> tuple[tuple[str, ...], PromotedFrom]:
-        """Labels + provenance from a single list/steps/callout menu shape."""
-        _ = cls
+        """Labels + provenance from a single list/callout/kv menu shape."""
         list_blocks = [block for block in document.blocks if isinstance(block, ListBlock)]
         step_blocks = [block for block in document.blocks if isinstance(block, StepsBlock)]
+        kv_blocks = [block for block in document.blocks if isinstance(block, KeyValueBlock)]
 
-        if len(list_blocks) == 1 and not step_blocks:
+        if len(list_blocks) == 1 and not step_blocks and not kv_blocks:
             labels = tuple(item.text.strip() for item in list_blocks[0].items if item.text.strip())
             return labels, "list"
         if len(step_blocks) == 1 and not list_blocks:
             # Steps are a process timeline (howto), not an exclusive picker. Promoting
             # them forced ``formatter_output_invalid`` when Intent did not mint actions
             # (W10 p1_howto). Exclusive choice menus stay on ListBlock / CalloutBlock /
-            # explicit ``actions`` (schema also requires non-empty step bodies).
+            # KeyValueBlock / explicit ``actions`` (schema also requires non-empty step bodies).
             _ = step_blocks
             return (), "none"
+
+        # Formatter often emits exclusive topics as kv rows (short key + expanded value).
+        # Static kv as the only selector violates 020 — promote to HITL cards.
+        if len(kv_blocks) == 1 and not list_blocks and not step_blocks and cls._kv_looks_like_choice_menu(kv_blocks[0].items):
+            non_framing = [
+                block
+                for block in document.blocks
+                if not isinstance(block, HeadingBlock | ParagraphBlock | DividerBlock | KeyValueBlock)
+            ]
+            if not non_framing:
+                labels = tuple(
+                    cls._choice_label_from_kv_item(item)
+                    for item in kv_blocks[0].items
+                    if item.label.strip() or item.value.strip()
+                )
+                if cls._MIN_CHOICE_OPTIONS <= len(labels) <= cls._MAX_PROMOTED_OPTIONS:
+                    return labels, "kv"
 
         # Topic rows often arrive as callouts (icon + title) without a list block.
         callout_labels = tuple(
@@ -463,6 +546,7 @@ class HitlInteractionPolicy:
             and not non_framing
             and not list_blocks
             and not step_blocks
+            and not kv_blocks
         ):
             return callout_labels, "callouts"
         return (), "none"

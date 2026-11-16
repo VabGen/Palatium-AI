@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 import time
 
@@ -97,11 +96,11 @@ class MCPCapabilityIndex:
 
         bindings: list[MCPCapabilityBinding] = []
         server_names = self._registry.list_servers()
-        listed = await asyncio.gather(
-            *[self._safe_list_summaries(server_name) for server_name in server_names],
-        )
+        # Sequential: parallel Streamable HTTP discovers race (late JSON-RPC id /
+        # cancel) and starve handshake under startup load — one server at a time.
         degraded: list[str] = []
-        for server_name, tools in zip(server_names, listed, strict=True):
+        for server_name in server_names:
+            tools = await self._safe_list_summaries(server_name)
             if tools is None:
                 degraded.append(server_name)
                 continue

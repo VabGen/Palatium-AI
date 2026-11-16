@@ -30,8 +30,14 @@ SoT слоёв не меняется (ADR 0003/0004): short = Postgres checkpoin
      могут ставить `verified` только явно)
 3. **Hot-path recall:** `quarantined` исключается; `inferred` демотируется относительно
    `verified` (score factor). Flag `MEMORY_ORIGIN_CEILING` (default on) — откат.
-4. **Promote → L4:** `verified` по существующим порогам; `inferred` — только при
-   `access_frequency ≥ promote_min` **и** non-PII; `quarantined` никогда.
+4. **Promote → L4:**
+   - **Slow-path (batch):** `verified` по существующим порогам; `inferred` — только при
+     `access_frequency ≥ promote_min` **и** non-PII; `quarantined` никогда
+     (`PromotionPolicy` + `OriginCeilingPolicy` без изменений).
+   - **Fast-path (W11 / ADR 0013):** только `trust=verified` после HITL save, когда
+     `max(importance, confidence)` хранимой строки ≥ `MEMORY_PROMOTE_FAST_MIN_SCORE`
+     → durable enqueue `promote_entry` (не sync Neo4j на chat hot-path).
+     `inferred` / extract LLM confidence **никогда** не триггерят fast-path.
 5. **Corroboration (batch, не hot-path):** near-duplicate overlap с `verified` или со вторым
    независимым `extract` (`source_task_id`) → upgrade `inferred → verified` + метрика.
 6. Legacy rows без полей: `origin=legacy`; `trust=verified` только при

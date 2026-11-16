@@ -204,6 +204,7 @@ async def _recall_after_continuity_remap(
         task_kind=routing_intent.task_kind,
         requires_mcp=routing_intent.requires_mcp,
         transformation=routing_intent.transformation,
+        use_memory=bool(state.get("use_memory", True)),
     )
     recall_after = recall
     widened = routed_decision.kinds is None and intent_decision.kinds is not None
@@ -249,6 +250,7 @@ async def continuation_node(
             task_kind=intent_task_kind,
             requires_mcp=intent_requires_mcp,
             transformation=intent_transformation,
+            use_memory=bool(state.get("use_memory", True)),
         )
         recall = await _maybe_deferred_durable_recall(
             state,

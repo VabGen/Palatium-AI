@@ -92,6 +92,7 @@ if TYPE_CHECKING:
     from palatium_ai.core.config.security import SecurityConfig
     from palatium_ai.core.config.settings import Settings
     from palatium_ai.domain.graph.write_port import GraphWritePort
+    from palatium_ai.domain.memory.memory_op_queue import MemoryOpQueuePort
     from palatium_ai.domain.memory.ports import DialogTurnStore, MemoryPort
     from palatium_ai.domain.ports.attachments import AttachmentRepositoryPort
     from palatium_ai.domain.ports.blob_store import BlobStorePort
@@ -312,6 +313,7 @@ def build_intent_service(
     file_reference_resolver: AttachmentReferenceResolver | None = None,
     vision_image_source: VisionImageSourcePort | None = None,
     vision_images: VisionImageService | None = None,
+    memory_op_queue: MemoryOpQueuePort | None = None,
 ) -> tuple[
     IntentService,
     MemoryExtractService | None,
@@ -442,6 +444,8 @@ def build_intent_service(
         redis_client=redis_client,
         mcp_tool_call_repository=mcp_tool_call_repository,
         scratchpad=session_scratchpad,
+        memory_op_queue=memory_op_queue,
+        promote_fast_min_score=settings.memory.promote_fast_min_score,
     )
     memory_forget_service = MemoryForgetService(
         hitl_service=hitl_service,

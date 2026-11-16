@@ -410,6 +410,9 @@ class FormatterAgent(BaseAgent):
             # Attached after validation, never emitted by the model: blocks are already
             # painted, and meta does not change layout (W1 invariant).
             document = document.model_copy(update={"meta": document.meta.model_copy(update={"citations": citations})})
+        # Upsert typed preview to the aligned document before ``result`` so lead-heading
+        # fill / Attribution rewrites do not snap chrome when the bubble remounts (040).
+        emit_content_document(document)
         agent_metrics.record_formatter_schema(path="schema_first", outcome="valid")
         logger.info(
             "formatter.llm_path",

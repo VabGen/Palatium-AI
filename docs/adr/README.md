@@ -78,3 +78,4 @@ ADR — не бюрократия, а страховка от повторног
 | [0010](0010-agents-audit-w1-w6-closure.md) | Audit W1–W6 closure: baselines, fail-soft PII, reserve triggers | accepted |
 | [0011](0011-observability-cost-contracts.md) | Observability, cost & contracts (W7–W8) | accepted |
 | [0012](0012-product-quality-evals.md) | Product-quality evals (W9): semantic / context / multi-turn / formatter | accepted |
+| [0013](0013-memory-scope-and-curation.md) | Memory scope (`use_memory`) + verified fast-path promote / clear (W11) | accepted |

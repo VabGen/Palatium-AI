@@ -76,6 +76,17 @@ class CrossEncoderRerankMemoryPort:
     async def forget(self, *, namespace: tuple[str, ...], key: str) -> bool:
         return await self._inner.forget(namespace=namespace, key=key)
 
+    async def clear_namespace(
+        self,
+        *,
+        user_id: str,
+        namespaces: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        clear = getattr(self._inner, "clear_namespace", None)
+        if clear is None:
+            return 0
+        return int(await clear(user_id=user_id, namespaces=namespaces))
+
     async def list_entries(
         self,
         *,

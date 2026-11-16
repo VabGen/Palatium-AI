@@ -144,35 +144,69 @@ function normalizeSourceRefLabel(label: string): string | null {
 }
 
 /**
+ * Chip identity for one logical file: LLM often emits both the upload basename
+ * (``Договор_….docx``) and a prose title (``Договор ….docx``). Those must be
+ * one chip, not two.
+ */
+export function sourceRefFingerprint(name: string): string {
+  const text = name.trim();
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text.toLowerCase();
+  return text.toLowerCase().replace(/[_\s]+/g, ' ');
+}
+
+/** Prefer filesystem-like basenames (underscores) over spaced prose titles. */
+export function preferSourceRefLabel(current: string, candidate: string): string {
+  const score = (value: string): number =>
+    (value.includes('_') ? 2 : 0) + (/\s/.test(value) ? 0 : 1);
+  return score(candidate) > score(current) ? candidate : current;
+}
+
+/**
  * Collapse LLM filenames + internal citation ids/pages into unique user-facing chips.
- * Keeps ``name#id8`` only when the same filename appears with different ids.
+ * Keeps ``name#id8`` only when the same file (fingerprint) appears with different ids.
  * Drops fence echoes like ``attachment:<uuid>``.
+ * Also collapses space↔underscore aliases of the same basename.
  */
 export function displaySourceRefs(refs: readonly string[]): string[] {
-  const parsed: Array<{ name: string; id: string }> = [];
+  const parsed: Array<{ name: string; id: string; fp: string }> = [];
   for (const raw of refs) {
     const normalized = normalizeSourceRefLabel(raw);
     if (!normalized || normalized.toLowerCase().startsWith('attachment:')) continue;
     const match = SOURCE_REF_PARTS.exec(normalized);
     const name = match?.groups?.name?.trim();
     if (!name) continue;
-    parsed.push({ name, id: (match?.groups?.id ?? '').toLowerCase() });
+    const fp = sourceRefFingerprint(name);
+    if (!fp) continue;
+    parsed.push({ name, id: (match?.groups?.id ?? '').toLowerCase(), fp });
   }
-  const idsByName = new Map<string, Set<string>>();
+
+  const preferred = new Map<string, string>();
+  const idsByFp = new Map<string, Set<string>>();
   for (const item of parsed) {
+    preferred.set(item.fp, preferSourceRefLabel(preferred.get(item.fp) ?? item.name, item.name));
     if (!item.id) continue;
-    const bucket = idsByName.get(item.name) ?? new Set<string>();
+    const bucket = idsByFp.get(item.fp) ?? new Set<string>();
     bucket.add(item.id);
-    idsByName.set(item.name, bucket);
+    idsByFp.set(item.fp, bucket);
   }
+
   const out: string[] = [];
   const seen = new Set<string>();
   for (const item of parsed) {
-    const needsId = (idsByName.get(item.name)?.size ?? 0) > 1;
-    const display = needsId && item.id ? `${item.name}#${item.id}` : item.name;
-    if (seen.has(display)) continue;
-    seen.add(display);
-    out.push(display);
+    const name = preferred.get(item.fp) ?? item.name;
+    const needsId = (idsByFp.get(item.fp)?.size ?? 0) > 1;
+    if (needsId) {
+      if (!item.id) continue;
+      const display = `${name}#${item.id}`;
+      if (seen.has(display)) continue;
+      seen.add(display);
+      out.push(display);
+      continue;
+    }
+    if (seen.has(item.fp)) continue;
+    seen.add(item.fp);
+    out.push(name);
   }
   return out;
 }

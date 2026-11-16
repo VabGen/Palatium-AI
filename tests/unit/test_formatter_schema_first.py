@@ -539,7 +539,7 @@ async def test_run_records_mode_split_latency_for_the_canary() -> None:
 
 @pytest.mark.asyncio()
 async def test_schema_first_paints_blocks_incrementally_without_replacing() -> None:
-    """The streamed document is a superset of the preview — no replace frame at all."""
+    """Typed preview is additive: block_delta upserts, never answer_delta replace."""
     from palatium_ai.application.services.turn_sse_bridge import TurnSseBridge, turn_sse_bridge
 
     harness = _StubHarness([LLMCompletion(content=_document_json(kind="report"), model="test")])
@@ -552,20 +552,21 @@ async def test_schema_first_paints_blocks_incrementally_without_replacing() -> N
     events = []
     while not bridge.queue.empty():
         events.append(bridge.queue.get_nowait())
-    frames = [event for event in events if event.get("event") == "answer_delta"]
-    assert frames, "structured contract must paint before the document is validated"
-    assert all("replace" not in frame for frame in frames)
-    painted = "".join(str(frame["delta"]) for frame in frames)
-    # Preview prose == document prose (superset, not a different text).
-    assert "Status" in painted
-    assert "Done" in painted
-    assert "No errors." in painted
+    # structured_incremental: typed surface only — no markdown dual-emit (040).
+    assert not any(event.get("event") == "answer_delta" for event in events)
+    titles = [event for event in events if event.get("event") == "document_title"]
+    assert titles
+    assert titles[0]["title"] == "Status"
     blocks = [event for event in events if event.get("event") == "block_delta"]
-    assert len(blocks) == 1
-    assert blocks[0]["index"] == 0
-    streamed_block = ContentDocument.model_validate_json(_document_json()).blocks[0]
-    assert blocks[0]["block"] == streamed_block.model_dump(mode="json")
+    # Mid-stream paint + post-align upsert (same index) — client replaces in place.
+    assert len(blocks) >= 1
+    assert all(event["index"] == 0 for event in blocks)
+    assert blocks[0]["block"]["type"] == "callout"
+    assert blocks[0]["block"]["title"] == "Done"
+    assert blocks[0]["block"]["body"] == "No errors."
     assert isinstance(output.output, ContentDocument)
+    # Final upsert matches the AgentOutput document (stream→result chrome sync).
+    assert blocks[-1]["block"] == output.output.blocks[0].model_dump(mode="json")
     # Streamed, not buffered: the same call carries the schema.
     assert harness.calls == [{"response_format": "json_schema", "response_model": ContentDocument}]
 

@@ -329,7 +329,9 @@ export async function processIntent(
   userId?: string | null,
   orgId?: string | null,
   attachmentIds: readonly string[] = [],
-  composerMode?: string | null
+  composerMode?: string | null,
+  /** W11: Settings «learn from chats» → API `use_memory` (default true). */
+  useMemory: boolean = true
 ): Promise<FormatterTaskResult> {
   // Клиентская валидация — не даём запросу уйти, если он гарантированно 422.
   if (text.length === 0) {
@@ -352,6 +354,7 @@ export async function processIntent(
         thread_id: threadId,
         ...(attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
         ...(composerMode ? { composer_mode: composerMode } : {}),
+        use_memory: useMemory,
       }),
     },
     userId,
@@ -382,6 +385,8 @@ export type ProcessStreamHandlers = {
   signal?: AbortSignal;
   /** Track P: composer mode pills / model dropdown → Intent floors. */
   composerMode?: string | null;
+  /** W11: personalization / durable memory for this turn (Settings learnFromChats). */
+  useMemory?: boolean;
 };
 
 /**
@@ -431,6 +436,7 @@ export async function processIntentStream(
   // он видит только статус ответа и сеть. Поэтому 5xx/обрыв лечатся так же, как в
   // JSON-пути, а уже начатый стрим повтору не подвержен: тело читается ниже.
   const composerMode = handlers.composerMode ?? null;
+  const useMemory = handlers.useMemory !== false;
   const res = await fetchWithAuth(
     '/intents/process/stream',
     {
@@ -440,6 +446,7 @@ export async function processIntentStream(
         thread_id: threadId,
         ...(attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
         ...(composerMode ? { composer_mode: composerMode } : {}),
+        use_memory: useMemory,
       }),
       signal,
     },
@@ -447,11 +454,11 @@ export async function processIntentStream(
     orgId
   );
   if (res.status === 404 || res.status === 405) {
-    return processIntent(text, threadId, userId, orgId, attachmentIds, composerMode);
+    return processIntent(text, threadId, userId, orgId, attachmentIds, composerMode, useMemory);
   }
   if (!res.ok) throw await apiFailure(res);
   if (!res.body) {
-    return processIntent(text, threadId, userId, orgId, attachmentIds, composerMode);
+    return processIntent(text, threadId, userId, orgId, attachmentIds, composerMode, useMemory);
   }
 
   const reader = res.body.getReader();
@@ -1203,6 +1210,10 @@ export type MemoryExtractRequest = {
   extract_task_id?: string;
 };
 
+export type MemoryClearRequest = {
+  thread_id: string;
+};
+
 export async function requestMemorySave(
   body: MemorySaveRequest,
   userId?: string | null,
@@ -1241,6 +1252,21 @@ export async function requestMemoryExtract(
   const res = await fetchWithAuth(
     '/memory/extract',
     { method: 'POST', body: JSON.stringify(body) },
+    userId,
+    orgId
+  );
+  if (!res.ok) throw await apiFailure(res);
+  return res.json();
+}
+
+export async function requestMemoryClear(
+  body: MemoryClearRequest,
+  userId?: string | null,
+  orgId?: string | null
+): Promise<HITLCardView> {
+  const res = await fetchWithAuth(
+    '/memory/clear',
+    { method: 'DELETE', body: JSON.stringify(body) },
     userId,
     orgId
   );

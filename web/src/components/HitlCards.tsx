@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { fetchHitlStepUpChallenge, respondHitlCard } from '../api/client';
 import { formatHitlError } from '../lib/hitl';
-import { formatDateTime, formatNumber, t } from '../i18n';
+import { formatDateTime, t } from '../i18n';
 import { AttachmentFileIcon, attachmentFileKind } from '../icons/fileTypeIcons';
 import {
   GlyphExclamation,
@@ -13,6 +13,7 @@ import { iconForActionKind } from '../icons/semanticIcons';
 import type {
   DocumentRevision,
   FormatterTaskResult,
+  HITLCardPurpose,
   HITLCardView,
   HitlStepUpChallenge,
 } from '../types/contentDocument';
@@ -27,8 +28,26 @@ const HITL_STATUS_KEYS = {
   dead_letter: 'hitl.status.dead_letter',
 } as const satisfies Record<HITLCardView['status'], MessageKey>;
 
+const HITL_BUSY_KEYS = {
+  user_choice: 'hitl.busy.choice',
+  quality_review: 'hitl.busy.review',
+  mcp_tool_approval: 'hitl.busy.tool',
+} as const satisfies Record<HITLCardPurpose, MessageKey>;
+
 function hitlStatusLabel(status: HITLCardView['status']): string {
   return t(HITL_STATUS_KEYS[status]);
+}
+
+/** Busy copy must match purpose: choice/reread is not a write (055 — no one-size «Saving»). */
+function hitlBusyLabel(
+  purpose: HITLCardPurpose | undefined,
+  stepUpInFlight: boolean
+): string {
+  if (stepUpInFlight) return t('hitl.stepUpConfirming');
+  if (purpose && purpose in HITL_BUSY_KEYS) {
+    return t(HITL_BUSY_KEYS[purpose]);
+  }
+  return t('hitl.busy.review');
 }
 
 /** Result of resolving one card: who was resolved, and the turn it produced (if any). */
@@ -52,9 +71,6 @@ type PendingStepUp = {
 };
 
 const STEP_UP_MESSAGE_TYPE = 'palatium.hitl.step_up';
-
-/** Claim name the server binds the assertion to when it does not name one itself. */
-const DEFAULT_STEP_UP_CLAIM = 'hitl_card_id';
 
 function authorizeOrigin(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -135,6 +151,7 @@ function HitlCard({
     if (!stepUpPending?.challenge.authorize_url) return;
     const expectedOrigin = authorizeOrigin(stepUpPending.challenge.authorize_url);
     if (!expectedOrigin) return;
+    const pending = stepUpPending;
 
     function onMessage(event: MessageEvent) {
       if (event.origin !== expectedOrigin) return;
@@ -143,11 +160,20 @@ function HitlCard({
       const payload = data as { type?: unknown; assertion?: unknown };
       if (payload.type !== STEP_UP_MESSAGE_TYPE) return;
       if (typeof payload.assertion !== 'string' || !payload.assertion.trim()) return;
-      setStepUpAssertion(payload.assertion.trim());
+      const assertion = payload.assertion.trim();
+      setStepUpAssertion(assertion);
+      // Big Tech: IdP return completes the card — no paste/JWT chrome for the user.
+      setBusyAction(pending.actionId);
+      setError(null);
+      void completeRespond(pending.actionId, pending.actionToken, assertion)
+        .catch(err => setError(formatHitlError(err)))
+        .finally(() => setBusyAction(null));
     }
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
+    // completeRespond closes over latest card; rebind when the pending challenge changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: only re-subscribe on challenge
   }, [stepUpPending]);
 
   async function completeRespond(actionId: string, actionToken: string, assertion: string | null) {
@@ -222,12 +248,10 @@ function HitlCard({
       : isReview
         ? 'hitl-review'
         : '';
-  const riskColor =
-    local.risk_score >= 0.7
-      ? 'var(--danger)'
-      : local.risk_score >= 0.4
-        ? 'var(--warning)'
-        : 'var(--success)';
+  // Big Tech / Cloudscape: show consequence, not ops floats. Numeric risk stays
+  // server-side for TTL/escalation; UI only surfaces a qualitative chip when high.
+  const showElevatedRisk = (isTool || isReview) && local.risk_score >= 0.7;
+  const showMeta = !isChoice && (showElevatedRisk || pending);
 
   return (
     <section
@@ -245,64 +269,48 @@ function HitlCard({
                 : t('hitl.kicker.review')}
           </p>
           <h3>{local.title}</h3>
-          {local.body && <p>{local.body}</p>}
+          {local.body &&
+            local.body.split('\n\n').map((paragraph, index) => (
+              <p key={index} className={index > 0 ? 'hitl-quote' : undefined}>
+                {paragraph}
+              </p>
+            ))}
           {isChoice && pending && <p className="hitl-choice-hint">{t('hitl.choiceHint')}</p>}
-          {mayNeedStepUp && <p className="hitl-step-up-hint">{t('hitl.stepUpHint')}</p>}
         </div>
       </header>
 
-      <div className="hitl-meta">
-        {/*
-          Choice cards are a product question, not an ops dashboard — hide risk/status.
-          Tool/review keep expiry; risk only when it informs the irreversible decision.
-        */}
-        {(isTool || isReview) && (
-          <span>
-            {t('hitl.riskLabel')}{' '}
-            <span style={{ color: riskColor }}>
-              {formatNumber(local.risk_score, {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}
-            </span>
-          </span>
-        )}
-        <span>{t('hitl.expires', { time: formatDateTime(local.expires_at) })}</span>
-        {(isTool || isReview) && (
-          <span className="hitl-status">{hitlStatusLabel(local.status)}</span>
-        )}
-      </div>
+      {showMeta ? (
+        <div className="hitl-meta">
+          {showElevatedRisk ? (
+            <span className="hitl-risk-chip">{t('hitl.riskElevated')}</span>
+          ) : null}
+          {pending ? (
+            <span>{t('hitl.expires', { time: formatDateTime(local.expires_at) })}</span>
+          ) : (
+            <span className="hitl-status">{hitlStatusLabel(local.status)}</span>
+          )}
+        </div>
+      ) : null}
 
       {stepUpPending ? (
         <div className="hitl-step-up-form" role="group" aria-label={t('hitl.stepUpGroup')}>
           <p className="hitl-step-up-hint">
-            {t('hitl.stepUpVia', {
-              method: stepUpPending.challenge.method,
-              acr: stepUpPending.challenge.required_acr
-                ? ` (acr=${stepUpPending.challenge.required_acr})`
-                : '',
-            })}{' '}
-            {t('hitl.stepUpBind', {
-              claim: stepUpPending.challenge.card_claim ?? DEFAULT_STEP_UP_CLAIM,
-              card: local.card_id,
-            })}
-            {stepUpPending.challenge.challenge
-              ? t('hitl.stepUpNonce', { nonce: stepUpPending.challenge.challenge })
-              : ''}
             {stepUpPending.challenge.authorize_url
               ? t('hitl.stepUpIdpOpened')
               : t('hitl.stepUpPaste')}
           </p>
-          <textarea
-            className="hitl-step-up-input"
-            rows={3}
-            value={stepUpAssertion}
-            onChange={event => setStepUpAssertion(event.target.value)}
-            placeholder={t('hitl.stepUpPlaceholder')}
-            disabled={busyAction !== null}
-          />
+          {!stepUpPending.challenge.authorize_url ? (
+            <textarea
+              className="hitl-step-up-input"
+              rows={3}
+              value={stepUpAssertion}
+              onChange={event => setStepUpAssertion(event.target.value)}
+              placeholder={t('hitl.stepUpPlaceholder')}
+              disabled={busyAction !== null}
+            />
+          ) : null}
           <div className="hitl-options">
-            {stepUpPending.challenge.authorize_url && (
+            {stepUpPending.challenge.authorize_url ? (
               <button
                 type="button"
                 className="action-card action-secondary"
@@ -314,15 +322,16 @@ function HitlCard({
               >
                 <span>{t('hitl.stepUpOpenIdp')}</span>
               </button>
+            ) : (
+              <button
+                type="button"
+                className="action-card action-primary"
+                disabled={busyAction !== null}
+                onClick={() => void submitIdpAssertion()}
+              >
+                <span>{busyAction ? t('hitl.stepUpConfirming') : t('hitl.stepUpSubmit')}</span>
+              </button>
             )}
-            <button
-              type="button"
-              className="action-card action-primary"
-              disabled={busyAction !== null}
-              onClick={() => void submitIdpAssertion()}
-            >
-              <span>{busyAction ? t('hitl.stepUpConfirming') : t('hitl.stepUpSubmit')}</span>
-            </button>
             <button
               type="button"
               className="action-card action-secondary"
@@ -353,20 +362,29 @@ function HitlCard({
               {optionLeading(option)}
               <span>
                 {busyAction === option.action_id
-                  ? mayNeedStepUp
-                    ? t('hitl.stepUpConfirming')
-                    : t('hitl.saving')
+                  ? hitlBusyLabel(local.purpose, stepUpPending !== null)
                   : option.label}
               </span>
             </button>
           ))}
         </div>
       ) : (
-        <p className="hitl-resolved">
-          {t('hitl.resolved', { action: local.resolved_action_id ?? local.status })}
-        </p>
+        <p className="hitl-resolved">{resolvedLabel(local.resolved_action_id, local.status)}</p>
       )}
       {error && <p className="msg-error">{error}</p>}
     </section>
   );
+}
+
+function resolvedLabel(
+  actionId: string | null | undefined,
+  status: HITLCardView['status']
+): string {
+  if (actionId === 'approve') return t('hitl.resolved.approved');
+  if (actionId === 'reject') return t('hitl.resolved.rejected');
+  if (status === 'expired' || status === 'auto_rejected' || status === 'dead_letter') {
+    return hitlStatusLabel(status);
+  }
+  if (status === 'escalated') return hitlStatusLabel(status);
+  return t('hitl.resolved.done');
 }

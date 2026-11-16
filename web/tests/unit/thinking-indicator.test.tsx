@@ -67,20 +67,18 @@ describe('ThinkingIndicator', () => {
 
     const orb = document.querySelector('canvas');
     expect(orb).not.toBeNull();
-    // Орб не должен дублировать состояние англоязычным `aria-label` библиотеки:
-    // русскую фазу даёт соседний live-region.
+    // Орб без англоязычного `aria-label`: русскую фазу даёт соседний live-region.
     expect(orb).toHaveAttribute('aria-hidden', 'true');
 
     const status = screen.getByRole('status');
-    expect(status).toHaveClass('sr-only');
+    expect(status).toHaveClass('thinking-indicator__label');
     expect(status).toHaveTextContent(t('msg.pending.searching'));
   });
 
-  it('keeps no visible caption next to the orb', () => {
+  it('shows the phase caption next to the orb', () => {
     render(<ThinkingIndicator phase={{ state: 'composing', label: 'msg.pending.composing' }} />);
 
-    // Единственный текст в индикаторе — скрытая подпись: облака и надписи нет.
-    expect(document.querySelector('.thinking-indicator')?.textContent).toBe(
+    expect(document.querySelector('.thinking-indicator__label')).toHaveTextContent(
       t('msg.pending.composing')
     );
   });

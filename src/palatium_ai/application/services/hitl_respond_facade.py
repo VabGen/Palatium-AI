@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.document_ingest_service import DocumentIngestService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.intent_service import IntentService
+    from palatium_ai.application.services.memory_clear_service import MemoryClearService
     from palatium_ai.application.services.memory_consolidate_service import MemoryConsolidateService
     from palatium_ai.application.services.memory_forget_service import MemoryForgetService
     from palatium_ai.application.services.memory_save_service import MemorySaveService
@@ -38,6 +39,7 @@ _OFF_GRAPH_TOOL_PREFIXES: tuple[str, ...] = (
     "doc-ingest-",
     "mem-save-",
     "mem-forget-",
+    "mem-clear-",
     "mem-verify-",
     "skill-manage-",
     "mem-extract-",
@@ -57,6 +59,7 @@ _OFF_GRAPH_DEFAULT_SUMMARY: tuple[tuple[str, str], ...] = (
     ("att-restore-", "Вложение восстановлено из карантина."),
     ("mem-save-", "Запись сохранена в память."),
     ("mem-forget-", "Запись удалена из памяти."),
+    ("mem-clear-", "Память очищена."),
     ("mem-verify-", "Верификация записи памяти завершена."),
     ("skill-manage-", "Управление навыком завершено."),
     ("mem-extract-", "Извлечение из диалога поставлено в очередь."),
@@ -131,6 +134,7 @@ class HitlRespondFacade:
         document_ingest_service: DocumentIngestService | None = None,
         memory_save_service: MemorySaveService | None = None,
         memory_forget_service: MemoryForgetService | None = None,
+        memory_clear_service: MemoryClearService | None = None,
         memory_verify_service: MemoryVerifyService | None = None,
         skill_manage_service: SkillManageService | None = None,
         memory_consolidate_service: MemoryConsolidateService | None = None,
@@ -142,6 +146,7 @@ class HitlRespondFacade:
         self._document_ingest = document_ingest_service
         self._memory_save = memory_save_service
         self._memory_forget = memory_forget_service
+        self._memory_clear = memory_clear_service
         self._memory_verify = memory_verify_service
         self._skill_manage = skill_manage_service
         self._memory_consolidate = memory_consolidate_service
@@ -263,6 +268,8 @@ class HitlRespondFacade:
             return self._memory_save
         if task_id.startswith("mem-forget-"):
             return self._memory_forget
+        if task_id.startswith("mem-clear-"):
+            return self._memory_clear
         if task_id.startswith("mem-verify-"):
             return self._memory_verify
         if task_id.startswith("skill-manage-"):

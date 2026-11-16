@@ -9,6 +9,7 @@ from .mcp_tool_call import McpToolCallORM
 from .memory_entry import MemoryEntryORM
 from .memory_extract_job import MemoryExtractJobORM
 from .memory_item import MemoryItemORM
+from .memory_op import MemoryOpORM
 from .message_feedback import MessageFeedbackORM
 from .project import ProjectORM
 from .session import SessionORM
@@ -22,6 +23,7 @@ __all__ = [
     "MemoryEntryORM",
     "MemoryExtractJobORM",
     "MemoryItemORM",
+    "MemoryOpORM",
     "MessageFeedbackORM",
     "ProjectORM",
     "SessionORM",

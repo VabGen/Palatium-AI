@@ -1,4 +1,4 @@
-"""The ``file_reference`` axis: Intent owns it, Continuity passes it, the bridge hints it (055)."""
+"""The ``file_reference`` axis: Intent suggests, Continuity evidence-gates, bridge hints (055)."""
 
 from __future__ import annotations
 
@@ -69,10 +69,15 @@ def test_parse_ignores_an_invented_axis_value() -> None:
 
 
 def test_continuity_forces_a_worker_owned_knowledge_request_for_a_thread_file() -> None:
+    """Explicit singular scope keeps Intent's storage axis (not bare auto)."""
     effective = ContinuityPolicy.resolve(
         contextualizer=None,
         dialog=_dialog(with_attachment=True),
-        raw_intent=_intent(file_reference="thread_file", task_kind="response_formatting"),
+        raw_intent=_intent(
+            file_reference="thread_file",
+            attachment_scope="single",
+            task_kind="response_formatting",
+        ),
     )
 
     assert effective.file_reference == "thread_file"
@@ -93,12 +98,26 @@ def test_continuity_keeps_none_when_no_reference_axis() -> None:
 
 
 def test_axis_survives_a_low_risk_route_snapshot() -> None:
-    """The axis is not rewritten by the social/format route machinery."""
+    """Explicit plurality axis is not rewritten by the social/format route machinery."""
     effective = ContinuityPolicy.resolve(
         contextualizer=None,
         dialog=_dialog(with_attachment=True),
-        raw_intent=_intent(file_reference="thread_file", task_kind="knowledge_request"),
+        raw_intent=_intent(
+            file_reference="thread_file",
+            attachment_scope="all",
+            task_kind="knowledge_request",
+        ),
     )
 
     assert effective.file_reference == "thread_file"
     assert "file_reference" in effective.model_dump()
+
+
+def test_bare_intent_thread_file_auto_is_demoted() -> None:
+    """History-blind Intent + auto scope must not force a storage re-read."""
+    effective = ContinuityPolicy.resolve(
+        contextualizer=None,
+        dialog=_dialog(with_attachment=True),
+        raw_intent=_intent(file_reference="thread_file", attachment_scope="auto"),
+    )
+    assert effective.file_reference == "none"

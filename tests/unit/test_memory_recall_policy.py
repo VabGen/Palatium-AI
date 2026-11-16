@@ -76,3 +76,13 @@ def test_restructure_is_not_a_content_transform() -> None:
     )
     assert decision.allowed is False
     assert decision.pin_kinds is None
+
+
+def test_use_memory_false_blocks_durable_recall() -> None:
+    decision = MemoryRecallPolicy.decide(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        use_memory=False,
+    )
+    assert decision.allowed is False
+    assert decision.reason == "use_memory_disabled"

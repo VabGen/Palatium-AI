@@ -200,21 +200,40 @@ function listItemPresentation(item: ListBlock['items'][number]): {
   return { text, level };
 }
 
+/**
+ * Collapse 「Title — Title」 when the model copied ``emphasis`` into ``text``.
+ * Mirror of ``kvDisplayParts`` for list chrome — exact duplicate only; a longer
+ * body that merely starts with the title stays ``Title — full sentence``.
+ */
+function listItemDisplayParts(
+  emphasis: string | null | undefined,
+  text: string
+): { lead: string | null; body: string | null } {
+  const lead = (emphasis ?? '').trim();
+  const body = text.trim();
+  if (!lead) return { lead: null, body: body || null };
+  if (!body || body.toLocaleLowerCase() === lead.toLocaleLowerCase()) {
+    return { lead, body: null };
+  }
+  return { lead, body };
+}
+
 const ListView = memo(({ block, sourceRefs }: { block: ListBlock } & WithSources) => {
   const Tag = block.style === 'ordered' ? 'ol' : 'ul';
   return (
     <Tag className={`block-list style-${block.style}`}>
       {block.items.map((item, i) => {
         const { text, level } = listItemPresentation(item);
+        const { lead, body } = listItemDisplayParts(item.emphasis, text);
         const nestedClass = level > 0 ? ` nested level-${level}` : '';
         const hasIcon = Boolean(item.icon);
         return (
           <li key={i} className={`block-list-item${nestedClass}${hasIcon ? ' has-token-icon' : ''}`}>
             {hasIcon ? <TokenIcon token={item.icon} size={16} /> : null}
             <span>
-              {item.emphasis && <strong>{item.emphasis}</strong>}
-              {item.emphasis && ' — '}
-              <InlineMarkdown text={text} sourceRefs={sourceRefs} />
+              {lead ? <strong>{lead}</strong> : null}
+              {lead && body ? ' — ' : null}
+              {body ? <InlineMarkdown text={body} sourceRefs={sourceRefs} /> : null}
             </span>
           </li>
         );
@@ -300,21 +319,43 @@ const FormulaView = memo(({ block }: { block: FormulaBlock }) => (
   </div>
 ));
 
+/** Collapse «Технологии — Технологии и IT» when the value already carries the label. */
+function kvDisplayParts(label: string, value: string): { title: string; detail: string | null } {
+  const labelText = label.trim();
+  const valueText = value.trim();
+  const labelL = labelText.toLocaleLowerCase();
+  const valueL = valueText.toLocaleLowerCase();
+  if (!labelText) return { title: valueText, detail: null };
+  if (!valueText) return { title: labelText, detail: null };
+  if (valueL === labelL || valueL.startsWith(labelL)) {
+    return { title: valueText, detail: null };
+  }
+  return { title: labelText, detail: valueText };
+}
+
 const KeyValueView = memo(({ block, sourceRefs }: { block: KeyValueBlock } & WithSources) => (
   <dl className="block-kv">
-    {block.items.map(item => (
-      <div className="kv-row" key={`${item.label}-${item.value}`}>
-        <dt>
-          <TokenIcon token={item.icon} size={16} />
-          <span className="kv-row__label">
-            <InlineMarkdown text={item.label} sourceRefs={sourceRefs} />
-          </span>
-        </dt>
-        <dd>
-          <InlineMarkdown text={item.value} sourceRefs={sourceRefs} />
-        </dd>
-      </div>
-    ))}
+    {block.items.map(item => {
+      const { title, detail } = kvDisplayParts(item.label, item.value);
+      return (
+        <div
+          className={`kv-row${detail ? '' : ' kv-row--single'}`}
+          key={`${item.label}-${item.value}`}
+        >
+          <dt>
+            <TokenIcon token={item.icon} size={16} />
+            <span className="kv-row__label">
+              <InlineMarkdown text={title} sourceRefs={sourceRefs} />
+            </span>
+          </dt>
+          {detail ? (
+            <dd>
+              <InlineMarkdown text={detail} sourceRefs={sourceRefs} />
+            </dd>
+          ) : null}
+        </div>
+      );
+    })}
   </dl>
 ));
 

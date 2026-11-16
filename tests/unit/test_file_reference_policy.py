@@ -193,6 +193,58 @@ def test_unique_stem_in_user_text_resolves_the_named_file() -> None:
     assert declined.attachment_id is None
 
 
+def test_doc_role_glued_to_stem_resolves_named_file() -> None:
+    """Live UX: «анализ файлаобращение» (missing space) → Обращение.docx, not a card.
+
+    Bounded-token matching alone rejects the stem inside ``файлаобращение`` because
+    the left neighbour is alphanumeric. The document-role prefix is structural
+    evidence of a file title — same ask as «файл обращение», just a typo (055).
+    """
+    letter = _candidate("Обращение.docx")
+    other = (
+        _candidate("3.pdf"),
+        _candidate("2.pdf"),
+        _candidate("1.pdf"),
+    )
+    resolution = FileReferencePolicy.resolve(
+        [letter, *other],
+        hint_text="дай тезисный анализ файлаобращение",
+    )
+    assert resolution.status == "resolved"
+    assert resolution.attachment_id == letter.attachment_id
+    assert resolution.reason == "name_in_turn_text"
+    assert FileReferencePolicy.is_named_reference(resolution)
+
+
+def test_digit_filename_introduced_by_name_pointer_resolves() -> None:
+    """Live UX: «смотри в БД с названием 3» → 3.pdf among 1/2/3, not memory/clarify.
+
+    Digit-only stems are below ``_MIN_NAME_MATCH_CHARS``; bare «за 3 минуты» must
+    not resolve, but a name-pointer / doc-role introducer is structural evidence.
+    """
+    files = (_candidate("1.pdf"), _candidate("2.pdf"), _candidate("3.pdf"), _candidate("Обращение.docx"))
+    hit = FileReferencePolicy.resolve(
+        files,
+        hint_text="смотри в БД с названием 3",
+    )
+    assert hit.status == "resolved"
+    assert hit.filename == "3.pdf"
+    assert hit.reason == "name_in_turn_text"
+
+    typo = FileReferencePolicy.resolve(files, hint_text="что в файлет 3")
+    assert typo.status == "resolved"
+    assert typo.filename == "3.pdf"
+
+    role = FileReferencePolicy.resolve(files, hint_text="прочитай файл 3")
+    assert role.status == "resolved"
+    assert role.filename == "3.pdf"
+
+    bare = FileReferencePolicy.resolve(files, hint_text="сделай анализ за 3 минуты")
+    assert bare.status == "ambiguous"
+    assert bare.reason == "several_thread_files"
+    assert bare.attachment_id is None
+
+
 def test_sibling_digit_token_resolves_scan_file() -> None:
     """Live UX: «анализ файла скан_2» → Скан 2, not a three-file choice card."""
     letter = _candidate("Обращение.docx")
