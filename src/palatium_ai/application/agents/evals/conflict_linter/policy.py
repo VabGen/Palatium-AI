@@ -31,6 +31,7 @@ NOQA_MAX: Final[int] = 5
 #: Manifest must keep at least this many conflict and non-conflict fixtures (floor, not ceiling).
 FIXTURE_FLOOR: Final[int] = 5
 
+
 #: Soft must/may triage signatures (exact match on prompt_id + kind — never path substring).
 #: Triaged 2026-11-16 as legitimate hierarchy (must = contract/security; may = flexibility).
 #: Heuristic cannot tell hierarchy from exclusive choice (see plan §2).

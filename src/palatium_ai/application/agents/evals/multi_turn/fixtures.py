@@ -110,9 +110,7 @@ def assert_pins_match() -> None:
     by_id = {r.case_id: r for r in MULTI_TURN_REVISIONS}
     dialogs = load_all_dialogs()
     if len(dialogs) != len(MULTI_TURN_REVISIONS):
-        msg = (
-            f"dialog count {len(dialogs)} != MULTI_TURN_REVISIONS {len(MULTI_TURN_REVISIONS)}"
-        )
+        msg = f"dialog count {len(dialogs)} != MULTI_TURN_REVISIONS {len(MULTI_TURN_REVISIONS)}"
         raise AssertionError(msg)
     for dialog in dialogs:
         pin = by_id.get(dialog.case_id)
@@ -122,10 +120,7 @@ def assert_pins_match() -> None:
         path = _FIXTURES_ROOT / pin.relative_path
         digest = file_sha256(path)
         if digest != pin.sha256:
-            msg = (
-                f"{dialog.case_id} sha256 drift: got {digest}, pin {pin.sha256} "
-                f"— update MULTI_TURN_REVISIONS if intentional"
-            )
+            msg = f"{dialog.case_id} sha256 drift: got {digest}, pin {pin.sha256} — update MULTI_TURN_REVISIONS if intentional"
             raise AssertionError(msg)
 
 
@@ -189,9 +184,7 @@ def observe(dialog: MultiTurnDialog) -> MultiTurnObservation:
         raw_intent=intent,
         user_text=user_text,
     )
-    decision = UncertaintyPolicy.for_pipeline(
-        UncertaintySignals.model_validate(dialog.frozen["uncertainty_signals"])
-    )
+    decision = UncertaintyPolicy.for_pipeline(UncertaintySignals.model_validate(dialog.frozen["uncertainty_signals"]))
     return MultiTurnObservation(
         continuation_kind=effective.continuation_kind,
         trust_prior_for_workers=effective.trust_prior_for_workers,
@@ -205,10 +198,7 @@ def observe(dialog: MultiTurnDialog) -> MultiTurnObservation:
 def assert_expected(dialog: MultiTurnDialog, observation: MultiTurnObservation) -> None:
     exp = dialog.expected
     if observation.continuation_kind != exp.continuation_kind:
-        msg = (
-            f"{dialog.case_id}: continuation_kind {observation.continuation_kind} "
-            f"!= {exp.continuation_kind}"
-        )
+        msg = f"{dialog.case_id}: continuation_kind {observation.continuation_kind} != {exp.continuation_kind}"
         raise AssertionError(msg)
     if observation.trust_prior_for_workers is not exp.trust_prior_for_workers:
         msg = f"{dialog.case_id}: trust_prior mismatch"
@@ -217,17 +207,11 @@ def assert_expected(dialog: MultiTurnDialog, observation: MultiTurnObservation) 
         msg = f"{dialog.case_id}: prior_context_present mismatch"
         raise AssertionError(msg)
     if observation.uncertainty_disposition != exp.uncertainty_disposition:
-        msg = (
-            f"{dialog.case_id}: disposition {observation.uncertainty_disposition} "
-            f"!= {exp.uncertainty_disposition}"
-        )
+        msg = f"{dialog.case_id}: disposition {observation.uncertainty_disposition} != {exp.uncertainty_disposition}"
         raise AssertionError(msg)
     if exp.transformation is not None and observation.transformation != exp.transformation:
         msg = f"{dialog.case_id}: transformation mismatch"
         raise AssertionError(msg)
-    if (
-        exp.underspecification_kind is not None
-        and observation.underspecification_kind != exp.underspecification_kind
-    ):
+    if exp.underspecification_kind is not None and observation.underspecification_kind != exp.underspecification_kind:
         msg = f"{dialog.case_id}: underspec mismatch"
         raise AssertionError(msg)

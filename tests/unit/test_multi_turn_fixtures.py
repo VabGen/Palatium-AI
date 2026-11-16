@@ -22,9 +22,7 @@ from palatium_ai.application.agents.evals.multi_turn.policy import (
 )
 from palatium_ai.domain.policies.uncertainty import UncertaintyPolicy, UncertaintySignals
 
-_UNCERTAINTY_MANIFEST = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "uncertainty" / "manifest.json"
-)
+_UNCERTAINTY_MANIFEST = Path(__file__).resolve().parents[1] / "fixtures" / "uncertainty" / "manifest.json"
 
 
 def _by_id(case_id: str):
@@ -53,9 +51,7 @@ def test_contrast_pair_section4_without_prior_vs_section5_with_prior() -> None:
     """Same ask class: without prior → clarification; with prior → use prior."""
     unc = json.loads(_UNCERTAINTY_MANIFEST.read_text(encoding="utf-8"))
     without = next(c for c in unc if c["case_id"] == "like_last_time_without_history")
-    without_decision = UncertaintyPolicy.decide(
-        UncertaintySignals.model_validate(without["signals"])
-    )
+    without_decision = UncertaintyPolicy.decide(UncertaintySignals.model_validate(without["signals"]))
     assert without_decision.disposition == "clarification"
 
     with_prior = _by_id("mt_like_last_time_with_prior")

@@ -66,9 +66,7 @@ def assert_workflow_matches_cutover(job: dict[str, Any], *, as_of: date) -> None
         assert job.get("continue-on-error") is True, "pre-cutover job must set continue-on-error: true"
         assert "--strict" not in run, "pre-cutover audit step must not pass --strict"
     else:
-        assert job.get("continue-on-error") in (False, None), (
-            "post-cutover job must remove continue-on-error (blocking)"
-        )
+        assert job.get("continue-on-error") in (False, None), "post-cutover job must remove continue-on-error (blocking)"
         assert "--strict" in run, "post-cutover audit step must pass --strict on the same run"
 
 
@@ -135,9 +133,8 @@ def test_conflict_linter_job_exists() -> None:
     text = CONFLICT_LINTER_WORKFLOW.read_text(encoding="utf-8")
     assert CUTOVER_DATE.isoformat() in text, "workflow must mention cutover date from policy.CUTOVER_DATE"
     flat = text.replace("\n", " ")
-    assert "continue-on-error AND" in flat and "--strict" in flat, (
-        "workflow must document cutover = remove continue-on-error AND add --strict"
-    )
+    assert "continue-on-error AND" in flat, "workflow must document cutover = remove continue-on-error AND add --strict"
+    assert "--strict" in flat, "workflow must document cutover = remove continue-on-error AND add --strict"
     loaded = cast("dict[str, Any]", yaml.safe_load(text))
     jobs = loaded.get("jobs", {})
     assert "conflict-linter" in jobs, "job id conflict-linter must exist"

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from palatium_ai.application.agents.evals.conflict_linter.policy import (
 )
 
 _REPO = Path(__file__).resolve().parents[2]
+_SCRIPT = _REPO / "scripts" / "run_conflict_linter.py"
 _REPORT = _REPO / "artifacts" / "conflict_linter_soft_metric_test.json"
 
 
@@ -71,12 +73,10 @@ def test_soft_metric_breakdown_subtracts_only_signatures() -> None:
 def test_audit_report_exposes_soft_metric_fields() -> None:
     """CLI audit JSON must carry soft_raw / soft_triaged / soft_new with identity."""
     _REPORT.parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
+    proc = subprocess.run(  # noqa: S603 — fixed argv: sys.executable + in-repo script
         [
-            "uv",
-            "run",
-            "python",
-            str(_REPO / "scripts" / "run_conflict_linter.py"),
+            sys.executable,
+            str(_SCRIPT),
             "--audit",
             "--judge",
             "none",
@@ -91,7 +91,9 @@ def test_audit_report_exposes_soft_metric_fields() -> None:
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(_REPORT.read_text(encoding="utf-8"))
     audit = payload["audit"]
-    assert "soft_raw" in audit and "soft_triaged" in audit and "soft_new" in audit
+    assert "soft_raw" in audit
+    assert "soft_triaged" in audit
+    assert "soft_new" in audit
     assert audit["soft_new"] == audit["soft_raw"] - audit["soft_triaged"]
     assert audit["soft_raw"] >= audit["soft_triaged"]
     # Current registry: four triaged must/may, soft_new should be 0 if only those fire.
