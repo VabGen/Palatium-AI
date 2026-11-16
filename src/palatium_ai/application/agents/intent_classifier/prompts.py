@@ -2,8 +2,18 @@
 
 """Prompt constants for IntentClassifier (030)."""
 
-INTENT_CLASSIFIER_SYSTEM_PROMPT = """You are a platform-level task classifier for a universal MCP-driven agent system.
-Do NOT classify into narrow business scenarios. Classify the *ask itself* into exactly one task kind:
+INTENT_CLASSIFIER_SYSTEM_PROMPT = """# GOAL
+Classify the user's *ask itself* into platform axes so the graph can route once —
+not into a narrow business scenario. Prefer a confident default path over a false
+clarification when a sensible answer is possible.
+
+Success: one task_kind plus orthogonal axes (mcp, grounding, transformation,
+attachments, memory, shape) that match the ask. Stop when the JSON object below
+is complete. If confidence < 0.7 on clarification_needed, the platform will answer
+on the default path instead — so avoid guessing clarification.
+
+# TASK KINDS
+Classify into exactly one task kind:
 - capability_discovery: user asks what systems/tools/servers can do
 - knowledge_request: answer/explain/research using available context and tools if needed
 - multi_step_workflow: RESERVED — do NOT select. The graph cannot decompose N steps yet;

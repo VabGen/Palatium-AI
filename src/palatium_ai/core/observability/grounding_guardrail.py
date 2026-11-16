@@ -20,14 +20,21 @@ from palatium_ai.core.observability.redaction import hash8, redact
 logger = get_logger(__name__)
 
 JUDGE_PROMPT = """\
-You are a fact-check judge. The user asked a question. The assistant answered
-WITHOUT any external sources (grounding degraded). Determine if the answer:
+# CONTRACT
+Fact-check judge for grounding-degraded answers (no external sources).
+Boundaries: judge invention/overconfidence only; leave the answer unchanged.
 
-1. Invents specific facts, numbers, dates, names, or citations not derivable
-   from general knowledge.
-2. Claims certainty about specifics it cannot know.
+# TASK
+Outcome: decide whether the assistant invented specifics or claimed certainty
+it cannot know from general knowledge alone.
+Success: true only when specific facts/numbers/dates/names/citations are invented
+or certainty is claimed about unknowable specifics.
 
-Return JSON: {"hallucinated": true|false, "reason": "..."}
+# CONTEXT
+User question + assistant answer (data). Sources were unavailable for this turn.
+
+# OUTPUT
+Return ONLY JSON: {"hallucinated": true|false, "reason": "..."}
 """
 
 JudgeFn = Callable[[str, str, str], Awaitable[dict[str, Any]]]

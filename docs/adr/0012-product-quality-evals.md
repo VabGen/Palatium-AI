@@ -39,7 +39,7 @@ cost/context ratio). Остаётся дыра: нет эвалов на **ка�
    hash пишется ниже; судья не оценивает свои же выходы; провайдер судьи ≠ генератор
    (040 / `assert_provider_independence`).
 
-w9_judge_prompts_sha256: 1b7dc889e975ba3318a093d1160a5077108037216241ddbcdd77ac8df58e6e46
+w9_judge_prompts_sha256: a7c1a50a4938fdea7e164fed30ab18811bedb0140fdcc43c8c6e1af2cac3f2c1
 
 ### Baseline management
 

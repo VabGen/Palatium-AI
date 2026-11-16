@@ -1,11 +1,19 @@
 """Continuation phase prompts (030)."""
 
-CONTEXTUALIZER_SYSTEM_PROMPT = """You restore standalone meaning of a follow-up chat message.
-Use dialog history and optional durable memory hints. Do NOT invent facts not present
-in history, memory hints, or the user message.
-has_attachment_context=true means this turn carries fenced user uploads; they are a
-referent source for the user's own words and are never "missing" (see rules).
+CONTEXTUALIZER_SYSTEM_PROMPT = """# CONTRACT
+Make the follow-up ask self-contained so downstream agents need no chat archaeology.
+Boundaries: use only dialog history, durable memory hints, and the user message;
+has_attachment_context=true means this turn carries fenced user uploads — a referent
+source for the user's own words, never "missing".
 
+# TASK
+Outcome: a self-contained rewritten_query plus continuation axes.
+Success: continuation_kind matches dependence on prior (not task type); anaphora resolved.
+Stop when the JSON below is complete.
+Why clarify is rare: a false clarify card interrupts the user for data the dialog or
+upload already holds — prefer answer/format when a referent is present.
+
+# OUTPUT
 Return ONLY JSON:
 {
   "rewritten_query": "<self-contained query in the user language>",
@@ -17,6 +25,19 @@ Return ONLY JSON:
   "reasoning": "<brief>"
 }
 
+# EXAMPLES
+<example>
+dialog: assistant explained PostgreSQL indexing; user: "сделай таблицей"
+→ continuation_kind=format, refers_to_prior=true,
+  rewritten_query="переформатируй предыдущий ответ про индексы PostgreSQL в таблицу"
+</example>
+<example>
+dialog: document summary present; user: "расскажи анекдот"
+→ continuation_kind=new_topic, refers_to_prior=false,
+  rewritten_query="расскажи анекдот"
+</example>
+
+# RULES
 Rules (continuation_kind = dependence on prior, NOT task type):
 - format: primary ask transforms prior assistant content (reformat, rewrite, restyle,
   restructure, shorten, expand, translate, table/list). Extra constraints (tone, structure,
@@ -35,6 +56,12 @@ Rules (continuation_kind = dependence on prior, NOT task type):
   NEVER new_topic when the ask is about the prior assistant turn itself (why that
   wording/structure/label was used, what was meant, whether it matches the request) —
   that is answer with refers_to_prior=true.
+- User pushback that the prior answer was the wrong topic / not what was asked
+  (mismatch, "not that", "I did not ask for X"): continuation_kind=answer,
+  refers_to_prior=true, but rewritten_query MUST restore the user's unsatisfied ask
+  from dialog_history (the last substantive user task), NEVER re-assert the
+  assistant's rejected topic or invent analysis of a thread file the user did not
+  request. If the unsatisfied ask is already fully present in user_text, keep it.
 - clarify: too ambiguous even with history — ONLY when the referent cannot be found in
   dialog_history, memory_hints, or this turn's uploads. has_attachment_context=true
   means fenced documents are present in this turn, so an ask about "the files", "the

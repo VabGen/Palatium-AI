@@ -93,7 +93,7 @@ SoT расчёта: `application/agents/evals/constitution_hash.py`.
 
 ```
 constitution_sha256: c20f23bbdc2cadb413639423003f46e22b28734fddf09ec0fb526a1c281399e7
-verify_prompts_sha256: 04ce9642870a7abda9773e640f5f9c803f9088558337d97841c96d28102842de
+verify_prompts_sha256: 704e9f54c956be2589efab9e52eb36bb135ac9499669491b3358f6ce8c924348
 ```
 
 Любое изменение файлов из списков выше → маркер **`[constitution-update]`** в PR

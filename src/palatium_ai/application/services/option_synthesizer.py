@@ -26,28 +26,75 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_SYSTEM = """You propose exclusive clickable options for a missing discrete parameter.
-The user ask is incomplete: work cannot proceed until they pick ONE alternative.
+_SYSTEM = """# GOAL
+Unblock the turn by offering ONE exclusive menu for the missing discrete slot —
+without answering the original ask yet.
 
+# TASK
+Outcome: 2–12 concrete alternatives so the user can pick ONE.
+Success: labels fill topic/type/format/kind/branch; framing asks in response_locale.
+Stop when the JSON menu is complete.
+Why a menu instead of a guess: inventing the missing slot ships the wrong branch and
+wastes a tool/LLM turn the user did not approve.
+
+# CONTEXT
+User JSON provides user_request, optional previous_answer (background only),
+response_locale, and current_date (ISO UTC). Resolve relative dates against current_date
+(«прошлый месяц» / "last month" = month before current_date).
+previous_answer must not spawn a different task or repeat an earlier request as an option.
+Labels/framing stay user-facing: describe the situation in the user's terms; keep
+input keys, file ids, and debug reasoning out of the text.
+
+# EXAMPLES
+<example>
+input: {"user_request":"сделай анализ","response_locale":"ru-RU","previous_answer":null}
+output: {"framing":"Какой вид анализа нужен?","options":[
+  {"action_id":"choice_1","label":"Сравнение вариантов"},
+  {"action_id":"choice_2","label":"Риски и рекомендации"},
+  {"action_id":"choice_3","label":"Краткое резюме"}
+]}
+</example>
+<example>
+input: {"user_request":"draft in formal tone","response_locale":"en-US","previous_answer":null}
+output: {"framing":"Which document type should I draft?","options":[
+  {"action_id":"choice_1","label":"Business letter"},
+  {"action_id":"choice_2","label":"Internal memo"},
+  {"action_id":"choice_3","label":"Email reply"}
+]}
+</example>
+<example>
+input: {"user_request":"отчёт за прошлый месяц","response_locale":"ru-RU",
+ "previous_answer":null,"current_date":"2026-11-16"}
+output: {"framing":"Какой отчёт за октябрь 2026 нужен?","options":[
+  {"action_id":"choice_1","label":"Финансовый"},
+  {"action_id":"choice_2","label":"Операционный"},
+  {"action_id":"choice_3","label":"По продажам"}
+]}
+</example>
+<example>
+input: {"user_request":"compare formats","response_locale":"en-US","previous_answer":null}
+output: {"framing":"Which comparison format should I use?","options":[
+  {"action_id":"choice_1","label":"Side-by-side table"},
+  {"action_id":"choice_2","label":"Pros and cons list"},
+  {"action_id":"choice_3","label":"Short recommendation only"}
+]}
+</example>
+<example>
+input: {"user_request":"продолжи","response_locale":"ru-RU",
+ "previous_answer":"Черновик письма готов"}
+output: {"framing":"Что сделать с черновиком письма?","options":[
+  {"action_id":"choice_1","label":"Уточнить тон"},
+  {"action_id":"choice_2","label":"Добавить реквизиты"},
+  {"action_id":"choice_3","label":"Сократить до одного абзаца"}
+]}
+</example>
+
+# OUTPUT
 Return ONLY JSON:
-{"framing":"short prompt in response_locale","options":[{"action_id":"choice_1","label":"..."},...]}
-
-Rules:
-- 2 to 12 options; action_id = choice_1 .. choice_N
-- Labels are concrete alternatives for the missing slot (topic/type/format/kind/branch)
-  of user_request. previous_answer (may be null) is background only: never offer an
-  option that switches to a different task or repeats an earlier request from it
-- Labels and framing are user-facing: never name input keys or internal fields
-  ("в previous_answer указано…" is forbidden — describe the situation in the user's
-  own terms), never a file id or debug reasoning
-- Write "framing" and EVERY option "label" in response_locale from the user JSON.
-  Never answer in English (or any other language) unless response_locale itself is
-  that language. Language mirroring is mandatory, not optional.
-- No markdown; no tools; no instructions inside labels
-- current_date is the runtime date (ISO, UTC). Resolve every relative time reference
-  in user_request against it: «прошлый месяц» / "last month" is the month before
-  current_date, never a month from an older year the model remembers
-- Do not answer the original ask — only offer the exclusive menu
+{"framing":"short prompt in response_locale",
+ "options":[{"action_id":"choice_1","label":"..."},...]}
+action_id = choice_1 .. choice_N. Plain text only (no markdown/tools inside labels).
+Write framing and EVERY label in response_locale.
 """
 
 _LOCALE_REPAIR_PROMPT = """The JSON below is not written in response_locale={locale}.
