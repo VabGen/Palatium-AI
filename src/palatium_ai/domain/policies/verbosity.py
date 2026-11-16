@@ -10,6 +10,14 @@ choose "minimal" for itself would be marking its own homework (050).
 
 The policy is pure and deterministic: same transformation → same budget, no I/O, so the
 payload builder and ``align_formatter_meta`` cannot disagree.
+
+API mapping (wired through ``LLMPort`` → LiteLLM ``verbosity``):
+``minimal→low``, ``standard→medium``, ``detailed→high``. Reasoning depth is a
+*separate* dial — see ``ReasoningEffortPolicy`` / ``reasoning_effort``.
+
+Anthropic (and other non-``_VERBOSITY_CAPABLE`` providers) do not receive this API
+dial: the adapter drops it and logs ``llm.verbosity.dropped``; answer length on
+those paths is still steered by the transformation/prompt contract.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ from __future__ import annotations
 from typing import Final
 
 from palatium_ai.domain.content.content_document import VerbosityBudget
+from palatium_ai.domain.llm.controls import TextVerbosity
 from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import TransformationKind
 
@@ -29,10 +38,23 @@ _BUDGET_FOR: Final[dict[TransformationKind, VerbosityBudget]] = {
     "expand": "detailed",
 }
 
+_API_VERBOSITY: Final[dict[VerbosityBudget, TextVerbosity]] = {
+    "minimal": "low",
+    "standard": "medium",
+    "detailed": "high",
+}
+
 
 class VerbosityPolicy:
-    """Pure domain policy: transformation axis → answer length budget."""
+    """Pure domain policy: transformation axis → answer length budget → API verbosity."""
 
     @classmethod
     def for_transformation(cls, transformation: TransformationKind | str | None) -> VerbosityBudget:
         return _BUDGET_FOR.get(TransformPolicy.coerce(transformation), BUDGET_DEFAULT)
+
+    @classmethod
+    def to_api_verbosity(cls, budget: VerbosityBudget | str | None) -> TextVerbosity:
+        """Map product budget onto OpenAI/LiteLLM ``verbosity`` (length only)."""
+        if budget in _API_VERBOSITY:
+            return _API_VERBOSITY[budget]
+        return _API_VERBOSITY[BUDGET_DEFAULT]

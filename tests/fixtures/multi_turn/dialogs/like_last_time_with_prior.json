@@ -1,0 +1,45 @@
+{
+  "case_id": "mt_like_last_time_with_prior",
+  "note": "§5 contrast to §4 like_last_time_without_history: same ask WITH prior → use prior, not clarify",
+  "contrast_with_uncertainty_case": "like_last_time_without_history",
+  "turns": [
+    {"role": "user", "content": "Составь краткий план встречи на пятницу."},
+    {
+      "role": "assistant",
+      "content": "План пятницы:\n1. Статус (10 мин)\n2. Риски (15 мин)\n3. Next steps (5 мин)"
+    },
+    {"role": "user", "content": "Сделай как в прошлый раз."}
+  ],
+  "check_turn_index": 2,
+  "frozen": {
+    "contextualizer": {
+      "rewritten_query": "Сделай как в прошлый раз.",
+      "continuation_kind": "answer",
+      "confidence": 0.9,
+      "refers_to_prior": true,
+      "prior_assistant_excerpt": "План пятницы:\n1. Статус (10 мин)\n2. Риски (15 мин)\n3. Next steps (5 мин)",
+      "reasoning": "anaphora; rewrite stays on ask tokens so Continuity keeps prior (no balloon)"
+    },
+    "raw_intent": {
+      "task_kind": "knowledge_request",
+      "requires_mcp": false,
+      "confidence": 0.85,
+      "grounding": "optional",
+      "reasoning": "history-blind; Continuity supplies prior"
+    },
+    "uncertainty_signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.85,
+      "grounding": "optional",
+      "has_prior_dialog": true,
+      "ambiguous_reference_without_prior": false,
+      "retrieval_empty": false
+    }
+  },
+  "expected": {
+    "continuation_kind": "answer",
+    "trust_prior_for_workers": true,
+    "prior_context_present": true,
+    "uncertainty_disposition": "default_with_mark"
+  }
+}

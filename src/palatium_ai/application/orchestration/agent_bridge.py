@@ -397,6 +397,8 @@ def context_weaver_to_agent_input(
             "has_trusted_prior": "true" if task_input.has_trusted_prior else "false",
             "file_reference": task_input.file_reference,
             "attachment_scope": task_input.attachment_scope,
+            "uncertainty_disposition": task_input.uncertainty_disposition or "",
+            "uncertainty_reason": task_input.uncertainty_reason or "",
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },

@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from palatium_ai.domain.llm.controls import ReasoningEffort, TextVerbosity
 from palatium_ai.domain.policies.types import AgentRole, ModelTier
 
 
@@ -28,6 +29,14 @@ class AgentConfig(BaseModel):
     llm_call_timeout_seconds: float | None = Field(default=None, gt=0)
     max_retries: int = Field(default=3, ge=0)
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    #: Depth/cost dial for LiteLLM ``reasoning_effort`` (Anthropic effort). ``None`` →
+    #: derive from ``model_tier`` via ReasoningEffortPolicy. Independent of verbosity.
+    reasoning_effort: ReasoningEffort | None = None
+    #: Length dial for LiteLLM ``verbosity`` (OpenAI text.verbosity). ``None`` → omit
+    #: unless the call site passes an override (e.g. Formatter from VerbosityPolicy).
+    #: On providers outside ``_VERBOSITY_CAPABLE`` (e.g. Anthropic) the adapter drops
+    #: this dial — length then follows the prompt contract, not the API param.
+    verbosity: TextVerbosity | None = None
 
     llm_provider: Literal["openai", "anthropic", "ollama", "qwen", "gateway"] | None = None
     llm_model: str | None = None

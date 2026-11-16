@@ -1,0 +1,50 @@
+{
+  "case_id": "mt_correction_accept",
+  "note": "User corrects referent («нет, я имел в виду X») — accept change, do not average or false-clarify",
+  "turns": [
+    {"role": "user", "content": "Сравни договор А и договор Б по срокам."},
+    {
+      "role": "assistant",
+      "content": "Договор А: 12 мес. Договор Б: 6 мес. У А длиннее срок."
+    },
+    {"role": "user", "content": "Нет, я имел в виду договор А и договор В."}
+  ],
+  "check_turn_index": 2,
+  "frozen": {
+    "contextualizer": {
+      "rewritten_query": "Сравни договор А и договор В по срокам.",
+      "continuation_kind": "answer",
+      "confidence": 0.88,
+      "refers_to_prior": true,
+      "prior_assistant_excerpt": "Договор А: 12 мес. Договор Б: 6 мес. У А длиннее срок.",
+      "reasoning": "correction replaces B with V; keep comparison frame"
+    },
+    "raw_intent": {
+      "task_kind": "knowledge_request",
+      "requires_mcp": false,
+      "confidence": 0.86,
+      "grounding": "optional",
+      "underspecification_kind": "none",
+      "requires_user_choice": false,
+      "reasoning": "corrected entities; still answerable"
+    },
+    "uncertainty_signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.86,
+      "grounding": "optional",
+      "underspecification_kind": "none",
+      "requires_user_choice": false,
+      "has_prior_dialog": true,
+      "ambiguous_reference_without_prior": false,
+      "retrieval_empty": false
+    }
+  },
+  "expected": {
+    "continuation_kind": "answer",
+    "trust_prior_for_workers": true,
+    "prior_context_present": true,
+    "transformation": "none",
+    "uncertainty_disposition": "default_with_mark",
+    "underspecification_kind": "none"
+  }
+}

@@ -1,0 +1,3 @@
+# OUTPUT
+Be concise: return ONLY valid JSON.
+Write a detailed free-form prose only answer; never JSON.

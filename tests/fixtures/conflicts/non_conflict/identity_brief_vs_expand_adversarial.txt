@@ -1,0 +1,6 @@
+# IDENTITY
+Prefer briefly answers for social turns.
+
+# USER ASK
+If transformation is expand, produce a longer rewrite; verbosity_budget maps to detailed.
+Different axes: default tone vs explicit expand ask.

@@ -1,0 +1,63 @@
+# Prompt conflict-linter (same-prompt v1) — plans/prompt-audit-backlog-2026.md §2
+#
+# Status: NON-BLOCKING until cutover date 2026-12-19 (policy.CUTOVER_DATE).
+# continue-on-error: true keeps the check visible without failing the PR.
+# On/after 2026-12-19: remove continue-on-error and pass --strict on audit.
+# Scope: same-prompt only; cross-prompt deferred after cutover.
+# Pin: tests/unit/test_ci_prompt_controls_gates.py::test_conflict_linter_job_exists
+
+name: conflict-linter
+
+on:
+  pull_request:
+    paths:
+      - "src/palatium_ai/application/agents/**/prompts.py"
+      - "src/palatium_ai/application/agents/evals/**"
+      - "src/palatium_ai/application/services/option_synthesizer.py"
+      - "src/palatium_ai/application/wiring.py"
+      - "src/palatium_ai/infrastructure/parsing/**"
+      - "src/palatium_ai/core/observability/grounding_guardrail.py"
+      - "tests/fixtures/conflicts/**"
+      - "scripts/run_conflict_linter.py"
+      - ".github/workflows/conflict-linter.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conflict-linter-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conflict-linter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # NON-BLOCKING: remove after 2026-12-19 if FP rate stays under gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Conflict-linter (fixtures + audit report)
+        run: >
+          uv run python scripts/run_conflict_linter.py
+          --fixtures --audit --judge heuristic
+          --report artifacts/conflict_linter.json
+
+      - name: Upload conflict-linter report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: conflict-linter
+          path: artifacts/conflict_linter.json
+          if-no-files-found: ignore

@@ -1,0 +1,6 @@
+# GOAL
+Deliver a full research deliverable with sources.
+
+# CONTEXT
+Formatter applies verbosity_budget from the transformation axis (shorten/expand).
+Length is a separate dial from research completeness.

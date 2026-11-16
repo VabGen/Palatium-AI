@@ -12,6 +12,7 @@ import structlog
 
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.resilience import CircuitOpenError, ConsecutiveFailureCircuit
+from palatium_ai.domain.llm.controls import ReasoningEffort, TextVerbosity
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError, VisionUnsupportedError
 
 from .litellm_adapter import LiteLLMAdapter
@@ -187,6 +188,8 @@ class _AgentModelLLMAdapter:
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> LLMCompletion:
         return await self._inner.generate(
             messages,
@@ -196,6 +199,8 @@ class _AgentModelLLMAdapter:
             response_format=response_format,
             response_model=response_model,
             timeout_seconds=timeout_seconds,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
         )
 
     async def generate_stream(
@@ -208,6 +213,8 @@ class _AgentModelLLMAdapter:
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         async for delta in self._inner.generate_stream(
             messages,
@@ -217,6 +224,8 @@ class _AgentModelLLMAdapter:
             response_format=response_format,
             response_model=response_model,
             timeout_seconds=timeout_seconds,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
         ):
             yield delta
 
@@ -332,6 +341,8 @@ class _FallbackChainLLMAdapter:
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> LLMCompletion:
         if _has_images(messages) and len(self._adapters) > 1:
             # Owner decision (2026-10-25): a vision alias is provider-scoped, so there is
@@ -345,6 +356,8 @@ class _FallbackChainLLMAdapter:
                 response_format=response_format,
                 response_model=response_model,
                 timeout_seconds=timeout_seconds,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
             )
         errors: list[str] = []
         open_circuits: list[tuple[str, float]] = []
@@ -365,6 +378,8 @@ class _FallbackChainLLMAdapter:
                     response_format=response_format,
                     response_model=response_model,
                     timeout_seconds=timeout_seconds,
+                    reasoning_effort=reasoning_effort,
+                    verbosity=verbosity,
                 )
             except Exception as exc:  # noqa: BLE001  # provider failure moves to the next in the chain (020)
                 self._capture_provider_failure(provider, exc, errors, unsupported, unsupported_vision)
@@ -398,6 +413,8 @@ class _FallbackChainLLMAdapter:
         response_format: LLMResponseFormat | None,
         response_model: type[BaseModel] | None,
         timeout_seconds: float | None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> LLMCompletion:
         """Image call: only the primary provider, no failover, typed failures intact."""
         provider, port = self._adapters[0]
@@ -414,6 +431,8 @@ class _FallbackChainLLMAdapter:
                 response_format=response_format,
                 response_model=response_model,
                 timeout_seconds=timeout_seconds,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
             )
         except Exception as exc:  # vision failure is reported, not retried elsewhere (020)
             self._record(provider, failed=not isinstance(exc, VisionUnsupportedError))
@@ -431,6 +450,8 @@ class _FallbackChainLLMAdapter:
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         if _has_images(messages) and len(self._adapters) > 1:
             # Same rule as ``generate``: a stream with images never fails over (ADR 0007).
@@ -442,6 +463,8 @@ class _FallbackChainLLMAdapter:
                 response_format=response_format,
                 response_model=response_model,
                 timeout_seconds=timeout_seconds,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
             ):
                 yield delta
             return
@@ -464,6 +487,8 @@ class _FallbackChainLLMAdapter:
                     response_format=response_format,
                     response_model=response_model,
                     timeout_seconds=timeout_seconds,
+                    reasoning_effort=reasoning_effort,
+                    verbosity=verbosity,
                 )
                 async for delta in stream:
                     yield delta
@@ -498,6 +523,8 @@ class _FallbackChainLLMAdapter:
         response_format: LLMResponseFormat | None,
         response_model: type[BaseModel] | None,
         timeout_seconds: float | None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         """Image stream: primary only, no failover (ADR 0007)."""
         provider, port = self._adapters[0]
@@ -514,6 +541,8 @@ class _FallbackChainLLMAdapter:
                 response_format=response_format,
                 response_model=response_model,
                 timeout_seconds=timeout_seconds,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
             )
             async for delta in stream:
                 yield delta

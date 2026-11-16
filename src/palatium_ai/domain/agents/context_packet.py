@@ -14,6 +14,7 @@ from palatium_ai.domain.policies.types import (
     AttachmentScope,
     ComposerMode,
     GroundingMode,
+    ResolvedUncertaintyDisposition,
     ResponseShape,
 )
 
@@ -55,5 +56,9 @@ class ContextPacket(BaseModel):
         default=False,
         description="True when local knowledge/memory search returned no hits; enables web_fallback.",
     )
+    #: §4 resolved disposition (Intent → packet → Formatter/Critic). Never raw unknown.
+    uncertainty_disposition: ResolvedUncertaintyDisposition | None = None
+    #: Paired with disposition — Critic uses it to accept only justified refusals.
+    uncertainty_reason: str = Field(default="", max_length=128)
     #: Explicit composer chrome (mode pills); floors Intent axes / researcher tier (Track P).
     composer_mode: ComposerMode | None = None

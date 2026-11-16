@@ -21,10 +21,12 @@ from .types import (
     ExecutionStrategy,
     GroundingMode,
     ModelTier,
+    ResolvedUncertaintyDisposition,
     ResponseShape,
     RouteStrategy,
     TaskKind,
     TransformationKind,
+    UncertaintyDisposition,
     UnderspecificationKind,
     UntrustedContentAction,
 )
@@ -68,6 +70,7 @@ if TYPE_CHECKING:
     from .scratchpad import SessionScratchpadPolicy
     from .shape import ShapeRecipe, ShapeRecipePolicy, ShapeVerdict
     from .transform import TransformPolicy, TransformRouteDecision
+    from .uncertainty import UncertaintyDecision, UncertaintyPolicy, UncertaintySignals
     from .untrusted_content import (
         DEFAULT_UNTRUSTED_CONTENT_THRESHOLDS,
         FENCED_ATTACHMENT_UNTRUSTED_CONTENT_THRESHOLDS,
@@ -143,6 +146,7 @@ __all__ = [
     "ReplyLocalePolicy",
     "ResearcherTierDecision",
     "ResearcherTierPolicy",
+    "ResolvedUncertaintyDisposition",
     "ResponseCacheKeyParts",
     "ResponseCacheKeyPolicy",
     "ResponseShape",
@@ -161,6 +165,10 @@ __all__ = [
     "TransformPolicy",
     "TransformRouteDecision",
     "TransformationKind",
+    "UncertaintyDecision",
+    "UncertaintyDisposition",
+    "UncertaintyPolicy",
+    "UncertaintySignals",
     "UnderspecificationKind",
     "UntrustedContentAction",
     "UntrustedContentPolicy",
@@ -206,6 +214,9 @@ _LAZY: dict[str, tuple[str, str]] = {
     "InternalVocabularyPolicy": (".internal_vocabulary", "InternalVocabularyPolicy"),
     "TransformPolicy": (".transform", "TransformPolicy"),
     "TransformRouteDecision": (".transform", "TransformRouteDecision"),
+    "UncertaintyDecision": (".uncertainty", "UncertaintyDecision"),
+    "UncertaintyPolicy": (".uncertainty", "UncertaintyPolicy"),
+    "UncertaintySignals": (".uncertainty", "UncertaintySignals"),
     "MemoryNamespaceBinding": (".memory_namespace", "MemoryNamespaceBinding"),
     "MemoryNamespacePolicy": (".memory_namespace", "MemoryNamespacePolicy"),
     "MemoryRecallDecision": (".memory_recall", "MemoryRecallDecision"),

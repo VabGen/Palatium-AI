@@ -18,6 +18,7 @@ from palatium_ai.domain.agents.researcher import (
     ResearcherInput,
 )
 from palatium_ai.domain.agents.supervisor import SupervisorInput
+from palatium_ai.domain.policies.uncertainty import UncertaintyPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.application.orchestration.snapshot import OrchestrationSnapshot
@@ -60,6 +61,8 @@ def build_context_weaver_input(
         has_attachment_context=selectors.uploads_in_scope(state) and bool((state.get("untrusted_context") or "").strip()),
         has_trusted_prior=bool(routing is not None and routing.trust_prior_for_workers),
         composer_mode=state.get("composer_mode"),
+        uncertainty_disposition=selectors.resolved_uncertainty_disposition(state),
+        uncertainty_reason=selectors.resolved_uncertainty_reason(state),
     )
 
 
@@ -121,13 +124,16 @@ def build_critic_input(
     state: AgentGraphState,
 ) -> CriticInput:
     """Собирает вход для Critic."""
+    packet = snapshot.context_packet(
+        state,
+        fallback_strategy=snapshot.selected_strategy,
+        fallback_rationale="Fallback packet synthesized by graph before critic execution.",
+    )
+    disposition = packet.uncertainty_disposition or selectors.resolved_uncertainty_disposition(state)
+    unc_reason = packet.uncertainty_reason or selectors.resolved_uncertainty_reason(state)
     return CriticInput(
         task_id=snapshot.task_id,
-        context_packet=snapshot.context_packet(
-            state,
-            fallback_strategy=snapshot.selected_strategy,
-            fallback_rationale="Fallback packet synthesized by graph before critic execution.",
-        ),
+        context_packet=packet,
         classification_confidence=snapshot.classification.confidence,
         classification_reasoning=snapshot.classification_reasoning,
         worker_summary=snapshot.worker_summary,
@@ -136,6 +142,8 @@ def build_critic_input(
         user_input_chars=len(selectors.resolved_user_text(state)),
         worker_confidence=selectors.resolved_worker_confidence(state),
         memory_hints=selectors.memory_hints(state),
+        uncertainty_disposition=disposition,
+        uncertainty_reason=unc_reason,
     )
 
 
@@ -162,13 +170,27 @@ def build_formatter_input(
         if not worker_summary.startswith(disclaimer.strip()):
             worker_summary = disclaimer + worker_summary
 
+    packet = snapshot.context_packet(
+        state,
+        fallback_strategy="clarify" if snapshot.route == "clarification" else "format_only",
+        fallback_rationale="Fallback packet synthesized by graph before formatter execution.",
+    )
+    disposition = packet.uncertainty_disposition or selectors.resolved_uncertainty_disposition(state)
+    unc_reason = packet.uncertainty_reason or selectors.resolved_uncertainty_reason(state)
+    # Leaked residual unknown → one-shot coerce (Formatter must not see raw unknown).
+    coerced = UncertaintyPolicy.coerce_for_downstream(disposition, reason=unc_reason or None)
+    if coerced is not None:
+        disposition = UncertaintyPolicy.resolved_disposition(coerced)
+        unc_reason = coerced.reason
+    if worker_summary:
+        worker_summary = UncertaintyPolicy.ensure_assumption_mark(
+            worker_summary,
+            disposition=disposition,
+        )
+
     return FormatterInput(
         task_id=snapshot.task_id,
-        context_packet=snapshot.context_packet(
-            state,
-            fallback_strategy="clarify" if snapshot.route == "clarification" else "format_only",
-            fallback_rationale="Fallback packet synthesized by graph before formatter execution.",
-        ),
+        context_packet=packet,
         worker_summary=worker_summary,
         critic_summary=snapshot.critic_summary,
         requires_review=intent_review or critic_requires_review,
@@ -183,6 +205,8 @@ def build_formatter_input(
         prior_context=selectors.resolved_prior_assistant_content(state),
         allow_worker_fallback=_allow_worker_fallback(state),
         policy_refusal=policy_refusal,
+        uncertainty_disposition=disposition,
+        uncertainty_reason=unc_reason,
     )
 
 

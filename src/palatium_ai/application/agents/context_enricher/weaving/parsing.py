@@ -9,12 +9,22 @@ import json
 from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.policies.grounding import GroundingPolicy
 from palatium_ai.domain.policies.shape import ShapeRecipePolicy
-from palatium_ai.domain.policies.types import ATTACHMENT_SCOPE_DEFAULT, FILE_REFERENCE_DEFAULT
+from palatium_ai.domain.policies.types import (
+    ATTACHMENT_SCOPE_DEFAULT,
+    FILE_REFERENCE_DEFAULT,
+    ResolvedUncertaintyDisposition,
+)
+
+_RESOLVED_DISPOSITIONS = frozenset({"clarification", "default_with_mark", "honest_refusal"})
 
 
 def decode_context_weaver_input(input_context: dict[str, str], *, instruction: str) -> ContextWeaverInput:
     caps_raw = json.loads(input_context.get("candidate_capabilities_json", "[]"))
     capabilities = tuple(str(item) for item in caps_raw)
+    raw_disp = (input_context.get("uncertainty_disposition") or "").strip()
+    disposition: ResolvedUncertaintyDisposition | None = (
+        raw_disp if raw_disp in _RESOLVED_DISPOSITIONS else None  # type: ignore[assignment]
+    )
     return ContextWeaverInput(
         task_id=input_context["_task_id"],
         user_text=instruction,
@@ -30,4 +40,6 @@ def decode_context_weaver_input(input_context: dict[str, str], *, instruction: s
         has_trusted_prior=input_context.get("has_trusted_prior", "false").lower() == "true",
         file_reference=input_context.get("file_reference") or FILE_REFERENCE_DEFAULT,  # type: ignore[arg-type]  # Literal registry (017)
         attachment_scope=input_context.get("attachment_scope") or ATTACHMENT_SCOPE_DEFAULT,  # type: ignore[arg-type]  # Literal registry (017)
+        uncertainty_disposition=disposition,
+        uncertainty_reason=(input_context.get("uncertainty_reason") or "")[:128],
     )

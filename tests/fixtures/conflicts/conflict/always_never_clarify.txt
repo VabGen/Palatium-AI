@@ -1,0 +1,3 @@
+# TASK
+Always clarify every ambiguity before answering.
+Never ask for clarification; avoid false clarification at all costs.

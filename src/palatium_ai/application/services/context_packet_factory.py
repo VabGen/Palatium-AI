@@ -36,6 +36,8 @@ class ContextPacketFactory:
         requires_mcp = effective_requires_mcp if effective_requires_mcp is not None else raw_mcp
         candidate_capabilities = effective_capabilities if effective_capabilities is not None else raw_caps
         response_shape = classification.output.response_shape if classification.output is not None else RESPONSE_SHAPE_DEFAULT
+        disposition = classification.output.uncertainty_disposition if classification.output is not None else None
+        unc_reason = classification.output.uncertainty_reason if classification.output is not None else ""
         route = routing.output.route if routing is not None and routing.output is not None else "clarification"
         route_plan = routing.output.plan if routing is not None and routing.output is not None else "No route plan"
 
@@ -54,4 +56,6 @@ class ContextPacketFactory:
                 rationale=fallback_rationale,
             ),
             context_summary=f"task_kind={task_kind}; route={route}; fallback_context_packet=true",
+            uncertainty_disposition=disposition,
+            uncertainty_reason=unc_reason,
         )

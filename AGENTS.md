@@ -1,6 +1,9 @@
 # Palatium AI — project operating contract
 
-Runtime rules for agents (stable prompt tier). Not user memory; not `.agent/MEMORY.md`.
+## Purpose
+
+Operating contract for Cursor agents in this repository: boundaries, context rules,
+and delivery expectations. Not user memory; not `.agent/MEMORY.md`.
 
 ## Boundaries
 

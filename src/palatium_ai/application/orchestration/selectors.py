@@ -26,7 +26,12 @@ from palatium_ai.domain.policies import (
     budget_untrusted_text,
 )
 from palatium_ai.domain.policies.attachment_focus import AttachmentPromptPolicy
-from palatium_ai.domain.policies.types import ATTACHMENT_FOCUS_DEFAULT, AttachmentFocus, TransformationKind
+from palatium_ai.domain.policies.types import (
+    ATTACHMENT_FOCUS_DEFAULT,
+    AttachmentFocus,
+    ResolvedUncertaintyDisposition,
+    TransformationKind,
+)
 
 _CONTEXT_PACKET_FACTORY = ContextPacketFactory()
 logger = get_logger(__name__)
@@ -419,7 +424,40 @@ def resolved_context_packet(
             effective_requires_mcp=effective.requires_mcp,
             effective_capabilities=effective.candidate_capabilities,
         )
-    return _with_untrusted_context(packet, state)
+    packet = _with_untrusted_context(packet, state)
+    return _with_uncertainty_disposition(packet, state)
+
+
+def resolved_uncertainty_disposition(state: AgentGraphState) -> ResolvedUncertaintyDisposition | None:
+    """§4 disposition attached post-Continuity on Intent (never raw unknown)."""
+    classification = state.get("classification")
+    output = classification.output if classification is not None else None
+    disposition = getattr(output, "uncertainty_disposition", None)
+    if disposition in {"clarification", "default_with_mark", "honest_refusal"}:
+        return disposition  # type: ignore[return-value]
+    return None
+
+
+def resolved_uncertainty_reason(state: AgentGraphState) -> str:
+    """Machine reason paired with disposition (Critic justification)."""
+    classification = state.get("classification")
+    output = classification.output if classification is not None else None
+    reason = getattr(output, "uncertainty_reason", "") if output is not None else ""
+    return reason if isinstance(reason, str) else ""
+
+
+def _with_uncertainty_disposition(packet: ContextPacket, state: AgentGraphState) -> ContextPacket:
+    """Merge Intent disposition + reason onto packet when weaving omitted them."""
+    disposition = resolved_uncertainty_disposition(state)
+    reason = resolved_uncertainty_reason(state)
+    updates: dict[str, object] = {}
+    if disposition is not None and packet.uncertainty_disposition != disposition:
+        updates["uncertainty_disposition"] = disposition
+    if reason and packet.uncertainty_reason != reason:
+        updates["uncertainty_reason"] = reason
+    if not updates:
+        return packet
+    return packet.model_copy(update=updates)
 
 
 def _with_untrusted_context(packet: ContextPacket, state: AgentGraphState) -> ContextPacket:

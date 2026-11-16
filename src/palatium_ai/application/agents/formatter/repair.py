@@ -32,6 +32,7 @@ from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
 from palatium_ai.domain.llm.response_parser import compact_validation_error
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
+from palatium_ai.domain.policies.verbosity import VerbosityPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -73,11 +74,13 @@ async def generate_document(
     mute_stream: bool = False,
 ) -> tuple[ContentDocument, LLMCompletion]:
     """Parse streamed Markdown into a document; return the completion for W3a citations."""
+    verbosity = VerbosityPolicy.to_api_verbosity(VerbosityPolicy.for_transformation(task_input.transformation))
     completion, markdown = await call_formatter_llm(
         harness=harness,
         config=config,
         messages=messages,
         max_tokens=max_tokens,
+        verbosity=verbosity,
         worker_summary=worker_summary,
         allow_worker_fallback=allow_worker_fallback,
         mute_stream=mute_stream,

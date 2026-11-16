@@ -61,11 +61,13 @@ from palatium_ai.domain.content.citations import CitationRef, normalize_citation
 from palatium_ai.domain.content.lint import ContentLint
 from palatium_ai.domain.llm.errors import StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.json_codec import LLMJSONError
-from palatium_ai.domain.llm.models import LLMCompletion
+from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
 from palatium_ai.domain.llm.response_parser import compact_validation_error
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
 from palatium_ai.domain.policies.shape import ShapeRecipe, ShapeRecipePolicy
+from palatium_ai.domain.policies.uncertainty import UncertaintyPolicy
+from palatium_ai.domain.policies.verbosity import VerbosityPolicy
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -89,6 +91,22 @@ def _structured_blocks_painted() -> bool:
 
     bridge = get_turn_sse_bridge()
     return bridge is not None and bridge.sse_first_block_recorded
+
+
+def _emit_assumption_mark_before_stream(task_input: FormatterInput) -> bool:
+    """§4: paint structural mark *before* the first LLM chunk (streaming UX = contract).
+
+    Returns True when a prefix was emitted (caller should treat prose as already painted).
+
+    Stream rollback is impossible: if the LLM errors after this emit, the user already
+    saw the mark. Failure paths must append an explicit error frame after the mark
+    (not erase it) — see plan §4 v1.1 «mark + LLM error». Not a cutover blocker.
+    """
+    prefix = UncertaintyPolicy.stream_prefix(task_input.uncertainty_disposition)
+    if not prefix:
+        return False
+    emit_structured_answer_delta(prefix.rstrip(), separator="")
+    return True
 
 
 def _paint_partial_frames(frames: list[PartialFrame], *, painted_prose: bool) -> bool:
@@ -317,7 +335,7 @@ class FormatterAgent(BaseAgent):
 
     def _schema_first_messages(
         self, input: AgentInput, task_input: FormatterInput
-    ) -> tuple[list[object], dict[str, object], str, int]:
+    ) -> tuple[list[ChatMessage], dict[str, object], str, int]:
         """Shared prompt assembly for schema_first stream and precheck paths."""
         user_payload = build_formatter_user_payload(task_input)
         user_message = build_formatter_user_message(user_payload)
@@ -343,7 +361,8 @@ class FormatterAgent(BaseAgent):
         """Paint closed blocks as the provider streams JSON (layout_shift=0)."""
         messages, user_payload, user_message, max_tokens = self._schema_first_messages(input, task_input)
         scanner = PartialDocumentScanner()
-        painted_prose = False
+        # Mark before first token — otherwise stream UX omits the structural contract.
+        painted_prose = _emit_assumption_mark_before_stream(task_input)
 
         def _on_delta(chunk: str) -> None:
             nonlocal painted_prose
@@ -352,11 +371,12 @@ class FormatterAgent(BaseAgent):
         try:
             completion = await self._harness.call_llm_stream(
                 self._config,
-                messages,  # type: ignore[arg-type]
+                messages,
                 response_format="json_schema",
                 response_model=ContentDocument,
                 max_tokens=max_tokens,
                 on_delta=_on_delta,
+                verbosity=VerbosityPolicy.to_api_verbosity(VerbosityPolicy.for_transformation(task_input.transformation)),
             )
             _paint_partial_frames(scanner.pending(), painted_prose=painted_prose)
             citations = self._resolve_citations(
@@ -516,7 +536,7 @@ class FormatterAgent(BaseAgent):
         *,
         input: AgentInput,
         task_input: FormatterInput,
-        messages: list[object],
+        messages: list[ChatMessage],
         user_payload: dict[str, object],
         max_tokens: int,
     ) -> tuple[ContentDocument, tuple[CitationRef, ...]] | AgentOutput:
@@ -524,10 +544,11 @@ class FormatterAgent(BaseAgent):
         try:
             completion = await self._harness.call_llm(
                 self._config,
-                messages,  # type: ignore[arg-type]
+                messages,
                 response_format="json_schema",
                 response_model=ContentDocument,
                 max_tokens=max_tokens,
+                verbosity=VerbosityPolicy.to_api_verbosity(VerbosityPolicy.for_transformation(task_input.transformation)),
             )
             citations = self._resolve_citations(
                 completion,
@@ -596,6 +617,9 @@ class FormatterAgent(BaseAgent):
             style_hint=str(style_hint) if isinstance(style_hint, str) else None,
             final_text_len=final_text_len,
         )
+
+        if not mute_stream:
+            _emit_assumption_mark_before_stream(task_input)
 
         try:
             document, completion = await generate_document(

@@ -122,6 +122,8 @@ class CriticAgent(BaseAgent):
             worker_confidence=task_input.worker_confidence,
             has_attachment_context=bool((task_input.context_packet.untrusted_context or "").strip()),
             verbatim_requested=VERBATIM_EXTRACTION_CAPABILITY in caps,
+            uncertainty_disposition=(task_input.uncertainty_disposition or task_input.context_packet.uncertainty_disposition),
+            uncertainty_reason=(task_input.uncertainty_reason or task_input.context_packet.uncertainty_reason or None),
         )
         if not gate.invoke_llm:
             agent_metrics.record_node_execution(self._config.role, f"passthrough:{gate.reason}")

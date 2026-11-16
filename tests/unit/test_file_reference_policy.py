@@ -312,6 +312,60 @@ def test_short_generic_phrase_does_not_select_a_file_by_title_run() -> None:
     assert resolution.attachment_id is None
 
 
+def test_inline_prose_genre_word_does_not_name_multi_token_thread_file() -> None:
+    """Live UX: «подписала договор с ООО…» must not bind Договор_оказания_услуг.docx.
+
+    A lone leading title token on a multi-token stem is ordinary prose, not a named
+    storage re-read — otherwise every inline text task mentioning «договор» steals
+    the prior upload (055 / living assistant).
+    """
+    contract = _candidate("Договор_оказания_услуг.docx")
+    hint = (
+        "1. Кратко перескажи этот текст своими словами: "
+        "12 апреля 2023 года компания ТехноСфера подписала договор с ООО Инновации…"
+    )
+    resolution = FileReferencePolicy.resolve([contract], hint_text=hint)
+    assert resolution.status == "resolved"
+    assert resolution.reason == "single_thread_file"
+    assert FileReferencePolicy.is_named_reference(resolution) is False
+    assert FileReferencePolicy.promotes_thread_file_reread(resolution) is False
+
+    # Discriminating tokens of the title still name the file.
+    named = FileReferencePolicy.resolve(
+        [contract],
+        hint_text="перечитай договор оказания услуг ещё раз",
+    )
+    assert named.status == "resolved"
+    assert named.reason == "name_in_turn_text"
+    assert FileReferencePolicy.promotes_thread_file_reread(named) is True
+
+
+def test_doc_role_plus_leading_title_names_multi_token_thread_file() -> None:
+    """«сводка файла договор» / full stem shorthand still promotes storage re-read.
+
+    Doc-role introducer is structural evidence the lead token is a file title, not
+    prose — class of asks, not a phrase list (055).
+    """
+    contract = _candidate("Договор_оказания_услуг.docx")
+    other = _candidate("Обращение.docx")
+    shorthand = FileReferencePolicy.resolve(
+        [contract, other],
+        hint_text="сделай сводку файла договор",
+    )
+    assert shorthand.status == "resolved"
+    assert shorthand.attachment_id == contract.attachment_id
+    assert shorthand.reason == "name_in_turn_text"
+    assert FileReferencePolicy.promotes_thread_file_reread(shorthand) is True
+
+    full_stem = FileReferencePolicy.resolve(
+        [contract, other],
+        hint_text="вернись к файлу Договор_оказания_услуг",
+    )
+    assert full_stem.status == "resolved"
+    assert full_stem.attachment_id == contract.attachment_id
+    assert FileReferencePolicy.promotes_thread_file_reread(full_stem) is True
+
+
 def test_only_a_named_reference_promotes_the_turn_to_a_storage_read() -> None:
     """``single_thread_file`` is a convenience pick, not evidence the ask is about it."""
     only = _candidate("СФУТ 9.03-2025.pdf")

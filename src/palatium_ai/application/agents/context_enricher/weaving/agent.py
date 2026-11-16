@@ -124,6 +124,8 @@ class ContextWeaverAgent(BaseAgent):
             context_summary=context_summary,
             attachment_scope=task_input.attachment_scope,
             composer_mode=task_input.composer_mode,
+            uncertainty_disposition=task_input.uncertainty_disposition,
+            uncertainty_reason=task_input.uncertainty_reason,
         )
         output = ContextWeaverOutput(
             context_packet=context_packet,

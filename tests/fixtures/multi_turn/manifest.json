@@ -1,0 +1,34 @@
+{
+  "suite": "multi_turn",
+  "section": "§5",
+  "floor": 5,
+  "note": "Hand-authored dialogs; observable signals only (not full answer text). Pins in MULTI_TURN_REVISIONS. Floor=5; suite may grow (v1.1 reset×§4).",
+  "cases": [
+    {
+      "case_id": "mt_like_last_time_with_prior",
+      "file": "dialogs/like_last_time_with_prior.json",
+      "contrast_with_uncertainty_case": "like_last_time_without_history"
+    },
+    {
+      "case_id": "mt_topic_switch",
+      "file": "dialogs/topic_switch.json"
+    },
+    {
+      "case_id": "mt_requirement_refine",
+      "file": "dialogs/requirement_refine.json"
+    },
+    {
+      "case_id": "mt_correction_accept",
+      "file": "dialogs/correction_accept.json"
+    },
+    {
+      "case_id": "mt_explicit_reset",
+      "file": "dialogs/explicit_reset.json"
+    },
+    {
+      "case_id": "mt_reset_then_incomplete",
+      "file": "dialogs/reset_then_incomplete.json",
+      "note": "§4×§5: after reset, incomplete anaphora → clarification"
+    }
+  ]
+}

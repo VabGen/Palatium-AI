@@ -2,6 +2,7 @@
 
 """Доменные модели LLM."""
 
+from .controls import ReasoningEffort, TextVerbosity
 from .errors import StructuredOutputUnsupportedError, VisionImageUnavailableError, VisionUnsupportedError
 from .models import (
     VISION_IMAGE_MIMES,
@@ -23,7 +24,9 @@ __all__ = [
     "LLMResponseFormat",
     "LLMStreamDelta",
     "LLMUsage",
+    "ReasoningEffort",
     "StructuredOutputUnsupportedError",
+    "TextVerbosity",
     "VisionImageUnavailableError",
     "VisionUnsupportedError",
 ]

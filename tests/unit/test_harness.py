@@ -87,8 +87,9 @@ class _FlakyLLM:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        **_controls: object,
     ) -> LLMCompletion:
-        _ = messages, temperature, max_tokens, response_format, response_model, timeout_seconds
+        _ = messages, temperature, max_tokens, response_format, response_model, timeout_seconds, _controls
         self.calls += 1
         if self.calls == 1:
             raise RuntimeError("upstream returned 502")
@@ -116,8 +117,9 @@ class _EmptyThenValidLLM:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        **_controls: object,
     ) -> LLMCompletion:
-        _ = messages, temperature, max_tokens, response_format, response_model, timeout_seconds
+        _ = messages, temperature, max_tokens, response_format, response_model, timeout_seconds, _controls
         self.calls += 1
         if self._always_empty or self.calls == 1:
             return LLMCompletion(content="   ", model=model or "tier-small", finish_reason="stop")

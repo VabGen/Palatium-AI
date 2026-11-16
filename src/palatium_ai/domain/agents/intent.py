@@ -21,6 +21,7 @@ from palatium_ai.domain.policies.types import (
     FileReferenceKind,
     GroundingMode,
     MemoryMutationKind,
+    ResolvedUncertaintyDisposition,
     ResponseShape,
     TaskKind,
     TransformationKind,
@@ -174,6 +175,17 @@ class IntentClassifierOutput(BaseModel):
             "an execution must not silence the question next to it."
         ),
     )
+    #: §4: attached post-LLM by UncertaintyPolicy.for_pipeline (never raw ``unknown``).
+    #: Conducts Intent → ContextPacket → Formatter/Critic; not invented by the model.
+    uncertainty_disposition: ResolvedUncertaintyDisposition | None = Field(
+        default=None,
+        description=(
+            "Resolved incomplete-input disposition from UncertaintyPolicy. "
+            "None until the orchestrator attaches it; never raw residual unknown."
+        ),
+    )
+    #: Machine reason from UncertaintyDecision (Critic justifies honest_refusal with this).
+    uncertainty_reason: str = Field(default="", max_length=128)
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str = Field(min_length=1)
 

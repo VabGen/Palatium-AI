@@ -5,6 +5,78 @@ from __future__ import annotations
 from palatium_ai.domain.policies import CriticPolicy
 
 
+def test_honest_refusal_disposition_passthrough() -> None:
+    """§4: justified honest_refusal is policy success, not incompleteness."""
+    decision = CriticPolicy.decide(
+        selected_strategy="reason_only",
+        task_kind="knowledge_request",
+        continuation_kind=None,
+        classification_confidence=0.95,
+        confidence_threshold=0.7,
+        requires_mcp=False,
+        requires_tool_call=False,
+        worker_summary="Out of scope for this product.",
+        uncertainty_disposition="honest_refusal",
+        uncertainty_reason="out_of_scope",
+    )
+    assert decision.invoke_llm is False
+    assert decision.reason == "honest_refusal_policy_success"
+
+
+def test_unjustified_honest_refusal_invokes_critic() -> None:
+    """Bare honest_refusal without a policy trigger is a dodge — judge, don't pass."""
+    decision = CriticPolicy.decide(
+        selected_strategy="reason_only",
+        task_kind="knowledge_request",
+        continuation_kind=None,
+        classification_confidence=0.9,
+        confidence_threshold=0.7,
+        requires_mcp=False,
+        requires_tool_call=False,
+        worker_summary="I don't know.",
+        uncertainty_disposition="honest_refusal",
+        uncertainty_reason="",
+    )
+    assert decision.invoke_llm is True
+    assert decision.reason == "unjustified_honest_refusal"
+
+
+def test_planted_unknown_on_packet_is_not_wildcard_passthrough() -> None:
+    """Raw unknown forged on packet/downstream — Critic must NOT invent unknown_fallback:*."""
+    decision = CriticPolicy.decide(
+        selected_strategy="reason_only",
+        task_kind="knowledge_request",
+        continuation_kind=None,
+        classification_confidence=0.4,
+        confidence_threshold=0.7,
+        requires_mcp=False,
+        requires_tool_call=False,
+        worker_summary="Cannot assert.",
+        uncertainty_disposition="unknown",  # type: ignore[arg-type]
+        uncertainty_reason="low_confidence_in_scope",
+    )
+    assert decision.invoke_llm is True
+    assert decision.reason == "unresolved_unknown_disposition"
+
+
+def test_intent_resolved_unknown_fallback_still_passthrough() -> None:
+    """Intent for_pipeline already attached honest_refusal + unknown_fallback — justified."""
+    decision = CriticPolicy.decide(
+        selected_strategy="reason_only",
+        task_kind="knowledge_request",
+        continuation_kind=None,
+        classification_confidence=0.4,
+        confidence_threshold=0.7,
+        requires_mcp=False,
+        requires_tool_call=False,
+        worker_summary="Cannot assert.",
+        uncertainty_disposition="honest_refusal",
+        uncertainty_reason="unknown_fallback:low_confidence_in_scope",
+    )
+    assert decision.invoke_llm is False
+    assert decision.reason == "honest_refusal_policy_success"
+
+
 def test_format_passthrough_with_source() -> None:
     decision = CriticPolicy.decide(
         selected_strategy="format_only",

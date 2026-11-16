@@ -1,0 +1,44 @@
+{
+  "case_id": "mt_explicit_reset",
+  "note": "Explicit reset drops continuity trust; §4 uncertainty policy still applies on the new ask",
+  "turns": [
+    {"role": "user", "content": "Запомни: отчёт нужен в формате таблицы."},
+    {
+      "role": "assistant",
+      "content": "Ок, буду готовить отчёт таблицей."
+    },
+    {"role": "user", "content": "Начнём заново. Кто такой Палатиум?"}
+  ],
+  "check_turn_index": 2,
+  "frozen": {
+    "contextualizer": {
+      "rewritten_query": "Кто такой Палатиум?",
+      "continuation_kind": "new_topic",
+      "confidence": 0.95,
+      "refers_to_prior": false,
+      "prior_assistant_excerpt": null,
+      "reasoning": "explicit reset; discard prior format preference for this ask"
+    },
+    "raw_intent": {
+      "task_kind": "knowledge_request",
+      "requires_mcp": false,
+      "confidence": 0.9,
+      "grounding": "optional",
+      "reasoning": "standalone identity ask after reset"
+    },
+    "uncertainty_signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.9,
+      "grounding": "optional",
+      "has_prior_dialog": true,
+      "ambiguous_reference_without_prior": false,
+      "retrieval_empty": false
+    }
+  },
+  "expected": {
+    "continuation_kind": "new_topic",
+    "trust_prior_for_workers": false,
+    "prior_context_present": true,
+    "uncertainty_disposition": "default_with_mark"
+  }
+}

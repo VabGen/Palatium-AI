@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from palatium_ai.domain.agents.execution import ExecutionStrategy
 from palatium_ai.domain.policies.constitution import PrincipleId
+from palatium_ai.domain.policies.types import ResolvedUncertaintyDisposition
 
 from .context_packet import ContextPacket
 from .contracts import TaskResult
@@ -33,6 +34,10 @@ class CriticInput(BaseModel):
     #: constitution checks and judge evidence — without them, a name recall looks
     #: like an invented leak (055).
     memory_hints: tuple[str, ...] = ()
+    #: §4 resolved disposition. Justified ``honest_refusal`` is policy success
+    #: (Critic passthrough); bare refusal without a trigger invokes the judge.
+    uncertainty_disposition: ResolvedUncertaintyDisposition | None = None
+    uncertainty_reason: str = Field(default="", max_length=128)
 
 
 class CriticOutput(BaseModel):

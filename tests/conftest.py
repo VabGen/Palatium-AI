@@ -268,6 +268,7 @@ class FakeLLMPort:
         self._content = content
         self._model = model
         self.calls: list[list[ChatMessage]] = []
+        self.last_kwargs: dict[str, object] = {}
 
     async def generate(
         self,
@@ -279,8 +280,18 @@ class FakeLLMPort:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> LLMCompletion:
-        _ = temperature, max_tokens, response_format, response_model, timeout_seconds
+        self.last_kwargs = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "response_format": response_format,
+            "response_model": response_model,
+            "timeout_seconds": timeout_seconds,
+            "reasoning_effort": reasoning_effort,
+            "verbosity": verbosity,
+        }
         self.calls.append(messages)
         return LLMCompletion(content=self._content, model=model or self._model)
 
@@ -294,9 +305,20 @@ class FakeLLMPort:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
-        _ = temperature, max_tokens, response_format, response_model, timeout_seconds
-        self.calls.append(messages)
+        await self.generate(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            response_model=response_model,
+            timeout_seconds=timeout_seconds,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
+        )
         yield LLMStreamDelta(content=self._content)
 
 
@@ -319,8 +341,11 @@ class SequentialFakeLLMPort:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> LLMCompletion:
         _ = temperature, max_tokens, response_format, response_model, timeout_seconds
+        _ = reasoning_effort, verbosity
         self.calls.append(messages)
         if self._index >= len(self._responses):
             raise RuntimeError("SequentialFakeLLMPort has no more responses")
@@ -338,6 +363,8 @@ class SequentialFakeLLMPort:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         completion = await self.generate(
             messages,
@@ -347,6 +374,8 @@ class SequentialFakeLLMPort:
             response_format=response_format,
             timeout_seconds=timeout_seconds,
             response_model=response_model,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
         )
         yield LLMStreamDelta(content=completion.content)
 

@@ -1,0 +1,3 @@
+# TASK
+Clarify rarely — only when the ask is underspecified and no prior resolves it.
+Avoid false clarification when prior context already answers the follow-up.

@@ -118,6 +118,34 @@ VERBATIM_EXTRACTION_CAPABILITY = "verbatim_extraction"
 # raises grounding / MCP / researcher-tier floors the user asked for.
 ComposerMode = Literal["web_search", "deep_think", "agent"]
 
+# --- Uncertainty disposition (stateless incomplete-input contract, §4) ---
+
+# What the assistant does when the turn is incomplete / uncertain. Closed set (010):
+#   clarification      — named gap; default answer would be wrong (HITL/clarify card)
+#   default_with_mark   — proceed on a reasonable assumption; mark it (not silent invent)
+#   honest_refusal      — out of scope, or required data absent (no-data / refuse)
+#   unknown             — *residual only*: policy could not choose among the three above.
+#                         Never user-facing. Downstream MUST call
+#                         UncertaintyPolicy.resolve_for_downstream (fallback =
+#                         honest_refusal + reason prefix). Do not treat as «не знаю»
+#                         prose — that would dump unclassified turns on the user.
+# Orthogonal to task_kind: ClarificationGatePolicy / GroundingPolicy feed signals;
+# UncertaintyPolicy owns the disposition vocabulary so outcomes are not mixed in prompts.
+# Pipeline contract field carries the *resolved* disposition (never raw unknown).
+UncertaintyDisposition = Literal[
+    "clarification",
+    "default_with_mark",
+    "honest_refusal",
+    "unknown",
+]
+
+#: Dispositions allowed on Formatter/Critic inputs after resolve_for_downstream.
+ResolvedUncertaintyDisposition = Literal[
+    "clarification",
+    "default_with_mark",
+    "honest_refusal",
+]
+
 # --- Routing / execution (supervisor, researcher, critic) ---
 
 ExecutionStrategy = Literal[
@@ -288,12 +316,14 @@ __all__ = [
     "ModelTier",
     "PartialBlockOutcome",
     "PresentationOwner",
+    "ResolvedUncertaintyDisposition",
     "ResponseShape",
     "RouteStrategy",
     "StreamDisplay",
     "StreamingContract",
     "TaskKind",
     "TransformationKind",
+    "UncertaintyDisposition",
     "UnderspecificationKind",
     "UntrustedContentAction",
 ]

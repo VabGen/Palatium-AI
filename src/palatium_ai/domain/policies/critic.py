@@ -15,8 +15,11 @@ from palatium_ai.domain.memory.tool_output import contains_untrusted_tool_output
 from palatium_ai.domain.policies.types import (
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     ExecutionStrategy,
+    ResolvedUncertaintyDisposition,
     TaskKind,
+    UncertaintyDisposition,
 )
+from palatium_ai.domain.policies.uncertainty import UncertaintyPolicy
 
 _HIGH_CONFIDENCE_STRATEGIES = frozenset({"reason_only", "retrieve_then_reason", "data_analysis", "code_sandbox"})
 
@@ -57,11 +60,25 @@ class CriticPolicy:
         worker_confidence: float | None = None,
         has_attachment_context: bool = False,
         verbatim_requested: bool = False,
+        uncertainty_disposition: UncertaintyDisposition | ResolvedUncertaintyDisposition | None = None,
+        uncertainty_reason: str | None = None,
     ) -> CriticGateDecision:
         """Return whether Critic must call an LLM (fail-closed on risk signals)."""
         # Untrusted evidence always fails closed — even for extract asks.
         if contains_untrusted_tool_output(worker_summary):
             return _invoke("untrusted_tool_evidence")
+
+        # §4: raw ``unknown`` at Critic is a leak (forged packet / downstream), not Intent
+        # resolve. Never coerce here into ``unknown_fallback:*`` — that wildcard would
+        # turn any planted unknown into a free passthrough. Intent must attach
+        # ``honest_refusal`` + justified reason before this gate.
+        if uncertainty_disposition == "unknown":
+            return _invoke("unresolved_unknown_disposition")
+
+        if uncertainty_disposition == "honest_refusal":
+            if UncertaintyPolicy.is_justified_refusal_reason(uncertainty_reason):
+                return _passthrough("honest_refusal_policy_success")
+            return _invoke("unjustified_honest_refusal")
 
         # Verbatim extract: worker body *is* the answer. Do not invent incompleteness
         # / quality HITL that would also block Formatter passthrough (055).

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
     from pydantic import BaseModel
 
+    from palatium_ai.domain.llm.controls import ReasoningEffort, TextVerbosity
     from palatium_ai.domain.llm.models import (
         ChatMessage,
         LLMCompletion,
@@ -32,6 +33,8 @@ class LLMPort(Protocol):
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> LLMCompletion:
         """Выполняет синхронную генерацию текста."""
         ...
@@ -46,6 +49,8 @@ class LLMPort(Protocol):
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         """Возвращает поток частичных ответов."""
         ...

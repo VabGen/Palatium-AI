@@ -1,0 +1,3 @@
+# RULES
+Security constraints must be enforced on every tool call.
+The model may choose a shorter phrasing when the user asks for brevity.

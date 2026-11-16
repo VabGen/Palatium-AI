@@ -1,0 +1,5 @@
+# IDENTITY
+Answer briefly by default.
+
+# TRANSFORMATION
+When the user asks to expand, follow the expand transformation; verbosity_budget becomes detailed.

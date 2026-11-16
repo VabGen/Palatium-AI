@@ -11,7 +11,11 @@ from palatium_ai.domain.agents.contracts import TaskResult
 from palatium_ai.domain.content import ContentDocument
 from palatium_ai.domain.hitl.cards import HITLCardView
 from palatium_ai.domain.memory import DialogTurnWindow
-from palatium_ai.domain.policies.types import TRANSFORMATION_DEFAULT, TransformationKind
+from palatium_ai.domain.policies.types import (
+    TRANSFORMATION_DEFAULT,
+    ResolvedUncertaintyDisposition,
+    TransformationKind,
+)
 
 # Canonical structured answer (no markdown fallback field).
 FormatterOutput = ContentDocument
@@ -52,6 +56,10 @@ class FormatterInput(BaseModel):
     # Worker summary is a deterministic policy refusal (file unresolved / empty
     # grounding). Formatter must not LLM-rewrite it (W10 P0.3 EN upload ask).
     policy_refusal: bool = False
+    #: §4 resolved disposition (from Intent/packet). ``default_with_mark`` →
+    #: assumption mark is structural and must survive verbosity_budget=minimal.
+    uncertainty_disposition: ResolvedUncertaintyDisposition | None = None
+    uncertainty_reason: str = Field(default="", max_length=128)
 
 
 class FormatterTaskResult(TaskResult):

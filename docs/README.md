@@ -24,6 +24,7 @@
 | **[adr/0008-memory-origin-trust-ceiling.md](adr/0008-memory-origin-trust-ceiling.md)** | ADR: origin/trust ceiling на medium (ASI-06); proposed до soak CMD1 (2026-11-03) |
 | **[adr/0009-langgraph-supervisor-workers.md](adr/0009-langgraph-supervisor-workers.md)** | ADR: LangGraph Supervisor→workers→Critic; почему не Swarm/Agents SDK (2026-11-10) |
 | **[adr/0010-agents-audit-w1-w6-closure.md](adr/0010-agents-audit-w1-w6-closure.md)** | ADR: закрытие аудита agents W1–W6 — baseline refresh, PII fail-soft, reserve triggers (2026-11-10) |
+| **[../.cursor/plans/prompt-audit-backlog-2026.md](../.cursor/plans/prompt-audit-backlog-2026.md)** | CTCO/liveliness/dials: CI pin DONE; §2 conflict-linter @VabGen due 2026-12-05; затем role A/B → uncertainty → multi-turn → lean-cut (2026-11-16) |
 | **[adr/0011-observability-cost-contracts.md](adr/0011-observability-cost-contracts.md)** | ADR: observability / cost / contracts W7–W8 — LLM chokepoint, freshness, retry, caps (2026-11-10) |
 | **[adr/0012-product-quality-evals.md](adr/0012-product-quality-evals.md)** | ADR: product-quality evals W9 — semantic / context / multi-turn / formatter (2026-11-10) |
 | **[adr/0013-memory-scope-and-curation.md](adr/0013-memory-scope-and-curation.md)** | ADR: memory scope (`use_memory`) + verified fast-path promote / HITL clear (W11, 2026-11-12) |

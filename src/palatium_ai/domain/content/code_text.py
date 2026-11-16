@@ -91,9 +91,7 @@ _PY_COMMENT_THEN_CODE = re.compile(
     rf")$"
 )
 #: ``]result =`` / ``)print(`` — closing delim jammed into the next statement.
-_PY_DELIM_THEN_STMT = re.compile(
-    rf"(?P<delim>[\)\]\"'])(?P<code>(?:{_PY_STMT_HEAD}|[a-zA-Z_]\w*[ \t]*=))"
-)
+_PY_DELIM_THEN_STMT = re.compile(rf"(?P<delim>[\)\]\"'])(?P<code>(?:{_PY_STMT_HEAD}|[a-zA-Z_]\w*[ \t]*=))")
 
 #: CSS ``prop: value;`` runs on one long line (often inside an HTML ``<style>``).
 _CSS_DECLARATION = re.compile(r"[a-zA-Z-]+\s*:\s*[^;{}]+;")
@@ -149,8 +147,7 @@ def _soft_break_css_runs(content: str) -> str:
             return line
         out = re.sub(r"\{\s+", "{\n  ", line)
         out = _STMT_SEMI.sub(";\n  ", out)
-        out = re.sub(r"[ \t]+\}", "\n}", out)
-        return out
+        return re.sub(r"[ \t]+\}", "\n}", out)
 
     return "\n".join(_line(line) for line in content.split("\n"))
 
@@ -163,11 +160,7 @@ def _soft_break_python(content: str) -> str:
         if def_match is not None:
             ret = def_match.group("ret")
             header = def_match.group("header") + (f" {ret.strip()}" if ret else "") + ":"
-            result = (
-                result[: def_match.start()]
-                + f"{header}\n    {def_match.group('body')}"
-                + result[def_match.end() :]
-            )
+            result = result[: def_match.start()] + f"{header}\n    {def_match.group('body')}" + result[def_match.end() :]
         else:
             class_match = _PY_CLASS_BODY.search(result)
             if class_match is not None:
@@ -182,9 +175,7 @@ def _soft_break_python(content: str) -> str:
 def _repair_python_line(line: str) -> str:
     """Unstick ``# comment stmt`` and ``]next =`` glue on a single long line."""
     stripped = line.lstrip()
-    comment_glue = stripped.startswith("#") and (
-        "=" in stripped or "return" in stripped or "print" in stripped
-    )
+    comment_glue = stripped.startswith("#") and ("=" in stripped or "return" in stripped or "print" in stripped)
     if len(line) < _COLLAPSED_LINE_MIN and not comment_glue:
         return line
     current = line

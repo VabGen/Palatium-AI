@@ -211,7 +211,15 @@ class ContinuityPolicy:
         if survived == 0:
             return False
         ballooned = _rewrite_ballooned(len(user_text), len(rewritten))
-        return not (ballooned and survived * 2 < len(asked))
+        if not ballooned:
+            return True
+        # At-most-half survival under inflation is topic substitution.
+        if survived * 2 <= len(asked):
+            return False
+        # Inflected overlap («просил»/«просит», «договор»/«договора») can mark every
+        # ask token as survived while the rewrite still invents a new topic mass.
+        novel = _novel_content_token_count(asked, produced)
+        return novel <= max(len(asked), survived)
 
     @staticmethod
     def prior_assistant_content(
@@ -543,21 +551,17 @@ class ContinuityPolicy:
         A fenced upload turn still owns its own file (``has_turn_attachments``).
         """
         snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
-        if thread_file_named:
-            snap.file_reference = "thread_file"
-            if snap.kind == "clarify":
-                # The named file IS the referent: there is nothing left to clarify, and
-                # a clarification turn would never dispatch the storage read (055).
-                snap.kind = "answer"
-        elif (
-            snap.file_reference == "thread_file"
-            and not has_turn_attachments
-            and snap.attachment_scope not in _EXPLICIT_FILE_SCOPES
-        ):
-            # Evidence-first file axis: Intent alone + auto scope cannot force a
-            # storage re-read / file-choice card (living assistant — dialog first).
-            snap.file_reference = FILE_REFERENCE_DEFAULT
-        assistant_prior = cls.prior_assistant_content(contextualizer, dialog)
+        cls._apply_file_reference_axis(
+            snap,
+            thread_file_named=thread_file_named,
+            has_turn_attachments=has_turn_attachments,
+        )
+        assistant_prior = cls._assistant_prior_after_rewrite_gate(
+            snap,
+            contextualizer=contextualizer,
+            dialog=dialog,
+            user_text=user_text,
+        )
         if snap.choice_slot_filled:
             snap.requires_user_choice = False
             snap.underspec = "none"
@@ -594,6 +598,73 @@ class ContinuityPolicy:
         if answered is not None:
             return answered
 
+        return cls._finalize_untrusted_prior(
+            snap=snap,
+            assistant_prior=assistant_prior,
+            dialog=dialog,
+            has_turn_attachments=has_turn_attachments,
+            user_text=user_text,
+        )
+
+    @staticmethod
+    def _apply_file_reference_axis(
+        snap: _ResolveSnapshot,
+        *,
+        thread_file_named: bool,
+        has_turn_attachments: bool,
+    ) -> None:
+        """Promote named thread files; demote Intent-only ``thread_file``+``auto``."""
+        if thread_file_named:
+            snap.file_reference = "thread_file"
+            if snap.kind == "clarify":
+                # The named file IS the referent: there is nothing left to clarify, and
+                # a clarification turn would never dispatch the storage read (055).
+                snap.kind = "answer"
+            return
+        if (
+            snap.file_reference == "thread_file"
+            and not has_turn_attachments
+            and snap.attachment_scope not in _EXPLICIT_FILE_SCOPES
+        ):
+            # Evidence-first file axis: Intent alone + auto scope cannot force a
+            # storage re-read / file-choice card (living assistant — dialog first).
+            snap.file_reference = FILE_REFERENCE_DEFAULT
+
+    @classmethod
+    def _assistant_prior_after_rewrite_gate(
+        cls,
+        snap: _ResolveSnapshot,
+        *,
+        contextualizer: ContextualizerOutput | None,
+        dialog: DialogTurnWindow | None,
+        user_text: str | None,
+    ) -> str | None:
+        """Salient prior, cleared when Contextualizer replaced the user's ask (055)."""
+        rewrite_replaced_ask = bool(
+            contextualizer is not None
+            and (user_text or "").strip()
+            and not cls.rewrite_preserves_ask(
+                user_text=user_text or "",
+                rewritten=contextualizer.rewritten_query or "",
+            )
+        )
+        if rewrite_replaced_ask:
+            snap.kind = "new_topic"
+            snap.refers_to_prior = False
+            return None
+        return cls.prior_assistant_content(contextualizer, dialog)
+
+    @classmethod
+    def _finalize_untrusted_prior(
+        cls,
+        *,
+        snap: _ResolveSnapshot,
+        assistant_prior: str | None,
+        dialog: DialogTurnWindow | None,
+        has_turn_attachments: bool,
+        user_text: str | None,
+    ) -> EffectiveRoutingIntent:
+        """Clarify / Intent fallback when format and answer continuity did not own the turn."""
         gate_prior = bool(assistant_prior and assistant_prior.strip()) or bool(dialog is not None and dialog.turns)
         gate_user = (user_text or "").strip()
         if snap.kind == "clarify":
@@ -618,7 +689,6 @@ class ContinuityPolicy:
                 has_attachment_context=has_turn_attachments,
                 user_text=gate_user,
             )
-
         return cls._finalize(
             task_kind=snap.raw_task,
             requires_mcp=snap.requires_mcp,
@@ -877,9 +947,7 @@ class _ResolveSnapshot:
             ),
             response_shape=(raw_intent.response_shape if raw_intent is not None else RESPONSE_SHAPE_DEFAULT),
             file_reference=raw_intent.file_reference if raw_intent is not None else FILE_REFERENCE_DEFAULT,
-            attachment_scope=(
-                raw_intent.attachment_scope if raw_intent is not None else ATTACHMENT_SCOPE_DEFAULT
-            ),
+            attachment_scope=(raw_intent.attachment_scope if raw_intent is not None else ATTACHMENT_SCOPE_DEFAULT),
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,
@@ -905,6 +973,21 @@ def _tokens(text: str) -> tuple[str, ...]:
 def _content_tokens(text: str) -> tuple[str, ...]:
     """Tokens long enough to carry the request (skips prepositions structurally)."""
     return tuple(token for token in _tokens(text) if len(token) >= _ASK_TOKEN_MIN_CHARS)
+
+
+def _novel_content_token_count(asked: tuple[str, ...], produced: tuple[str, ...]) -> int:
+    """How many long rewrite tokens are not prefix-related to any ask token."""
+    count = 0
+    for candidate in produced:
+        if len(candidate) < _ASK_TOKEN_MIN_CHARS:
+            continue
+        related = any(
+            candidate.startswith(token[:_ASK_TOKEN_PREFIX_CHARS]) or token.startswith(candidate[:_ASK_TOKEN_PREFIX_CHARS])
+            for token in asked
+        )
+        if not related:
+            count += 1
+    return count
 
 
 def _rewrite_ballooned(raw_chars: int, rewritten_chars: int) -> bool:

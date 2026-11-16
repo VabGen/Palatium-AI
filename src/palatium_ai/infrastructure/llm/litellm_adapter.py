@@ -45,6 +45,16 @@ logger = structlog.get_logger(__name__)
 
 _UNSUPPORTED_MARKERS = ("not support", "unsupported", "unrecognized", "unknown parameter", "invalid parameter")
 _FORMAT_MARKERS = ("response_format", "json_schema", "strict")
+#: Providers known to accept OpenAI ``text.verbosity`` via LiteLLM.
+#: Expand only after verifying the dial is forwarded (OpenAI-compatible ≠ capable);
+#: Anthropic rejects the kwarg unless ``drop_params`` — we omit + debug-log instead.
+_VERBOSITY_CAPABLE: frozenset[str] = frozenset(
+    {
+        "openai",
+        "azure",
+        "azure_ai",
+    }
+)
 
 
 def is_structured_output_unsupported(exc: BaseException) -> bool:
@@ -432,6 +442,8 @@ class LiteLLMAdapter:
         response_format: LLMResponseFormat | None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> dict[str, Any]:
         """Shared LiteLLM kwargs (``stream`` passed as a Literal at the call site)."""
         resolved_model = resolve_litellm_model(
@@ -457,6 +469,20 @@ class LiteLLMAdapter:
             params["temperature"] = temperature
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
+        # 2026 dials: reasoning_effort is cross-vendor (LiteLLM → Anthropic
+        # output_config.effort); verbosity is capability-gated (see _VERBOSITY_CAPABLE).
+        if reasoning_effort is not None:
+            params["reasoning_effort"] = reasoning_effort
+        if verbosity is not None:
+            if self._provider in _VERBOSITY_CAPABLE:
+                params["verbosity"] = verbosity
+            else:
+                logger.debug(
+                    "llm.verbosity.dropped",
+                    provider=self._provider,
+                    verbosity=verbosity,
+                    reason="unsupported_by_provider",
+                )
         payload = build_provider_response_format(response_format, response_model)
         if payload is not None:
             params["response_format"] = payload
@@ -472,6 +498,8 @@ class LiteLLMAdapter:
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> LLMCompletion:
         """Выполняет синхронную генерацию текста (или vision-вызов при image_parts)."""
         image_urls = await self._vision_image_urls(messages)
@@ -482,6 +510,8 @@ class LiteLLMAdapter:
             response_format=response_format,
             response_model=response_model,
             timeout_seconds=timeout_seconds,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
         )
         params["messages"] = _to_litellm_messages(
             messages,
@@ -521,6 +551,8 @@ class LiteLLMAdapter:
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         """Возвращает поток частичных ответов (vision-вызов при image_parts)."""
         from time import perf_counter
@@ -535,6 +567,8 @@ class LiteLLMAdapter:
             response_format=response_format,
             response_model=response_model,
             timeout_seconds=timeout_seconds,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
         )
         # OpenAI-compatible: last chunk carries usage (and LiteLLM may attach cost).
         params["stream_options"] = {"include_usage": True}

@@ -16,6 +16,7 @@ from palatium_ai.domain.policies.types import (
     ComposerMode,
     FileReferenceKind,
     GroundingMode,
+    ResolvedUncertaintyDisposition,
     ResponseShape,
 )
 
@@ -52,6 +53,9 @@ class ContextWeaverInput(BaseModel):
     has_trusted_prior: bool = False
     #: Explicit composer chrome (mode pills); carried into ContextPacket / researcher tier.
     composer_mode: ComposerMode | None = None
+    #: §4 resolved disposition from Intent (never raw unknown).
+    uncertainty_disposition: ResolvedUncertaintyDisposition | None = None
+    uncertainty_reason: str = Field(default="", max_length=128)
 
 
 class ContextWeaverOutput(BaseModel):

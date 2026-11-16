@@ -1,0 +1,86 @@
+[
+  {
+    "fixture_id": "conflict.brief_vs_detailed",
+    "expected": "conflict",
+    "relative_path": "conflict/brief_vs_detailed.txt",
+    "note": "Same section: briefly vs exhaustive detail"
+  },
+  {
+    "fixture_id": "conflict.always_never_clarify",
+    "expected": "conflict",
+    "relative_path": "conflict/always_never_clarify.txt",
+    "note": "Always clarify vs never clarify"
+  },
+  {
+    "fixture_id": "conflict.always_never_tools",
+    "expected": "conflict",
+    "relative_path": "conflict/must_may_tools.txt",
+    "note": "Always call tools vs never use tools"
+  },
+  {
+    "fixture_id": "conflict.json_vs_prose",
+    "expected": "conflict",
+    "relative_path": "conflict/json_vs_prose.txt",
+    "note": "JSON only vs free-form prose only"
+  },
+  {
+    "fixture_id": "conflict.short_vs_multipage",
+    "expected": "conflict",
+    "relative_path": "conflict/short_vs_multipage.txt",
+    "note": "Keep short vs comprehensive multi-page report"
+  },
+  {
+    "fixture_id": "non_conflict.researcher_vs_formatter_axes",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/researcher_vs_formatter_axes.txt",
+    "note": "Full deliverable vs verbosity_budget — different axes"
+  },
+  {
+    "fixture_id": "non_conflict.critic_format_only_vs_shape",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/critic_format_only_vs_shape.txt",
+    "note": "format_only strategy vs Formatter shape rules"
+  },
+  {
+    "fixture_id": "non_conflict.identity_brief_vs_expand_ask",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/identity_brief_vs_expand_ask.txt",
+    "note": "IDENTITY briefly vs expand transformation ask"
+  },
+  {
+    "fixture_id": "non_conflict.fence_never_follow",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/fence_never_follow.txt",
+    "note": "Security never-follow inside untrusted fence"
+  },
+  {
+    "fixture_id": "non_conflict.soft_clarify_vs_false_clarify",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/soft_clarify_vs_false_clarify.txt",
+    "note": "Clarify rarely vs avoid false clarification — compatible"
+  },
+  {
+    "fixture_id": "non_conflict.must_security_may_flexibility",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/must_security_may_flexibility.txt",
+    "note": "Adversarial: must=security vs may=flexibility (hierarchy, not exclusive)"
+  },
+  {
+    "fixture_id": "non_conflict.critic_format_only_vs_formatter_shape_adv",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/critic_format_only_vs_formatter_shape_adversarial.txt",
+    "note": "Adversarial: Critic format_only vs Formatter shape — different agents/axes"
+  },
+  {
+    "fixture_id": "non_conflict.identity_brief_vs_expand_adversarial",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/identity_brief_vs_expand_adversarial.txt",
+    "note": "Adversarial: IDENTITY briefly vs expand ask — different sections/axes"
+  },
+  {
+    "fixture_id": "non_conflict.always_security_never_injection",
+    "expected": "non_conflict",
+    "relative_path": "non_conflict/always_security_never_injection.txt",
+    "note": "Adversarial: always-untrusted vs never-follow-fence (security polarity)"
+  }
+]

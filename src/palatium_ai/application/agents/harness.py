@@ -31,6 +31,7 @@ from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
 from palatium_ai.domain.agents.output_contracts import check_agent_output_schema
 from palatium_ai.domain.content.citations import CitationRef
+from palatium_ai.domain.llm.controls import ReasoningEffort, TextVerbosity
 from palatium_ai.domain.llm.errors import EmptyLLMCompletionError, StructuredOutputUnsupportedError
 from palatium_ai.domain.llm.models import (
     ChatMessage,
@@ -44,6 +45,7 @@ from palatium_ai.domain.memory.compact import CompactRequest
 from palatium_ai.domain.policies.llm_retry import default_llm_retry_policy, is_transient_llm_error
 from palatium_ai.domain.policies.llm_timeout import compute_llm_timeout_seconds
 from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyPolicy
+from palatium_ai.domain.policies.reasoning_effort import ReasoningEffortPolicy
 from palatium_ai.domain.policies.subagent_context import (
     assert_fresh_handoff_context,
     context_char_len,
@@ -388,6 +390,8 @@ class Harness:
         max_tokens: int | None,
         attempt: int,
         prompt_version: str,
+        reasoning_effort: ReasoningEffort | None,
+        verbosity: TextVerbosity | None,
     ) -> LLMCompletion:
         """One LLM attempt — empty completion raises into the retry loop (W8.3)."""
         logger.debug(
@@ -399,6 +403,8 @@ class Harness:
             max_retries=config.max_retries,
             response_format=response_format or "text",
             prompt_version=prompt_version,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
         )
         if self._cost_budget is not None:
             self._cost_budget.assert_turn_allows_call()
@@ -414,6 +420,8 @@ class Harness:
                 response_format=response_format,
                 response_model=response_model,
                 timeout_seconds=call_timeout,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
             ),
             timeout=call_timeout,
         )
@@ -451,12 +459,19 @@ class Harness:
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> LLMCompletion:
         """LLM with shared RetryPolicy backoff, budget guard, token metrics (030, W8.3)."""
         assert_json_schema_model(response_format, response_model)
         llm = self._resolve_llm(config)
         resolved_model = config.llm_model
         prompt_version = _prompt_version_for_role(config.role)
+        effort, verb = _resolve_llm_controls(
+            config,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
+        )
         policy = default_llm_retry_policy(max_attempts=config.max_retries)
         attempt_box = {"n": 0}
 
@@ -475,6 +490,8 @@ class Harness:
                 max_tokens=max_tokens,
                 attempt=attempt_box["n"],
                 prompt_version=prompt_version,
+                reasoning_effort=effort,
+                verbosity=verb,
             )
 
         def _on_retry(state: object) -> None:
@@ -525,6 +542,8 @@ class Harness:
         max_tokens: int | None,
         call_timeout: float,
         initial_model: str,
+        reasoning_effort: ReasoningEffort | None,
+        verbosity: TextVerbosity | None,
     ) -> tuple[LLMCompletion, bool]:
         """One stream attempt; returns (completion, forwarded_any_delta)."""
         forwarded = False
@@ -549,6 +568,8 @@ class Harness:
                     response_format=response_format,
                     response_model=response_model,
                     timeout_seconds=call_timeout,
+                    reasoning_effort=reasoning_effort,
+                    verbosity=verbosity,
                 ),
                 on_delta=_guarded_on_delta,
                 initial_model=initial_model,
@@ -583,11 +604,18 @@ class Harness:
         response_model: type[BaseModel] | None = None,
         on_delta: DeltaCallback | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> LLMCompletion:
         """Streaming LLM with retries only before the first delta (no UI duplicates)."""
         assert_json_schema_model(response_format, response_model)
         llm = self._resolve_llm(config)
         resolved_model = config.llm_model
+        effort, verb = _resolve_llm_controls(
+            config,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
+        )
         if self._cost_budget is not None:
             self._cost_budget.assert_turn_allows_call()
 
@@ -610,6 +638,8 @@ class Harness:
                     on_delta=on_delta,
                     max_tokens=max_tokens,
                     call_timeout=call_timeout,
+                    reasoning_effort=effort,
+                    verbosity=verb,
                     initial_model=initial_model,
                 )
                 return completion
@@ -937,6 +967,24 @@ def _is_retryable_llm_call(exc: BaseException) -> bool:
     if isinstance(exc, (CostBudgetExceededError, StructuredOutputUnsupportedError, CircuitOpenError)):
         return False
     return is_transient_llm_error(exc)
+
+
+def _resolve_llm_controls(
+    config: AgentConfig,
+    *,
+    reasoning_effort: ReasoningEffort | None,
+    verbosity: TextVerbosity | None,
+) -> tuple[ReasoningEffort, TextVerbosity | None]:
+    """Resolve depth vs length dials independently (call override > config > tier)."""
+    effort = (
+        reasoning_effort
+        if reasoning_effort is not None
+        else config.reasoning_effort
+        if config.reasoning_effort is not None
+        else ReasoningEffortPolicy.for_model_tier(config.model_tier)
+    )
+    verb = verbosity if verbosity is not None else config.verbosity
+    return effort, verb
 
 
 def _prompt_version_for_role(role: str) -> str:

@@ -239,18 +239,12 @@ class HitlCopyPolicy:
         if _use_cyrillic_copy(locale, title, prose_hint):
             return HitlReviewCopy(
                 title=title or "Требуется проверка",
-                body=(
-                    "Контроль качества отметил этот ответ. "
-                    "Подтвердите, чтобы оставить его, или отклоните для переработки."
-                ),
+                body=("Контроль качества отметил этот ответ. Подтвердите, чтобы оставить его, или отклоните для переработки."),
                 options=_review_options_ru(),
             )
         return HitlReviewCopy(
             title=title or "Review required",
-            body=(
-                "Quality gate flagged this answer. "
-                "Approve to keep it, or reject to regenerate."
-            ),
+            body=("Quality gate flagged this answer. Approve to keep it, or reject to regenerate."),
             options=_review_options_en(),
         )
 

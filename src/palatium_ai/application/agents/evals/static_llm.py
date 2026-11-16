@@ -27,9 +27,12 @@ class StaticLLMPort:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> LLMCompletion:
         self.calls.append(list(messages))
         _ = temperature, max_tokens, response_format, response_model, timeout_seconds
+        _ = reasoning_effort, verbosity
         return LLMCompletion(content=self._content, model=model or self._model)
 
     async def generate_stream(
@@ -42,6 +45,8 @@ class StaticLLMPort:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> AsyncIterator[LLMStreamDelta]:
         completion = await self.generate(
             messages,
@@ -51,6 +56,8 @@ class StaticLLMPort:
             response_format=response_format,
             response_model=response_model,
             timeout_seconds=timeout_seconds,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
         )
         yield LLMStreamDelta(
             content=completion.content,
@@ -78,6 +85,8 @@ class SequentialStaticLLMPort(StaticLLMPort):
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
     ) -> LLMCompletion:
         if self._index >= len(self._responses):
             return await super().generate(
@@ -88,9 +97,12 @@ class SequentialStaticLLMPort(StaticLLMPort):
                 response_format=response_format,
                 response_model=response_model,
                 timeout_seconds=timeout_seconds,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
             )
         self.calls.append(list(messages))
         content = self._responses[self._index]
         self._index += 1
         _ = temperature, max_tokens, response_format, response_model, timeout_seconds
+        _ = reasoning_effort, verbosity
         return LLMCompletion(content=content, model=model or self._model)

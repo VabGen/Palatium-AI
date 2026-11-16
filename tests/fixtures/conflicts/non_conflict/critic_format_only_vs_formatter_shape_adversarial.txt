@@ -1,0 +1,5 @@
+# CRITIC
+When route strategy is format_only, skip substance critique.
+
+# FORMATTER
+Apply ContentDocument shape rules and headings; form is Formatter's job, not Critic's.

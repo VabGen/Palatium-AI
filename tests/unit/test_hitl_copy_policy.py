@@ -42,10 +42,7 @@ def test_choice_fallback_title_und_cyrillic() -> None:
 
 def test_tool_approval_save_memory_hides_wire_details() -> None:
     """Big Tech: consequence + quote; no platform.save_memory / side_effect / ns UUID."""
-    preview = (
-        "ns=user/user-d60a00fb-5d6e-46a6-90a0-6f69b2e57de6; "
-        "key=user_name; type=fact; text=имя пользователя Геннадий"
-    )
+    preview = "ns=user/user-d60a00fb-5d6e-46a6-90a0-6f69b2e57de6; key=user_name; type=fact; text=имя пользователя Геннадий"
     copy = HitlCopyPolicy.tool_approval(
         locale="ru",
         server_name="platform",

@@ -1,0 +1,98 @@
+[
+  {
+    "case_id": "empty_context_fact_ask",
+    "note": "Empty thread + required grounding + empty retrieval → honest_refusal (no invent)",
+    "signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.9,
+      "grounding": "required",
+      "has_prior_dialog": false,
+      "has_attachment_context": false,
+      "retrieval_empty": true
+    },
+    "expected_disposition": "honest_refusal"
+  },
+  {
+    "case_id": "contradictory_choice_slot",
+    "note": "Named discrete_choice gap at high confidence → clarification",
+    "signals": {
+      "task_kind": "clarification_needed",
+      "underspecification_kind": "discrete_choice",
+      "requires_user_choice": true,
+      "confidence": 0.85,
+      "grounding": "none",
+      "has_prior_dialog": true
+    },
+    "expected_disposition": "clarification"
+  },
+  {
+    "case_id": "out_of_scope",
+    "note": "Ask outside product scope → honest_refusal",
+    "signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.95,
+      "grounding": "none",
+      "out_of_scope": true
+    },
+    "expected_disposition": "honest_refusal"
+  },
+  {
+    "case_id": "like_last_time_without_history",
+    "note": "Ambiguous reference with no prior (stateless half) → clarification",
+    "signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.8,
+      "grounding": "optional",
+      "has_prior_dialog": false,
+      "ambiguous_reference_without_prior": true
+    },
+    "expected_disposition": "clarification"
+  },
+  {
+    "case_id": "false_clarify_demoted",
+    "note": "clarification_needed without named gap → default_with_mark (not invent, not HITL)",
+    "signals": {
+      "task_kind": "clarification_needed",
+      "underspecification_kind": "none",
+      "requires_user_choice": false,
+      "confidence": 0.9,
+      "grounding": "optional"
+    },
+    "expected_disposition": "default_with_mark"
+  },
+  {
+    "case_id": "low_confidence_in_scope",
+    "note": "In-scope knowledge ask with low confidence → residual unknown (must resolve before user)",
+    "signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.4,
+      "grounding": "optional",
+      "has_prior_dialog": true,
+      "retrieval_empty": false
+    },
+    "expected_disposition": "unknown"
+  },
+  {
+    "case_id": "low_confidence_tool_edge",
+    "note": "In-scope tool_execution low confidence → residual unknown (edge twin)",
+    "signals": {
+      "task_kind": "tool_execution",
+      "confidence": 0.35,
+      "grounding": "optional",
+      "has_prior_dialog": false,
+      "retrieval_empty": false
+    },
+    "expected_disposition": "unknown"
+  },
+  {
+    "case_id": "optional_empty_assume",
+    "note": "Optional grounding + empty retrieval → default_with_mark (marked degrade)",
+    "signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.8,
+      "grounding": "optional",
+      "retrieval_empty": true
+    },
+    "expected_disposition": "default_with_mark"
+  }
+]

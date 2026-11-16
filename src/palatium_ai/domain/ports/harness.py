@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
     from palatium_ai.domain.agents.base import BaseAgent
     from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
+    from palatium_ai.domain.llm.controls import ReasoningEffort, TextVerbosity
     from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion, LLMResponseFormat
 
 
@@ -48,6 +49,8 @@ class HarnessPort(Protocol):
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> LLMCompletion:
         """LLM call with retry, timeout, metrics (agents must not hold LLMPort directly)."""
         ...
@@ -61,6 +64,8 @@ class HarnessPort(Protocol):
         response_model: type[BaseModel] | None = None,
         on_delta: Callable[[str], object] | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        verbosity: TextVerbosity | None = None,
     ) -> LLMCompletion:
         """Streaming LLM; accumulates content and optionally forwards deltas."""
         ...

@@ -1,0 +1,44 @@
+{
+  "case_id": "mt_reset_then_incomplete",
+  "note": "§4×§5 stitch: after explicit reset, incomplete anaphora still yields clarification (uncertainty survives; continuity does not)",
+  "turns": [
+    {"role": "user", "content": "Составь план отчёта таблицей."},
+    {
+      "role": "assistant",
+      "content": "План отчёта: колонки Дата / Статус / Владелец."
+    },
+    {"role": "user", "content": "Начнём заново."},
+    {"role": "user", "content": "Сделай как в прошлый раз."}
+  ],
+  "check_turn_index": 3,
+  "frozen": {
+    "contextualizer": {
+      "rewritten_query": "Сделай как в прошлый раз.",
+      "continuation_kind": "new_topic",
+      "confidence": 0.9,
+      "refers_to_prior": false,
+      "prior_assistant_excerpt": null,
+      "reasoning": "post-reset; prior format preference discarded"
+    },
+    "raw_intent": {
+      "task_kind": "knowledge_request",
+      "requires_mcp": false,
+      "confidence": 0.8,
+      "grounding": "optional",
+      "reasoning": "anaphora after reset; no usable prior"
+    },
+    "uncertainty_signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.8,
+      "grounding": "optional",
+      "has_prior_dialog": false,
+      "ambiguous_reference_without_prior": true
+    }
+  },
+  "expected": {
+    "continuation_kind": "new_topic",
+    "trust_prior_for_workers": false,
+    "prior_context_present": true,
+    "uncertainty_disposition": "clarification"
+  }
+}

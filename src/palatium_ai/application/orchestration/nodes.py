@@ -106,6 +106,7 @@ from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.memory_recall import MemoryRecallDecision
 from palatium_ai.domain.policies.parallel_workers import ParallelWorkerPolicy
 from palatium_ai.domain.policies.types import TRANSFORMATION_DEFAULT
+from palatium_ai.domain.policies.uncertainty import UncertaintyPolicy, UncertaintySignals
 
 if TYPE_CHECKING:
     from palatium_ai.application.agents.analyst import AnalystAgent
@@ -337,13 +338,33 @@ async def continuation_node(
             routing_intent=routing_intent,
             effective_user_text=effective_user_text,
         )
+        if raw_intent is not None:
+            # §4: attach resolved uncertainty disposition after Continuity remap (contract field).
+            has_prior = bool(window.turns)
+            raw_intent = UncertaintyPolicy.with_disposition(
+                raw_intent,
+                UncertaintySignals(
+                    task_kind=routing_intent.task_kind,
+                    underspecification_kind=routing_intent.underspecification_kind,
+                    requires_user_choice=routing_intent.requires_user_choice,
+                    confidence=raw_intent.confidence,
+                    grounding=routing_intent.grounding,
+                    has_prior_dialog=has_prior,
+                    has_attachment_context=entry_has_attachments,
+                    ambiguous_reference_without_prior=(
+                        not has_prior
+                        and routing_intent.continuation_kind in {"answer", "format"}
+                        and not (routing_intent.prior_context or "").strip()
+                    ),
+                ),
+            )
         update: AgentGraphState = {
             "contextualization": result,
             "effective_user_text": effective_user_text,
             "routing_intent": routing_intent,
             "untrusted_context": untrusted_context,
         }
-        if classification is not None and raw_intent is not None and classification.output is not raw_intent:
+        if classification is not None and raw_intent is not None:
             update["classification"] = classification.model_copy(update={"output": raw_intent})
         if recall_after is not None:
             update["memory_recall"] = recall_after

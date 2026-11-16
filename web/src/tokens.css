@@ -98,6 +98,22 @@
   --tracking-display: -0.035em;
 
   /*
+   * Compact density (SED ~400px right rail) — remapped on `.shell.is-compact`.
+   * Typography & Layout: same Brand Book scale, one step denser.
+   */
+  --text-xs-compact: 0.6875rem; /* 11 */
+  --text-sm-compact: 0.8125rem; /* 13 */
+  --text-base-compact: 0.875rem; /* 14 */
+  --text-md-compact: 0.875rem;
+  --text-lg-compact: 1rem;
+  --text-xl-compact: 1.125rem;
+  --zone-top-height-compact: 44px;
+  --shell-pad-x-compact: var(--space-2); /* 8 */
+  --shell-scroll-gutter-compact: 8px;
+  --space-transcript-compact: var(--space-3); /* 16 */
+  --radius-composer-compact: 18px;
+
+  /*
    * Typography triad (Brand Book): Inter · Geist Mono · Sentient.
    * K2: Inter Variable + Geist (Brand «Display» = Vercel Geist Sans OFL) + Geist Mono.
    * Serif: Sentient when licensed files present; else Georgia stack.

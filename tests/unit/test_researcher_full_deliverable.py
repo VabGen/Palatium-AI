@@ -51,8 +51,15 @@ def test_critic_prompt_rejects_meta_only_generation() -> None:
 
 
 def test_critic_prompt_uses_neutral_payload_names() -> None:
-    """Internal field names must not reach an LLM prompt: the model echoes them into prose."""
-    prompt = CRITIC_SYSTEM_PROMPT.lower()
+    """Critic-authored rules must not teach internal field names the model echoes into prose.
+
+    Constitution articles (appended after ``CONSTITUTION —``) may name domain inputs
+    such as ``memory_hints`` — that SoT is pinned separately in
+    ``test_constitution_policy``. This gate covers only the Critic instruction body.
+    """
+    authored, _sep, _constitution = CRITIC_SYSTEM_PROMPT.partition("CONSTITUTION —")
+    assert _sep, "Critic prompt must append the Constitution block"
+    prompt = authored.lower()
     assert "attachment_context" not in prompt
     assert "attached_files" in prompt
     assert "prior_context" not in prompt
@@ -75,3 +82,16 @@ def test_summary_clip_allows_full_letter_handoff() -> None:
     parsed = parse_researcher_output('{"summary": ' + __import__("json").dumps(body) + ', "confidence": 0.9, "sources_used": []}')
     assert parsed.summary == body
     assert not parsed.summary.endswith("…")
+
+
+def test_freeform_reason_only_prose_is_wrapped_not_raised() -> None:
+    """reason_only text tasks may ignore json_object — do not kill the turn (030.8)."""
+    prose = "1. Краткий пересказ: компания подписала соглашение.\n2. Парафраз: …"
+    parsed = parse_researcher_output(prose)
+    assert parsed.summary == prose
+    assert 0.0 < parsed.confidence <= 1.0
+    assert "llm_freeform" in parsed.sources_used
+
+    as_string = parse_researcher_output('"просто текстовый ответ"')
+    assert as_string.summary == "просто текстовый ответ"
+    assert "llm_freeform" in as_string.sources_used

@@ -1,0 +1,45 @@
+{
+  "case_id": "mt_requirement_refine",
+  "note": "Adversarial: «сделай короче» after detailed is refine/format, not contradiction or clarify",
+  "turns": [
+    {"role": "user", "content": "Опиши подробно процесс онбординга нового сотрудника."},
+    {
+      "role": "assistant",
+      "content": "Онбординг включает: документы, доступы, наставника, чек-лист первой недели и промежуточный review на 30-й день."
+    },
+    {"role": "user", "content": "Сделай короче."}
+  ],
+  "check_turn_index": 2,
+  "frozen": {
+    "contextualizer": {
+      "rewritten_query": "Сделай короче.",
+      "continuation_kind": "format",
+      "confidence": 0.93,
+      "refers_to_prior": true,
+      "prior_assistant_excerpt": "Онбординг включает: документы, доступы, наставника, чек-лист первой недели и промежуточный review на 30-й день.",
+      "reasoning": "length refine; rewrite = ask (no balloon) so format path keeps prior"
+    },
+    "raw_intent": {
+      "task_kind": "response_formatting",
+      "requires_mcp": false,
+      "confidence": 0.9,
+      "grounding": "none",
+      "transformation": "shorten",
+      "reasoning": "shorten prior"
+    },
+    "uncertainty_signals": {
+      "task_kind": "response_formatting",
+      "confidence": 0.9,
+      "grounding": "none",
+      "has_prior_dialog": true,
+      "ambiguous_reference_without_prior": false
+    }
+  },
+  "expected": {
+    "continuation_kind": "format",
+    "trust_prior_for_workers": true,
+    "prior_context_present": true,
+    "transformation": "shorten",
+    "uncertainty_disposition": "default_with_mark"
+  }
+}

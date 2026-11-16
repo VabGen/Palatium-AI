@@ -1,0 +1,44 @@
+{
+  "case_id": "mt_topic_switch",
+  "note": "Setup topic A then unrelated B → new_topic; prior not trusted for workers",
+  "turns": [
+    {"role": "user", "content": "Какой статус договора №42?"},
+    {
+      "role": "assistant",
+      "content": "Договор №42 на согласовании у юр. отдела, срок до пятницы."
+    },
+    {"role": "user", "content": "Какая погода в Минске завтра?"}
+  ],
+  "check_turn_index": 2,
+  "frozen": {
+    "contextualizer": {
+      "rewritten_query": "Какая погода в Минске завтра?",
+      "continuation_kind": "new_topic",
+      "confidence": 0.92,
+      "refers_to_prior": false,
+      "prior_assistant_excerpt": null,
+      "reasoning": "unrelated ask; no anaphora to contract"
+    },
+    "raw_intent": {
+      "task_kind": "knowledge_request",
+      "requires_mcp": false,
+      "confidence": 0.9,
+      "grounding": "optional",
+      "reasoning": "standalone weather ask"
+    },
+    "uncertainty_signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.9,
+      "grounding": "optional",
+      "has_prior_dialog": true,
+      "ambiguous_reference_without_prior": false,
+      "retrieval_empty": false
+    }
+  },
+  "expected": {
+    "continuation_kind": "new_topic",
+    "trust_prior_for_workers": false,
+    "prior_context_present": true,
+    "uncertainty_disposition": "default_with_mark"
+  }
+}

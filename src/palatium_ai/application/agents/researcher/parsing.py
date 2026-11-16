@@ -11,7 +11,7 @@ from palatium_ai.application.agents.researcher.config import SUMMARY_MAX_CHARS
 from palatium_ai.application.tools.mcp import MCPToolCallOutcome
 from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutput
-from palatium_ai.domain.llm.json_codec import loads_llm_json
+from palatium_ai.domain.llm.json_codec import LLMJSONError, loads_llm_json
 from palatium_ai.domain.memory.tool_output import (
     compress_worker_context,
     wrap_untrusted_tool_output,
@@ -56,10 +56,25 @@ def decode_researcher_input(input_context: dict[str, str]) -> ResearcherInput:
 
 
 def parse_researcher_output(raw_content: str) -> ResearcherOutput:
-    """Parse LLM JSON into ResearcherOutput with hardening against malformed values."""
-    payload = loads_llm_json(raw_content)
+    """Parse LLM JSON into ResearcherOutput with hardening against malformed values.
+
+    Freeform / non-object payloads (reason_only text tasks that ignore
+    ``response_format=json_object``) degrade to a summary envelope instead of
+    killing the turn with ``Researcher JSON must be an object`` (030.8).
+    """
+    text = (raw_content or "").strip()
+    if not text:
+        raise ValueError("Researcher output empty")
+
+    try:
+        payload = loads_llm_json(text)
+    except LLMJSONError:
+        return _freeform_researcher_output(text)
+
+    if isinstance(payload, str):
+        return _freeform_researcher_output(payload.strip() or text)
     if not isinstance(payload, dict):
-        raise ValueError("Researcher JSON must be an object")
+        return _freeform_researcher_output(text)
 
     raw_summary = payload.get("summary", "No summary provided")
     summary = str(raw_summary).strip() or "No summary provided"
@@ -82,6 +97,41 @@ def parse_researcher_output(raw_content: str) -> ResearcherOutput:
         confidence=confidence,
         sources_used=sources,
     )
+
+
+# Soft confidence when the model returned prose instead of the JSON envelope (030.4).
+_FREEFORM_CONFIDENCE_FLOOR = 0.40
+_FREEFORM_CONFIDENCE_CEILING = 0.75
+_FREEFORM_CONFIDENCE_CHARS_FULL = 500
+
+
+def _freeform_researcher_output(text: str) -> ResearcherOutput:
+    """Wrap non-object LLM text as a Researcher summary (reason_only resilience)."""
+    summary = _unwrap_json_string(text.strip()) or "No summary provided"
+    if len(summary) > SUMMARY_MAX_CHARS:
+        summary = summary[:SUMMARY_MAX_CHARS].rstrip() + "…"
+    ratio = min(1.0, len(summary) / float(_FREEFORM_CONFIDENCE_CHARS_FULL))
+    confidence = round(
+        _FREEFORM_CONFIDENCE_FLOOR + (_FREEFORM_CONFIDENCE_CEILING - _FREEFORM_CONFIDENCE_FLOOR) * ratio,
+        3,
+    )
+    return ResearcherOutput(
+        summary=summary,
+        confidence=confidence,
+        sources_used=("llm_freeform",),
+    )
+
+
+def _unwrap_json_string(text: str) -> str:
+    """Decode a top-level JSON string when the object codec rejected it."""
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        if isinstance(loaded, str) and loaded.strip():
+            return loaded.strip()
+    return text
 
 
 def approval_granted(decision: object) -> bool:

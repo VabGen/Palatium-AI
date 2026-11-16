@@ -1101,6 +1101,74 @@ def test_ballooned_rewrite_that_keeps_one_token_is_pinned_back() -> None:
     )
 
 
+def test_pushback_rewrite_that_reasserts_rejected_topic_is_demoted() -> None:
+    """«я не просил договор» must not trust prior / sticky-fence the rejected file.
+
+    Contextualizer may still emit answer+refers_to_prior with a ballooned rewrite
+    that re-analyses Contract 15/2026. Continuity must treat that as ask substitution:
+    new_topic, no prior_context, no trust_prior (055).
+    """
+    raw = "я не просил договор"
+    rewritten = (
+        "Пользователь просит полный анализ договора №15/2026 об оказании услуг "
+        "между ООО ТехноСфера и ООО Инновации: стороны, предмет, сроки и штрафы."
+    )
+    assert not ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten=rewritten)
+    assert (
+        ContinuityPolicy.resolve_effective_user_text(
+            raw_user_text=raw,
+            rewritten_query=rewritten,
+            has_turn_attachments=False,
+        )
+        == raw
+    )
+    ctx = ContextualizerOutput(
+        rewritten_query=rewritten,
+        continuation_kind="answer",
+        confidence=0.9,
+        refers_to_prior=True,
+        prior_assistant_excerpt="Договор №15/2026 об оказании услуг…",
+        reasoning="user asks about the contract again",
+    )
+    raw_intent = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        confidence=0.8,
+        reasoning="analysis",
+    )
+    dialog = DialogTurnWindow(
+        thread_id="t-pushback",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-pushback",
+                role="assistant",
+                content="Договор №15/2026 об оказании услуг…",
+                seq=0,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-pushback",
+                role="user",
+                content=raw,
+                seq=1,
+                created_at=datetime.now(UTC),
+            ),
+        ),
+        limit=12,
+    )
+    routing = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=dialog,
+        raw_intent=raw_intent,
+        user_text=raw,
+    )
+    assert routing.continuation_kind == "new_topic"
+    assert routing.trust_prior_for_workers is False
+    assert routing.prior_context is None
+
+
 def test_named_thread_file_forces_the_storage_axis() -> None:
     """A file named in code needs ``platform.read_attachment``, not a formatter echo."""
     ctx = ContextualizerOutput(

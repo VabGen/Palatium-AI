@@ -57,6 +57,167 @@ textarea {
   box-sizing: border-box;
 }
 
+/*
+ * Compact density — SED / host right rail (~400px).
+ * Driven by ResizeObserver → `.is-compact` (shell width, not viewport).
+ * Согласно Typography & Layout + Color System: denser type/spacing tokens only.
+ */
+.shell.is-compact {
+  --shell-pad-x: var(--shell-pad-x-compact);
+  --shell-scroll-gutter: var(--shell-scroll-gutter-compact);
+  --zone-top-height: var(--zone-top-height-compact);
+  --space-transcript: var(--space-transcript-compact);
+  --radius-composer: var(--radius-composer-compact);
+  --text-xs: var(--text-xs-compact);
+  --text-sm: var(--text-sm-compact);
+  --text-base: var(--text-base-compact);
+  --text-md: var(--text-md-compact);
+  --text-lg: var(--text-lg-compact);
+  --text-xl: var(--text-xl-compact);
+  --leading-body: 1.45;
+  --leading-prose: 1.5;
+}
+
+.shell.is-compact .shell-stage {
+  height: calc(100% - 8px);
+  margin: 4px 4px 4px 0;
+  border-radius: 10px;
+  padding: 0 var(--shell-pad-x);
+}
+
+.shell.is-compact .shell-stage:has(.transcript),
+.shell.is-compact .shell-stage:has(.composer-stack--product.is-home) {
+  padding-right: calc(var(--shell-pad-x) + var(--shell-scroll-gutter));
+}
+
+.shell.is-compact .top-bar {
+  gap: var(--space-1);
+}
+
+.shell.is-compact .top-bar__thread-title,
+.shell.is-compact .top-bar__page-title {
+  font-size: var(--text-sm);
+}
+
+.shell.is-compact .transcript {
+  gap: var(--space-3);
+  padding: 10px 2px 20px;
+  font-size: var(--text-base);
+}
+
+.shell.is-compact .msg.user {
+  max-width: 100%;
+  font-size: var(--text-sm);
+  padding: 8px 10px;
+}
+
+.shell.is-compact .empty h2 {
+  font-size: clamp(1.25rem, 6vw, 1.55rem);
+}
+
+.shell.is-compact .empty-lede,
+.shell.is-compact .empty p {
+  font-size: var(--text-sm);
+}
+
+.shell.is-compact .product-chips,
+.shell.is-compact .product-showcase {
+  gap: var(--space-1);
+}
+
+.shell.is-compact .suggestion,
+.shell.is-compact .product-chip {
+  font-size: var(--text-xs);
+  padding: 6px 10px;
+}
+
+.shell.is-compact .hitl-card {
+  padding: var(--space-2);
+  border-radius: 10px;
+}
+
+.shell.is-compact .hitl-header h3 {
+  font-size: var(--text-sm);
+  line-height: 20px;
+}
+
+.shell.is-compact .hitl-header p,
+.shell.is-compact .hitl-meta {
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+
+.shell.is-compact .hitl-options {
+  gap: var(--space-1);
+}
+
+.shell.is-compact .hitl-options .action-card {
+  min-height: 40px;
+  padding: 8px 10px;
+  font-size: var(--text-sm);
+}
+
+.shell.is-compact .answer-file-card,
+.shell.is-compact .artifact-anchor {
+  padding: 8px 10px;
+  font-size: var(--text-sm);
+}
+
+.shell.is-compact .composer-stack--product {
+  padding-inline: 0;
+}
+
+.shell.is-compact .composer {
+  border-radius: var(--radius-composer);
+  padding: 8px 10px;
+}
+
+/* Keep ≥16px on the editable field — iOS zooms inputs below 16px. */
+.shell.is-compact .composer textarea {
+  font-size: 16px;
+  min-height: 40px;
+  line-height: 1.4;
+}
+
+.shell.is-compact .composer-toolbar,
+.shell.is-compact .composer-modes {
+  gap: 4px;
+  padding-bottom: 4px;
+}
+
+.shell.is-compact .composer-mode-pill,
+.shell.is-compact .composer-context-chip {
+  font-size: var(--text-xs);
+  padding: 4px 8px;
+}
+
+.shell.is-compact .send-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.shell.is-compact .block-doc,
+.shell.is-compact .block-paragraph,
+.shell.is-compact .msg-body {
+  font-size: var(--text-base);
+  line-height: var(--leading-prose);
+}
+
+.shell.is-compact .kv-row {
+  grid-template-columns: 1fr;
+  gap: 2px 0;
+  font-size: var(--text-sm);
+}
+
+.shell.is-compact .msg-actions {
+  opacity: 1;
+  gap: 2px;
+}
+
+.shell.is-compact .dialogue-nav {
+  display: none;
+}
+
 .shell-stage {
   position: relative;
   min-width: 0;
@@ -4450,6 +4611,7 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
  * kimi.ai `.new-chat-btn`: full column width (= nav rows via top gutter),
  * 40px / r12. No Ctrl/K in chrome.
  */
+/* kimi.ai `.new-chat-btn`: Labels Primary · 14/20 Medium — Typography (sidebar). */
 .history-sidebar__new {
   display: flex;
   align-items: center;
@@ -4465,9 +4627,9 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
   border: 1px solid color-mix(in srgb, var(--kimi-neutral) 13%, transparent);
   border-radius: 12px;
   background: var(--kimi-pure-white);
-  color: var(--text);
-  font: inherit;
-  font-size: 14px;
+  color: var(--kimi-labels-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
   font-weight: 500;
   line-height: 20px;
   cursor: pointer;
@@ -4509,12 +4671,14 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
   min-height: 0;
 }
 
+/* kimi.ai section labels («Проекты» / «Чаты»): Labels Tertiary · 12/28 Regular. */
 .history-sidebar__heading {
   margin: 0;
   padding: 0 6px;
-  font-size: 14px;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
   font-weight: 400;
-  color: color-mix(in srgb, var(--kimi-neutral) 45%, transparent);
+  color: var(--kimi-labels-tertiary);
   letter-spacing: normal;
   text-transform: none;
   line-height: 28px;
@@ -4530,24 +4694,25 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
   padding: 0 6px;
   border: 0;
   background: transparent;
-  color: color-mix(in srgb, var(--kimi-neutral) 45%, transparent);
-  font: inherit;
-  font-size: 14px;
+  color: var(--kimi-labels-tertiary);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
   font-weight: 400;
+  line-height: 28px;
   cursor: pointer;
   border-radius: 8px;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .history-sidebar__section-toggle:hover {
-    color: var(--text);
+    color: var(--kimi-labels-primary);
     background: var(--bg-soft);
   }
 }
 
 .history-sidebar__section-chevron {
   flex: none;
-  color: color-mix(in srgb, var(--kimi-neutral) 45%, transparent);
+  color: var(--kimi-labels-tertiary);
 }
 
 .history-sidebar__create-project {
@@ -4588,8 +4753,11 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
   align-items: center;
   gap: 8px;
   padding: 0 8px;
-  color: var(--text-muted);
-  font-size: 14px;
+  color: var(--kimi-labels-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: 20px;
 }
 
 /* kimi.ai `.next-sidebar-project-item`: wash on the ROW (includes ···). */
@@ -4601,21 +4769,22 @@ button.history-sidebar__project-row {
   background: transparent;
   border-radius: 12px;
   cursor: pointer;
-  font: inherit;
-  font-size: 14px;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
   font-weight: 400;
   line-height: 20px;
   text-align: left;
-  color: color-mix(in srgb, var(--kimi-neutral) 90%, transparent);
+  color: var(--kimi-labels-primary);
 }
 
 button.history-sidebar__project-row.is-active {
-  color: var(--text);
+  color: var(--kimi-labels-primary);
+  font-weight: 500;
 }
 
 @media (hover: hover) and (pointer: fine) {
   button.history-sidebar__project-row:hover {
-    color: var(--text);
+    color: var(--kimi-labels-primary);
   }
 }
 
@@ -4672,6 +4841,7 @@ button.history-sidebar__project-row.is-active {
   margin: 0;
 }
 
+/* kimi.ai nav / chat / project rows: Labels Primary · 14/20 Regular. */
 .history-sidebar__item {
   flex: 1 1 auto;
   width: 100%;
@@ -4682,19 +4852,21 @@ button.history-sidebar__project-row.is-active {
   gap: 6px;
   border: 0;
   background: transparent;
-  color: color-mix(in srgb, var(--kimi-neutral) 90%, transparent);
+  color: var(--kimi-labels-primary);
   border-radius: 12px;
   /* Right pad clears the absolute ··· (24) + inset (8). */
   padding: 0 40px 0 8px;
   text-align: left;
   cursor: pointer;
-  font: inherit;
-  font-size: 14px;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
   font-weight: 400;
+  line-height: 20px;
 }
 
 .history-sidebar__item.is-active {
-  color: var(--text);
+  color: var(--kimi-labels-primary);
+  font-weight: 500;
 }
 
 /*
@@ -4815,7 +4987,7 @@ button.history-sidebar__project-row.is-active {
 
 .history-sidebar__link.is-muted {
   pointer-events: none;
-  color: color-mix(in srgb, var(--kimi-neutral) 45%, transparent);
+  color: var(--kimi-labels-tertiary);
 }
 
 .history-sidebar__pin {
@@ -4866,7 +5038,8 @@ button.history-sidebar__project-row.is-active {
   min-width: 0;
   overflow: hidden;
   max-width: 100%;
-  color: color-mix(in srgb, var(--kimi-neutral) 90%, transparent);
+  color: var(--kimi-labels-primary);
+  font-family: var(--font-body);
   font-size: var(--text-sm);
   font-weight: 500;
   line-height: 20px;
@@ -4920,9 +5093,11 @@ button.history-sidebar__project-row.is-active {
   background: transparent;
   border-radius: 0;
   padding: 0;
-  font-size: 14px;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
   font-weight: 500;
-  color: color-mix(in srgb, var(--kimi-neutral) 90%, transparent);
+  line-height: 20px;
+  color: var(--kimi-labels-primary);
 }
 
 .kimi-dd__trigger--profile:hover,
@@ -5405,7 +5580,7 @@ button.history-sidebar__project-row.is-active {
   }
 
   .history-sidebar__link:hover {
-    color: var(--text);
+    color: var(--kimi-labels-primary);
   }
 }
 
@@ -6179,7 +6354,84 @@ button.history-sidebar__project-row.is-active {
 }
 
 .brand-doodle__stroke {
-  color: var(--kimi-brand-blue);
+  /* Soft sky accent — Color System ``brand-blue-soft``, not hard signature blue. */
+  color: var(--kimi-brand-blue-soft);
+}
+
+/*
+ * Asymmetric doodle underline (reference screenshot):
+ * — organic uneven peaks (not tiled sine)
+ * — ends dissolve via SVG mask
+ * — alive via opacity crossfade of two sibling paths (GPU opacity only)
+ */
+.brand-doodle__wave {
+  opacity: 0;
+  animation: brand-wave-enter var(--duration-slow) var(--ease-out) 0.35s both;
+}
+
+.brand-doodle__stroke--a,
+.brand-doodle__stroke--b {
+  will-change: opacity;
+}
+
+.brand-doodle__stroke--a {
+  opacity: 0.85;
+  animation: brand-wave-a 5.2s var(--ease-in-out) 0.9s infinite;
+}
+
+.brand-doodle__stroke--b {
+  opacity: 0.2;
+  animation: brand-wave-b 5.2s var(--ease-in-out) 0.9s infinite;
+}
+
+@keyframes brand-wave-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes brand-wave-a {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 0.18;
+  }
+}
+
+@keyframes brand-wave-b {
+  0%,
+  100% {
+    opacity: 0.18;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-doodle__wave {
+    animation: none;
+    opacity: 1;
+  }
+
+  .brand-doodle__stroke--a,
+  .brand-doodle__stroke--b {
+    animation: none;
+    will-change: auto;
+  }
+
+  .brand-doodle__stroke--a {
+    opacity: 0.85;
+  }
+
+  .brand-doodle__stroke--b {
+    opacity: 0;
+  }
 }
 
 @media (max-width: 720px) {
@@ -6453,7 +6705,7 @@ button.history-sidebar__project-row.is-active {
 .composer-hero__live {
   display: flex;
   justify-content: center;
-  animation: hero-idle 6s var(--ease-out) 0.8s infinite;
+  /* Wordmark type stays still — motion lives on ``.brand-doodle__wave`` only. */
 }
 
 .composer-home-wordmark {
@@ -6468,10 +6720,6 @@ button.history-sidebar__project-row.is-active {
   animation: none;
 }
 
-.composer-hero.is-logo-hidden .composer-hero__live {
-  animation: none;
-}
-
 @keyframes hero-enter {
   from {
     opacity: 0;
@@ -6483,19 +6731,8 @@ button.history-sidebar__project-row.is-active {
   }
 }
 
-@keyframes hero-idle {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-3px);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .composer-hero,
-  .composer-hero__live {
+  .composer-hero {
     animation: none;
   }
 }
@@ -8098,7 +8335,7 @@ button.history-sidebar__project-row.is-active {
   gap: 1px;
 }
 
-/* kimi.ai `.next-sidebar-nav-item`: 36px row, r10, 8px inset, 6px icon gap. */
+/* kimi.ai `.next-sidebar-nav-item`: Labels Primary · 14/20 Regular (Typography). */
 .history-sidebar__rail-item {
   display: flex;
   align-items: center;
@@ -8107,9 +8344,9 @@ button.history-sidebar__project-row.is-active {
   min-height: 36px;
   border: 0;
   background: transparent;
-  color: color-mix(in srgb, var(--kimi-neutral) 90%, transparent);
-  font: inherit;
-  font-size: 14px;
+  color: var(--kimi-labels-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
   font-weight: 400;
   line-height: 20px;
   padding: 0 8px;
@@ -8152,17 +8389,18 @@ button.history-sidebar__project-row.is-active {
 }
 
 .history-sidebar__rail-item--more {
-  color: color-mix(in srgb, var(--kimi-neutral) 45%, transparent);
+  color: var(--kimi-labels-tertiary);
 }
 
 /* Active = route selection only. Hover wash lives in `(hover:hover) and (pointer:fine)`. */
 .history-sidebar__rail-item.is-active {
   background: color-mix(in srgb, var(--kimi-neutral) 5%, transparent);
-  color: var(--text);
+  color: var(--kimi-labels-primary);
+  font-weight: 500;
 }
 
 .history-sidebar__rail-item--more.is-active {
-  color: var(--text);
+  color: var(--kimi-labels-primary);
 }
 
 /* More row = overflow button + Customize Sidebar gear (kimi.ai hover affordance). */
@@ -8265,6 +8503,7 @@ button.history-sidebar__project-row.is-active {
   }
 }
 
+/* kimi.ai «Все чаты»: same scale as section labels (12 Regular · Tertiary). */
 .history-sidebar__link {
   display: inline-flex;
   align-items: center;
@@ -8272,10 +8511,11 @@ button.history-sidebar__project-row.is-active {
   height: 28px;
   border: 0;
   background: transparent;
-  color: color-mix(in srgb, var(--kimi-neutral) 45%, transparent);
-  font: inherit;
-  font-size: 14px;
+  color: var(--kimi-labels-tertiary);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
   font-weight: 400;
+  line-height: 20px;
   cursor: pointer;
   padding: 0 6px;
   border-radius: 8px;

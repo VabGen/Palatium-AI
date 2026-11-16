@@ -8,7 +8,9 @@ Gates (in order):
   4. skills-lock — product ``skills/procedural/skills-lock.json`` drift (CMD4; warn-only).
   5. layers      — hexagonal import contract from rule 000 (``scripts/check_import_layers.py``).
   6. mypy        — ``--strict`` on the platform package.
-  7. pytest      — ``tests/`` suite (``slow`` load tests deselected — 080/075) + coverage.
+  7. pytest      — ``tests/`` suite (``slow`` / live deselected — 080/075) + coverage.
+                 Prompt-audit closures + LLM dials unit/smoke ride this selection
+                 (pin: ``tests/unit/test_ci_prompt_controls_gates.py``).
   8. coverage    — ``domain/policies`` >= 90% (docs/max-pro-level-tz.md §13/§15).
   9. SLA math    — budget gate arithmetic.
   10. agent evals — deterministic baseline.

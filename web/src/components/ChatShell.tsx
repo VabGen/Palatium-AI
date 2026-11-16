@@ -64,6 +64,7 @@ import {
   SIDE_CONSOLE_WIDTH_DEFAULT,
   writeSideConsoleWidthPct,
 } from '../lib/sideConsoleWidth';
+import { initialShellDensity, shellDensityFromWidth } from '../lib/shellDensity';
 import { KimiDialog } from './KimiDialog';
 import { LiveAnnouncer } from './LiveAnnouncer';
 import { StreamMarkdownPreview } from './StreamMarkdownPreview';
@@ -386,12 +387,13 @@ export function ChatShell() {
   const [wsConnected, setWsConnected] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [projectId, setProjectId] = useState('');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia('(max-width: 1280px)').matches : false
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => initialShellDensity().narrow
   );
-  const [isNarrowShell, setIsNarrowShell] = useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia('(max-width: 1280px)').matches : false
-  );
+  const [isNarrowShell, setIsNarrowShell] = useState(() => initialShellDensity().narrow);
+  /** ≤480px panel (SED right rail) — denser type/padding; driven by shell width. */
+  const [isCompactShell, setIsCompactShell] = useState(() => initialShellDensity().compact);
+  const shellRef = useRef<HTMLDivElement>(null);
   const [modeIntent, setModeIntent] = useState<ComposerMode | null>(null);
   /** kimi.ai `+` → Web search nested panel (Autosearch default). */
   const [webSearchPref, setWebSearchPref] = useState<'auto' | 'off'>('auto');
@@ -430,17 +432,43 @@ export function ChatShell() {
   void resolveWireModelId(intensity);
   const effectiveComposerMode = resolveComposerModeFromUi(intensity, modeIntent);
 
+  /*
+   * Density from `.shell` width (not viewport): SED host opens a ~400px right
+   * panel inside a wide desktop — matchMedia(viewport) would never densify.
+   * Re-bind when leaving settings (shell unmounts during that view).
+   */
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 1280px)');
-    /* Initial values already come from the same query (lazy useState above);
-       only viewport *changes* need to be dispatched from the listener. */
-    const sync = () => {
-      setIsNarrowShell(mq.matches);
-      if (mq.matches) setSidebarCollapsed(true);
+    if (shellView === 'settings') return;
+    const node = shellRef.current;
+    if (!node) return;
+
+    let wasNarrow = shellDensityFromWidth(node.getBoundingClientRect().width).narrow;
+
+    const apply = (width: number) => {
+      const next = shellDensityFromWidth(width);
+      setIsNarrowShell(next.narrow);
+      setIsCompactShell(next.compact);
+      // Collapse only on transition into narrow — don't fight an open drawer.
+      if (next.narrow && !wasNarrow) setSidebarCollapsed(true);
+      wasNarrow = next.narrow;
     };
-    mq.addEventListener('change', sync);
-    return () => mq.removeEventListener('change', sync);
-  }, []);
+
+    apply(node.getBoundingClientRect().width);
+
+    if (typeof ResizeObserver === 'undefined') {
+      const onResize = () => apply(node.getBoundingClientRect().width);
+      window.addEventListener('resize', onResize);
+      return () => window.removeEventListener('resize', onResize);
+    }
+
+    const ro = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (!entry) return;
+      apply(entry.contentRect.width);
+    });
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [shellView]);
 
   useEffect(() => {
     const onHash = () => {
@@ -465,7 +493,8 @@ export function ChatShell() {
   }, []);
 
   const collapseNavIfNarrow = useCallback(() => {
-    if (window.matchMedia('(max-width: 1280px)').matches) {
+    const width = shellRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+    if (shellDensityFromWidth(width).narrow) {
       setSidebarCollapsed(true);
     }
   }, []);
@@ -1837,14 +1866,16 @@ export function ChatShell() {
 
   return (
     <div
+      ref={shellRef}
       className={`shell${artifactMessage || filesRail ? ' is-artifact-open' : ''}${
         filesRail?.mode === 'list' ? ' is-files-list' : ''
       }${filesRail?.mode === 'preview' ? ' is-files-preview' : ''}${
         artifactMessage && !filesRail ? ' is-artifact-doc' : ''
       }${navDrawerOpen ? ' is-nav-open' : ''}${isNarrowShell ? ' is-narrow' : ''}${
-        canResizeSideConsole ? ' is-side-console-resizable' : ''
-      }`}
+        isCompactShell ? ' is-compact' : ''
+      }${canResizeSideConsole ? ' is-side-console-resizable' : ''}`}
       part="shell"
+      data-density={isCompactShell ? 'compact' : 'comfortable'}
       style={
         canResizeSideConsole
           ? ({

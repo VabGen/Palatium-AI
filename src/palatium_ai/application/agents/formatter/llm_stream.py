@@ -17,6 +17,7 @@ from palatium_ai.domain.llm.models import ChatMessage, LLMCompletion
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
+    from palatium_ai.domain.llm.controls import TextVerbosity
     from palatium_ai.domain.ports.harness import HarnessPort
 
 logger = get_logger(__name__)
@@ -35,6 +36,7 @@ async def call_formatter_llm(
     worker_summary: str = "",
     allow_worker_fallback: bool = True,
     mute_stream: bool = False,
+    verbosity: TextVerbosity | None = None,
 ) -> tuple[LLMCompletion, str]:
     """Stream GFM when an SSE bridge is bound; otherwise one-shot text completion.
 
@@ -42,11 +44,23 @@ async def call_formatter_llm(
     ``block_delta`` preview is already on screen and a Markdown restart would snap.
     """
     if mute_stream:
-        return await complete(harness=harness, config=config, messages=messages, max_tokens=max_tokens)
+        return await complete(
+            harness=harness,
+            config=config,
+            messages=messages,
+            max_tokens=max_tokens,
+            verbosity=verbosity,
+        )
 
     emitter = FormatterMarkdownEmitter.bind()
     if emitter is None:
-        return await complete(harness=harness, config=config, messages=messages, max_tokens=max_tokens)
+        return await complete(
+            harness=harness,
+            config=config,
+            messages=messages,
+            max_tokens=max_tokens,
+            verbosity=verbosity,
+        )
 
     if not allow_worker_fallback:
         # Single-writer formatter-owned turn: the worker draft is not the deliverable,
@@ -57,6 +71,7 @@ async def call_formatter_llm(
             messages=messages,
             max_tokens=max_tokens,
             on_delta=emitter.on_delta,
+            verbosity=verbosity,
         )
         markdown = emitter.finish() or sanitize_markdown_buffer(completion.content)
         return completion, markdown
@@ -72,6 +87,7 @@ async def call_formatter_llm(
             messages=messages,
             max_tokens=max_tokens,
             on_delta=on_delta,
+            verbosity=verbosity,
         )
     finally:
         await cancel_watch()
@@ -86,6 +102,7 @@ async def complete(
     messages: list[ChatMessage],
     max_tokens: int,
     on_delta: DeltaCallback | None = None,
+    verbosity: TextVerbosity | None = None,
 ) -> tuple[LLMCompletion, str]:
     """Always request plain text; Markdown is parsed after the stream."""
     completion = await dispatch(
@@ -94,6 +111,7 @@ async def complete(
         messages=messages,
         max_tokens=max_tokens,
         on_delta=on_delta,
+        verbosity=verbosity,
     )
     return completion, sanitize_markdown_buffer(completion.content)
 
@@ -105,6 +123,7 @@ async def dispatch(
     messages: list[ChatMessage],
     max_tokens: int,
     on_delta: DeltaCallback | None,
+    verbosity: TextVerbosity | None = None,
 ) -> LLMCompletion:
     if on_delta is None:
         return await harness.call_llm(
@@ -113,6 +132,7 @@ async def dispatch(
             response_format="text",
             response_model=None,
             max_tokens=max_tokens,
+            verbosity=verbosity,
         )
     return await harness.call_llm_stream(
         config,
@@ -121,6 +141,7 @@ async def dispatch(
         response_model=None,
         on_delta=on_delta,
         max_tokens=max_tokens,
+        verbosity=verbosity,
     )
 
 

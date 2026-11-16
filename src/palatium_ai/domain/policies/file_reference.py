@@ -335,9 +335,24 @@ class FileReferencePolicy:
             ):
                 strong.append(item)
                 continue
-            if _leading_title_token_matches(haystack, stem):
+            if not _leading_title_token_matches(haystack, stem):
+                continue
+            # Doc-role / name-pointer before the lead («файл договор», «с названием
+            # Скан») is structural evidence of a file title — promote to strong even
+            # for multi-token stems. Bare lead in prose stays weak (055).
+            if _leading_title_introduced_in_ask(haystack_words, stem):
+                strong.append(item)
+            else:
                 weak.append(item)
-        return strong or weak
+        if strong:
+            return strong
+        # A lone leading-title hit on a multi-token stem is ordinary prose
+        # («подписали договор…» ≠ «Договор_оказания_услуг.docx»). Keep weak
+        # matches only when they disambiguate siblings («Скан» → card) or when
+        # the stem itself is a single substantive token (055).
+        if len(weak) == 1 and _stem_substantive_token_count(_normalize_name(_strip_extension(weak[0].filename))) >= 2:
+            return []
+        return weak
 
 
 def _resolved(candidate: FileRefCandidate, *, reason: str) -> FileReferenceResolution:
@@ -453,13 +468,50 @@ def _leading_title_token_matches(haystack: str, stem: str) -> bool:
     first alphabetic token of the stem counts; uniqueness still gates resolution, so
     a shared prefix (``Скан`` among siblings) yields ``ambiguous`` over that subset.
     """
-    words = _name_words(stem)
-    if not words:
-        return False
-    lead = words[0]
-    if lead.isdigit() or len(lead) < _MIN_NAME_MATCH_CHARS:
+    lead = _leading_title_token(stem)
+    if not lead:
         return False
     return _occurs_as_bounded_token(haystack, lead)
+
+
+def _leading_title_token(stem: str) -> str:
+    """First alphabetic title token of a stem, or empty when none qualifies."""
+    words = _name_words(stem)
+    if not words:
+        return ""
+    lead = words[0]
+    if lead.isdigit() or len(lead) < _MIN_NAME_MATCH_CHARS:
+        return ""
+    return lead
+
+
+def _leading_title_introduced_in_ask(haystack_words: Sequence[str], stem: str) -> bool:
+    """True when the leading title token is preceded by a file-name introducer.
+
+    Same structural introducers as short stems (``файл`` / ``название`` / role typo):
+    «сделай сводку файла договор» names ``Договор_оказания_услуг.docx``; bare
+    «подписали договор» does not (055).
+    """
+    lead = _leading_title_token(stem)
+    if not lead:
+        return False
+    lead_l = lead.casefold()
+    for index, word in enumerate(haystack_words):
+        if word != lead_l:
+            continue
+        if index == 0:
+            continue
+        prev = haystack_words[index - 1]
+        if prev in _DOC_ROLE_TOKENS or prev in _NAME_POINTER_TOKENS:
+            return True
+        if _token_extends_doc_role(prev):
+            return True
+    return False
+
+
+def _stem_substantive_token_count(stem: str) -> int:
+    """How many discriminating title tokens the stem carries (digits count)."""
+    return sum(1 for word in _name_words(stem) if _run_word_is_substantive(word))
 
 
 def _name_run_matches(haystack_words: Sequence[str], stem: str) -> bool:

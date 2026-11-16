@@ -22,7 +22,8 @@ from palatium_ai.infrastructure.llm.litellm_adapter import build_provider_respon
 #: that spends prompt space re-baselines the ceiling to today +5 % instead of "60 % of
 #: the monolith": W6/W7 landed near 7.9k; kimi-answer-formatting added document_analysis
 #: few-shot (2026-11-11). Guard still forbids a return to the 11.6k monolith.
-_CEILING_CHARS = 9_400
+#: Rebaseline 2026-11-16 after document_analysis few-shot + CTCO audit waves (~9918).
+_CEILING_CHARS = 10_414
 
 
 def test_formatter_prompt_stays_below_the_documented_ceiling() -> None:
