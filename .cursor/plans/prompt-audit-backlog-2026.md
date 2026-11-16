@@ -68,7 +68,8 @@ implement two-layer conflict-linter + non-blocking CI job
 - **Повышение `NOQA_MAX`:** только PR с owner `@VabGen` + запись в этом плане
   (таблица «NOQA_MAX history»: date, old→new, why). Без записи в плане — отклонять.
   Поднятие «потому что надо» без triage exceptions запрещено.
-- Pin: `continue-on-error` до/после `CUTOVER_DATE`, непустой manifest, noqa ≤ N,
+- Pin: `continue-on-error` до/после `CUTOVER_DATE` **AND** `--strict` на том же
+  audit step (одно без другого ≠ cutover); непустой manifest, noqa ≤ N,
   registry size == 15.
 
 ### Soft triage 2026-11-16 (`must`/`may` — 4 findings)
@@ -99,7 +100,8 @@ implement two-layer conflict-linter + non-blocking CI job
 - [x] heuristic judge recall ≥ 4/5 (live LLM — later)
 - [x] CI job non-blocking + cutover date in workflow + pin (coe / noqa / fixtures / registry)
 - [x] soft must/may triage записан (таблица выше)
-- [ ] cutover 2026-12-19: `continue-on-error` off + `--strict` + pin flip
+- [ ] cutover 2026-12-19: `continue-on-error` off **AND** `--strict` + pin flip
+  (см. `test_cutover_requires_both_flags`)
 - [ ] cross-prompt layer (после cutover)
 
 ## §4 Uncertainty (stateless; выше lean-cut) — IN PROGRESS 2026-11-16
