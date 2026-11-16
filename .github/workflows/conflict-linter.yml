@@ -2,9 +2,10 @@
 #
 # Status: NON-BLOCKING until cutover date 2026-12-19 (policy.CUTOVER_DATE).
 # continue-on-error: true keeps the check visible without failing the PR.
-# On/after 2026-12-19: remove continue-on-error and pass --strict on audit.
+# cutover 2026-12-19 = снять continue-on-error AND добавить --strict
+# одно без другого не считается cutover
 # Scope: same-prompt only; cross-prompt deferred after cutover.
-# Pin: tests/unit/test_ci_prompt_controls_gates.py::test_conflict_linter_job_exists
+# Pin: tests/unit/test_conflict_linter_ci_gate.py
 
 name: conflict-linter
 
