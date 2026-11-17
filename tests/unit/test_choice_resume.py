@@ -178,5 +178,7 @@ def test_continuity_after_hitl_topic_pick_does_not_reopen_clarify() -> None:
     assert effective.task_kind == "knowledge_request"
     assert effective.requires_user_choice is False
     assert effective.underspecification_kind == "none"
-    assert effective.trust_prior_for_workers is True
+    assert effective.trust_prior_for_workers is False
+    assert effective.prior_context is None
+    assert effective.suppress_intent_hitl is True
     assert effective.continuation_kind == "answer"

@@ -2,9 +2,13 @@
 
 """Critic gate policy — when LLM-as-a-Judge is required vs deterministic passthrough.
 
-Authority for skipping Critic LLM on true reformatting / high-confidence clarify.
-Fail-closed: tools, MCP, low confidence, answer-continuity, social routed as
-``format_only``, or clarify with substantive user payload always invoke the judge.
+Authority for skipping Critic LLM on true reformatting / high-confidence clarify /
+phatic social (no worker draft). Fail-closed: tools, MCP, low confidence,
+answer-continuity, or clarify with substantive user payload always invoke the judge.
+
+2026 Big Tech: ChatGPT / Claude / Copilot do not mint quality HITL on greetings —
+LLM-as-judge on ``social_conversation`` + ``format_only`` was producing false
+``quality_review`` cards and identity self-attribution noise.
 """
 
 from __future__ import annotations
@@ -199,7 +203,7 @@ class CriticPolicy:
         requires_tool_call: bool,
         has_attachment_context: bool,
     ) -> CriticGateDecision | None:
-        # True reformatting of prior content — not social routed as format_only (2026).
+        # True reformatting of prior content — not bare social synthesis.
         if continuation_kind == "format" or task_kind == "response_formatting":
             if worker_summary and worker_summary.strip():
                 return _passthrough("format_passthrough")
@@ -221,6 +225,11 @@ class CriticPolicy:
             ):
                 return _passthrough("answer_high_confidence_passthrough")
             return _invoke("answer_continuity_gate")
+
+        # Phatic social (no worker, not an answer follow-up): passthrough.
+        # Social with a draft, or answer-continuity above, still judges.
+        if task_kind == "social_conversation" and selected_strategy == "format_only" and not (worker_summary or "").strip():
+            return _passthrough("social_phatic_passthrough")
 
         # Clarify while user already sent a substantive payload → likely wrong route.
         clarifying = selected_strategy == "clarify" or task_kind == "clarification_needed"

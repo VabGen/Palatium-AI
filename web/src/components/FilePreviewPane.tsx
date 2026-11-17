@@ -17,9 +17,7 @@ import {
 } from '../icons/kimiStroke';
 import { t } from '../i18n';
 
-const PdfConsole = lazy(() =>
-  import('./PdfConsole').then(mod => ({ default: mod.PdfConsole })),
-);
+const PdfConsole = lazy(() => import('./PdfConsole').then(mod => ({ default: mod.PdfConsole })));
 
 export type ThreadFileItem = {
   id: string;
@@ -229,9 +227,7 @@ function PreviewBody({
             aria-label={
               fullscreen ? t('attach.previewFullscreenExit') : t('attach.previewFullscreen')
             }
-            title={
-              fullscreen ? t('attach.previewFullscreenExit') : t('attach.previewFullscreen')
-            }
+            title={fullscreen ? t('attach.previewFullscreenExit') : t('attach.previewFullscreen')}
             aria-pressed={fullscreen}
           >
             {fullscreen ? <IconCompress size={20} /> : <IconExpand size={20} />}

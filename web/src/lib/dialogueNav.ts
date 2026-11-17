@@ -70,11 +70,9 @@ export function buildDialogueNavEntries(
     const fileName = hasFile ? softCap(names[0] ?? '', DIALOGUE_NAV_TEXT_SAFE_MAX) : null;
     const extraCount = Math.max(0, names.length - 1);
     const prompt = softCap(promptRaw);
-    const labelParts = [
-      fileName,
-      extraCount > 0 ? `+${extraCount}` : null,
-      prompt || null,
-    ].filter(Boolean);
+    const labelParts = [fileName, extraCount > 0 ? `+${extraCount}` : null, prompt || null].filter(
+      Boolean
+    );
     entries.push({
       id: message.id,
       label: labelParts.join(' ') || '…',
@@ -98,9 +96,7 @@ export function buildDialogueNavLabel(
   attachmentNames: readonly string[] = [],
   max = 34
 ): string {
-  const entry = buildDialogueNavEntries([
-    { id: 'x', role: 'user', text, attachmentNames },
-  ])[0];
+  const entry = buildDialogueNavEntries([{ id: 'x', role: 'user', text, attachmentNames }])[0];
   if (!entry) return endEllipsis(text, max);
   return entry.label.length <= max ? entry.label : endEllipsis(entry.label, max);
 }

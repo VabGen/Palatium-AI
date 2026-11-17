@@ -183,9 +183,9 @@ describe('processIntent', () => {
       })
     );
 
-    await expect(
-      processIntent('привет', 'th-1', null, null, [], null, false)
-    ).resolves.toEqual(RESULT);
+    await expect(processIntent('привет', 'th-1', null, null, [], null, false)).resolves.toEqual(
+      RESULT
+    );
     expect(body).toMatchObject({ use_memory: false, thread_id: 'th-1' });
   });
 });

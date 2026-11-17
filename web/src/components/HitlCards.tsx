@@ -3,11 +3,7 @@ import { fetchHitlStepUpChallenge, respondHitlCard } from '../api/client';
 import { formatHitlError } from '../lib/hitl';
 import { formatDateTime, t } from '../i18n';
 import { AttachmentFileIcon, attachmentFileKind } from '../icons/fileTypeIcons';
-import {
-  GlyphExclamation,
-  GlyphSafe,
-  GlyphTodo,
-} from '../icons/kimiTokenGlyphs';
+import { GlyphExclamation, GlyphSafe, GlyphTodo } from '../icons/kimiTokenGlyphs';
 import { TokenIcon } from '../icons/TokenIcon';
 import { iconForActionKind } from '../icons/semanticIcons';
 import type {
@@ -39,10 +35,7 @@ function hitlStatusLabel(status: HITLCardView['status']): string {
 }
 
 /** Busy copy must match purpose: choice/reread is not a write (055 — no one-size «Saving»). */
-function hitlBusyLabel(
-  purpose: HITLCardPurpose | undefined,
-  stepUpInFlight: boolean
-): string {
+function hitlBusyLabel(purpose: HITLCardPurpose | undefined, stepUpInFlight: boolean): string {
   if (stepUpInFlight) return t('hitl.stepUpConfirming');
   if (purpose && purpose in HITL_BUSY_KEYS) {
     return t(HITL_BUSY_KEYS[purpose]);
@@ -140,9 +133,7 @@ function HitlCard({
       return <TokenIcon token={explicit} size={16} />;
     }
     if (isChoice && /\.\w{2,5}$/i.test(option.label.trim())) {
-      return (
-        <AttachmentFileIcon kind={attachmentFileKind(option.label.trim())} size={20} />
-      );
+      return <AttachmentFileIcon kind={attachmentFileKind(option.label.trim())} size={20} />;
     }
     return null;
   }

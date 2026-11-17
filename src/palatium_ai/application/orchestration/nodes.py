@@ -158,6 +158,7 @@ async def _apply_sticky_attachment_rehydrate(
     entry_has_attachments: bool,
     entry_untrusted_context: str,
     window: DialogTurnWindow,
+    choice_slot_filled: bool = False,
 ) -> str:
     """SB2: rehydrate dialog-bound attachments after Continuity (not sticky poison)."""
     rehydrate = AttachmentStickinessPolicy.decide_rehydrate(
@@ -170,6 +171,7 @@ async def _apply_sticky_attachment_rehydrate(
         grounding=routing_intent.grounding,
         adaptive_grounding_enabled=is_adaptive_grounding_enabled(user_id_var.get()),
         transformation=routing_intent.transformation,
+        choice_slot_filled=choice_slot_filled,
     )
     agent_metrics.record_attachment_sticky(action=rehydrate.reason)
     # Not `attachment.build_turn_context`: that name is the traced span of the actual
@@ -199,13 +201,19 @@ async def _recall_after_continuity_remap(
     intent_decision: MemoryRecallDecision,
     routing_intent: EffectiveRoutingIntent,
     effective_user_text: str,
+    has_turn_attachments: bool = False,
 ) -> MemoryRecallBundle | None:
     """SB3: fill durable recall when Continuity remapped kind after Intent skipped/narrowed."""
-    routed_decision = MemoryRecallPolicy.decide(
-        task_kind=routing_intent.task_kind,
-        requires_mcp=routing_intent.requires_mcp,
-        transformation=routing_intent.transformation,
-        use_memory=bool(state.get("use_memory", True)),
+    routed_decision = MemoryRecallPolicy.apply_pin_hygiene(
+        MemoryRecallPolicy.decide(
+            task_kind=routing_intent.task_kind,
+            requires_mcp=routing_intent.requires_mcp,
+            transformation=routing_intent.transformation,
+            use_memory=bool(state.get("use_memory", True)),
+        ),
+        continuation_kind=routing_intent.continuation_kind,
+        trust_prior_for_workers=routing_intent.trust_prior_for_workers,
+        has_turn_attachments=has_turn_attachments,
     )
     recall_after = recall
     widened = routed_decision.kinds is None and intent_decision.kinds is not None
@@ -217,9 +225,9 @@ async def _recall_after_continuity_remap(
             query=effective_user_text,
         )
     if recall_after is not None and routed_decision.pin_kinds is not None:
-        # Continuity/Intent disagree on the transform axis: the earlier recall may
-        # carry task facts and pinned intents. A content transform reads prior text,
-        # so narrow the bundle instead of spending a second durable query (060/055).
+        # Continuity/Intent disagree on the transform / topic axis: the earlier recall
+        # may carry task facts and pinned asks. Narrow the bundle instead of a second
+        # durable query (060/055) — stale pins must not steer a new topic or fence.
         return recall_after.restrict_kinds(
             kinds=routed_decision.kinds,
             pin_kinds=routed_decision.pin_kinds,
@@ -247,11 +255,18 @@ async def continuation_node(
         intent_task_kind = raw_intent.task_kind if raw_intent is not None else None
         intent_requires_mcp = bool(raw_intent.requires_mcp) if raw_intent is not None else False
         intent_transformation = raw_intent.transformation if raw_intent is not None else TRANSFORMATION_DEFAULT
-        intent_decision = MemoryRecallPolicy.decide(
-            task_kind=intent_task_kind,
-            requires_mcp=intent_requires_mcp,
-            transformation=intent_transformation,
-            use_memory=bool(state.get("use_memory", True)),
+        entry_untrusted_context = state.get("untrusted_context") or ""
+        # Level 0: presence is decided by the typed attachment state, not by whether
+        # a budgeted string happened to survive a trim (the old false-negative).
+        entry_has_attachments = selectors.has_attachment_context(state)
+        intent_decision = MemoryRecallPolicy.apply_pin_hygiene(
+            MemoryRecallPolicy.decide(
+                task_kind=intent_task_kind,
+                requires_mcp=intent_requires_mcp,
+                transformation=intent_transformation,
+                use_memory=bool(state.get("use_memory", True)),
+            ),
+            has_turn_attachments=entry_has_attachments,
         )
         recall = await _maybe_deferred_durable_recall(
             state,
@@ -263,10 +278,6 @@ async def continuation_node(
         )
         budget = state.get("prompt_budget") or MemoryPromptBudget()
         intent_caps = tuple(raw_intent.candidate_capabilities) if raw_intent is not None else ()
-        entry_untrusted_context = state.get("untrusted_context") or ""
-        # Level 0: presence is decided by the typed attachment state, not by whether
-        # a budgeted string happened to survive a trim (the old false-negative).
-        entry_has_attachments = selectors.has_attachment_context(state)
         task_input = ContextualizerInput(
             task_id=selectors.require_task_id(state),
             user_text=selectors.resolved_user_text(state),
@@ -307,12 +318,14 @@ async def continuation_node(
             if routing_intent.continuation_kind in {"answer", "format"}
             else bool(output.refers_to_prior if output is not None else False)
         )
+        slot_filled_for_sticky = bool(getattr(output, "choice_slot_filled", False)) if output is not None else False
         untrusted_context = await _apply_sticky_attachment_rehydrate(
             routing_intent=routing_intent,
             refers_to_prior=rehydrate_refers,
             entry_has_attachments=entry_has_attachments,
             entry_untrusted_context=entry_untrusted_context,
             window=window,
+            choice_slot_filled=slot_filled_for_sticky,
         )
 
         raw_ask = (raw_user if isinstance(raw_user, str) else "").strip()
@@ -337,10 +350,15 @@ async def continuation_node(
             intent_decision=intent_decision,
             routing_intent=routing_intent,
             effective_user_text=effective_user_text,
+            has_turn_attachments=entry_has_attachments,
         )
         if raw_intent is not None:
             # §4: attach resolved uncertainty disposition after Continuity remap (contract field).
             has_prior = bool(window.turns)
+            slot_filled = bool(getattr(output, "choice_slot_filled", False)) if output is not None else False
+            prior_grounds = (
+                routing_intent.trust_prior_for_workers and routing_intent.continuation_kind in {"answer", "format"}
+            ) or slot_filled
             raw_intent = UncertaintyPolicy.with_disposition(
                 raw_intent,
                 UncertaintySignals(
@@ -351,6 +369,7 @@ async def continuation_node(
                     grounding=routing_intent.grounding,
                     has_prior_dialog=has_prior,
                     has_attachment_context=entry_has_attachments,
+                    prior_grounds_answer=prior_grounds,
                     ambiguous_reference_without_prior=(
                         not has_prior
                         and routing_intent.continuation_kind in {"answer", "format"}
@@ -431,12 +450,15 @@ async def intent_classifier_node(
         text = state.get("effective_user_text") or selectors.resolved_user_text(state)
         has_prior = ContinuityPolicy.prior_assistant_content(None, dialog) is not None
         blocks = selectors.attachment_blocks(state)
+        # Prefer pre-graph registry flag: dialog payloads age out of the window while
+        # MinIO/DB rows remain (055 — Intent must not claim has_thread_files=false).
+        has_thread_files = bool(state.get("has_thread_files")) or AttachmentStickinessPolicy.thread_has_files(dialog)
         task_input = IntentClassifierInput(
             task_id=selectors.require_task_id(state),
             text=text,
             continuation_kind=None,
             has_prior_dialog=has_prior,
-            has_thread_files=AttachmentStickinessPolicy.thread_has_files(dialog),
+            has_thread_files=has_thread_files,
             attachment_count=len(blocks),
             attachment_kinds=_attachment_kinds(blocks),
         )
@@ -702,8 +724,13 @@ def _emit_worker_answer_deltas(state: AgentGraphState, result: object) -> None:
         return
     if result.status == "failure" or result.output is None:
         return
-    summary = result.output.summary.strip()
+    from palatium_ai.domain.policies.worker_prose import WorkerProsePolicy
+
+    summary = WorkerProsePolicy.user_visible(result.output.summary).strip()
     if not summary or summary == FAILURE_PLACEHOLDER_SUMMARY:
+        return
+    # Never paint a structured envelope as the early draft (2026 JSON-bleed).
+    if summary.lstrip().startswith("{") and '"summary"' in summary[:200].lower():
         return
     emit_answer_deltas(summary)
 
@@ -1329,7 +1356,7 @@ def route_after_context(
     return _record_handoff(
         from_node=GRAPH_NODE_WEAVING,
         to_node=GRAPH_NODE_CRITIC,
-        reason=str(strategy or "default_critic"),
+        reason=str(strategy),
     )
 
 
@@ -1425,7 +1452,7 @@ def route_after_quality_revision(
     return _record_handoff(
         from_node=GRAPH_NODE_QUALITY_REVISION,
         to_node=GRAPH_NODE_RESEARCHER,
-        reason=str(strategy or "researcher"),
+        reason=str(strategy),
     )
 
 

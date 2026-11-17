@@ -8,8 +8,9 @@ from palatium_ai.application.agents.formatter.markdown_parser import (
 )
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.formatter import FormatterInput
-from palatium_ai.domain.content import CalloutBlock, ListBlock, ParagraphBlock, TableBlock
+from palatium_ai.domain.content import CalloutBlock, HeadingBlock, ListBlock, ParagraphBlock, TableBlock
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
+from palatium_ai.domain.policies.uncertainty import UncertaintyPolicy
 
 
 def _task(*, locale: str = "en-US", review: bool = False) -> FormatterInput:
@@ -40,6 +41,19 @@ def test_paragraphs_and_heading() -> None:
     assert doc.locale == "en-US"
     assert any(b.type == "heading" for b in doc.blocks) or doc.title
     assert any(isinstance(b, ParagraphBlock | ListBlock | type(doc.blocks[0])) for b in doc.blocks)
+
+
+def test_assumption_mark_before_atx_heading_parses_as_heading() -> None:
+    """Worker path: mark + ATX must not glue into one paragraph with literal ##."""
+    body = "## Тезисный анализ Договора № 15/2026\n\nКлючевые противоречия и риски."
+    marked = UncertaintyPolicy.ensure_assumption_mark(body, disposition="default_with_mark")
+    doc = markdown_to_content_document(marked, _task(locale="ru-RU"))
+    headings = [b for b in doc.blocks if isinstance(b, HeadingBlock)]
+    assert headings, f"expected HeadingBlock, got {[type(b).__name__ for b in doc.blocks]}"
+    assert headings[0].level == 2
+    assert "Тезисный анализ" in headings[0].text
+    assert "##" not in headings[0].text
+    assert not any("##" in getattr(b, "text", "") for b in doc.blocks if isinstance(b, ParagraphBlock))
 
 
 def test_callout_note() -> None:

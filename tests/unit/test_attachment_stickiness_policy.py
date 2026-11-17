@@ -47,6 +47,41 @@ def test_rehydrate_clears_pending_on_new_topic() -> None:
     assert decision.attachment_ids == ()
 
 
+def test_rehydrate_clears_pending_when_choice_slot_filled() -> None:
+    """HITL topic pick must not re-fence sticky PDF (menu echo / fake cite)."""
+    doc_id = uuid4()
+    window = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(
+                thread_id="t1",
+                role="user",
+                content="вот файл",
+                payload=attachment_ids_payload((doc_id,)),
+                seq=0,
+            ),
+            DialogTurn(
+                thread_id="t1",
+                role="assistant",
+                content="Выберите тему анекдота…",
+                seq=1,
+            ),
+        ),
+    )
+    decision = AttachmentStickinessPolicy.decide_rehydrate(
+        continuation_kind="answer",
+        refers_to_prior=True,
+        has_turn_attachments=False,
+        dialog=window,
+        prior_context="Выберите тему анекдота…",
+        trust_prior_for_workers=True,
+        choice_slot_filled=True,
+    )
+    assert decision.clear_pending is True
+    assert decision.attachment_ids == ()
+    assert decision.reason == "clear_pending:choice_slot_filled"
+
+
 def test_rehydrate_clears_pending_when_format_not_trusted() -> None:
     """False format after Continuity demote must not re-fence sticky PDF."""
     doc_id = uuid4()

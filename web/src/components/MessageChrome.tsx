@@ -106,11 +106,7 @@ export type UserMessageActionsProps = {
  */
 export function UserMessageActions({ onEdit, onCopy, disabled }: UserMessageActionsProps) {
   return (
-    <div
-      className="msg-actions msg-actions--user"
-      role="group"
-      aria-label={t('action.userGroup')}
-    >
+    <div className="msg-actions msg-actions--user" role="group" aria-label={t('action.userGroup')}>
       <button
         type="button"
         className="msg-actions__labeled icon-hover"

@@ -228,7 +228,10 @@ const ListView = memo(({ block, sourceRefs }: { block: ListBlock } & WithSources
         const nestedClass = level > 0 ? ` nested level-${level}` : '';
         const hasIcon = Boolean(item.icon);
         return (
-          <li key={i} className={`block-list-item${nestedClass}${hasIcon ? ' has-token-icon' : ''}`}>
+          <li
+            key={i}
+            className={`block-list-item${nestedClass}${hasIcon ? ' has-token-icon' : ''}`}
+          >
             {hasIcon ? <TokenIcon token={item.icon} size={16} /> : null}
             <span>
               {lead ? <strong>{lead}</strong> : null}

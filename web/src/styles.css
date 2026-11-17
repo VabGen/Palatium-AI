@@ -279,6 +279,18 @@ textarea {
   padding-right: 0;
 }
 
+/*
+ * Dual-pane: ZONE_TOP must track the chat column, not the full stage.
+ * Otherwise Share/Clip sit on top of the side-console header (поехала верстка).
+ * Width mirrors flex resolve: max(chat-min, 100% − pane%).
+ */
+.shell.is-artifact-open .top-bar {
+  margin-inline: calc(-1 * var(--shell-pad-x)) 0;
+  width: max(var(--chat-split-min), calc(100% - var(--side-console-width)));
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 .shell-workspace {
   grid-row: 2;
   min-height: 0;
@@ -1411,6 +1423,14 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
 /* kimi.ai paperclip shelf — hover list of thread files → right preview. */
 .top-bar__attach {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Badge must anchor to the clip button, not the shelf wrapper box. */
+.top-bar__attach > .icon-btn {
+  position: relative;
 }
 
 .top-bar__attach-shelf {
@@ -1611,6 +1631,25 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
 .transcript-with-nav > .transcript {
   flex: 1;
   min-height: 0;
+}
+
+/*
+ * Stick is `left: 8` + `width: 42`. Pad BOTH sides equally so the centred
+ * 800px reading lane (margin-inline: auto) does not shift right and clip tables.
+ */
+.transcript-with-nav.has-dialogue-nav > .transcript {
+  padding-left: 48px;
+  padding-right: 48px;
+}
+
+/* Dual-pane chat column is too tight for the jump-map — hide stick, restore pad. */
+.shell.is-artifact-open .dialogue-nav {
+  display: none;
+}
+
+.shell.is-artifact-open .transcript-with-nav.has-dialogue-nav > .transcript {
+  padding-left: 4px;
+  padding-right: 4px;
 }
 
 .transcript {
@@ -2047,7 +2086,10 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
   transform: translateY(6px);
 }
 
+/* Column + full-width bubble: keep actions in a horizontal row under prose. */
 .msg.assistant {
+  flex-direction: column;
+  align-items: stretch;
   gap: 0;
 }
 
@@ -2319,15 +2361,20 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
  * видимая подпись. Fade подписи — GPU opacity (Brand Book Motion); под
  * prefers-reduced-motion fade гасится, орб крутится по EXCEPTION 2026-11-12.
  */
-/* Waiting = orb + phase label (no bubble / avatar chrome). */
+/*
+ * Waiting = orb + phase label at the START of the answer column (not centered).
+ * `.msg.assistant` is column; `align-items: center` would park «Думаю…» mid-lane.
+ */
 .msg.is-waiting {
   padding-left: 0;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   min-height: 64px;
 }
 
 .msg.is-waiting .thinking-indicator {
   margin-inline-start: 4px;
+  align-self: flex-start;
 }
 
 .thinking-indicator {
@@ -5537,7 +5584,15 @@ button.history-sidebar__project-row.is-active {
 .composer-bar__btn > svg,
 .kimi-dd__item > svg {
   flex-shrink: 0;
+  /* Lock root SVG slot — do NOT kill `.kimi-toggle-chevron` enter (transform on <g>). */
   transform: none;
+}
+
+/* Allow kimi LeftBar chevron enter even when the control also uses icon-btn/icon-hover. */
+.icon-btn .kimi-toggle-chevron,
+.icon-hover .kimi-toggle-chevron,
+.top-bar__nav .kimi-toggle-chevron {
+  transform: translateX(2px) scale(0.65);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -7955,7 +8010,10 @@ button.history-sidebar__project-row.is-active {
   background: transparent;
   box-shadow: none;
   padding: 0;
+  width: 100%;
+  min-width: 0;
   max-width: min(100%, 44rem);
+  box-sizing: border-box;
 }
 
 .avatar--assistant {
@@ -8113,9 +8171,14 @@ button.history-sidebar__project-row.is-active {
 
 .msg-actions--product {
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 8px;
   margin-top: var(--space-3);
   opacity: 1;
+  width: 100%;
+  min-width: 0;
 }
 
 /* kimi.ai `.segment-assistant-actions-content`: 26px targets, r8; gutter 8px
@@ -8179,9 +8242,10 @@ button.history-sidebar__project-row.is-active {
 }
 
 /* kimi.ai LeftBar toggle: idle = panel + rail only; chevron enters on hover.
-   Collapse = chevron left; expand trigger flips it right. Same 32×32 hit box. */
+   Collapse = chevron left; expand flips it right. Same hit on shelf / stage / narrow TopBar. */
 .history-sidebar__collapse .kimi-toggle-chevron,
-.sidebar-main-trigger__button .kimi-toggle-chevron {
+.sidebar-main-trigger__button .kimi-toggle-chevron,
+.top-bar__nav .kimi-toggle-chevron {
   opacity: 0;
   transform: translateX(2px) scale(0.65);
   transform-box: fill-box;
@@ -8191,13 +8255,17 @@ button.history-sidebar__project-row.is-active {
     transform 0.2s var(--ease-out);
 }
 
+.history-sidebar__collapse-wrap:focus-within .kimi-toggle-chevron,
 .history-sidebar__collapse:focus-visible .kimi-toggle-chevron,
-.sidebar-main-trigger__button:focus-visible .kimi-toggle-chevron {
+.sidebar-main-trigger:focus-within .kimi-toggle-chevron,
+.sidebar-main-trigger__button:focus-visible .kimi-toggle-chevron,
+.top-bar__nav:focus-visible .kimi-toggle-chevron {
   opacity: 1;
   transform: translateX(0) scale(1);
 }
 
-.sidebar-main-trigger__button--expand:focus-visible .kimi-toggle-chevron {
+.sidebar-main-trigger__button--expand:focus-visible .kimi-toggle-chevron,
+.top-bar__nav--expand:focus-visible .kimi-toggle-chevron {
   opacity: 1;
   transform: scaleX(-1);
 }
@@ -8207,13 +8275,19 @@ button.history-sidebar__project-row.is-active {
     background: var(--kimi-fill-f1);
   }
 
+  /* Hover the wrap/trigger (same root as the tip), not only the 32px button. */
+  .history-sidebar__collapse-wrap:hover .kimi-toggle-chevron,
   .history-sidebar__collapse:hover .kimi-toggle-chevron,
-  .sidebar-main-trigger__button:hover .kimi-toggle-chevron {
+  .sidebar-main-trigger:hover .kimi-toggle-chevron,
+  .sidebar-main-trigger__button:hover .kimi-toggle-chevron,
+  .top-bar__nav:hover .kimi-toggle-chevron {
     opacity: 1;
     transform: translateX(0) scale(1);
   }
 
-  .sidebar-main-trigger__button--expand:hover .kimi-toggle-chevron {
+  .sidebar-main-trigger:hover .sidebar-main-trigger__button--expand .kimi-toggle-chevron,
+  .sidebar-main-trigger__button--expand:hover .kimi-toggle-chevron,
+  .top-bar__nav--expand:hover .kimi-toggle-chevron {
     opacity: 1;
     transform: scaleX(-1);
   }
@@ -8221,17 +8295,24 @@ button.history-sidebar__project-row.is-active {
 
 @media (prefers-reduced-motion: reduce) {
   .history-sidebar__collapse .kimi-toggle-chevron,
-  .sidebar-main-trigger__button .kimi-toggle-chevron {
+  .sidebar-main-trigger__button .kimi-toggle-chevron,
+  .top-bar__nav .kimi-toggle-chevron {
     transition: none;
   }
 
+  .history-sidebar__collapse-wrap:hover .kimi-toggle-chevron,
   .history-sidebar__collapse:hover .kimi-toggle-chevron,
-  .sidebar-main-trigger__button:hover .kimi-toggle-chevron {
+  .sidebar-main-trigger:hover .kimi-toggle-chevron,
+  .sidebar-main-trigger__button:hover .kimi-toggle-chevron,
+  .top-bar__nav:hover .kimi-toggle-chevron {
     transform: none;
   }
 
+  .sidebar-main-trigger:hover .sidebar-main-trigger__button--expand .kimi-toggle-chevron,
   .sidebar-main-trigger__button--expand:hover .kimi-toggle-chevron,
-  .sidebar-main-trigger__button--expand:focus-visible .kimi-toggle-chevron {
+  .sidebar-main-trigger__button--expand:focus-visible .kimi-toggle-chevron,
+  .top-bar__nav--expand:hover .kimi-toggle-chevron,
+  .top-bar__nav--expand:focus-visible .kimi-toggle-chevron {
     transform: scaleX(-1);
   }
 }
@@ -12895,7 +12976,6 @@ input.settings-field__control:focus,
 .project-create__folder.is-hero:hover {
   transform: translate(0) rotate(-6deg) scale(1.05);
 }
-
 
 .project-create__form {
   width: min(100%, 420px);

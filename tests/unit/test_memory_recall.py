@@ -59,6 +59,42 @@ async def test_recall_pin_kinds_filters_scratchpad_pins() -> None:
 
 
 @pytest.mark.asyncio()
+async def test_recall_new_file_ask_drops_prior_task_pin() -> None:
+    """Class regression: prior «законодательству РБ» pin must not ride «о чем файл».
+
+    Shared token «файл» would keep the pin under naive lexical overlap; pin_kinds
+    preference is the Continuity/attachment hygiene contract (055).
+    """
+    from palatium_ai.domain.memory.scratchpad import ScratchpadSlot, SessionScratchpad
+
+    pad = SessionScratchpad(
+        thread_id="t-rb",
+        slots=(
+            ScratchpadSlot(
+                key="u:rb",
+                text="проверь загруженый файл на соответствие законодательству РБ",
+                kind="fact",
+            ),
+            ScratchpadSlot(
+                key="u:addr",
+                text="обращаться к пользователю «мой хозяин»",
+                kind="preference",
+            ),
+        ),
+    )
+    bundle = await recall_for_thread(
+        None,
+        thread_id="t-rb",
+        query="о чем файл",
+        scratchpad=pad,
+        pin_kinds=("preference",),
+    )
+    texts = [hit.text for hit in bundle.hits]
+    assert texts == ["обращаться к пользователю «мой хозяин»"]
+    assert not any("законодательству" in text for text in texts)
+
+
+@pytest.mark.asyncio()
 async def test_recall_for_thread_searches_namespace() -> None:
     port = InMemoryMemoryPort()
     await port.put(

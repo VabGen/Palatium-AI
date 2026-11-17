@@ -41,6 +41,17 @@ from palatium_ai.domain.policies.verbosity import VerbosityPolicy
 
 logger = get_logger(__name__)
 
+#: Markers that prove the worker body is an incomplete dump / edge clip — never
+#: paint as ``plain_text`` (live OCR appendix dumps with ``[worker truncated N]``).
+_INCOMPLETE_DUMP_MARKERS: tuple[str, ...] = (
+    "[attachment extraction truncated]",
+    "[attachment body truncated]",
+    "[attachment context truncated",
+    "[file text truncated",
+    "[worker truncated",
+    "[mcp truncated",
+)
+
 
 def _log_document_repair(repair: str, head: str) -> None:
     """Telemetry for a decoded model JSON: the strategy, never the prose (020)."""
@@ -85,10 +96,7 @@ def parse_formatter_document(raw_content: str) -> ContentDocument:
 
 def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) -> ContentDocument:
     """Синхронизирует meta/locale с пайплайном (locale pin — source of truth)."""
-    from palatium_ai.domain.attachments.citations import (
-        citation_refs_from_untrusted_context,
-        sanitize_source_refs,
-    )
+    from palatium_ai.domain.attachments.citations import sanitize_source_refs
     from palatium_ai.domain.content.citations.markers import strip_citation_markers
     from palatium_ai.domain.policies.internal_vocabulary import InternalVocabularyPolicy
 
@@ -109,7 +117,6 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
         confidence = MIN_PIPELINE_CONFIDENCE
 
     locale = ReplyLocalePolicy.normalize(task_input.response_locale) or "und"
-    attachment_refs = citation_refs_from_untrusted_context(task_input.context_packet.untrusted_context)
     has_attachments = bool((task_input.context_packet.untrusted_context or "").strip())
 
     interaction = document.meta.interaction
@@ -119,9 +126,10 @@ def align_formatter_meta(document: ContentDocument, task_input: FormatterInput) 
     elif has_attachments and not task_input.requires_user_choice and interaction == "choice":
         # Upload grounds the ask — drop LLM exclusive-menu tags about prior topics (055).
         interaction = "none"
-    # Prefer LLM refs when present; always union attachment file citations (W2 G03).
+    # Cite chips only from refs the document declared. Fenced uploads ground the
+    # worker; auto-union stamped every Continuity-rehydrated follow-up (055).
     # Bare UUIDs / attachment:<uuid> are not user-facing — sanitize drops them.
-    merged_refs = sanitize_source_refs((*document.meta.source_refs, *attachment_refs))
+    merged_refs = sanitize_source_refs(document.meta.source_refs)
     # Keep resolvable ``[n]`` in prose — BlockRenderer turns them into cite chips next
     # to the claim (footer chips alone are not grounding). Dangling markers stay for
     # ``dangling_citation`` lint. ABI gate retained so call sites stay explicit.
@@ -282,6 +290,7 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
         payload["dialog_history"] = _formatter_dialog_block(
             task_input.dialog_window,
             has_attachments=has_attachments,
+            social_synthesis=social_synthesis,
         )
         if has_attachments:
             # Budget per fence, never by head+tail on the joined blob: that dropped the
@@ -293,7 +302,9 @@ def build_formatter_user_payload(task_input: FormatterInput) -> dict[str, object
                 max_chars=FORMATTER_ATTACHMENT_MAX_CHARS,
             )
     if memory_block:
-        payload["user_facts"] = memory_block
+        # Provenance label (Anthropic/Copilot Memory 2026): facts are about the
+        # *user*, never assistant self-identity. Structural, not a phrase list.
+        payload["user_facts"] = f"About the user (not the assistant):\n{memory_block}"
     return payload
 
 
@@ -328,10 +339,9 @@ def resolve_style_hint(task_input: FormatterInput) -> FormatterStyleHint:
     then the worker answer's own shape — a single structure-free paragraph is shown
     as prose, never compiled into sections.
     """
-    if task_input.requires_user_choice or task_input.underspecification_kind == "discrete_choice":
-        return "choice_cards"
-    if task_input.underspecification_kind == "open_text":
-        return "clarify_open"
+    early = _style_hint_from_turn_axes(task_input)
+    if early is not None:
+        return early
     source = (task_input.worker_summary or "").strip()
     if _needs_social_synthesis(
         task_kind=task_input.context_packet.task_kind,
@@ -340,8 +350,44 @@ def resolve_style_hint(task_input: FormatterInput) -> FormatterStyleHint:
         return "social_reply"
     if task_input.context_packet.task_kind == "response_formatting":
         return "restructure_sections_icons"
+    transform_hint = _style_hint_from_transform(task_input)
+    if transform_hint is not None:
+        return transform_hint
     if (task_input.revision_feedback or "").strip():
         return "revise_keep_structure"
+    return _style_hint_from_capabilities_and_shape(task_input, source)
+
+
+def _style_hint_from_turn_axes(task_input: FormatterInput) -> FormatterStyleHint | None:
+    """Choice / open-text axes beat every other composition hint."""
+    if task_input.requires_user_choice or task_input.underspecification_kind == "discrete_choice":
+        return "choice_cards"
+    if task_input.underspecification_kind == "open_text":
+        return "clarify_open"
+    return None
+
+
+def _style_hint_from_transform(task_input: FormatterInput) -> FormatterStyleHint | None:
+    """Transform / explicit response_shape beat worker-shape preservation.
+
+    Otherwise «красивое форматирование» / «тезисный анализ» painted the OCR dump
+    as plain_text.
+    """
+    transformation = TransformPolicy.coerce(task_input.transformation)
+    if transformation == "restructure":
+        return "restructure_sections_icons"
+    if TransformPolicy.needs_reason_over_prior(transformation):
+        return "brand_sections_icons"
+    if task_input.context_packet.response_shape != "auto":
+        return "brand_sections_icons"
+    return None
+
+
+def _style_hint_from_capabilities_and_shape(
+    task_input: FormatterInput,
+    source: str,
+) -> FormatterStyleHint:
+    """Capability tags and worker body shape — last resort after turn/transform axes."""
     caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
     # Extract / full-text asks: worker body is the deliverable — do not brand-restructure.
     if VERBATIM_EXTRACTION_CAPABILITY in caps:
@@ -350,9 +396,20 @@ def resolve_style_hint(task_input: FormatterInput) -> FormatterStyleHint:
         return "document_generation"
     if CONTENT_GENERATION_CAPABILITY in caps:
         return "content_generation"
+    # Incomplete / edge-clipped dumps must be rewritten, never shown as-is (055).
+    if looks_like_incomplete_worker_dump(source):
+        return "brand_sections_icons"
     if preserve_worker_shape(source):
         return "plain_text"
     return "brand_sections_icons"
+
+
+def looks_like_incomplete_worker_dump(source: str) -> bool:
+    """True when the worker body carries a truncation/dump marker (structural, 055)."""
+    if not source:
+        return False
+    lowered = source.lower()
+    return any(marker in lowered for marker in _INCOMPLETE_DUMP_MARKERS)
 
 
 def preserve_worker_shape(source: str) -> bool:
@@ -383,12 +440,16 @@ def _formatter_dialog_block(
     window: DialogTurnWindow | None,
     *,
     has_attachments: bool,
+    social_synthesis: bool = False,
 ) -> str:
     if window is None or not window.turns:
         return "(no prior turns)"
     # File-grounded turns: prior assistant answers about other uploads must not
-    # compete with the current fence (cross-file bleed). Keep user turns only.
-    if has_attachments:
+    # compete with the current fence (cross-file bleed). Social synthesis: prior
+    # assistant clarification agendas must not become this turn's job («привет»
+    # answered as a lingering name ask). Keep user turns only; prefs come from
+    # user_facts (055, same class as attachment strip).
+    if has_attachments or social_synthesis:
         user_turns = tuple(turn for turn in window.turns if turn.role == "user")
         window = window.model_copy(update={"turns": user_turns}) if user_turns else None
         if window is None or not window.turns:

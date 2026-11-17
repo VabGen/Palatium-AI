@@ -55,6 +55,15 @@ _VERBOSITY_CAPABLE: frozenset[str] = frozenset(
         "azure_ai",
     }
 )
+#: Providers where LiteLLM maps ``reasoning_effort`` without UnsupportedParamsError.
+#: Anthropic → ``output_config.effort``. Corporate ``gateway`` (openai/tier-*) and
+#: generic OpenAI chat models reject the kwarg — omit + debug-log (same pattern as
+#: verbosity). Do not add openai/gateway/azure until a model-level allowlist exists.
+_REASONING_EFFORT_CAPABLE: frozenset[str] = frozenset(
+    {
+        "anthropic",
+    }
+)
 
 
 def is_structured_output_unsupported(exc: BaseException) -> bool:
@@ -469,10 +478,17 @@ class LiteLLMAdapter:
             params["temperature"] = temperature
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
-        # 2026 dials: reasoning_effort is cross-vendor (LiteLLM → Anthropic
-        # output_config.effort); verbosity is capability-gated (see _VERBOSITY_CAPABLE).
+        # 2026 dials: both gated by provider capability (OpenAI-compatible ≠ capable).
         if reasoning_effort is not None:
-            params["reasoning_effort"] = reasoning_effort
+            if self._provider in _REASONING_EFFORT_CAPABLE:
+                params["reasoning_effort"] = reasoning_effort
+            else:
+                logger.debug(
+                    "llm.reasoning_effort.dropped",
+                    provider=self._provider,
+                    reasoning_effort=reasoning_effort,
+                    reason="unsupported_by_provider",
+                )
         if verbosity is not None:
             if self._provider in _VERBOSITY_CAPABLE:
                 params["verbosity"] = verbosity

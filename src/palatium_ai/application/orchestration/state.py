@@ -78,6 +78,9 @@ class AgentGraphState(TypedDict, total=False):
     #: The ask deterministically names a file this dialog holds (pre-graph resolution of
     #: the thread attachment registry). Sets the ``thread_file`` axis in ContinuityPolicy.
     thread_file_named: bool
+    #: Thread has readable uploads in the attachment registry and/or dialog payloads.
+    #: Registry is SoT (dialog payloads age out of the window — Intent must not go blind).
+    has_thread_files: bool
     # Single writer for this turn (PresentationOwnershipPolicy); formatter = safe default.
     presentation_owner: PresentationOwner
     presentation_owner_reason: str

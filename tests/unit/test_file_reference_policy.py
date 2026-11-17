@@ -12,8 +12,17 @@ from palatium_ai.domain.policies.file_reference import (
 )
 
 
-def _candidate(name: str, *, attachment_id: UUID | None = None) -> FileRefCandidate:
-    return FileRefCandidate(attachment_id=attachment_id or uuid4(), filename=name)
+def _candidate(
+    name: str,
+    *,
+    attachment_id: UUID | None = None,
+    search_text: str = "",
+) -> FileRefCandidate:
+    return FileRefCandidate(
+        attachment_id=attachment_id or uuid4(),
+        filename=name,
+        search_text=search_text,
+    )
 
 
 def test_empty_thread_has_no_candidates() -> None:
@@ -402,3 +411,40 @@ def test_single_resolution_carries_exactly_one_id() -> None:
     only = _candidate("СФУТ 9.03-2025.pdf")
     resolution = FileReferencePolicy.resolve([only], hint_text="перечитай файл")
     assert resolution.attachment_ids == (only.attachment_id,)
+
+
+def test_content_preview_resolves_topical_ask_when_filename_is_opaque() -> None:
+    """«файл про иван-чай» must hit OCR/derived text, not invent a name match."""
+    tea = _candidate(
+        "ht_1-5.webp",
+        search_text="Цена на иван-чай улетает в небо. Оптовикам 1500 рублей за килограмм.",
+    )
+    contract = _candidate(
+        "Договор оказания услуг.docx",
+        search_text="ДОГОВОР ОКАЗАНИЯ УСЛУГ № 15/2026 г. Минск",
+    )
+    claim = _candidate(
+        "Заявление об увеличении размера исковых требований.docx",
+        search_text="Заявление об увеличении размера исковых требований по делу",
+    )
+    resolution = FileReferencePolicy.resolve(
+        [tea, contract, claim],
+        hint_text="Мы что то обсуждали по файлу про иван-чай",
+    )
+    assert resolution.status == "resolved"
+    assert resolution.attachment_id == tea.attachment_id
+    assert resolution.reason == "content_in_turn_text"
+    assert FileReferencePolicy.promotes_thread_file_reread(resolution) is True
+
+
+def test_content_preview_stays_ambiguous_when_two_files_share_topic_tokens() -> None:
+    first = _candidate("a.webp", search_text="иван чай дорожает на рынке трав")
+    second = _candidate("b.webp", search_text="закупка иван чай для столовой")
+    other = _candidate("c.docx", search_text="договор подряда")
+    resolution = FileReferencePolicy.resolve(
+        [first, second, other],
+        hint_text="открой файл про иван чай",
+    )
+    assert resolution.status == "ambiguous"
+    assert resolution.reason == "several_content_matches"
+    assert set(resolution.candidates) == {"a.webp", "b.webp"}

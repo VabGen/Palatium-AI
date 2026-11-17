@@ -19,6 +19,7 @@ def _attachment(
     user_id: str = "user-1",
     thread_id: str = "thread-1",
     status: str = "ready",
+    derived_text_key: str | None = None,
 ) -> Attachment:
     return Attachment(
         id=uuid4(),
@@ -30,7 +31,36 @@ def _attachment(
         blob_key=f"attachments/{uuid4().hex}",
         mode="attach",
         status=status,  # type: ignore[arg-type]  # Literal registry (017)
+        derived_text_key=derived_text_key,
         created_at=datetime.now(UTC),
+    )
+
+
+class _FakeBlobStore:
+    """In-memory derived-text blobs keyed like MinIO."""
+
+    def __init__(self, objects: dict[str, bytes]) -> None:
+        self._objects = objects
+
+    async def read_bytes(self, key: str) -> bytes:
+        from palatium_ai.domain.ports.blob_store import BlobNotFoundError
+
+        if key not in self._objects:
+            raise BlobNotFoundError(key)
+        return self._objects[key]
+
+
+def _derived_blob(text: str) -> bytes:
+    from palatium_ai.domain.attachments.content import AttachmentContent, AttachmentScanSummary
+
+    return (
+        AttachmentContent(
+            scan=AttachmentScanSummary(action="allow"),
+            safe_text=text,
+            page_count=1,
+        )
+        .model_dump_json()
+        .encode("utf-8")
     )
 
 
@@ -232,3 +262,40 @@ async def test_all_requested_resolves_the_whole_set_instead_of_refusing_ambiguit
     assert resolution.reason == "all_requested"
     assert resolution.attachment_ids == (rows[0].id, rows[1].id)
     assert resolution.attachment_id == rows[0].id
+
+
+@pytest.mark.asyncio()
+async def test_opaque_filename_resolves_via_derived_text_preview() -> None:
+    """Registry + MinIO preview: topical ask finds OCR'd webp among several files."""
+    tea = _attachment("ht_1-5.webp", derived_text_key="derived/tea.json")
+    contract = _attachment("Договор.docx", derived_text_key="derived/contract.json")
+    claim = _attachment("Заявление.docx", derived_text_key="derived/claim.json")
+    blob = _FakeBlobStore(
+        {
+            "derived/tea.json": _derived_blob("Цена на иван-чай улетает в небо. Опт 1500 рублей за килограмм."),
+            "derived/contract.json": _derived_blob("ДОГОВОР ОКАЗАНИЯ УСЛУГ № 15/2026"),
+            "derived/claim.json": _derived_blob("Заявление об увеличении исковых требований"),
+        }
+    )
+    resolver = AttachmentReferenceResolver(
+        repository=_FakeRepository([tea, contract, claim]),
+        blob_store=blob,
+    )
+
+    resolution = await resolver.resolve(
+        user_id="user-1",
+        thread_id="thread-1",
+        hint_text="Мы что то обсуждали по файлу про иван-чай",
+    )
+
+    assert resolution.status == "resolved"
+    assert resolution.attachment_id == tea.id
+    assert resolution.reason == "content_in_turn_text"
+
+
+@pytest.mark.asyncio()
+async def test_thread_has_readable_files_reads_the_registry() -> None:
+    resolver = AttachmentReferenceResolver(repository=_FakeRepository([_attachment("a.pdf")]))
+    assert await resolver.thread_has_readable_files(user_id="user-1", thread_id="thread-1") is True
+    empty = AttachmentReferenceResolver(repository=_FakeRepository([]))
+    assert await empty.thread_has_readable_files(user_id="user-1", thread_id="thread-1") is False

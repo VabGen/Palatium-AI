@@ -43,10 +43,7 @@ export function readSideConsoleWidthPct(): number {
 export function writeSideConsoleWidthPct(pct: number): void {
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(
-      SIDE_CONSOLE_WIDTH_STORAGE_KEY,
-      String(Math.round(pct * 10) / 10)
-    );
+    localStorage.setItem(SIDE_CONSOLE_WIDTH_STORAGE_KEY, String(Math.round(pct * 10) / 10));
   } catch {
     // Private mode / quota — width stays session-scoped via React state.
   }

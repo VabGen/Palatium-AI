@@ -82,8 +82,8 @@ async def test_stream_prefix_emitted_before_llm_stream(monkeypatch: pytest.Monke
     order: list[str] = []
 
     def _capture_emit(text: str, *, separator: str = "", keep_whitespace: bool = False) -> None:
-        _ = separator, keep_whitespace
-        order.append(f"emit:{text}")
+        _ = separator
+        order.append(f"emit:{text!r}:keep={keep_whitespace}")
 
     monkeypatch.setattr(formatter_agent, "emit_structured_answer_delta", _capture_emit)
     monkeypatch.setattr(formatter_agent, "_paint_partial_frames", lambda *_a, **_k: True)
@@ -101,5 +101,7 @@ async def test_stream_prefix_emitted_before_llm_stream(monkeypatch: pytest.Monke
     assert order, "expected prefix emit and/or llm stream"
     assert order[0].startswith("emit:"), f"first event must be prefix emit, got {order}"
     assert ASSUMPTION_MARK in order[0]
+    assert "\\n\\n" in order[0], "prefix must keep blank line so ## stays at column 0"
+    assert "keep=True" in order[0]
     assert "llm_stream_start" in order
     assert order.index(order[0]) < order.index("llm_stream_start")

@@ -72,13 +72,20 @@ export function fieldsFromFormatterResult(result: FormatterTaskResult): Assistan
   const emptyFailure = document === null && !hasHitl;
   const rawError = result.error?.trim() || undefined;
   const humanError = humanizeFormatterError(rawError);
+  // A pending choice/review card is the turn outcome — never paint a machine
+  // error under a usable picker (live clarify + formatter_output_invalid).
+  const error = hasHitl
+    ? undefined
+    : emptyFailure
+      ? humanError || t('msg.emptyResponse')
+      : humanError;
   return {
     document,
     hitlCards,
     _requiresReview: requiresReview,
     // Never a contentless "moderator" wait: HITL is cards on a draft, else it's a failure.
     _pendingReview: false,
-    error: emptyFailure ? humanError || t('msg.emptyResponse') : humanError,
+    error,
     status: emptyFailure ? 'failure' : result.status,
   };
 }

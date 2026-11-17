@@ -3,7 +3,6 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import {
   IconChevronDown,
   IconMessage,
-  IconPanelLeft,
   IconPaperclip,
   IconPencil,
   IconPinTop,
@@ -11,6 +10,7 @@ import {
   IconSpark,
   IconTrash,
 } from '../icons/kimiStroke';
+import { KimiGlyph } from '../icons/kimiNavGlyphs';
 import { AttachmentFileIcon, attachmentFileKind } from '../icons/fileTypeIcons';
 import { t } from '../i18n';
 import { Button } from './ui/Button';
@@ -42,6 +42,8 @@ export type TopBarProps = {
   onCollapse?: () => void;
   showNavToggle?: boolean;
   navToggleLabel?: string;
+  /** Drawer closed → expand chevron (scaleX -1); open → collapse chevron. */
+  navToggleExpand?: boolean;
   onToggleNav?: () => void;
   badges?: readonly string[];
   threadHint?: string | null;
@@ -87,6 +89,7 @@ export function TopBar({
   onCollapse,
   showNavToggle = false,
   navToggleLabel,
+  navToggleExpand = false,
   onToggleNav,
   badges = [],
   threadHint = null,
@@ -150,12 +153,13 @@ export function TopBar({
         {showNavToggle && onToggleNav ? (
           <Button
             variant="icon"
-            className="top-bar__nav"
+            className={`top-bar__nav${navToggleExpand ? ' top-bar__nav--expand' : ''}`}
             onClick={onToggleNav}
             aria-label={navToggleLabel ?? 'Menu'}
             title={navToggleLabel}
           >
-            <IconPanelLeft size={18} />
+            {/* kimi LeftBar toggle: chevron enters on hover (same as shelf / stage). */}
+            <KimiGlyph name="toggle" size={20} />
           </Button>
         ) : null}
 

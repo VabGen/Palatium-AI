@@ -39,6 +39,6 @@
     "continuation_kind": "new_topic",
     "trust_prior_for_workers": false,
     "prior_context_present": true,
-    "uncertainty_disposition": "default_with_mark"
+    "uncertainty_disposition": "proceed"
   }
 }

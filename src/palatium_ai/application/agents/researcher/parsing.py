@@ -61,7 +61,12 @@ def parse_researcher_output(raw_content: str) -> ResearcherOutput:
     Freeform / non-object payloads (reason_only text tasks that ignore
     ``response_format=json_object``) degrade to a summary envelope instead of
     killing the turn with ``Researcher JSON must be an object`` (030.8).
+
+    When the codec fails but the text is still a worker envelope, lift
+    ``summary`` structurally (2026 JSON-bleed) — never ship the wire format.
     """
+    from palatium_ai.domain.policies.worker_prose import WorkerProsePolicy
+
     text = (raw_content or "").strip()
     if not text:
         raise ValueError("Researcher output empty")
@@ -69,15 +74,21 @@ def parse_researcher_output(raw_content: str) -> ResearcherOutput:
     try:
         payload = loads_llm_json(text)
     except LLMJSONError:
+        lifted = WorkerProsePolicy.lift_summary_envelope(text)
+        if lifted is not None:
+            return _envelope_recovered_output(lifted)
         return _freeform_researcher_output(text)
 
     if isinstance(payload, str):
+        lifted = WorkerProsePolicy.lift_summary_envelope(payload.strip() or text)
+        if lifted is not None:
+            return _envelope_recovered_output(lifted)
         return _freeform_researcher_output(payload.strip() or text)
     if not isinstance(payload, dict):
         return _freeform_researcher_output(text)
 
     raw_summary = payload.get("summary", "No summary provided")
-    summary = str(raw_summary).strip() or "No summary provided"
+    summary = WorkerProsePolicy.user_visible(str(raw_summary).strip() or "No summary provided")
     if len(summary) > SUMMARY_MAX_CHARS:
         summary = summary[:SUMMARY_MAX_CHARS].rstrip() + "…"
 
@@ -99,6 +110,21 @@ def parse_researcher_output(raw_content: str) -> ResearcherOutput:
     )
 
 
+_ENVELOPE_RECOVERED_CONFIDENCE = 0.7
+
+
+def _envelope_recovered_output(summary: str) -> ResearcherOutput:
+    """Envelope recovered after codec failure — prose only, soft confidence."""
+    text = summary.strip() or "No summary provided"
+    if len(text) > SUMMARY_MAX_CHARS:
+        text = text[:SUMMARY_MAX_CHARS].rstrip() + "…"
+    return ResearcherOutput(
+        summary=text,
+        confidence=_ENVELOPE_RECOVERED_CONFIDENCE,
+        sources_used=("envelope_recovered",),
+    )
+
+
 # Soft confidence when the model returned prose instead of the JSON envelope (030.4).
 _FREEFORM_CONFIDENCE_FLOOR = 0.40
 _FREEFORM_CONFIDENCE_CEILING = 0.75
@@ -107,7 +133,18 @@ _FREEFORM_CONFIDENCE_CHARS_FULL = 500
 
 def _freeform_researcher_output(text: str) -> ResearcherOutput:
     """Wrap non-object LLM text as a Researcher summary (reason_only resilience)."""
+    from palatium_ai.domain.policies.worker_prose import WorkerProsePolicy
+
+    # Last chance: broken envelope still carrying a summary string field.
+    lifted = WorkerProsePolicy.lift_summary_envelope(text)
+    if lifted is not None:
+        return _envelope_recovered_output(lifted)
     summary = _unwrap_json_string(text.strip()) or "No summary provided"
+    # Never paint a JSON object body as freeform prose (JSON-bleed class).
+    if summary.lstrip().startswith("{") and '"summary"' in summary[:200].lower():
+        recovered = WorkerProsePolicy.lift_summary_envelope(summary)
+        if recovered is not None:
+            return _envelope_recovered_output(recovered)
     if len(summary) > SUMMARY_MAX_CHARS:
         summary = summary[:SUMMARY_MAX_CHARS].rstrip() + "…"
     ratio = min(1.0, len(summary) / float(_FREEFORM_CONFIDENCE_CHARS_FULL))

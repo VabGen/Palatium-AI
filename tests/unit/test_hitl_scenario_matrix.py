@@ -127,8 +127,8 @@ def test_s2_choice_resume_envelope_is_typed_not_nl() -> None:
     assert "UNTRUSTED_HITL_LABEL" in text
 
 
-def test_s4_required_choice_without_options_fails_closed() -> None:
-    """S4: required choice + prose-only document → formatter_output_invalid."""
+def test_s4_required_choice_without_options_awaits_synthesis() -> None:
+    """S4: required choice + prose-only document → soft missing (synthesis / open ask)."""
     doc = ContentDocument(
         schema_version=1,
         locale="en-US",
@@ -143,8 +143,9 @@ def test_s4_required_choice_without_options_fails_closed() -> None:
         ),
     )
     assembled = InteractionAssembler.assemble(doc, requires_review=False, requires_user_choice=True)
-    assert assembled.invalid is True
-    assert assembled.plan.reason == "formatter_output_invalid"
+    assert assembled.invalid is False
+    assert assembled.plan.reason == "choice_options_missing"
+    assert assembled.plan.required_choice is True
 
 
 def test_s5_archive_write_requires_hitl() -> None:

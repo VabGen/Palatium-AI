@@ -100,6 +100,7 @@ class AttachmentStickinessPolicy:
         grounding: GroundingMode | str | None = GROUNDING_DEFAULT,
         adaptive_grounding_enabled: bool = False,
         transformation: TransformationKind | str = TRANSFORMATION_DEFAULT,
+        choice_slot_filled: bool = False,
     ) -> AttachmentRehydrateDecision:
         """After Continuity: optionally re-fence dialog-bound attachments for format.
 
@@ -112,9 +113,18 @@ class AttachmentStickinessPolicy:
         worker re-analyse that document and lose the ask ("перепиши ответ короче"
         turned into "сравнение файлов"). The transformation axis therefore wins over
         the positional bind (055).
+
+        A closed HITL choice slot is fulfilled from ``rewritten_query``; re-fencing
+        sticky uploads turned the pick into an attachment-grounded menu echo (055).
         """
         if has_turn_attachments:
             return AttachmentRehydrateDecision(reason="already_fenced", rehydrate_source="none")
+        if choice_slot_filled:
+            return AttachmentRehydrateDecision(
+                clear_pending=True,
+                reason="clear_pending:choice_slot_filled",
+                rehydrate_source="none",
+            )
         if TransformPolicy.needs_reason_over_prior(transformation):
             # The prior assistant answer IS the source. Keep no fence: an attachment
             # would re-open a topic the transform must not answer.

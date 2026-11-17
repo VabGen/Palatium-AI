@@ -105,13 +105,12 @@ def memory_hint_kinds(state: AgentGraphState) -> tuple[str, ...]:
     Consumers that personalise (Formatter) must tell a preference from a pinned ask;
     empty means "kind unknown", which keeps the legacy first-N slice.
     """
+    from palatium_ai.domain.memory.recall import MemoryRecallBundle
+
     recall = state.get("memory_recall")
-    if recall is None:
+    if not isinstance(recall, MemoryRecallBundle):
         return ()
-    hint_items = getattr(recall, "hint_items", None)
-    if not callable(hint_items):
-        return ()
-    items = tuple((str(text), str(kind)) for text, kind in hint_items())
+    items = recall.hint_items()
     window = state.get("dialog_window")
     turns = getattr(window, "turns", None) if window is not None else None
     if not turns:
@@ -433,8 +432,15 @@ def resolved_uncertainty_disposition(state: AgentGraphState) -> ResolvedUncertai
     classification = state.get("classification")
     output = classification.output if classification is not None else None
     disposition = getattr(output, "uncertainty_disposition", None)
-    if disposition in {"clarification", "default_with_mark", "honest_refusal"}:
-        return disposition  # type: ignore[return-value]
+    allowed: frozenset[ResolvedUncertaintyDisposition] = frozenset(
+        {"clarification", "default_with_mark", "honest_refusal", "proceed"}
+    )
+    if not isinstance(disposition, str):
+        return None
+    # Narrow via membership in the closed Literal set (010) — not getattr Any.
+    for candidate in allowed:
+        if disposition == candidate:
+            return candidate
     return None
 
 

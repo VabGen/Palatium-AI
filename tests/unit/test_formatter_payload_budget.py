@@ -58,7 +58,10 @@ def test_minimal_payload_with_source_omits_dialog_dumps_and_attachment() -> None
     assert "critic_summary" not in payload
     assert "context_summary" not in payload
     assert "worker_summary" not in payload
-    assert "меня зовут Гена" in str(payload["user_facts"])
+    facts = str(payload["user_facts"])
+    assert "меня зовут Гена" in facts
+    # Provenance label: facts are about the user, never assistant self-identity.
+    assert facts.startswith("About the user (not the assistant):")
     # LLM-facing payload must not teach the model our internal field names: the
     # model mirrors them into user prose and HITL card labels (055, 020).
     assert "attachment_context" not in payload
@@ -256,3 +259,47 @@ def test_attachment_stats_separate_by_design_omission_from_trim() -> None:
     assert stats["attachment_fences"] == 1
     assert stats["attachment_payload_chars"] == 0
     assert stats["attachment_budget_trimmed"] is False
+
+
+def test_social_synthesis_strips_assistant_clarification_agendas() -> None:
+    """«привет» must not inherit a prior assistant name-clarification as the job (055)."""
+    window = DialogTurnWindow(
+        thread_id="th-social",
+        turns=(
+            DialogTurn(thread_id="th-social", role="user", content="обращайся ко мне мой хозяин", seq=0),
+            DialogTurn(
+                thread_id="th-social",
+                role="assistant",
+                content="В предоставленных данных нет информации о вашем имени. Напишите его.",
+                seq=1,
+            ),
+            DialogTurn(thread_id="th-social", role="user", content="привет", seq=2),
+        ),
+        limit=12,
+    )
+    task = FormatterInput(
+        task_id="t1",
+        context_packet=_packet(
+            user_text="привет",
+            task_kind="social_conversation",
+            route="formatter",
+            route_plan="social",
+            execution_plan=ToolExecutionPlan(
+                strategy="reason_only",
+                requires_tool_call=False,
+                rationale="social",
+            ),
+        ),
+        worker_summary="",
+        dialog_window=window,
+        memory_hints=("обращаться «мой хозяин»", "проверь законодательству РБ"),
+        memory_hint_kinds=("preference", "fact"),
+    )
+    payload = build_formatter_user_payload(task)
+    assert payload["style_hint"] == "social_reply"
+    dialog = str(payload.get("dialog_history", ""))
+    assert "нет информации о вашем имени" not in dialog
+    assert "обращайся ко мне мой хозяин" in dialog
+    facts = str(payload.get("user_facts", ""))
+    assert "мой хозяин" in facts
+    assert "законодательству" not in facts

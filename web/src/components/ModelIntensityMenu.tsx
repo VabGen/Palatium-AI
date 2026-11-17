@@ -202,9 +202,7 @@ export function ModelIntensityMenu({
             <span className="kimi-dd__item-text">
               <span className="kimi-dd__item-label">{t(key)}</span>
             </span>
-            {contextLength === value ? (
-              <IconCheck size={18} className="model-lane__check" />
-            ) : null}
+            {contextLength === value ? <IconCheck size={18} className="model-lane__check" /> : null}
           </button>
         ))}
       </PopoverSurface>

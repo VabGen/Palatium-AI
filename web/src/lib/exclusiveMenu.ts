@@ -49,7 +49,12 @@ export function looksLikeExclusiveMenu(document: ContentDocument | null | undefi
   ) {
     optionCount = kvs[0].items.length;
     optionKind = 'kv';
-  } else if (lists.length === 0 && steps.length === 0 && kvs.length === 0 && callouts.length >= MIN_OPTIONS) {
+  } else if (
+    lists.length === 0 &&
+    steps.length === 0 &&
+    kvs.length === 0 &&
+    callouts.length >= MIN_OPTIONS
+  ) {
     const other = document.blocks.filter(
       block =>
         block.type !== 'callout' &&

@@ -53,23 +53,14 @@ class FormatterMemoryMergePolicy:
                 reason="content_transform_no_personalization",
             )
         if not has_source_content:
-            return FormatterMemoryMergeDecision(
-                hints=raw[:capped],
-                reason="full_hints_no_source",
-            )
+            return cls._without_source(raw, hit_kinds=hit_kinds, capped=capped)
         if hit_kinds is None:
             # Without kind metadata keep a small personalization slice (first N).
             return FormatterMemoryMergeDecision(
                 hints=raw[: min(2, capped)],
                 reason="identity_slice_with_source",
             )
-        selected: list[str] = []
-        for hint, kind in zip(raw, hit_kinds, strict=False):
-            normalized = str(kind).strip().lower()
-            if normalized in _PERSONALIZATION_KINDS:
-                selected.append(hint)
-            if len(selected) >= capped:
-                break
+        selected = cls._preference_hints(raw, hit_kinds, capped=capped)
         if not selected:
             # Kinds are known and none is a preference: facts/pins are not identity.
             return FormatterMemoryMergeDecision(
@@ -77,6 +68,42 @@ class FormatterMemoryMergePolicy:
                 reason="no_personalization_kinds_with_source",
             )
         return FormatterMemoryMergeDecision(
-            hints=tuple(selected[:capped]),
+            hints=selected,
             reason="identity_kinds_with_source",
         )
+
+    @classmethod
+    def _without_source(
+        cls,
+        raw: tuple[str, ...],
+        *,
+        hit_kinds: tuple[str, ...] | list[str] | None,
+        capped: int,
+    ) -> FormatterMemoryMergeDecision:
+        # Social / empty-worker synthesis: without a kind gate, scratchpad asks
+        # («проверь на соответствие…») become standing agendas on «привет» (055).
+        if hit_kinds is None:
+            return FormatterMemoryMergeDecision(
+                hints=raw[:capped],
+                reason="full_hints_no_source",
+            )
+        selected = cls._preference_hints(raw, hit_kinds, capped=capped)
+        return FormatterMemoryMergeDecision(
+            hints=selected,
+            reason=("identity_kinds_no_source" if selected else "no_personalization_kinds_no_source"),
+        )
+
+    @staticmethod
+    def _preference_hints(
+        raw: tuple[str, ...],
+        hit_kinds: tuple[str, ...] | list[str],
+        *,
+        capped: int,
+    ) -> tuple[str, ...]:
+        selected: list[str] = []
+        for hint, kind in zip(raw, hit_kinds, strict=False):
+            if str(kind).strip().lower() in _PERSONALIZATION_KINDS:
+                selected.append(hint)
+            if len(selected) >= capped:
+                break
+        return tuple(selected[:capped])

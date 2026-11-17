@@ -15,7 +15,7 @@ from palatium_ai.domain.policies.types import (
     ResolvedUncertaintyDisposition,
 )
 
-_RESOLVED_DISPOSITIONS = frozenset({"clarification", "default_with_mark", "honest_refusal"})
+_RESOLVED_DISPOSITIONS = frozenset({"clarification", "default_with_mark", "honest_refusal", "proceed"})
 
 
 def decode_context_weaver_input(input_context: dict[str, str], *, instruction: str) -> ContextWeaverInput:

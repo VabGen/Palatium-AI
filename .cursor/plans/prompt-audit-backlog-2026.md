@@ -115,9 +115,10 @@ implement two-layer conflict-linter + non-blocking CI job
 | `clarification` | названный пробел; default path неверен |
 | `default_with_mark` | разумное допущение с пометкой (не silent invent) |
 | `honest_refusal` | out of scope / required data absent; также fallback после residual |
-| `unknown` | **residual only** — policy не выбрала между тремя выше; **не** user-facing. Downstream: `resolve_for_downstream` → `honest_refusal` (`unknown_fallback:…`) |
+| `proceed` | evidence sufficient / prior dialog grounds ask — **без** ASSUMPTION_MARK |
+| `unknown` | **residual only** — policy не выбрала между clarify / marked-default / refuse; **не** user-facing. Downstream: `resolve_for_downstream` → `honest_refusal` (`unknown_fallback:…`) |
 
-Реализация: `UncertaintyPolicy` + `tests/fixtures/uncertainty/` (8 cases, ≥2 на disposition).
+Реализация: `UncertaintyPolicy` + `tests/fixtures/uncertainty/` (≥2 на disposition; `prior_grounds_answer`).
 Композит `ClarificationGatePolicy` + `GroundingPolicy` — без дубля их правил.
 
 **Disposition — поле контракта** (не лог): `IntentClassifierOutput.uncertainty_disposition`

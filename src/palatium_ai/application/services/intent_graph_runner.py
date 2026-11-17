@@ -537,6 +537,11 @@ class IntentGraphRunner:
                 thread_id=thread_id,
                 user_id=user_id,
             ),
+            "has_thread_files": await self._thread_has_files(
+                dialog=prior_window,
+                thread_id=thread_id,
+                user_id=user_id,
+            ),
             "use_memory": use_memory,
         }
         if composer_mode is not None:
@@ -626,6 +631,28 @@ class IntentGraphRunner:
                 status=resolution.status,
             )
         return named
+
+    async def _thread_has_files(
+        self,
+        *,
+        dialog: DialogTurnWindow,
+        thread_id: str,
+        user_id: str | None,
+    ) -> bool:
+        """Registry or dialog payloads: uploads survive after payload turns age out."""
+        from palatium_ai.domain.policies.attachment_stickiness import AttachmentStickinessPolicy
+
+        if AttachmentStickinessPolicy.thread_has_files(dialog):
+            return True
+        resolver = self._file_reference_resolver
+        owner = (user_id or "").strip()
+        if resolver is None or not owner or not (thread_id or "").strip():
+            return False
+        try:
+            return await resolver.thread_has_readable_files(user_id=owner, thread_id=thread_id)
+        except Exception:
+            logger.exception("thread registry file probe failed", thread_id=thread_id)
+            return False
 
     async def _emit_hop_observability(
         self,

@@ -107,8 +107,8 @@ def test_format_without_source_invokes_llm() -> None:
     assert decision.reason == "format_without_source"
 
 
-def test_social_format_only_invokes_llm() -> None:
-    """Social uses format_only but must not inherit format_passthrough (2026)."""
+def test_social_format_only_phatic_passthrough() -> None:
+    """Phatic social (no worker) skips Critic — no false quality_review HITL (2026)."""
     decision = CriticPolicy.decide(
         selected_strategy="format_only",
         task_kind="social_conversation",
@@ -119,8 +119,23 @@ def test_social_format_only_invokes_llm() -> None:
         requires_tool_call=False,
         worker_summary=None,
     )
+    assert decision.invoke_llm is False
+    assert decision.reason == "social_phatic_passthrough"
+
+
+def test_social_format_only_with_worker_still_invokes() -> None:
+    """Social that somehow carries a draft still gets the quality gate."""
+    decision = CriticPolicy.decide(
+        selected_strategy="format_only",
+        task_kind="social_conversation",
+        continuation_kind="new_topic",
+        classification_confidence=0.95,
+        confidence_threshold=0.7,
+        requires_mcp=False,
+        requires_tool_call=False,
+        worker_summary="draft greeting",
+    )
     assert decision.invoke_llm is True
-    assert decision.reason == "default_quality_gate"
 
 
 def test_clarify_high_confidence_passthrough() -> None:

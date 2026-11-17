@@ -4,16 +4,24 @@
  * transcript; the side pane opens only on user click (Kimi chat parity) —
  * never auto-open and never replace the bubble with an anchor-only card.
  *
+ * Contract (Claude / ChatGPT canvas / Kimi 2026 — citations ≠ artifacts):
+ * - ``source_refs`` / ``citations`` are provenance chips under the bubble.
+ * - HITL ``actions`` are cards, not side-pane openers.
+ * - Artifact affordance is structural mass only (dense blocks / sections /
+ *   long self-contained body) — never “has a file” or “has a list”.
+ *
  * Thresholds are structural (block kinds / count / length), never phrase lists (055).
- * Aligned with Anthropic artifacts guidance: substantial self-contained content
- * (layout / dense data / multi-section), not short social prose — even if it
- * spans two paragraph blocks.
  */
 import type { ContentBlock, ContentDocument } from '../types/contentDocument';
-import { displaySourceRefs } from './attachments';
 
 /** Single-paragraph answers shorter than this stay in the transcript bubble. */
 export const ARTIFACT_MIN_PARAGRAPH_CHARS = 320;
+
+/**
+ * Chat-shaped lists/callouts need more mass than a long paragraph before the
+ * side pane — ordinary file Q&A («о чем файл») with bullets must stay inline.
+ */
+export const ARTIFACT_MIN_SUPPORT_CHARS = ARTIFACT_MIN_PARAGRAPH_CHARS * 2;
 
 /** Dense payload types that warrant a side-pane artifact on their own. */
 const DENSE_BLOCK_TYPES = new Set<ContentBlock['type']>([
@@ -68,10 +76,7 @@ function totalPlainChars(doc: ContentDocument): number {
 export function isArtifactWorthy(doc: ContentDocument): boolean {
   if (doc.blocks.length === 0) return false;
 
-  if ((doc.meta.citations?.length ?? 0) > 0) return true;
-  // Internal stamps (e.g. ``from memory``) are not file citations — ignore them.
-  if (displaySourceRefs(doc.meta.source_refs).length > 0) return true;
-  if (doc.actions.length > 0) return true;
+  // Provenance and HITL are orthogonal axes — never promote to artifact (055).
 
   if (doc.blocks.some(block => DENSE_BLOCK_TYPES.has(block.type))) return true;
 
@@ -79,8 +84,12 @@ export function isArtifactWorthy(doc: ContentDocument): boolean {
   // Multi-section answers (analysis / guide / recipe) — Anthropic «sections» flavor.
   if (headingCount >= 2) return true;
 
+  const chars = totalPlainChars(doc);
+  // One section heading + substantive body (report-shaped, not a chat blurb).
+  if (headingCount >= 1 && chars >= ARTIFACT_MIN_PARAGRAPH_CHARS) return true;
+
   if (doc.blocks.some(block => SUPPORT_BLOCK_TYPES.has(block.type))) {
-    return totalPlainChars(doc) >= ARTIFACT_MIN_PARAGRAPH_CHARS;
+    return chars >= ARTIFACT_MIN_SUPPORT_CHARS;
   }
 
   const only = doc.blocks.length === 1 ? doc.blocks[0] : null;

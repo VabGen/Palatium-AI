@@ -90,7 +90,7 @@ def test_assembler_strips_list_and_keeps_framing() -> None:
     assert fields["promoted_from"] == "list"
 
 
-def test_assembler_fail_closed_when_choice_required_without_options() -> None:
+def test_assembler_soft_missing_when_choice_required_without_options() -> None:
     doc = ContentDocument(
         schema_version=1,
         locale="en-US",
@@ -105,8 +105,9 @@ def test_assembler_fail_closed_when_choice_required_without_options() -> None:
         ),
     )
     assembled = InteractionAssembler.assemble(doc, requires_review=False, requires_user_choice=True)
-    assert assembled.invalid is True
-    assert assembled.plan.reason == "formatter_output_invalid"
+    assert assembled.invalid is False
+    assert assembled.plan.reason == "choice_options_missing"
+    assert assembled.plan.required_choice is True
 
 
 def test_assembler_delivers_fact_answer_with_over_flagged_choice() -> None:

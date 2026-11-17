@@ -229,6 +229,8 @@ def test_joke_on_document_topic_answers_instead_of_choice_menu() -> None:
     assert effective.requires_user_choice is False
     assert effective.underspecification_kind == "none"
     assert effective.suppress_intent_hitl is True
+    assert effective.trust_prior_for_workers is False
+    assert effective.prior_context is None
 
 
 def test_low_confidence_contextualizer_clarify_does_not_stop_the_turn() -> None:

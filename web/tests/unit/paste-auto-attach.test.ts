@@ -110,4 +110,16 @@ describe('displaySourceRefs', () => {
       ])
     ).toEqual(['Договор_оказания_услуг_2.docx', 'Договор_оказания_услуг.docx']);
   });
+
+  it('collapses markdown [file.pdf] aliases with upload basenames', async () => {
+    const { displaySourceRefs } = await import('../../src/lib/attachments');
+    expect(
+      displaySourceRefs([
+        '[Скан 1 _Приложение.pdf]',
+        '[Скан 2 _Приложение.pdf]',
+        'Скан_1__Приложение.pdf',
+        'Скан_2__Приложение.pdf',
+      ])
+    ).toEqual(['Скан_1__Приложение.pdf', 'Скан_2__Приложение.pdf']);
+  });
 });

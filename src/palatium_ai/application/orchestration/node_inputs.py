@@ -155,7 +155,11 @@ def build_formatter_input(
     critic_result = state.get("critic")
     critic_requires_review = critic_result.requires_review if critic_result is not None else False
     intent_review = snapshot.classification.requires_review and not selectors.suppress_intent_hitl(state)
-    worker_summary = snapshot.worker_summary
+    from palatium_ai.domain.policies.worker_prose import WorkerProsePolicy
+
+    # Unwrap envelopes before disclaimer/mark — prefixes would hide the leading `{`.
+    raw_worker = snapshot.worker_summary
+    worker_summary = WorkerProsePolicy.user_visible(raw_worker or "") if raw_worker else raw_worker
     execution = state.get("execution")
     policy_refusal = _is_policy_refusal_execution(execution)
     if (

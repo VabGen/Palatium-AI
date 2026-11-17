@@ -32,6 +32,7 @@
       "confidence": 0.9,
       "grounding": "none",
       "has_prior_dialog": true,
+      "prior_grounds_answer": true,
       "ambiguous_reference_without_prior": false
     }
   },
@@ -40,6 +41,6 @@
     "trust_prior_for_workers": true,
     "prior_context_present": true,
     "transformation": "shorten",
-    "uncertainty_disposition": "default_with_mark"
+    "uncertainty_disposition": "proceed"
   }
 }

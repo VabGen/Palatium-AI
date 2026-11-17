@@ -149,15 +149,11 @@ class ChoiceResumePolicy:
         if prior_user and "HITL_CHOICE_RESUME" not in prior_user:
             base = prior_user[:_PRIOR_USER_MAX]
             rewritten = f"{base}\n[selected_option action_id={parsed.action_id}] {label}"
-        elif prior_assistant_excerpt and prior_assistant_excerpt.strip():
-            excerpt = prior_assistant_excerpt.strip()[:_PRIOR_USER_MAX]
-            rewritten = (
-                f"Continue the prior assistant clarification using the selected option.\n"
-                f"Prior:\n{excerpt}\n"
-                f"[selected_option action_id={parsed.action_id}] {label}"
-            )
         else:
+            # Do not paste the prior exclusive menu into the ask — workers re-emitted
+            # it as «какой вариант выбираем?» instead of fulfilling the pick (055).
             rewritten = f"[selected_option action_id={parsed.action_id}] {label}"
+        _ = prior_assistant_excerpt
         return rewritten[:_REWRITE_MAX]
 
 

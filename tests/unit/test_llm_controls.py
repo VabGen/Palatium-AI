@@ -81,18 +81,27 @@ async def test_harness_forwards_effort_and_verbosity_to_llm_port() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_litellm_generate_forwards_dials(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_litellm_openai_forwards_verbosity_drops_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI chat models reject reasoning_effort; verbosity stays capability-gated."""
     from types import SimpleNamespace
 
     from palatium_ai.core.config.llm.openai import OpenAILLMConfig
 
     captured: dict[str, object] = {}
+    dropped: list[dict[str, object]] = []
 
     async def _fake_acompletion(**params: object) -> object:
         captured.update(params)
         return SimpleNamespace(choices=[], model="gpt-test", usage=None)
 
+    def _fake_debug(event: str, **kwargs: object) -> None:
+        if event == "llm.reasoning_effort.dropped":
+            dropped.append({"event": event, **kwargs})
+
     monkeypatch.setattr("palatium_ai.infrastructure.llm.litellm_adapter.acompletion", _fake_acompletion)
+    monkeypatch.setattr("palatium_ai.infrastructure.llm.litellm_adapter.logger.debug", _fake_debug)
     adapter = LiteLLMAdapter(OpenAILLMConfig.model_validate({"OPENAI_API_KEY": "k", "OPENAI_TIMEOUT": "42"}))
     await adapter.generate(
         [ChatMessage(role="user", content="hi")],
@@ -101,9 +110,67 @@ async def test_litellm_generate_forwards_dials(monkeypatch: pytest.MonkeyPatch) 
         reasoning_effort="medium",
         verbosity="low",
     )
-    assert captured["reasoning_effort"] == "medium"
+    assert "reasoning_effort" not in captured
     assert captured["verbosity"] == "low"
     assert captured["max_tokens"] == 128
+    assert dropped == [
+        {
+            "event": "llm.reasoning_effort.dropped",
+            "provider": "openai",
+            "reasoning_effort": "medium",
+            "reason": "unsupported_by_provider",
+        }
+    ]
+
+
+@pytest.mark.asyncio()
+async def test_litellm_gateway_drops_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Corporate gateway (openai/tier-*) must not receive reasoning_effort."""
+    from types import SimpleNamespace
+
+    from pydantic import SecretStr
+
+    from palatium_ai.core.config.llm.gateway import GatewayLLMConfig
+
+    captured: dict[str, object] = {}
+    dropped: list[dict[str, object]] = []
+
+    async def _fake_acompletion(**params: object) -> object:
+        captured.update(params)
+        return SimpleNamespace(choices=[], model="tier-small", usage=None)
+
+    def _fake_debug(event: str, **kwargs: object) -> None:
+        if event == "llm.reasoning_effort.dropped":
+            dropped.append({"event": event, **kwargs})
+
+    monkeypatch.setattr("palatium_ai.infrastructure.llm.litellm_adapter.acompletion", _fake_acompletion)
+    monkeypatch.setattr("palatium_ai.infrastructure.llm.litellm_adapter.logger.debug", _fake_debug)
+    adapter = LiteLLMAdapter(
+        GatewayLLMConfig(
+            api_key=SecretStr("k"),
+            default_model="tier-small",
+            base_url="http://gateway.example/v1",
+        ),
+    )
+    await adapter.generate(
+        [ChatMessage(role="user", content="hi")],
+        model="tier-small",
+        max_tokens=32,
+        reasoning_effort="low",
+        verbosity="medium",
+    )
+    assert "reasoning_effort" not in captured
+    assert "verbosity" not in captured  # gateway ∉ _VERBOSITY_CAPABLE
+    assert dropped == [
+        {
+            "event": "llm.reasoning_effort.dropped",
+            "provider": "gateway",
+            "reasoning_effort": "low",
+            "reason": "unsupported_by_provider",
+        }
+    ]
 
 
 @pytest.mark.asyncio()

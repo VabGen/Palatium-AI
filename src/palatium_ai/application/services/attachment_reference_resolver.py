@@ -15,27 +15,38 @@ from typing import TYPE_CHECKING
 from palatium_ai.core.logging import get_logger
 from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.core.observability.tracing import traceable
+from palatium_ai.domain.attachments.content import AttachmentContent
 from palatium_ai.domain.policies.file_reference import (
     FileRefCandidate,
     FileReferencePolicy,
     FileReferenceResolution,
 )
+from palatium_ai.domain.ports.blob_store import BlobNotFoundError
 
 if TYPE_CHECKING:
     from palatium_ai.domain.attachments.models import Attachment
     from palatium_ai.domain.ports.attachments import AttachmentRepositoryPort
+    from palatium_ai.domain.ports.blob_store import BlobStorePort
 
 logger = get_logger(__name__)
 
 #: Row states whose body may be read / lazily parsed (mirrors AttachmentReadService).
 _USABLE = frozenset({"ready", "indexed"})
+#: Cap on derived/OCR preview loaded for topical matching (same as policy).
+_SEARCH_PREVIEW_CHARS = 4_000
 
 
 class AttachmentReferenceResolver:
     """Owner + thread scoped reference resolution for the re-read path."""
 
-    def __init__(self, *, repository: AttachmentRepositoryPort) -> None:
+    def __init__(
+        self,
+        *,
+        repository: AttachmentRepositoryPort,
+        blob_store: BlobStorePort | None = None,
+    ) -> None:
         self._repository = repository
+        self._blob_store = blob_store
 
     @traceable(name="attachment_reference.resolve")
     async def resolve(
@@ -73,6 +84,19 @@ class AttachmentReferenceResolver:
             if all_requested
             else FileReferencePolicy.resolve(candidates, hint_text=hint_text, filename=filename)
         )
+        # Name miss with several files: enrich from MinIO derived/OCR text and retry
+        # so «файл про иван-чай» can uniquely resolve ht_1-5.webp (055 / registry SoT).
+        if (
+            not all_requested
+            and not (filename or "").strip()
+            and resolution.status == "ambiguous"
+            and resolution.reason == "several_thread_files"
+            and (hint_text or "").strip()
+            and self._blob_store is not None
+        ):
+            enriched = await self._candidates_with_search_text(attachments)
+            if any(item.search_text for item in enriched):
+                resolution = FileReferencePolicy.resolve(enriched, hint_text=hint_text)
         if not candidates and attachments:
             resolution = resolution.model_copy(update={"reason": "thread_files_not_readable"})
         if resolution.status != "resolved":
@@ -102,6 +126,19 @@ class AttachmentReferenceResolver:
             all_requested=all_requested,
         )
         return resolution
+
+    async def thread_has_readable_files(self, *, user_id: str, thread_id: str) -> bool:
+        """True when the attachment registry holds at least one readable row.
+
+        Dialog-turn payloads age out of the window; the registry is the SoT for
+        ``has_thread_files`` on Intent (055) — same source the UI «Все файлы» uses.
+        """
+        scoped_thread = (thread_id or "").strip()
+        owner = (user_id or "").strip()
+        if not scoped_thread or not owner:
+            return False
+        attachments = await self._repository.list_for_thread(scoped_thread, user_id=owner)
+        return any(item.status in _USABLE for item in attachments)
 
     async def resolve_explicit(
         self,
@@ -149,6 +186,45 @@ class AttachmentReferenceResolver:
             thread_file_count=len(attachments),
         )
         return resolution
+
+    async def _candidates_with_search_text(
+        self,
+        attachments: list[Attachment],
+    ) -> tuple[FileRefCandidate, ...]:
+        """Load truncated derived/OCR previews for usable rows (MinIO / blob)."""
+        out: list[FileRefCandidate] = []
+        for item in attachments:
+            if item.status not in _USABLE:
+                continue
+            preview = await self._load_search_preview(item)
+            out.append(
+                FileRefCandidate(
+                    attachment_id=item.id,
+                    filename=item.filename,
+                    search_text=preview,
+                )
+            )
+        return tuple(out)
+
+    async def _load_search_preview(self, attachment: Attachment) -> str:
+        if self._blob_store is None or not attachment.derived_text_key:
+            return ""
+        try:
+            raw = await self._blob_store.read_bytes(attachment.derived_text_key)
+        except BlobNotFoundError:
+            return ""
+        except Exception:  # noqa: BLE001  # preview is optimisations-only; never fail the turn (030.8)
+            logger.warning(
+                "attachment_reference.search_preview_failed",
+                attachment_id=str(attachment.id),
+                reason="blob_read_error",
+            )
+            return ""
+        try:
+            content = AttachmentContent.model_validate_json(raw)
+        except Exception:  # noqa: BLE001  # corrupt derived JSON → skip content match
+            return ""
+        return (content.safe_text or "")[:_SEARCH_PREVIEW_CHARS]
 
 
 def _usable_candidates(attachments: list[Attachment]) -> tuple[FileRefCandidate, ...]:

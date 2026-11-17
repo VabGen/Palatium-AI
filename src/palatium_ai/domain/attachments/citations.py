@@ -108,9 +108,25 @@ def _fence_entries(untrusted_context: str) -> list[tuple[str, str]]:
     return entries
 
 
+_MD_FILE_WRAP_RE = re.compile(r"^\[([^\]]+)\](?:\([^)]*\))?$")
+_WRAP_OPEN = frozenset("[「『\"'«")
+_WRAP_CLOSE = frozenset("]」』\"'»")
+
+
+def _strip_source_ref_decorators(label: str) -> str:
+    """Collapse ``[Скан 1.pdf]`` / ``[file](…)`` to the bare basename."""
+    text = label.strip()
+    md = _MD_FILE_WRAP_RE.match(text)
+    if md is not None:
+        text = (md.group(1) or "").strip()
+    while len(text) >= 2 and text[0] in _WRAP_OPEN and text[-1] in _WRAP_CLOSE:
+        text = text[1:-1].strip()
+    return text
+
+
 def _source_ref_fingerprint(name: str) -> str:
-    """One chip key for ``Договор_a.docx`` vs ``Договор a.docx`` (LLM aliases)."""
-    text = name.strip()
+    """One chip key for ``Договор_a.docx`` vs ``Договор a.docx`` / ``[file.pdf]``."""
+    text = _strip_source_ref_decorators(name)
     if not text:
         return ""
     if text.lower().startswith(("http://", "https://")):
@@ -191,15 +207,15 @@ def _collapse_parsed_source_refs(parsed: list[tuple[str, str, str]]) -> tuple[st
 
 
 def _normalize_ref_label(label: str) -> str | None:
-    """Strip ``attachment:`` fence echoes; drop uuid-only technical refs."""
-    text = label.strip()
+    """Strip ``attachment:`` fence echoes / ``[file]`` wraps; drop uuid-only refs."""
+    text = _strip_source_ref_decorators(label)
     if not text:
         return None
     if _ATTACHMENT_UUID_ONLY_RE.match(text) or _BARE_UUID_RE.match(text):
         return None
     prefixed = _ATTACHMENT_PREFIX_RE.match(text)
     if prefixed is not None:
-        rest = (prefixed.group("rest") or "").strip()
+        rest = _strip_source_ref_decorators((prefixed.group("rest") or "").strip())
         if not rest or _BARE_UUID_RE.match(rest):
             return None
         return rest

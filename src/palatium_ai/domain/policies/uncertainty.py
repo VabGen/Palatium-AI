@@ -8,8 +8,10 @@ ContinuityPolicy; this policy only sees *signals* (e.g. anaphora without prior).
 
 ``unknown`` is a *residual* from ``decide`` — policy could not pick among
 clarification / default_with_mark / honest_refusal. It is **not** user-facing
-«не знаю». Pipeline code must call ``resolve_for_downstream`` (or ``for_pipeline``)
-before attaching the disposition to Intent → ContextPacket → Formatter/Critic.
+«не знаю». ``proceed`` means evidence is sufficient (incl. prior dialog grounds
+the ask) — no assumption mark. Pipeline code must call ``resolve_for_downstream``
+(or ``for_pipeline``) before attaching the disposition to Intent → ContextPacket
+→ Formatter/Critic.
 
 Composes ClarificationGatePolicy + GroundingPolicy; does not re-implement their rules.
 """
@@ -66,6 +68,8 @@ class UncertaintySignals(BaseModel):
     out_of_scope: bool = False
     #: «как в прошлый раз» / anaphora with no thread evidence (stateless half of §5).
     ambiguous_reference_without_prior: bool = False
+    #: Continuity trusts prior / slot filled from dialog — answer is not an assumption.
+    prior_grounds_answer: bool = False
 
 
 class UncertaintyDecision(BaseModel):
@@ -96,7 +100,7 @@ class UncertaintyPolicy:
                 reason="ambiguous_reference_without_prior",
             )
 
-        if signals.retrieval_empty is True:
+        if signals.retrieval_empty is True and not signals.prior_grounds_answer:
             mode = GroundingPolicy.coerce_mode(signals.grounding)
             empty = GroundingPolicy.decide_empty_retrieval(enabled=True, grounding=mode)
             if empty.action == "clarify" or mode == "required":
@@ -131,7 +135,12 @@ class UncertaintyPolicy:
         }:
             return UncertaintyDecision(disposition="unknown", reason="low_confidence_in_scope")
 
-        return UncertaintyDecision(disposition="default_with_mark", reason="sufficient_to_proceed")
+        # Dialog already supplies the referent (Continuity trust / slot filled) —
+        # answering from prior is not an assumption (055: class of false mark).
+        if signals.prior_grounds_answer and signals.has_prior_dialog:
+            return UncertaintyDecision(disposition="proceed", reason="prior_dialog_grounds")
+
+        return UncertaintyDecision(disposition="proceed", reason="sufficient_to_proceed")
 
     @classmethod
     def resolve_for_downstream(cls, decision: UncertaintyDecision) -> UncertaintyDecision:
@@ -171,7 +180,7 @@ class UncertaintyPolicy:
                     reason="unknown_fallback:exhausted",
                 )
             return cls.resolve_for_downstream(UncertaintyDecision(disposition="unknown", reason=base[:128]))
-        if disposition in {"clarification", "default_with_mark", "honest_refusal"}:
+        if disposition in {"clarification", "default_with_mark", "honest_refusal", "proceed"}:
             return UncertaintyDecision(
                 disposition=disposition,  # type: ignore[arg-type]
                 reason=(reason or "attached")[:128],
@@ -220,10 +229,16 @@ class UncertaintyPolicy:
 
     @classmethod
     def stream_prefix(cls, disposition: UncertaintyDisposition | None) -> str | None:
-        """Text that must be painted *before* the first LLM stream chunk (or None)."""
+        """Text that must be painted *before* the first LLM stream chunk (or None).
+
+        Ends with a blank line so CommonMark ATHeading markers (``## …``) in the
+        following body stay at column 0. Same-line glue
+        (``Предположение: ## Title``) leaves ``##`` as literal text in preview
+        and collapses the heading when worker GFM is parsed.
+        """
         if not cls.requires_assumption_mark(disposition):
             return None
-        return f"{ASSUMPTION_MARK} "
+        return f"{ASSUMPTION_MARK}\n\n"
 
     @classmethod
     def mark_exempt_from_verbosity(
@@ -274,10 +289,14 @@ class UncertaintyPolicy:
         disposition: UncertaintyDisposition | None,
         mark: str = ASSUMPTION_MARK,
     ) -> str:
-        """Prepend structural mark when required and missing (verbosity-safe)."""
+        """Prepend structural mark when required and missing (verbosity-safe).
+
+        Mark is its own paragraph (blank line after). Inline glue would break
+        ATHeading / list / fence constructs that must start at column 0.
+        """
         text = body.strip()
         if not text or not cls.requires_assumption_mark(disposition):
             return body
         if mark in text:
             return body
-        return f"{mark} {text}"
+        return f"{mark}\n\n{text}"

@@ -40,7 +40,15 @@ _MIN_NAME_RUN_CHARS_WITH_DIGIT = 4
 # A refusal never becomes a wall of names.
 _MAX_LISTED_NAMES = 5
 #: Resolution reasons that mean "the ask named this file" (not a default pick).
-_NAMED_REFERENCE_REASONS = frozenset({"name_in_turn_text", "explicit_filename"})
+_NAMED_REFERENCE_REASONS = frozenset({"name_in_turn_text", "explicit_filename", "content_in_turn_text"})
+#: Min length of a topical token used for content-preview matching (OCR / derived text).
+_MIN_CONTENT_TOKEN_CHARS = 3
+#: A lone topical token must be longer (avoids «чай» / «суд» false hits).
+_MIN_SINGLE_CONTENT_TOKEN_CHARS = 5
+#: Combined topical probe length floor when several short tokens remain («иван»+«чай»).
+_MIN_CONTENT_PROBE_CHARS = 7
+#: Cap on derived/OCR preview kept on a candidate (065 budget; identity only).
+_MAX_SEARCH_TEXT_CHARS = 4_000
 #: Punctuation stripped from a word before it is read as a document name.
 _TOKEN_TRIM = ".,;:!?()[]{}«»\"'"  # noqa: S105 — punctuation set, not a credential (017)
 #: Closed morphological set of the *document-role* noun (ru/en). When the user
@@ -110,6 +118,62 @@ _NAME_POINTER_TOKENS: Final[frozenset[str]] = frozenset(
 )
 #: Max alphabetic junk after a doc-role stem in a typo token («файлет» → файл+ет).
 _DOC_ROLE_TYPO_SUFFIX_MAX = 2
+#: Closed function-word set stripped from topical content probes (not an open
+#: phrase list — structural stopwords so «про»/«about» never become the match key).
+_CONTENT_STOP_TOKENS: Final[frozenset[str]] = frozenset(
+    {
+        "про",
+        "для",
+        "по",
+        "на",
+        "из",
+        "от",
+        "до",
+        "за",
+        "под",
+        "над",
+        "при",
+        "без",
+        "что",
+        "как",
+        "там",
+        "это",
+        "эта",
+        "этот",
+        "эти",
+        "был",
+        "была",
+        "было",
+        "были",
+        "мы",
+        "вы",
+        "они",
+        "он",
+        "она",
+        "мне",
+        "нас",
+        "вас",
+        "или",
+        "еще",
+        "ещё",
+        "то",
+        "же",
+        "ли",
+        "бы",
+        "не",
+        "ни",
+        "about",
+        "with",
+        "from",
+        "this",
+        "that",
+        "the",
+        "and",
+        "for",
+        "into",
+        "over",
+    }
+)
 
 
 class FileRefCandidate(BaseModel):
@@ -119,6 +183,9 @@ class FileRefCandidate(BaseModel):
 
     attachment_id: UUID
     filename: str = Field(min_length=1, max_length=255)
+    #: Optional derived/OCR preview for topical asks («файл про иван-чай») when the
+    #: filename itself does not carry the topic. Empty = name-only matching.
+    search_text: str = Field(default="", max_length=_MAX_SEARCH_TEXT_CHARS)
 
 
 class FileReferenceResolution(BaseModel):
@@ -196,6 +263,18 @@ class FileReferencePolicy:
                 reason="several_names_in_turn_text",
             )
 
+        # Topical ask against derived/OCR text («файл про иван-чай» → ht_1-5.webp):
+        # only when previews were loaded; uniqueness still fail-closed (020).
+        content_matched = FileReferencePolicy.match_content(scoped, hint_text=hint_text)
+        if len(content_matched) == 1:
+            return _resolved(content_matched[0], reason="content_in_turn_text")
+        if len(content_matched) > 1:
+            return FileReferenceResolution(
+                status="ambiguous",
+                candidates=tuple(item.filename for item in content_matched),
+                reason="several_content_matches",
+            )
+
         if _names_foreign_document(scoped, hint_text=hint_text):
             # The ask named a document the dialog does not hold: reading the dialog's
             # only file would answer about the wrong document (020 fail-closed).
@@ -256,7 +335,10 @@ class FileReferencePolicy:
         """
         if FileReferencePolicy.is_named_reference(resolution):
             return True
-        if resolution.status == "ambiguous" and resolution.reason == "several_names_in_turn_text":
+        if resolution.status == "ambiguous" and resolution.reason in {
+            "several_names_in_turn_text",
+            "several_content_matches",
+        }:
             return True
         return resolution.status == "no_match" and bool((resolution.requested_name or "").strip())
 
@@ -294,6 +376,39 @@ class FileReferencePolicy:
                 )
             return "Не удалось найти запрошенный файл среди файлов этого диалога. Назовите его точнее."
         return ""  # pragma: no cover - resolved carries no refusal
+
+    @staticmethod
+    def match_content(
+        candidates: Sequence[FileRefCandidate],
+        *,
+        hint_text: str,
+    ) -> list[FileRefCandidate]:
+        """Candidates whose derived/OCR preview best covers topical ask tokens.
+
+        Structural (055): strip document-role / name-pointer / function words from the
+        ask, keep substantive tokens, score each preview by how many probe tokens it
+        contains as bounded words. A hit needs ≥2 token overlaps, or one long token
+        (≥5). Ties at the best score stay ambiguous for the caller (``len == 1``).
+        """
+        probe = _content_probe_tokens(hint_text)
+        if not probe:
+            return []
+        scored: list[tuple[int, FileRefCandidate]] = []
+        for item in candidates:
+            haystack = _normalize_text(item.search_text[:_MAX_SEARCH_TEXT_CHARS])
+            if not haystack:
+                continue
+            hit_tokens = [token for token in probe if _occurs_as_bounded_token(haystack, token)]
+            hits = len(hit_tokens)
+            if hits == 0:
+                continue
+            long_hit = any(len(token) >= _MIN_SINGLE_CONTENT_TOKEN_CHARS for token in hit_tokens)
+            if hits >= 2 or (hits == 1 and long_hit):
+                scored.append((hits, item))
+        if not scored:
+            return []
+        best = max(score for score, _ in scored)
+        return [item for score, item in scored if score == best]
 
     @staticmethod
     def match_names(
@@ -640,6 +755,28 @@ def _format_names(names: Sequence[str]) -> str:
         if len(seen) >= _MAX_LISTED_NAMES:
             break
     return ", ".join(f"«{name}»" for name in seen)
+
+
+def _content_probe_tokens(hint_text: str) -> tuple[str, ...]:
+    """Topical tokens from the ask after stripping file-name introducers."""
+    words = _name_words(hint_text[:_HINT_SCAN_CHARS])
+    probe: list[str] = []
+    for word in words:
+        if word in _DOC_ROLE_TOKENS or word in _NAME_POINTER_TOKENS or word in _CONTENT_STOP_TOKENS:
+            continue
+        if _token_extends_doc_role(word):
+            continue
+        if len(word) < _MIN_CONTENT_TOKEN_CHARS:
+            continue
+        if word not in probe:
+            probe.append(word)
+    if not probe:
+        return ()
+    if len(probe) == 1:
+        return tuple(probe) if len(probe[0]) >= _MIN_SINGLE_CONTENT_TOKEN_CHARS else ()
+    if sum(len(token) for token in probe) < _MIN_CONTENT_PROBE_CHARS:
+        return ()
+    return tuple(probe)
 
 
 def _normalize_name(filename: str) -> str:

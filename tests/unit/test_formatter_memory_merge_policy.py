@@ -14,6 +14,27 @@ def test_full_hints_without_source() -> None:
     assert decision.reason == "full_hints_no_source"
 
 
+def test_social_no_source_keeps_preferences_only_when_kinds_known() -> None:
+    """Scratchpad asks must not become a standing agenda on an empty-worker social turn."""
+    decision = FormatterMemoryMergePolicy.decide(
+        memory_hints=("проверь соответствие законодательству РБ", "обращаться «мой хозяин»"),
+        has_source_content=False,
+        hit_kinds=("fact", "preference"),
+    )
+    assert decision.hints == ("обращаться «мой хозяин»",)
+    assert decision.reason == "identity_kinds_no_source"
+
+
+def test_social_no_source_drops_fact_only_pins() -> None:
+    decision = FormatterMemoryMergePolicy.decide(
+        memory_hints=("сравни файлы", "о чем файл"),
+        has_source_content=False,
+        hit_kinds=("fact", "fact"),
+    )
+    assert decision.hints == ()
+    assert decision.reason == "no_personalization_kinds_no_source"
+
+
 def test_identity_slice_with_source() -> None:
     decision = FormatterMemoryMergePolicy.decide(
         memory_hints=("меня зовут Геннадий", "длинный факт о рынке"),

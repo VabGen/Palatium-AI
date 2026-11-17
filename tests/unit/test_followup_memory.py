@@ -231,9 +231,9 @@ async def test_followup_answer_overrides_false_clarification() -> None:
 async def test_phatic_followup_skips_researcher_not_critic() -> None:
     """Phatic follow-up must not route to Researcher / false HITL.
 
-    Social uses format_only (2026): Critic LLM quality-gates the Formatter draft.
-    Regression target is Researcher skip + no review — not Critic passthrough
-    (that would collide with CriticPolicy / route_after_context for social).
+    Social uses format_only (2026): CriticPolicy.social_phatic_passthrough skips
+    LLM-as-judge (no quality HITL on greetings); Formatter still synthesises.
+    Regression target: Researcher skip + no review + Critic LLM skipped.
     """
     dialog = FakeDialogTurnStore()
     await dialog.append_turn(thread_id="social-follow", role="user", content="привет")
@@ -295,7 +295,7 @@ async def test_phatic_followup_skips_researcher_not_critic() -> None:
     assert result.status == "success"
     assert result.requires_review is False
     assert len(llm_researcher.calls) == 0
-    assert len(llm_critic.calls) == 1
+    assert len(llm_critic.calls) == 0
     assert len(formatter_llm.calls) >= 1
     # Intent LLM only on the shared pipeline; Contextualizer skips social.
     assert len(pipeline_llm.calls) == 1

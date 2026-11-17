@@ -60,6 +60,7 @@ import { DialogueNav } from './DialogueNav';
 import { FilePreviewPane } from './FilePreviewPane';
 import { SideConsoleResizer } from './SideConsoleResizer';
 import {
+  clampSideConsoleWidthPct,
   readSideConsoleWidthPct,
   SIDE_CONSOLE_WIDTH_DEFAULT,
   writeSideConsoleWidthPct,
@@ -387,9 +388,7 @@ export function ChatShell() {
   const [wsConnected, setWsConnected] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [projectId, setProjectId] = useState('');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => initialShellDensity().narrow
-  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => initialShellDensity().narrow);
   const [isNarrowShell, setIsNarrowShell] = useState(() => initialShellDensity().narrow);
   /** ≤480px panel (SED right rail) — denser type/padding; driven by shell width. */
   const [isCompactShell, setIsCompactShell] = useState(() => initialShellDensity().compact);
@@ -417,9 +416,7 @@ export function ChatShell() {
    * (mutually exclusive with ArtifactPane).
    */
   const [filesRail, setFilesRail] = useState<
-    | null
-    | { mode: 'list' }
-    | { mode: 'preview'; id: string; filename: string; page?: number }
+    null | { mode: 'list' } | { mode: 'preview'; id: string; filename: string; page?: number }
   >(null);
   /** kimi dual-pane: user-resizable side-console width (% of workspace). */
   const [sideConsoleWidthPct, setSideConsoleWidthPct] = useState(readSideConsoleWidthPct);
@@ -1597,7 +1594,10 @@ export function ChatShell() {
         );
         // Persist rename even if the live thread was not yet on the shelf.
         if (updated.some(row => row.id === renamedId)) return updated;
-        return [{ id: renamedId, title: next, projectId: projectId.trim() || null, updatedAt: now }, ...updated];
+        return [
+          { id: renamedId, title: next, projectId: projectId.trim() || null, updatedAt: now },
+          ...updated,
+        ];
       });
       setRenameTarget(null);
       toast.success(t('sidebar.renameDone'));
@@ -1838,14 +1838,46 @@ export function ChatShell() {
   const navDrawerOpen = isNarrowShell && !sidebarCollapsed;
 
   const setSideConsoleWidth = useCallback((pct: number) => {
-    setSideConsoleWidthPct(pct);
-    writeSideConsoleWidthPct(pct);
+    const workspaceW = workspaceRef.current?.getBoundingClientRect().width ?? 0;
+    const next = clampSideConsoleWidthPct(pct, workspaceW);
+    setSideConsoleWidthPct(next);
+    writeSideConsoleWidthPct(next);
   }, []);
 
   const resetSideConsoleWidth = useCallback(() => {
-    setSideConsoleWidthPct(SIDE_CONSOLE_WIDTH_DEFAULT);
-    writeSideConsoleWidthPct(SIDE_CONSOLE_WIDTH_DEFAULT);
+    const workspaceW = workspaceRef.current?.getBoundingClientRect().width ?? 0;
+    const next = clampSideConsoleWidthPct(SIDE_CONSOLE_WIDTH_DEFAULT, workspaceW);
+    setSideConsoleWidthPct(next);
+    writeSideConsoleWidthPct(next);
   }, []);
+
+  /*
+   * Keep ``--side-console-width`` inside chat-min + pane-min whenever the
+   * dual-pane opens or the workspace resizes — raw 70% overflows ~1280 stages.
+   */
+  useEffect(() => {
+    if (!canResizeSideConsole) return;
+    const node = workspaceRef.current;
+    if (!node) return;
+
+    const apply = () => {
+      const workspaceW = node.getBoundingClientRect().width;
+      setSideConsoleWidthPct(prev => {
+        const next = clampSideConsoleWidthPct(prev, workspaceW);
+        if (next !== prev) writeSideConsoleWidthPct(next);
+        return next === prev ? prev : next;
+      });
+    };
+
+    apply();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', apply);
+      return () => window.removeEventListener('resize', apply);
+    }
+    const ro = new ResizeObserver(() => apply());
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [canResizeSideConsole]);
 
   /* kimi.ai serves settings as a full page: the left rail becomes the settings
      nav, so the history sidebar and stage are replaced entirely. */
@@ -1973,7 +2005,7 @@ export function ChatShell() {
           <span className="sidebar-main-trigger">
             <button
               type="button"
-              className="sidebar-main-trigger__button sidebar-main-trigger__button--expand icon-hover"
+              className="sidebar-main-trigger__button sidebar-main-trigger__button--expand"
               aria-label={t('sidebar.expand')}
               aria-keyshortcuts="Control+B"
               onClick={() => setSidebarCollapsed(false)}
@@ -2005,6 +2037,7 @@ export function ChatShell() {
           onCollapse={mode === 'host' ? () => setPanelOpen(false) : undefined}
           showNavToggle={isNarrowShell}
           navToggleLabel={sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+          navToggleExpand={sidebarCollapsed}
           onToggleNav={() => setSidebarCollapsed(v => !v)}
           badges={topBadges}
           threadHint={devMode ? `${threadId.slice(0, 18)}…` : null}
@@ -2046,626 +2079,652 @@ export function ChatShell() {
           <div className="shell-chat-column">
             {/* [ZONE_BODY] — лента / marketplace */}
             <div className="shell-main" data-zone="ZONE_BODY">
-          {shellView === 'plugins' || shellView === 'skills' ? (
-            <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
-              {shellView === 'plugins' ? (
-                <PluginsPage
-                  activeTab="plugins"
-                  onTabChange={tab => navigateShell(tab === 'skills' ? 'skills' : 'plugins')}
-                />
-              ) : (
-                <SkillsPage
-                  activeTab="skills"
-                  onTabChange={tab => navigateShell(tab === 'skills' ? 'skills' : 'plugins')}
-                />
-              )}
-            </Suspense>
-          ) : null}
-          {shellView === 'scheduled' ? (
-            <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
-              <ScheduledTasksPage onCompose={composeFromPage} />
-            </Suspense>
-          ) : null}
-          {shellView === 'history' ? (
-            <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
-              <ChatHistoryPage
-                threads={historyThreads.map(thread => {
-                  if (thread.id !== threadId || messages.length === 0) return thread;
-                  const assistant = [...messages]
-                    .reverse()
-                    .find(message => message.role === 'assistant' && message.document);
-                  let snippetSource = '';
-                  if (assistant && assistant.role === 'assistant' && assistant.document) {
-                    snippetSource = [
-                      assistant.document.title,
-                      ...assistant.document.blocks
-                        .filter(
-                          (block): block is { type: 'paragraph'; text: string } =>
-                            block.type === 'paragraph' && typeof block.text === 'string'
-                        )
-                        .map(block => block.text),
-                    ]
-                      .filter(Boolean)
-                      .join(' ');
-                  } else {
-                    const lastUser = [...messages]
-                      .reverse()
-                      .find(message => message.role === 'user');
-                    if (lastUser && lastUser.role === 'user') {
-                      snippetSource = lastUser.text.trim();
-                    }
-                  }
-                  const fileNames = new Set<string>();
-                  for (const message of messages) {
-                    if (message.role === 'user') {
-                      for (const name of message.attachmentNames ?? []) fileNames.add(name);
-                    } else if (message.document?.meta.source_refs) {
-                      for (const name of displaySourceRefs(message.document.meta.source_refs)) {
-                        fileNames.add(name);
-                      }
-                    }
-                  }
-                  return {
-                    ...thread,
-                    snippet: cleanHistorySnippet(snippetSource),
-                    files: [...fileNames].map(filename => ({
-                      filename,
-                      meta: attachmentTypeLabel(filename),
-                    })),
-                  };
-                })}
-                activeThreadId={threadId}
-                pinnedThreadIds={pinnedThreadIds}
-                userId={userId}
-                orgId={orgId}
-                onOpenThread={id => {
-                  navigateShell('chat');
-                  handleSelectThread(id);
-                }}
-                onNewChat={handleNewThread}
-                onClose={() => navigateShell('chat')}
-                onRenameThread={openRenameThread}
-                onPinThread={handlePinThreadTop}
-                onDeleteThread={(id, title) => setArchiveTarget({ id, title })}
-                onDeleteThreads={items => {
-                  if (items.length === 1) {
-                    const only = items[0];
-                    if (only) setArchiveTarget(only);
-                    return;
-                  }
-                  setBulkArchive(items);
-                }}
-              />
-            </Suspense>
-          ) : null}
-          {shellView === 'project-create' ? (
-            <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
-              <CreateProjectPage busy={false} onCreate={handleCreateProject} />
-            </Suspense>
-          ) : null}
-          {shellView === 'project' && messages.length === 0 ? (
-            <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
-              <ProjectWorkspacePage
-                title={
-                  projects.find(p => p.id === projectId)?.title?.trim() || t('sidebar.untitled')
-                }
-                onAddFiles={files => addFiles(Array.from(files))}
-                onRename={() => openRenameProject(projectId)}
-                onPinTop={() => pinProjectTop(projectId)}
-                onDelete={() => {
-                  const title =
-                    projects.find(p => p.id === projectId)?.title?.trim() || t('sidebar.untitled');
-                  setProjectDelete({ id: projectId, title });
-                }}
-              />
-            </Suspense>
-          ) : null}
-          {isChatSurface(shellView) && !(shellView === 'project' && messages.length === 0) ? (
-            <div className={`transcript-with-nav${showDialogueNav ? ' has-dialogue-nav' : ''}`}>
-              {showDialogueNav ? (
-                <DialogueNav entries={dialogueNavEntries} scrollRootRef={transcriptRef} />
+              {shellView === 'plugins' || shellView === 'skills' ? (
+                <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
+                  {shellView === 'plugins' ? (
+                    <PluginsPage
+                      activeTab="plugins"
+                      onTabChange={tab => navigateShell(tab === 'skills' ? 'skills' : 'plugins')}
+                    />
+                  ) : (
+                    <SkillsPage
+                      activeTab="skills"
+                      onTabChange={tab => navigateShell(tab === 'skills' ? 'skills' : 'plugins')}
+                    />
+                  )}
+                </Suspense>
               ) : null}
-              <MessageList ref={transcriptRef} label={t('a11y.transcript')}>
-              {messages.map(message => {
-                if (message.role === 'user') {
-                  return (
-                    <div
-                      key={message.id}
-                      id={dialogueTurnDomId(message.id)}
-                      data-turn-id={message.id}
-                      className="msg user"
-                    >
-                      <div className="bubble-col">
-                        {message.attachmentNames && message.attachmentNames.length > 0 ? (
-                          <ul className="user-file-list" aria-label={t('composer.attachedFiles')}>
-                            {message.attachmentNames.map((name, index) => {
-                              const attachmentId = message.attachmentIds?.[index];
-                              const ext = name.includes('.')
-                                ? (name.split('.').pop()?.toUpperCase() ?? '')
-                                : '';
-                              return (
-                                <li key={attachmentId ?? name}>
-                                  <UserAttachmentCard
-                                    filename={name}
-                                    meta={ext}
-                                    active={
-                                      filesRail?.mode === 'preview' && filesRail.id === attachmentId
-                                    }
-                                    openLabel={t('attach.openFile', { name })}
-                                    onOpen={
-                                      attachmentId
-                                        ? () => openAttachmentPreview(attachmentId, name)
-                                        : undefined
-                                    }
-                                  />
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        ) : null}
-                        <div className="bubble">
-                          <p>{message.text}</p>
-                        </div>
-                        <UserMessageActions
-                          onEdit={() => editUserMessage(message)}
-                          onCopy={() => copyUserMessage(message)}
-                          disabled={busy}
-                        />
-                      </div>
-                    </div>
-                  );
-                }
-
-                const pendingHitl = (message.hitlCards ?? []).filter(
-                  card => card.status === 'pending'
-                );
-                const showHitl = pendingHitl.length > 0;
-                const showDevGap =
-                  devMode &&
-                  !showHitl &&
-                  looksLikeExclusiveMenu(message.document) &&
-                  message._requiresReview;
-                const sourceChips = message.document
-                  ? displaySourceRefs(message.document.meta.source_refs)
-                  : [];
-                // Провайдерские якоря точнее чипов из `source_refs`: если они есть, показываем
-                // их (с цитатами), иначе — прежний список имён файлов.
-                const citationAnchors = message.document?.meta.citations ?? [];
-                const documentIsArtifact =
-                  Boolean(message.document) &&
-                  isArtifactWorthy(message.document as ContentDocument);
-                const answerSourceNames = sourceChips.length
-                  ? sourceChips
-                  : citationAnchors.map(citation => citation.source_ref);
-                const primaryAnswerFile =
-                  answerSourceNames
-                    .map(ref => {
-                      const refFp = sourceRefFingerprint(ref);
-                      return threadAttachments.find(file => {
-                        const fileFp = sourceRefFingerprint(file.filename);
-                        return (
-                          file.filename === ref ||
-                          (Boolean(refFp) && refFp === fileFp) ||
-                          ref.endsWith(file.filename) ||
-                          file.filename.endsWith(ref)
-                        );
-                      });
-                    })
-                    .find(Boolean) ?? null;
-
-                const isStreamingBubble =
-                  Boolean(message._streaming) ||
-                  (Boolean(message._regenerating) &&
-                    streamingAssistantIdRef.current === message.id);
-                const showStreamPreview = isStreamingBubble && !message.document;
-                /**
-                 * Ожидание без единого токена: в ленте не «облако с подписью», а
-                 * только орб текущей фазы (паттерн Big Tech). Как только приходит
-                 * заголовок/первый блок — это уже предпросмотр ответа, т.е. облако.
-                 */
-                const isWaiting =
-                  showStreamPreview && !streamDocument && streamPreview.length === 0;
-
-                return (
-                  <div
-                    key={message.id}
-                    className={`msg assistant${showStreamPreview ? ' pending' : ''}${
-                      isWaiting ? ' is-waiting' : ''
-                    }`}
-                    style={
-                      streamBubbleMinHeight && streamingAssistantIdRef.current === message.id
-                        ? { minHeight: streamBubbleMinHeight }
-                        : undefined
-                    }
-                  >
-                    {isWaiting ? (
-                      <ThinkingIndicator phase={pendingPhase} />
-                    ) : (
-                      <>
-                        <AssistantAvatar />
-                        <div
-                          className="bubble bubble--plain"
-                          ref={
-                            showStreamPreview || streamingAssistantIdRef.current === message.id
-                              ? streamBubbleRef
-                              : undefined
-                          }
-                        >
-                          {showStreamPreview ? (
-                            streamDocument ? (
-                              <div className="stream-preview stream-preview--doc">
-                                <BlockRenderer document={streamDocument} />
-                              </div>
-                            ) : (
-                              <StreamMarkdownPreview markdown={streamPreview} />
+              {shellView === 'scheduled' ? (
+                <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
+                  <ScheduledTasksPage onCompose={composeFromPage} />
+                </Suspense>
+              ) : null}
+              {shellView === 'history' ? (
+                <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
+                  <ChatHistoryPage
+                    threads={historyThreads.map(thread => {
+                      if (thread.id !== threadId || messages.length === 0) return thread;
+                      const assistant = [...messages]
+                        .reverse()
+                        .find(message => message.role === 'assistant' && message.document);
+                      let snippetSource = '';
+                      if (assistant && assistant.role === 'assistant' && assistant.document) {
+                        snippetSource = [
+                          assistant.document.title,
+                          ...assistant.document.blocks
+                            .filter(
+                              (block): block is { type: 'paragraph'; text: string } =>
+                                block.type === 'paragraph' && typeof block.text === 'string'
                             )
-                          ) : message.document ? (
-                            <>
-                              {/*
-                                Product chat follows Kimi: answer prose first, then actions.
-                                Revision chrome (W7b note + block wash) is operator-only —
-                                end users read the final answer, not a diff dashboard.
-                              */}
-                              {devMode ? <RevisionNote revision={message.revision} /> : null}
-                              <BlockRenderer
-                                document={message.document}
-                                revision={devMode ? message.revision : null}
-                              />
-                              {citationAnchors.length > 0 ? (
-                                <CitationSources
-                                  citations={citationAnchors}
-                                  userId={userId}
-                                  orgId={orgId}
-                                  onOpenPdfPage={openAttachmentPreview}
-                                />
-                              ) : sourceChips.length > 0 ? (
-                                <ul className="source-ref-chips" aria-label={t('attach.sources')}>
-                                  {sourceChips.map((ref, index) => {
-                                    const refFp = sourceRefFingerprint(ref);
-                                    const matched = threadAttachments.find(file => {
-                                      const fileFp = sourceRefFingerprint(file.filename);
-                                      return (
-                                        file.filename === ref ||
-                                        (Boolean(refFp) && refFp === fileFp) ||
-                                        ref.endsWith(file.filename) ||
-                                        file.filename.endsWith(ref)
-                                      );
-                                    });
+                            .map(block => block.text),
+                        ]
+                          .filter(Boolean)
+                          .join(' ');
+                      } else {
+                        const lastUser = [...messages]
+                          .reverse()
+                          .find(message => message.role === 'user');
+                        if (lastUser && lastUser.role === 'user') {
+                          snippetSource = lastUser.text.trim();
+                        }
+                      }
+                      const fileNames = new Set<string>();
+                      for (const message of messages) {
+                        if (message.role === 'user') {
+                          for (const name of message.attachmentNames ?? []) fileNames.add(name);
+                        } else if (message.document?.meta.source_refs) {
+                          for (const name of displaySourceRefs(message.document.meta.source_refs)) {
+                            fileNames.add(name);
+                          }
+                        }
+                      }
+                      return {
+                        ...thread,
+                        snippet: cleanHistorySnippet(snippetSource),
+                        files: [...fileNames].map(filename => ({
+                          filename,
+                          meta: attachmentTypeLabel(filename),
+                        })),
+                      };
+                    })}
+                    activeThreadId={threadId}
+                    pinnedThreadIds={pinnedThreadIds}
+                    userId={userId}
+                    orgId={orgId}
+                    onOpenThread={id => {
+                      navigateShell('chat');
+                      handleSelectThread(id);
+                    }}
+                    onNewChat={handleNewThread}
+                    onClose={() => navigateShell('chat')}
+                    onRenameThread={openRenameThread}
+                    onPinThread={handlePinThreadTop}
+                    onDeleteThread={(id, title) => setArchiveTarget({ id, title })}
+                    onDeleteThreads={items => {
+                      if (items.length === 1) {
+                        const only = items[0];
+                        if (only) setArchiveTarget(only);
+                        return;
+                      }
+                      setBulkArchive(items);
+                    }}
+                  />
+                </Suspense>
+              ) : null}
+              {shellView === 'project-create' ? (
+                <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
+                  <CreateProjectPage busy={false} onCreate={handleCreateProject} />
+                </Suspense>
+              ) : null}
+              {shellView === 'project' && messages.length === 0 ? (
+                <Suspense fallback={<div className="market-page__loading" aria-busy="true" />}>
+                  <ProjectWorkspacePage
+                    title={
+                      projects.find(p => p.id === projectId)?.title?.trim() || t('sidebar.untitled')
+                    }
+                    onAddFiles={files => addFiles(Array.from(files))}
+                    onRename={() => openRenameProject(projectId)}
+                    onPinTop={() => pinProjectTop(projectId)}
+                    onDelete={() => {
+                      const title =
+                        projects.find(p => p.id === projectId)?.title?.trim() ||
+                        t('sidebar.untitled');
+                      setProjectDelete({ id: projectId, title });
+                    }}
+                  />
+                </Suspense>
+              ) : null}
+              {isChatSurface(shellView) && !(shellView === 'project' && messages.length === 0) ? (
+                <div className={`transcript-with-nav${showDialogueNav ? ' has-dialogue-nav' : ''}`}>
+                  {showDialogueNav ? (
+                    <DialogueNav entries={dialogueNavEntries} scrollRootRef={transcriptRef} />
+                  ) : null}
+                  <MessageList ref={transcriptRef} label={t('a11y.transcript')}>
+                    {messages.map(message => {
+                      if (message.role === 'user') {
+                        return (
+                          <div
+                            key={message.id}
+                            id={dialogueTurnDomId(message.id)}
+                            data-turn-id={message.id}
+                            className="msg user"
+                          >
+                            <div className="bubble-col">
+                              {message.attachmentNames && message.attachmentNames.length > 0 ? (
+                                <ul
+                                  className="user-file-list"
+                                  aria-label={t('composer.attachedFiles')}
+                                >
+                                  {message.attachmentNames.map((name, index) => {
+                                    const attachmentId = message.attachmentIds?.[index];
+                                    const ext = name.includes('.')
+                                      ? (name.split('.').pop()?.toUpperCase() ?? '')
+                                      : '';
                                     return (
-                                      <li
-                                        key={ref}
-                                        id={`source-ref-${index + 1}`}
-                                        className="source-ref-chip"
-                                      >
-                                        {matched ? (
-                                          <button
-                                            type="button"
-                                            className="source-ref-button"
-                                            onClick={() =>
-                                              openAttachmentPreview(matched.id, matched.filename)
-                                            }
-                                            aria-label={t('attach.openFile', {
-                                              name: matched.filename,
-                                            })}
-                                          >
-                                            <span className="source-ref-icon" aria-hidden>
-                                              <AttachmentFileIcon
-                                                kind={attachmentFileKind(matched.filename)}
-                                                size={18}
-                                              />
-                                            </span>
-                                            <span className="source-ref-name">{ref}</span>
-                                          </button>
-                                        ) : (
-                                          <>
-                                            <span className="source-ref-icon" aria-hidden>
-                                              <AttachmentFileIcon
-                                                kind={attachmentFileKind(ref)}
-                                                size={18}
-                                              />
-                                            </span>
-                                            <span className="source-ref-name">{ref}</span>
-                                          </>
-                                        )}
+                                      <li key={attachmentId ?? name}>
+                                        <UserAttachmentCard
+                                          filename={name}
+                                          meta={ext}
+                                          active={
+                                            filesRail?.mode === 'preview' &&
+                                            filesRail.id === attachmentId
+                                          }
+                                          openLabel={t('attach.openFile', { name })}
+                                          onOpen={
+                                            attachmentId
+                                              ? () => openAttachmentPreview(attachmentId, name)
+                                              : undefined
+                                          }
+                                        />
                                       </li>
                                     );
                                   })}
                                 </ul>
                               ) : null}
-                              {/*
+                              <div className="bubble">
+                                <p>{message.text}</p>
+                              </div>
+                              <UserMessageActions
+                                onEdit={() => editUserMessage(message)}
+                                onCopy={() => copyUserMessage(message)}
+                                disabled={busy}
+                              />
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      const pendingHitl = (message.hitlCards ?? []).filter(
+                        card => card.status === 'pending'
+                      );
+                      const showHitl = pendingHitl.length > 0;
+                      const showDevGap =
+                        devMode &&
+                        !showHitl &&
+                        looksLikeExclusiveMenu(message.document) &&
+                        message._requiresReview;
+                      const sourceChips = message.document
+                        ? displaySourceRefs(message.document.meta.source_refs)
+                        : [];
+                      // Провайдерские якоря точнее чипов из `source_refs`: если они есть, показываем
+                      // их (с цитатами), иначе — прежний список имён файлов.
+                      const citationAnchors = message.document?.meta.citations ?? [];
+                      const documentIsArtifact =
+                        Boolean(message.document) &&
+                        isArtifactWorthy(message.document as ContentDocument);
+                      const answerSourceNames = sourceChips.length
+                        ? sourceChips
+                        : citationAnchors.map(citation => citation.source_ref);
+                      const primaryAnswerFile =
+                        answerSourceNames
+                          .map(ref => {
+                            const refFp = sourceRefFingerprint(ref);
+                            return threadAttachments.find(file => {
+                              const fileFp = sourceRefFingerprint(file.filename);
+                              return (
+                                file.filename === ref ||
+                                (Boolean(refFp) && refFp === fileFp) ||
+                                ref.endsWith(file.filename) ||
+                                file.filename.endsWith(ref)
+                              );
+                            });
+                          })
+                          .find(Boolean) ?? null;
+                      /* Source chips already open the same files — skip primary card duplicate. */
+                      const primaryAlreadyChipped =
+                        primaryAnswerFile != null &&
+                        answerSourceNames.some(ref => {
+                          const refFp = sourceRefFingerprint(ref);
+                          const fileFp = sourceRefFingerprint(primaryAnswerFile.filename);
+                          return Boolean(refFp) && refFp === fileFp;
+                        });
+
+                      const isStreamingBubble =
+                        Boolean(message._streaming) ||
+                        (Boolean(message._regenerating) &&
+                          streamingAssistantIdRef.current === message.id);
+                      const showStreamPreview = isStreamingBubble && !message.document;
+                      /**
+                       * Ожидание без единого токена: в ленте не «облако с подписью», а
+                       * только орб текущей фазы (паттерн Big Tech). Как только приходит
+                       * заголовок/первый блок — это уже предпросмотр ответа, т.е. облако.
+                       */
+                      const isWaiting =
+                        showStreamPreview && !streamDocument && streamPreview.length === 0;
+
+                      return (
+                        <div
+                          key={message.id}
+                          className={`msg assistant${showStreamPreview ? ' pending' : ''}${
+                            isWaiting ? ' is-waiting' : ''
+                          }`}
+                          style={
+                            streamBubbleMinHeight && streamingAssistantIdRef.current === message.id
+                              ? { minHeight: streamBubbleMinHeight }
+                              : undefined
+                          }
+                        >
+                          {isWaiting ? (
+                            <ThinkingIndicator phase={pendingPhase} />
+                          ) : (
+                            <>
+                              <AssistantAvatar />
+                              <div
+                                className="bubble bubble--plain"
+                                ref={
+                                  showStreamPreview ||
+                                  streamingAssistantIdRef.current === message.id
+                                    ? streamBubbleRef
+                                    : undefined
+                                }
+                              >
+                                {showStreamPreview ? (
+                                  streamDocument ? (
+                                    <div className="stream-preview stream-preview--doc">
+                                      <BlockRenderer document={streamDocument} />
+                                    </div>
+                                  ) : (
+                                    <StreamMarkdownPreview markdown={streamPreview} />
+                                  )
+                                ) : message.document ? (
+                                  <>
+                                    {/*
+                                Product chat follows Kimi: answer prose first, then actions.
+                                Revision chrome (W7b note + block wash) is operator-only —
+                                end users read the final answer, not a diff dashboard.
+                              */}
+                                    {devMode ? <RevisionNote revision={message.revision} /> : null}
+                                    <BlockRenderer
+                                      document={message.document}
+                                      revision={devMode ? message.revision : null}
+                                    />
+                                    {citationAnchors.length > 0 ? (
+                                      <CitationSources
+                                        citations={citationAnchors}
+                                        userId={userId}
+                                        orgId={orgId}
+                                        onOpenPdfPage={openAttachmentPreview}
+                                      />
+                                    ) : sourceChips.length > 0 ? (
+                                      <ul
+                                        className="source-ref-chips"
+                                        aria-label={t('attach.sources')}
+                                      >
+                                        {sourceChips.map((ref, index) => {
+                                          const refFp = sourceRefFingerprint(ref);
+                                          const matched = threadAttachments.find(file => {
+                                            const fileFp = sourceRefFingerprint(file.filename);
+                                            return (
+                                              file.filename === ref ||
+                                              (Boolean(refFp) && refFp === fileFp) ||
+                                              ref.endsWith(file.filename) ||
+                                              file.filename.endsWith(ref)
+                                            );
+                                          });
+                                          return (
+                                            <li
+                                              key={ref}
+                                              id={`source-ref-${index + 1}`}
+                                              className="source-ref-chip"
+                                            >
+                                              {matched ? (
+                                                <button
+                                                  type="button"
+                                                  className="source-ref-button"
+                                                  onClick={() =>
+                                                    openAttachmentPreview(
+                                                      matched.id,
+                                                      matched.filename
+                                                    )
+                                                  }
+                                                  aria-label={t('attach.openFile', {
+                                                    name: matched.filename,
+                                                  })}
+                                                >
+                                                  <span className="source-ref-icon" aria-hidden>
+                                                    <AttachmentFileIcon
+                                                      kind={attachmentFileKind(matched.filename)}
+                                                      size={18}
+                                                    />
+                                                  </span>
+                                                  <span className="source-ref-name">{ref}</span>
+                                                </button>
+                                              ) : (
+                                                <>
+                                                  <span className="source-ref-icon" aria-hidden>
+                                                    <AttachmentFileIcon
+                                                      kind={attachmentFileKind(ref)}
+                                                      size={18}
+                                                    />
+                                                  </span>
+                                                  <span className="source-ref-name">{ref}</span>
+                                                </>
+                                              )}
+                                            </li>
+                                          );
+                                        })}
+                                      </ul>
+                                    ) : null}
+                                    {/*
                                 Anthropic/Kimi: file/artifact pills only under substantial
                                 answers — never under short social/ack (isArtifactWorthy).
                                 Sticky thread attachments alone must not paint cards.
                               */}
-                              {documentIsArtifact ? (
-                                <AnswerFileCards
-                                  artifactTitle={message.document?.title}
-                                  artifactActive={artifactMessageId === message.id}
-                                  onOpenArtifact={() => {
-                                    setFilesRail(null);
-                                    setArtifactMessageId(message.id);
-                                  }}
-                                  primaryFile={
-                                    primaryAnswerFile
-                                      ? {
-                                          id: primaryAnswerFile.id,
-                                          filename: primaryAnswerFile.filename,
+                                    {documentIsArtifact ? (
+                                      <AnswerFileCards
+                                        artifactTitle={message.document?.title}
+                                        artifactActive={artifactMessageId === message.id}
+                                        onOpenArtifact={() => {
+                                          setFilesRail(null);
+                                          setArtifactMessageId(message.id);
+                                        }}
+                                        primaryFile={
+                                          primaryAnswerFile && !primaryAlreadyChipped
+                                            ? {
+                                                id: primaryAnswerFile.id,
+                                                filename: primaryAnswerFile.filename,
+                                              }
+                                            : null
                                         }
-                                      : null
-                                  }
-                                  primaryActive={
-                                    filesRail?.mode === 'preview' &&
-                                    primaryAnswerFile !== null &&
-                                    filesRail.id === primaryAnswerFile.id
-                                  }
-                                  onOpenPrimary={openAttachmentPreview}
-                                  showAllFiles={threadAttachments.length > 0}
-                                  allFilesActive={filesRail?.mode === 'list'}
-                                  onOpenAllFiles={openAttachmentsList}
-                                />
-                              ) : null}
-                              {showHitl ? (
-                                <HitlCards
-                                  cards={pendingHitl}
-                                  userId={userId}
-                                  orgId={orgId}
-                                  onResolved={event => handleHitlResolved(message.id, event)}
-                                />
-                              ) : null}
-                              {showDevGap && <p className="hitl-dev-gap">{t('msg.devGap')}</p>}
-                              {message.error && <p className="msg-error">{message.error}</p>}
-                              {!showHitl ? (
-                                <MessageActions
-                                  onCopy={() => copyMessageContent(message)}
-                                  onShare={() => void shareMessageContent(message)}
-                                  onRegenerate={() => void regenerateResponse(message.id)}
-                                  onLike={() => handleFeedback(message.id, 'like')}
-                                  onDislike={() => handleFeedback(message.id, 'dislike')}
-                                  liked={!!message._feedbackLike}
-                                  disliked={!!message._feedbackDislike}
-                                  regenerating={!!message._regenerating}
-                                  disabled={busy || !!message._feedbackSending}
-                                />
-                              ) : null}
-                              {devMode ? (
-                                <span className="dev-meta">
-                                  Confidence: {message.document.meta.confidence} | Requires review:{' '}
-                                  {String(message._requiresReview)}
-                                </span>
-                              ) : null}
+                                        primaryActive={
+                                          filesRail?.mode === 'preview' &&
+                                          primaryAnswerFile !== null &&
+                                          !primaryAlreadyChipped &&
+                                          filesRail.id === primaryAnswerFile.id
+                                        }
+                                        onOpenPrimary={openAttachmentPreview}
+                                        showAllFiles={threadAttachments.length > 0}
+                                        allFilesActive={filesRail?.mode === 'list'}
+                                        onOpenAllFiles={openAttachmentsList}
+                                      />
+                                    ) : null}
+                                    {showHitl ? (
+                                      <HitlCards
+                                        cards={pendingHitl}
+                                        userId={userId}
+                                        orgId={orgId}
+                                        onResolved={event => handleHitlResolved(message.id, event)}
+                                      />
+                                    ) : null}
+                                    {showDevGap && (
+                                      <p className="hitl-dev-gap">{t('msg.devGap')}</p>
+                                    )}
+                                    {message.error && <p className="msg-error">{message.error}</p>}
+                                    {!showHitl ? (
+                                      <MessageActions
+                                        onCopy={() => copyMessageContent(message)}
+                                        onShare={() => void shareMessageContent(message)}
+                                        onRegenerate={() => void regenerateResponse(message.id)}
+                                        onLike={() => handleFeedback(message.id, 'like')}
+                                        onDislike={() => handleFeedback(message.id, 'dislike')}
+                                        liked={!!message._feedbackLike}
+                                        disliked={!!message._feedbackDislike}
+                                        regenerating={!!message._regenerating}
+                                        disabled={busy || !!message._feedbackSending}
+                                      />
+                                    ) : null}
+                                    {devMode ? (
+                                      <span className="dev-meta">
+                                        Confidence: {message.document.meta.confidence} | Requires
+                                        review: {String(message._requiresReview)}
+                                      </span>
+                                    ) : null}
+                                  </>
+                                ) : showHitl ? (
+                                  <HitlCards
+                                    cards={pendingHitl}
+                                    userId={userId}
+                                    orgId={orgId}
+                                    onResolved={event => handleHitlResolved(message.id, event)}
+                                  />
+                                ) : (
+                                  <p className="msg-error">
+                                    {message.error ?? t('msg.emptyResponse')}
+                                  </p>
+                                )}
+                              </div>
                             </>
-                          ) : showHitl ? (
-                            <HitlCards
-                              cards={pendingHitl}
-                              userId={userId}
-                              orgId={orgId}
-                              onResolved={event => handleHitlResolved(message.id, event)}
-                            />
-                          ) : (
-                            <p className="msg-error">{message.error ?? t('msg.emptyResponse')}</p>
                           )}
                         </div>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
-              <div ref={messageEndRef} />
-            </MessageList>
-            </div>
-          ) : null}
-            </div>
-
-        {isChatSurface(shellView) ? (
-          <div
-            className={`composer-dock${shellView === 'project' ? ' composer-dock--project' : ''}`}
-            data-zone="ZONE_FOOTER"
-          >
-            {messages.length > 0 && !isAtThreadEnd ? (
-              <IconButton
-                className="scroll-bottom-fab"
-                aria-label={t('thread.scrollBottom')}
-                title={t('thread.scrollBottom')}
-                onClick={() =>
-                  messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-                }
-              >
-                <IconChevronDown size={16} />
-              </IconButton>
-            ) : null}
-            {messages.length === 0 && (isHomeView(shellView) || shellView === 'deep-research') ? (
-              <div
-                className={`composer-hero${LOGO_VIEWS.has(shellView) ? '' : ' is-logo-hidden'}`}
-                data-zone="ZONE_HERO"
-                aria-hidden={!LOGO_VIEWS.has(shellView)}
-              >
-                <div className="composer-hero__live">
-                  <BrandWordmark />
-                </div>
-              </div>
-            ) : null}
-            <Composer
-              input={input}
-              onInputChange={setInput}
-              onSubmit={() => void send()}
-              onStop={() => streamAbortRef.current?.abort()}
-              busy={busy}
-              canSend={canSend}
-              overLimit={overLimit}
-              inputLength={inputLength}
-              nearLimit={nearLimit}
-              counterClass={counterClass}
-              counterLive={counterLive}
-              hasMessages={messages.length > 0}
-              showToolBar={messages.length === 0 && shellView !== 'project'}
-              deepResearchMode={shellView === 'deep-research' && messages.length === 0}
-              onExitDeepResearch={() => navigateShell('chat')}
-              onExitProductMode={() => navigateShell('chat')}
-              placeholderOverride={productPlaceholder(
-                shellView,
-                projects.find(p => p.id === projectId)?.title
-              )}
-              dragActive={dragActive}
-              onDragOver={e => {
-                e.preventDefault();
-                setDragActive(true);
-              }}
-              onDragLeave={() => setDragActive(false)}
-              onDrop={e => {
-                e.preventDefault();
-                setDragActive(false);
-                addFiles(Array.from(e.dataTransfer.files));
-              }}
-              onPaste={handleComposerPaste}
-              fileInputRef={fileInputRef}
-              composerInputRef={composerInputRef}
-              attachmentAccept={ATTACHMENT_ACCEPT}
-              onFilesSelected={files => addFiles(files)}
-              projectId={projectId}
-              projects={projects.map(proj => ({ id: proj.id, title: proj.title }))}
-              onProjectChange={id => {
-                if (id) setProjectId(id);
-                else setProjectId('');
-              }}
-              onRequestCreateProject={() => navigateShell('project-create')}
-              intensity={intensity}
-              contextLength={contextLength}
-              onIntensityChange={setIntensity}
-              onContextLengthChange={setContextLength}
-              onOpenPluginsPage={() => navigateShell('plugins')}
-              webSearchMode={webSearchPref}
-              onSlashAction={action => {
-                if (action.kind === 'skills') navigateShell('skills');
-                else if (action.kind === 'goal') navigateShell('scheduled');
-                else if (action.kind === 'webSearch') {
-                  setWebSearchPref(action.mode);
-                  setModeIntent(action.mode === 'auto' ? 'web_search' : null);
-                } else if (action.kind === 'plugin')
-                  toast(t('plugins.installSoon', { name: action.id }));
-              }}
-              productMode={
-                PRODUCT_MODES[shellView]
-                  ? {
-                      label: t(PRODUCT_MODES[shellView]!.labelKey),
-                      icon: PRODUCT_MODES[shellView]!.icon,
-                    }
-                  : undefined
-              }
-              showEmptyChrome={messages.length === 0}
-              productChips={
-                messages.length === 0 && shellView === 'chat' ? (
-                  <ProductChips
-                    chips={productChips}
-                    onSelect={id => {
-                      const view = CHIP_VIEWS[id];
-                      if (view) navigateShell(view);
-                    }}
-                  />
-                ) : null
-              }
-              landingTail={
-                messages.length === 0 ? (
-                  shellView === 'deep-research' ? (
-                    <FeaturedResearchCases
-                      onSelect={title => {
-                        setInput(t('chip.prompt.deepResearch') + title);
-                        composerInputRef.current?.focus();
-                      }}
-                    />
-                  ) : isHomeView(shellView) && shellView !== 'chat' ? (
-                    <ProductShowcase
-                      key={shellView}
-                      view={shellView}
-                      onSelectPrompt={prompt => {
-                        setInput(prompt);
-                        composerInputRef.current?.focus();
-                      }}
-                    />
-                  ) : null
-                ) : null
-              }
-              attachmentSlot={
-                attachments.length > 0 ? (
-                  <ul
-                    className="attachment-chips attachment-chips--in-capsule"
-                    aria-label={t('composer.attachedFiles')}
-                  >
-                    {attachments.map(chip => {
-                      const tip = chip.error ?? attachmentDisplayName(chip.filename);
-                      const pending = chip.status === 'uploading' || chip.status === 'scanning';
-                      const kind = attachmentFileKind(chip.filename);
-                      const isThumb = kind === 'image' && Boolean(chip.previewUrl);
-                      const meta = chip.error
-                        ? chip.error
-                        : pending
-                          ? chip.status === 'uploading'
-                            ? t('attach.uploading')
-                            : t('attach.waiting')
-                          : attachmentChipMeta(chip.filename, chip.sizeBytes);
-                      return (
-                        <li
-                          key={chip.localId}
-                          className={
-                            'attachment-chip is-' +
-                            chip.status +
-                            (chip.origin === 'paste' ? ' is-paste' : '') +
-                            (isThumb ? ' attachment-chip--thumb' : '')
-                          }
-                          data-tooltip={tip}
-                        >
-                          {isThumb ? (
-                            <img
-                              className="attachment-chip__thumb"
-                              src={chip.previewUrl}
-                              alt=""
-                              draggable={false}
-                            />
-                          ) : (
-                            <>
-                              <span className="attachment-chip__icon" aria-hidden>
-                                <AttachmentFileIcon kind={kind} size={44} />
-                              </span>
-                              <span className="attachment-chip__text">
-                                <span className="attachment-name">
-                                  {attachmentDisplayName(chip.filename)}
-                                </span>
-                                <span className="attachment-size">
-                                  {pending ? <IconLoader className="spin" size={14} /> : null}
-                                  <span className="attachment-size__label">{meta}</span>
-                                </span>
-                              </span>
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            className="attachment-remove"
-                            onClick={() => removeAttachment(chip.localId)}
-                            aria-label={t('composer.removeAttachment', { name: chip.filename })}
-                          >
-                            <IconX size={12} />
-                          </button>
-                        </li>
                       );
                     })}
-                  </ul>
-                ) : null
-              }
-              toolsSlot={
-                messages.length > 0 ? (
-                  <div className="composer-context is-open">
-                    <MemoryActions
-                      threadId={threadId}
-                      userId={userId}
-                      orgId={orgId}
-                      disabled={busy}
-                      onCardCreated={handleMemoryCardCreated}
-                    />
+                    <div ref={messageEndRef} />
+                  </MessageList>
+                </div>
+              ) : null}
+            </div>
+
+            {isChatSurface(shellView) ? (
+              <div
+                className={`composer-dock${shellView === 'project' ? ' composer-dock--project' : ''}`}
+                data-zone="ZONE_FOOTER"
+              >
+                {messages.length > 0 && !isAtThreadEnd ? (
+                  <IconButton
+                    className="scroll-bottom-fab"
+                    aria-label={t('thread.scrollBottom')}
+                    title={t('thread.scrollBottom')}
+                    onClick={() =>
+                      messageEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+                    }
+                  >
+                    <IconChevronDown size={16} />
+                  </IconButton>
+                ) : null}
+                {messages.length === 0 &&
+                (isHomeView(shellView) || shellView === 'deep-research') ? (
+                  <div
+                    className={`composer-hero${LOGO_VIEWS.has(shellView) ? '' : ' is-logo-hidden'}`}
+                    data-zone="ZONE_HERO"
+                    aria-hidden={!LOGO_VIEWS.has(shellView)}
+                  >
+                    <div className="composer-hero__live">
+                      <BrandWordmark />
+                    </div>
                   </div>
-                ) : null
-              }
-            />
-          </div>
-        ) : null}
+                ) : null}
+                <Composer
+                  input={input}
+                  onInputChange={setInput}
+                  onSubmit={() => void send()}
+                  onStop={() => streamAbortRef.current?.abort()}
+                  busy={busy}
+                  canSend={canSend}
+                  overLimit={overLimit}
+                  inputLength={inputLength}
+                  nearLimit={nearLimit}
+                  counterClass={counterClass}
+                  counterLive={counterLive}
+                  hasMessages={messages.length > 0}
+                  showToolBar={messages.length === 0 && shellView !== 'project'}
+                  deepResearchMode={shellView === 'deep-research' && messages.length === 0}
+                  onExitDeepResearch={() => navigateShell('chat')}
+                  onExitProductMode={() => navigateShell('chat')}
+                  placeholderOverride={productPlaceholder(
+                    shellView,
+                    projects.find(p => p.id === projectId)?.title
+                  )}
+                  dragActive={dragActive}
+                  onDragOver={e => {
+                    e.preventDefault();
+                    setDragActive(true);
+                  }}
+                  onDragLeave={() => setDragActive(false)}
+                  onDrop={e => {
+                    e.preventDefault();
+                    setDragActive(false);
+                    addFiles(Array.from(e.dataTransfer.files));
+                  }}
+                  onPaste={handleComposerPaste}
+                  fileInputRef={fileInputRef}
+                  composerInputRef={composerInputRef}
+                  attachmentAccept={ATTACHMENT_ACCEPT}
+                  onFilesSelected={files => addFiles(files)}
+                  projectId={projectId}
+                  projects={projects.map(proj => ({ id: proj.id, title: proj.title }))}
+                  onProjectChange={id => {
+                    if (id) setProjectId(id);
+                    else setProjectId('');
+                  }}
+                  onRequestCreateProject={() => navigateShell('project-create')}
+                  intensity={intensity}
+                  contextLength={contextLength}
+                  onIntensityChange={setIntensity}
+                  onContextLengthChange={setContextLength}
+                  onOpenPluginsPage={() => navigateShell('plugins')}
+                  webSearchMode={webSearchPref}
+                  onSlashAction={action => {
+                    if (action.kind === 'skills') navigateShell('skills');
+                    else if (action.kind === 'goal') navigateShell('scheduled');
+                    else if (action.kind === 'webSearch') {
+                      setWebSearchPref(action.mode);
+                      setModeIntent(action.mode === 'auto' ? 'web_search' : null);
+                    } else if (action.kind === 'plugin')
+                      toast(t('plugins.installSoon', { name: action.id }));
+                  }}
+                  productMode={
+                    PRODUCT_MODES[shellView]
+                      ? {
+                          label: t(PRODUCT_MODES[shellView]!.labelKey),
+                          icon: PRODUCT_MODES[shellView]!.icon,
+                        }
+                      : undefined
+                  }
+                  showEmptyChrome={messages.length === 0}
+                  productChips={
+                    messages.length === 0 && shellView === 'chat' ? (
+                      <ProductChips
+                        chips={productChips}
+                        onSelect={id => {
+                          const view = CHIP_VIEWS[id];
+                          if (view) navigateShell(view);
+                        }}
+                      />
+                    ) : null
+                  }
+                  landingTail={
+                    messages.length === 0 ? (
+                      shellView === 'deep-research' ? (
+                        <FeaturedResearchCases
+                          onSelect={title => {
+                            setInput(t('chip.prompt.deepResearch') + title);
+                            composerInputRef.current?.focus();
+                          }}
+                        />
+                      ) : isHomeView(shellView) && shellView !== 'chat' ? (
+                        <ProductShowcase
+                          key={shellView}
+                          view={shellView}
+                          onSelectPrompt={prompt => {
+                            setInput(prompt);
+                            composerInputRef.current?.focus();
+                          }}
+                        />
+                      ) : null
+                    ) : null
+                  }
+                  attachmentSlot={
+                    attachments.length > 0 ? (
+                      <ul
+                        className="attachment-chips attachment-chips--in-capsule"
+                        aria-label={t('composer.attachedFiles')}
+                      >
+                        {attachments.map(chip => {
+                          const tip = chip.error ?? attachmentDisplayName(chip.filename);
+                          const pending = chip.status === 'uploading' || chip.status === 'scanning';
+                          const kind = attachmentFileKind(chip.filename);
+                          const isThumb = kind === 'image' && Boolean(chip.previewUrl);
+                          const meta = chip.error
+                            ? chip.error
+                            : pending
+                              ? chip.status === 'uploading'
+                                ? t('attach.uploading')
+                                : t('attach.waiting')
+                              : attachmentChipMeta(chip.filename, chip.sizeBytes);
+                          return (
+                            <li
+                              key={chip.localId}
+                              className={
+                                'attachment-chip is-' +
+                                chip.status +
+                                (chip.origin === 'paste' ? ' is-paste' : '') +
+                                (isThumb ? ' attachment-chip--thumb' : '')
+                              }
+                              data-tooltip={tip}
+                            >
+                              {isThumb ? (
+                                <img
+                                  className="attachment-chip__thumb"
+                                  src={chip.previewUrl}
+                                  alt=""
+                                  draggable={false}
+                                />
+                              ) : (
+                                <>
+                                  <span className="attachment-chip__icon" aria-hidden>
+                                    <AttachmentFileIcon kind={kind} size={44} />
+                                  </span>
+                                  <span className="attachment-chip__text">
+                                    <span className="attachment-name">
+                                      {attachmentDisplayName(chip.filename)}
+                                    </span>
+                                    <span className="attachment-size">
+                                      {pending ? <IconLoader className="spin" size={14} /> : null}
+                                      <span className="attachment-size__label">{meta}</span>
+                                    </span>
+                                  </span>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                className="attachment-remove"
+                                onClick={() => removeAttachment(chip.localId)}
+                                aria-label={t('composer.removeAttachment', { name: chip.filename })}
+                              >
+                                <IconX size={12} />
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : null
+                  }
+                  toolsSlot={
+                    messages.length > 0 ? (
+                      <div className="composer-context is-open">
+                        <MemoryActions
+                          threadId={threadId}
+                          userId={userId}
+                          orgId={orgId}
+                          disabled={busy}
+                          onCardCreated={handleMemoryCardCreated}
+                        />
+                      </div>
+                    ) : null
+                  }
+                />
+              </div>
+            ) : null}
           </div>
 
           {canResizeSideConsole ? (

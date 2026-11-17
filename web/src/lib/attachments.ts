@@ -129,14 +129,34 @@ export function isInternalSourceRef(ref: string): boolean {
   return ref.trim().toLowerCase() === MEMORY_SOURCE_MARKER;
 }
 
+/**
+ * LLM often wraps filenames as markdown ``[Скан 1.pdf]`` / ``[file](…)`` —
+ * those must fingerprint as the same chip as the upload basename.
+ */
+function stripSourceRefDecorators(label: string): string {
+  let text = label.trim();
+  const md = /^\[([^\]]+)\](?:\([^)]*\))?$/.exec(text);
+  if (md?.[1]) text = md[1].trim();
+  text = text
+    .replace(/^[[「『"'«]+/, '')
+    .replace(/["'»」』\]]+$/, '')
+    .trim();
+  return text;
+}
+
 function normalizeSourceRefLabel(label: string): string | null {
-  const text = label.trim();
-  if (!text || isInternalSourceRef(text) || BARE_UUID.test(text) || ATTACHMENT_UUID_ONLY.test(text)) {
+  const text = stripSourceRefDecorators(label);
+  if (
+    !text ||
+    isInternalSourceRef(text) ||
+    BARE_UUID.test(text) ||
+    ATTACHMENT_UUID_ONLY.test(text)
+  ) {
     return null;
   }
   const prefixed = ATTACHMENT_PREFIX.exec(text);
   if (prefixed) {
-    const rest = prefixed.groups?.rest?.trim() ?? '';
+    const rest = stripSourceRefDecorators(prefixed.groups?.rest?.trim() ?? '');
     if (!rest || BARE_UUID.test(rest) || isInternalSourceRef(rest)) return null;
     return rest;
   }
@@ -146,10 +166,10 @@ function normalizeSourceRefLabel(label: string): string | null {
 /**
  * Chip identity for one logical file: LLM often emits both the upload basename
  * (``Договор_….docx``) and a prose title (``Договор ….docx``). Those must be
- * one chip, not two.
+ * one chip, not two. Also collapses ``[file.pdf]`` ↔ ``file.pdf``.
  */
 export function sourceRefFingerprint(name: string): string {
-  const text = name.trim();
+  const text = stripSourceRefDecorators(name);
   if (!text) return '';
   if (/^https?:\/\//i.test(text)) return text.toLowerCase();
   return text.toLowerCase().replace(/[_\s]+/g, ' ');

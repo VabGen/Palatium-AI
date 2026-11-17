@@ -239,8 +239,9 @@ def test_compare_report_with_rhetorical_choice_downgrades() -> None:
     assert plan.choice_actions == ()
 
 
-def test_clarification_menu_too_small_fails_closed() -> None:
-    # interaction=choice demands cards; a single action is not a choice set → fail-closed.
+def test_clarification_menu_too_small_awaits_synthesis() -> None:
+    # interaction=choice with a single action is not a choice set — soft missing,
+    # so option synthesis / open-ask can recover instead of a red failure.
     doc = ContentDocument(
         schema_version=1,
         locale="en-US",
@@ -260,8 +261,9 @@ def test_clarification_menu_too_small_fails_closed() -> None:
         task_kind="clarification_needed",
         selected_strategy="clarify",
     )
-    assert plan.reason == "formatter_output_invalid"
+    assert plan.reason == "choice_options_missing"
     assert plan.choice_actions == ()
+    assert plan.required_choice is True
 
 
 def test_requires_user_choice_promotes_callout_topics() -> None:
@@ -294,7 +296,8 @@ def test_requires_user_choice_promotes_callout_topics() -> None:
     assert framed.meta.interaction == "choice"
 
 
-def test_requires_user_choice_without_options_fails_closed() -> None:
+def test_requires_user_choice_without_options_is_soft_missing_not_invalid() -> None:
+    """Prose clarify without options awaits synthesis — not a red formatter failure."""
     doc = ContentDocument(
         schema_version=1,
         locale="en-US",
@@ -308,7 +311,34 @@ def test_requires_user_choice_without_options_fails_closed() -> None:
         requires_review=False,
         requires_user_choice=True,
     )
-    assert plan.reason == "formatter_output_invalid"
+    assert plan.reason == "choice_options_missing"
+    assert plan.required_choice is True
+    assert plan.choice_actions == ()
+
+
+def test_clarify_actions_without_interaction_tag_still_mint() -> None:
+    """Formatter ActionSpec alone is enough on a clarify turn (no meta.interaction)."""
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        title="Запрос уточнения",
+        blocks=(ParagraphBlock(type="paragraph", text="Как только вы предоставите данные…"),),
+        actions=(
+            ActionSpec(action_id="attach", label="Прикрепить файл", kind="custom", style="primary"),
+            ActionSpec(action_id="topic", label="Указать тему", kind="custom", style="secondary"),
+        ),
+        meta=DocumentMeta(confidence=0.9, requires_review=False, source_refs=(), interaction="none"),
+    )
+    plan = HitlInteractionPolicy.plan(
+        doc,
+        requires_review=False,
+        task_kind="clarification_needed",
+        selected_strategy="clarify",
+        requires_user_choice=True,
+    )
+    assert plan.reason != "formatter_output_invalid"
+    assert len(plan.choice_actions) == 2
+    assert plan.choice_actions[0].label == "Прикрепить файл"
 
 
 def test_answered_read_only_turn_ignores_over_flagged_choice() -> None:

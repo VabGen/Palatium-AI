@@ -8,10 +8,7 @@ import {
   type RefObject,
 } from 'react';
 import { AttachmentFileIcon } from '../icons/fileTypeIcons';
-import {
-  dialogueTurnDomId,
-  type DialogueNavEntry,
-} from '../lib/dialogueNav';
+import { dialogueTurnDomId, type DialogueNavEntry } from '../lib/dialogueNav';
 import { t } from '../i18n';
 
 type DialogueNavProps = {
@@ -177,9 +174,7 @@ export function DialogueNav({ entries, scrollRootRef, onJump }: DialogueNavProps
                   ) : null}
                 </button>
                 <span className="dialogue-nav__tick-slot" aria-hidden>
-                  <span
-                    className={`dialogue-nav__tick${active ? ' is-active' : ''}`}
-                  />
+                  <span className={`dialogue-nav__tick${active ? ' is-active' : ''}`} />
                 </span>
               </li>
             );

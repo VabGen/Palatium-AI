@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ARTIFACT_MIN_PARAGRAPH_CHARS,
+  ARTIFACT_MIN_SUPPORT_CHARS,
   artifactPreviewText,
   isArtifactWorthy,
 } from '../../src/lib/artifactDocument';
@@ -85,34 +86,79 @@ describe('isArtifactWorthy', () => {
     expect(isArtifactWorthy(doc({ blocks: [{ type: 'paragraph', text }] }))).toBe(true);
   });
 
-  it('accepts documents with source citations', () => {
+  it('does not promote file Q&A to artifact just because source_refs exist', () => {
+    // Citations are chips; «о чем файл» + short bullets must stay in the bubble.
     expect(
       isArtifactWorthy(
         doc({
+          title: 'О чем файл',
+          blocks: [
+            {
+              type: 'paragraph',
+              text: 'Текст про рост цен на иван-чай из‑за высокого спроса.',
+            },
+            {
+              type: 'list',
+              style: 'unordered',
+              items: [{ text: 'Розница: 3000–5000 ₽/кг' }, { text: 'Опт: 1500 ₽/кг' }],
+            },
+          ],
           meta: {
             confidence: 1,
             requires_review: false,
-            source_refs: ['Договор.pdf'],
-            interaction: 'none',
-          },
-        })
-      )
-    ).toBe(true);
-  });
-
-  it('ignores internal from-memory stamp as sole source_ref', () => {
-    expect(
-      isArtifactWorthy(
-        doc({
-          meta: {
-            confidence: 1,
-            requires_review: false,
-            source_refs: ['from memory'],
+            source_refs: ['ht_1-5.webp'],
             interaction: 'none',
           },
         })
       )
     ).toBe(false);
+  });
+
+  it('ignores citations and HITL actions as sole artifact signals', () => {
+    expect(
+      isArtifactWorthy(
+        doc({
+          actions: [
+            {
+              action_id: 'a1',
+              label: 'Вариант',
+              kind: 'custom',
+              style: 'secondary',
+              requires_confirmation: false,
+              risk_score: 0,
+            },
+          ],
+          meta: {
+            confidence: 1,
+            requires_review: false,
+            source_refs: ['Договор.pdf'],
+            citations: [
+              {
+                source_ref: 'Договор.pdf',
+                quote: 'п.1',
+                anchor: 'url_only',
+              },
+            ],
+            interaction: 'choice',
+          },
+        })
+      )
+    ).toBe(false);
+  });
+
+  it('accepts long list-shaped deliverables past the support mass threshold', () => {
+    const item = 'а'.repeat(80);
+    const items = Array.from({ length: 10 }, () => ({ text: item }));
+    expect(items.reduce((n, row) => n + row.text.length, 0)).toBeGreaterThanOrEqual(
+      ARTIFACT_MIN_SUPPORT_CHARS
+    );
+    expect(
+      isArtifactWorthy(
+        doc({
+          blocks: [{ type: 'list', style: 'unordered', items }],
+        })
+      )
+    ).toBe(true);
   });
 });
 

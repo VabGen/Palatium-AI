@@ -39,6 +39,16 @@ def test_identity_core_names_the_product_and_speaks_as_one_assistant() -> None:
     assert "pipeline component" in IDENTITY_CORE
     assert "response_locale" in IDENTITY_CORE
     assert "never invent a" in IDENTITY_CORE.lower()
+    # Provenance firewall: remembered user attributes must not become "I am …".
+    assert "Provenance" in IDENTITY_CORE
+    assert "user_facts" in IDENTITY_CORE
+
+
+def test_identity_core_forbids_claiming_user_name_as_self() -> None:
+    """Regression class: greeting + remembered user name → «Меня зовут Геннадий»."""
+    lowered = IDENTITY_CORE.lower()
+    assert "never claim" in lowered
+    assert "do not become them" in lowered
 
 
 def test_capabilities_are_user_domain_facts_not_the_agent_registry() -> None:

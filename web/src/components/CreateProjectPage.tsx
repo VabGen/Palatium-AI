@@ -54,12 +54,7 @@ function ProjectFolderArt({ mark }: { mark?: string }) {
 
 type SideSlot = 'outer-left' | 'inner-left' | 'inner-right' | 'outer-right';
 
-const SIDE_SLOTS: readonly SideSlot[] = [
-  'outer-left',
-  'inner-left',
-  'inner-right',
-  'outer-right',
-];
+const SIDE_SLOTS: readonly SideSlot[] = ['outer-left', 'inner-left', 'inner-right', 'outer-right'];
 
 /**
  * kimi.ai ``/project/create`` — title, folder carousel (CSS grid stack), name + Create.

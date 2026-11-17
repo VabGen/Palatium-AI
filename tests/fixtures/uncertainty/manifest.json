@@ -94,5 +94,30 @@
       "retrieval_empty": true
     },
     "expected_disposition": "default_with_mark"
+  },
+  {
+    "case_id": "prior_dialog_grounds",
+    "note": "Prior dialog fills the ask (name in history) → proceed, no ASSUMPTION_MARK",
+    "signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.9,
+      "grounding": "optional",
+      "has_prior_dialog": true,
+      "prior_grounds_answer": true,
+      "retrieval_empty": true
+    },
+    "expected_disposition": "proceed"
+  },
+  {
+    "case_id": "sufficient_in_scope",
+    "note": "In-scope ask with enough confidence and non-empty retrieval → proceed (no mark)",
+    "signals": {
+      "task_kind": "knowledge_request",
+      "confidence": 0.85,
+      "grounding": "optional",
+      "has_prior_dialog": false,
+      "retrieval_empty": false
+    },
+    "expected_disposition": "proceed"
   }
 ]

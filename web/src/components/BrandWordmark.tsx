@@ -41,27 +41,13 @@ export function BrandWordmark({ className }: BrandWordmarkProps) {
         aria-label={name}
       >
         <defs>
-          <linearGradient
-            id={fadeId}
-            x1="40"
-            y1="0"
-            x2="370"
-            y2="0"
-            gradientUnits="userSpaceOnUse"
-          >
+          <linearGradient id={fadeId} x1="40" y1="0" x2="370" y2="0" gradientUnits="userSpaceOnUse">
             <stop offset="0" stopColor="#fff" stopOpacity="0" />
             <stop offset="0.1" stopColor="#fff" stopOpacity="1" />
             <stop offset="0.9" stopColor="#fff" stopOpacity="1" />
             <stop offset="1" stopColor="#fff" stopOpacity="0" />
           </linearGradient>
-          <mask
-            id={maskId}
-            maskUnits="userSpaceOnUse"
-            x="0"
-            y="0"
-            width="400"
-            height="82"
-          >
+          <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="400" height="82">
             <rect x="40" y="56" width="330" height="22" fill={`url(#${fadeId})`} />
           </mask>
         </defs>

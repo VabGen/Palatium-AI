@@ -43,10 +43,12 @@ if TYPE_CHECKING:
     from palatium_ai.application.services.cost_budget import CostBudgetService
     from palatium_ai.application.services.hitl_service import HitlService
     from palatium_ai.application.services.intent_graph_runner import IntentGraphRunner
+    from palatium_ai.application.services.interaction_assembler import AssembledInteraction
     from palatium_ai.application.services.kill_switch import KillSwitchService
     from palatium_ai.application.services.memory_extract import MemoryExtractService
     from palatium_ai.application.services.option_synthesizer import OptionSynthesizer
     from palatium_ai.application.services.session_service import SessionService
+    from palatium_ai.domain.hitl.interaction_policy import HitlCardPlan
     from palatium_ai.domain.memory.ports import DialogTurnStore
     from palatium_ai.domain.memory.turns import DialogTurnWindow
 
@@ -707,7 +709,6 @@ class IntentHitlFlow:
             interaction_plan_log_fields,
         )
         from palatium_ai.domain.content import parse_content_document
-        from palatium_ai.domain.hitl.option_synthesis import DiscreteChoiceSynthesisPolicy
 
         if formatted.output is None:
             # No draft to review: this is a pipeline failure, not a human wait (020 cards, not spinner).
@@ -751,48 +752,22 @@ class IntentHitlFlow:
             has_turn_attachments=has_turn_attachments,
             response_shape=response_shape,
         )
-
-        if (
-            DiscreteChoiceSynthesisPolicy.needs_synthesis(
-                requires_user_choice=requires_user_choice,
-                underspecification_kind=underspecification_kind,
-                plan=assembled.plan,
-                has_turn_attachments=has_turn_attachments,
-            )
-            and self._option_synthesizer is not None
-            and user_text
-        ):
-            fresh_prior = DiscreteChoiceSynthesisPolicy.fresh_prior(prior_context, dialog)
-            synthesis = await self._option_synthesizer.synthesize(
-                user_text=user_text,
-                prior_context=fresh_prior,
-                response_locale=document.locale,
-            )
-            logger.info(
-                "hitl.option_synthesis",
-                thread_id=thread_id,
-                task_id=task_id,
-                options=len(synthesis.actions),
-                underspecification_kind=underspecification_kind,
-                stale_choices=bool((prior_context or "").strip()) and fresh_prior is None,
-            )
-            if synthesis.actions:
-                document = DiscreteChoiceSynthesisPolicy.merge_actions_into_document(
-                    document,
-                    synthesis.actions,
-                    framing_text=synthesis.framing,
-                    locale=document.locale,
-                )
-                formatted = formatted.model_copy(update={"output": document})
-                assembled = InteractionAssembler.assemble(
-                    document,
-                    requires_review=formatted.requires_review,
-                    selected_strategy=selected_strategy,
-                    task_kind=task_kind,
-                    requires_user_choice=True,
-                    has_turn_attachments=has_turn_attachments,
-                    response_shape=response_shape,
-                )
+        document, formatted, assembled = await self._maybe_synthesize_choice_options(
+            document=document,
+            formatted=formatted,
+            assembled=assembled,
+            thread_id=thread_id,
+            task_id=task_id,
+            selected_strategy=selected_strategy,
+            task_kind=task_kind,
+            requires_user_choice=requires_user_choice,
+            underspecification_kind=underspecification_kind,
+            user_text=user_text,
+            prior_context=prior_context,
+            has_turn_attachments=has_turn_attachments,
+            dialog=dialog,
+            response_shape=response_shape,
+        )
 
         logger.info(
             "hitl.interaction_plan",
@@ -805,33 +780,193 @@ class IntentHitlFlow:
             **interaction_plan_log_fields(assembled),
         )
         if assembled.invalid:
-            agent_metrics.record_hitl_deny("formatter_output_invalid")
-            await write_audit(
-                conversation_id=thread_id,
-                event="hitl_formatter_output_invalid",
-                metadata={
-                    "task_id": task_id,
-                    "task_kind": task_kind or "",
-                    "selected_strategy": str(selected_strategy or ""),
-                    "menu_shaped": str(assembled.plan.menu_shaped),
-                    "promoted_from": assembled.plan.promoted_from,
-                    "force_structural": str(assembled.plan.force_structural),
-                    "underspecification_kind": underspecification_kind,
-                },
-            )
-            return formatted.model_copy(
-                update={
-                    "status": "failure",
-                    "error": "formatter_output_invalid",
-                    "requires_review": True,
-                    "hitl_cards": (),
-                    "confidence": min(formatted.confidence, 0.0),
-                }
+            return await self._fail_invalid_formatter_output(
+                formatted=formatted,
+                assembled=assembled,
+                thread_id=thread_id,
+                task_id=task_id,
+                task_kind=task_kind,
+                selected_strategy=selected_strategy,
+                underspecification_kind=underspecification_kind,
             )
 
         plan = assembled.plan
         if assembled.document is not None:
             document = assembled.document
+
+        soft = self._deliver_soft_clarify_without_options(formatted, document, plan)
+        if soft is not None:
+            return soft
+
+        cards = await self._mint_cards_for_plan(
+            document=document,
+            plan=plan,
+            file_card=file_card,
+            formatted=formatted,
+            thread_id=thread_id,
+            task_id=task_id,
+            user_id=user_id,
+            org_id=org_id,
+        )
+
+        # Delivered cards/document clear any prior machine error (e.g. soft clarify
+        # recovered by synthesis) so the UI never shows formatter_output_invalid
+        # next to a usable HITL picker.
+        return formatted.model_copy(
+            update={
+                "output": document,
+                "hitl_cards": tuple(cards),
+                "status": "success" if cards or document.blocks else formatted.status,
+                "error": None if cards or document.blocks else formatted.error,
+            }
+        )
+
+    async def _maybe_synthesize_choice_options(
+        self,
+        *,
+        document: ContentDocument,
+        formatted: FormatterTaskResult,
+        assembled: AssembledInteraction,
+        thread_id: str,
+        task_id: str,
+        selected_strategy: str | None,
+        task_kind: str | None,
+        requires_user_choice: bool,
+        underspecification_kind: str,
+        user_text: str | None,
+        prior_context: str | None,
+        has_turn_attachments: bool,
+        dialog: DialogTurnWindow | None,
+        response_shape: str | None,
+    ) -> tuple[ContentDocument, FormatterTaskResult, AssembledInteraction]:
+        """Fill missing exclusive options via LLM synthesis when the policy asks."""
+        from palatium_ai.application.services.interaction_assembler import InteractionAssembler
+        from palatium_ai.domain.hitl.option_synthesis import DiscreteChoiceSynthesisPolicy
+
+        if not (
+            DiscreteChoiceSynthesisPolicy.needs_synthesis(
+                requires_user_choice=requires_user_choice,
+                underspecification_kind=underspecification_kind,
+                plan=assembled.plan,
+                has_turn_attachments=has_turn_attachments,
+            )
+            and self._option_synthesizer is not None
+            and user_text
+        ):
+            return document, formatted, assembled
+
+        fresh_prior = DiscreteChoiceSynthesisPolicy.fresh_prior(prior_context, dialog)
+        synthesis = await self._option_synthesizer.synthesize(
+            user_text=user_text,
+            prior_context=fresh_prior,
+            response_locale=document.locale,
+        )
+        logger.info(
+            "hitl.option_synthesis",
+            thread_id=thread_id,
+            task_id=task_id,
+            options=len(synthesis.actions),
+            underspecification_kind=underspecification_kind,
+            stale_choices=bool((prior_context or "").strip()) and fresh_prior is None,
+        )
+        if not synthesis.actions:
+            return document, formatted, assembled
+
+        document = DiscreteChoiceSynthesisPolicy.merge_actions_into_document(
+            document,
+            synthesis.actions,
+            framing_text=synthesis.framing,
+            locale=document.locale,
+        )
+        formatted = formatted.model_copy(update={"output": document})
+        reassembled = InteractionAssembler.assemble(
+            document,
+            requires_review=formatted.requires_review,
+            selected_strategy=selected_strategy,
+            task_kind=task_kind,
+            requires_user_choice=True,
+            has_turn_attachments=has_turn_attachments,
+            response_shape=response_shape,
+        )
+        return document, formatted, reassembled
+
+    async def _fail_invalid_formatter_output(
+        self,
+        *,
+        formatted: FormatterTaskResult,
+        assembled: AssembledInteraction,
+        thread_id: str,
+        task_id: str,
+        task_kind: str | None,
+        selected_strategy: str | None,
+        underspecification_kind: str,
+    ) -> FormatterTaskResult:
+        """Audit + fail-closed when structural exclusive menu could not be minted."""
+        agent_metrics.record_hitl_deny("formatter_output_invalid")
+        await write_audit(
+            conversation_id=thread_id,
+            event="hitl_formatter_output_invalid",
+            metadata={
+                "task_id": task_id,
+                "task_kind": task_kind or "",
+                "selected_strategy": str(selected_strategy or ""),
+                "menu_shaped": str(assembled.plan.menu_shaped),
+                "promoted_from": assembled.plan.promoted_from,
+                "force_structural": str(assembled.plan.force_structural),
+                "underspecification_kind": underspecification_kind,
+            },
+        )
+        return formatted.model_copy(
+            update={
+                "status": "failure",
+                "error": "formatter_output_invalid",
+                "requires_review": True,
+                "hitl_cards": (),
+                "confidence": min(formatted.confidence, 0.0),
+            }
+        )
+
+    @staticmethod
+    def _deliver_soft_clarify_without_options(
+        formatted: FormatterTaskResult,
+        document: ContentDocument,
+        plan: HitlCardPlan,
+    ) -> FormatterTaskResult | None:
+        """Synthesis could not fill a soft clarify — deliver framing as an open ask.
+
+        Never a red formatter_output_invalid beside usable prose (020 / 055).
+        """
+        if plan.reason != "choice_options_missing" or plan.choice_actions:
+            return None
+        document = document.model_copy(
+            update={
+                "actions": (),
+                "meta": document.meta.model_copy(update={"interaction": "none"}),
+            }
+        )
+        return formatted.model_copy(
+            update={
+                "output": document,
+                "hitl_cards": (),
+                "status": "success",
+                "error": None,
+                "requires_review": False,
+            }
+        )
+
+    async def _mint_cards_for_plan(
+        self,
+        *,
+        document: ContentDocument,
+        plan: HitlCardPlan,
+        file_card: HITLCardView | None,
+        formatted: FormatterTaskResult,
+        thread_id: str,
+        task_id: str,
+        user_id: str | None,
+        org_id: str | None,
+    ) -> list[HITLCardView]:
+        """Mint choice and/or quality-review cards for an assembled plan."""
         cards: list[HITLCardView] = []
 
         if file_card is not None:
@@ -866,13 +1001,7 @@ class IntentHitlFlow:
                     org_id=org_id,
                 )
             )
-
-        return formatted.model_copy(
-            update={
-                "output": document,
-                "hitl_cards": tuple(cards),
-            }
-        )
+        return cards
 
     async def _mint_file_choice_card(
         self,

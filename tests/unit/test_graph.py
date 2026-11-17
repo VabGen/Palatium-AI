@@ -214,6 +214,7 @@ async def test_graph_skips_researcher_for_non_research_route() -> None:
 
 @pytest.mark.asyncio()
 async def test_graph_social_skips_researcher_uses_formatter_llm() -> None:
+    """Phatic social: skip Researcher; CriticPolicy passthrough; Formatter synthesises."""
     llm_intent = FakeLLMPort(
         '{"task_kind": "social_conversation", "requires_mcp": false, '
         '"candidate_capabilities": [], "confidence": 0.96, "reasoning": "Greeting"}',
@@ -244,7 +245,8 @@ async def test_graph_social_skips_researcher_uses_formatter_llm() -> None:
     assert result.output is not None
     assert result.output.task_kind == "social_conversation"
     assert len(llm_researcher.calls) == 0
-    assert len(llm_critic.calls) == 1
+    # CriticPolicy.social_phatic_passthrough — no LLM-as-judge on greetings (2026).
+    assert len(llm_critic.calls) == 0
     assert len(llm_formatter.calls) >= 1
 
 

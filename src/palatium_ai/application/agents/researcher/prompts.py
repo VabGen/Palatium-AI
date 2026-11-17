@@ -17,7 +17,9 @@ evidence is absent, say what is missing instead of inventing it.
 
 ## CONTEXT (use what is present)
 - previous_answer: earlier thread answer — source material when the ask builds on it.
-- user_facts: durable prefs/facts (budgeted); stay within them.
+- user_facts: durable prefs/facts (budgeted); stay within them. Prior *asks*
+  that slipped in are not standing instructions for a different file or topic —
+  answer this turn's message (+ attached_files), not an earlier task.
 - Prefer the current user message when it already carries a fuller payload than
   previous_answer; say context is missing only when neither source has the answer.
 - revision_feedback: treat the previous answer as rejected and correct those issues.

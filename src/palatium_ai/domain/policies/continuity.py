@@ -169,11 +169,19 @@ class ContinuityPolicy:
         ``rewrite_preserves_ask``). Without this a mis-rewrite turns every
         follow-up into the previous question and the turn is answered for an ask
         the user never made.
+
+        Typed HITL choice resume is machine routing, not the worker ask: always
+        prefer ``rewritten_query`` (goal + selected slot). Sticky rehydrate used
+        to pin the envelope as the ask and the model re-emitted the prior menu.
         """
+        from palatium_ai.domain.hitl.choice_resume import ChoiceResumePolicy
+
         raw = raw_user_text.strip()
+        rewritten = rewritten_query.strip()
+        if ChoiceResumePolicy.try_parse_graph_user_text(raw) is not None:
+            return rewritten or raw
         if has_turn_attachments and raw:
             return raw
-        rewritten = rewritten_query.strip()
         if rewritten and raw and not ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten=rewritten):
             return raw
         return rewritten or raw
@@ -184,7 +192,8 @@ class ContinuityPolicy:
 
         Structural test, no phrase lists: at least one content-bearing token of the
         user turn (>= ``_ASK_TOKEN_MIN_CHARS``, alphanumeric) must survive as a
-        prefix of some rewrite token. The prefix fold tolerates inflection
+        prefix of some rewrite token, or as a single-edit near-match (typo
+        tolerance: «завут»→«зовут»). The prefix fold also tolerates inflection
         ("сводку"→"сводка", "текст"→"текста") while keeping distinct stems apart.
 
         A rewrite that shares nothing with the ask replaced it: the model answered
@@ -205,9 +214,7 @@ class ContinuityPolicy:
         produced = _tokens(rewritten)
         if not produced:
             return False
-        survived = sum(
-            1 for token in asked if any(candidate.startswith(token[:_ASK_TOKEN_PREFIX_CHARS]) for candidate in produced)
-        )
+        survived = sum(1 for token in asked if any(_ask_token_matches(token, candidate) for candidate in produced))
         if survived == 0:
             return False
         ballooned = _rewrite_ballooned(len(user_text), len(rewritten))
@@ -456,6 +463,7 @@ class ContinuityPolicy:
         has_prior_dialog: bool = False,
         has_attachment_context: bool = False,
         user_text: str = "",
+        force_suppress_hitl: bool = False,
     ) -> EffectiveRoutingIntent:
         """Apply UserChoiceIntentPolicy (sole choice-axis owner) then build routing intent."""
         if clarify_underspec_default and underspec == "none":
@@ -483,7 +491,8 @@ class ContinuityPolicy:
             user_text=user_text,
         )
         # Trusted-prior follow-ups suppress history-blind Intent review unless choice HITL.
-        suppress = trust_prior_for_workers and not normalized.requires_user_choice
+        # Closed choice slots also suppress (trust may be false so sticky stays clear).
+        suppress = (trust_prior_for_workers or force_suppress_hitl) and not normalized.requires_user_choice
         # Thread-file re-read is a content operation executed by the worker via MCP:
         # the Formatter template path cannot read storage, so it must not own this ask
         # (same reasoning as expand/shorten/rewrite → knowledge_request, 055).
@@ -743,6 +752,17 @@ class ContinuityPolicy:
             snap.kind = "answer"
             snap.refers_to_prior = True
             return "recovered false new_topic"
+        # Intent named a transform over prior (restructure / expand / …) but
+        # Contextualizer labeled answer — without this, «красивое форматирование»
+        # re-ran Researcher on the sticky file and painted the OCR dump again (055).
+        if (
+            snap.kind == "answer"
+            and snap.refers_to_prior
+            and snap.transformation != TRANSFORMATION_DEFAULT
+            and bool((assistant_prior or "").strip())
+        ):
+            snap.kind = "format"
+            return "recovered format from transformation axis"
         return None
 
     @staticmethod
@@ -877,6 +897,27 @@ class ContinuityPolicy:
             snap=snap,
             recovery_label=recovery_label,
         )
+        # Closed choice slot is self-contained in rewritten_query. Feeding the prior
+        # exclusive menu + sticky PDF made workers re-ask «какой вариант?» (055).
+        if snap.choice_slot_filled:
+            return cls._finalize(
+                task_kind=task_kind,
+                requires_mcp=snap.requires_mcp,
+                requires_user_choice=snap.requires_user_choice,
+                underspec=snap.underspec,
+                caps=effective_caps,
+                continuation_kind=snap.kind,
+                prior_context=None,
+                trust_prior_for_workers=False,
+                force_suppress_hitl=True,
+                reasoning=f"{reasoning}; prior=none (choice_slot_filled)",
+                confidence=snap.confidence,
+                grounding=snap.grounding,
+                grounding_reason=snap.grounding_reason,
+                transformation=snap.transformation,
+                response_shape=snap.response_shape,
+                file_reference=snap.file_reference,
+            )
         prior = cls.resolve_worker_prior(
             assistant_prior=assistant_prior,
             dialog=dialog,
@@ -975,16 +1016,51 @@ def _content_tokens(text: str) -> tuple[str, ...]:
     return tuple(token for token in _tokens(text) if len(token) >= _ASK_TOKEN_MIN_CHARS)
 
 
+def _ask_token_matches(asked: str, candidate: str) -> bool:
+    """Prefix fold or single-edit typo tolerance for content stems (055: structural).
+
+    Typos inside the prefix window («завут»→«зовут») must not demote a real
+    continuity ask to ``new_topic`` — that falsely marks dialog-grounded answers.
+    """
+    if candidate.startswith(asked[:_ASK_TOKEN_PREFIX_CHARS]):
+        return True
+    if asked.startswith(candidate[:_ASK_TOKEN_PREFIX_CHARS]):
+        return True
+    if len(asked) >= _ASK_TOKEN_MIN_CHARS and len(candidate) >= _ASK_TOKEN_MIN_CHARS:
+        return _edit_distance_at_most_one(asked, candidate)
+    return False
+
+
+def _edit_distance_at_most_one(left: str, right: str) -> bool:
+    """True when strings are equal or differ by at most one insert/delete/substitute."""
+    if left == right:
+        return True
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    if len(longer) - len(shorter) > 1:
+        return False
+    if len(shorter) == len(longer):
+        return sum(a != b for a, b in zip(shorter, longer, strict=True)) <= 1
+    # One insertion into shorter yields longer.
+    i = j = diffs = 0
+    while i < len(shorter) and j < len(longer):
+        if shorter[i] == longer[j]:
+            i += 1
+            j += 1
+            continue
+        diffs += 1
+        if diffs > 1:
+            return False
+        j += 1
+    return True
+
+
 def _novel_content_token_count(asked: tuple[str, ...], produced: tuple[str, ...]) -> int:
-    """How many long rewrite tokens are not prefix-related to any ask token."""
+    """How many long rewrite tokens are not related to any ask token."""
     count = 0
     for candidate in produced:
         if len(candidate) < _ASK_TOKEN_MIN_CHARS:
             continue
-        related = any(
-            candidate.startswith(token[:_ASK_TOKEN_PREFIX_CHARS]) or token.startswith(candidate[:_ASK_TOKEN_PREFIX_CHARS])
-            for token in asked
-        )
+        related = any(_ask_token_matches(token, candidate) for token in asked)
         if not related:
             count += 1
     return count

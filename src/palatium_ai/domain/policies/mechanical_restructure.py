@@ -20,7 +20,6 @@ from palatium_ai.domain.content.content_document import (
     ContentBlock,
     ContentDocument,
     DocumentKind,
-    DocumentMeta,
     FormulaBlock,
     HeadingBlock,
     KeyValueBlock,
@@ -292,10 +291,8 @@ class MechanicalRestructurePolicy:
 
     @classmethod
     def _with_blocks(cls, prior: ContentDocument, blocks: tuple[ContentBlock, ...]) -> ContentDocument:
-        meta = prior.meta
-        if not isinstance(meta, DocumentMeta):
-            meta = DocumentMeta(confidence=0.9)
-        return prior.model_copy(update={"blocks": blocks, "actions": (), "meta": meta})
+        _ = cls
+        return prior.model_copy(update={"blocks": blocks, "actions": (), "meta": prior.meta})
 
 
 def _block_lines(block: ContentBlock) -> list[str]:

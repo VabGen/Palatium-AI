@@ -111,7 +111,9 @@ def test_short_structured_worker_skips_formatter_llm() -> None:
     assert result is not None
     assert result.output is not None
     plain = result.output.plain_text()
-    assert "Риск" in plain
+    # Deterministic blockify may fold ``**Риск**: сроки`` into a bullet body;
+    # the contract under test is 0-LLM emit with the deliverable facts intact.
+    assert "сроки" in plain
     assert "продлить" in plain
 
 
@@ -127,6 +129,24 @@ def test_explicit_user_decisions_outrank_generation_hint() -> None:
     reformat = _formatter_input(worker=_JOKE, caps=("compose",), task_kind="response_formatting")
     assert resolve_style_hint(choice) == "choice_cards"
     assert resolve_style_hint(reformat) == "restructure_sections_icons"
+
+
+def test_transform_and_shape_beat_plain_worker_preserve() -> None:
+    """«красивое форматирование» / «тезисный анализ» must not stay plain_text dumps."""
+    dump = "Раздел А.\n\n" + ("Проверка соответствия статье закона. " * 20)
+    assert resolve_style_hint(_formatter_input(worker=dump, transformation="restructure")) == "restructure_sections_icons"
+    shaped = _formatter_input(worker=dump)
+    shaped = shaped.model_copy(
+        update={
+            "context_packet": shaped.context_packet.model_copy(update={"response_shape": "document_analysis"}),
+        }
+    )
+    assert resolve_style_hint(shaped) == "brand_sections_icons"
+
+
+def test_worker_truncation_marker_forces_compose_hint() -> None:
+    body = "Приложение 4\n\n1. Общие положения…\n… [worker truncated 1 chars] …\nхвост договора"
+    assert resolve_style_hint(_formatter_input(worker=body)) == "brand_sections_icons"
 
 
 def _signals(**overrides: object) -> FormatterPassthroughSignals:

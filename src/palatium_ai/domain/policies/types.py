@@ -124,9 +124,11 @@ ComposerMode = Literal["web_search", "deep_think", "agent"]
 #   clarification      — named gap; default answer would be wrong (HITL/clarify card)
 #   default_with_mark   — proceed on a reasonable assumption; mark it (not silent invent)
 #   honest_refusal      — out of scope, or required data absent (no-data / refuse)
-#   unknown             — *residual only*: policy could not choose among the three above.
-#                         Never user-facing. Downstream MUST call
-#                         UncertaintyPolicy.resolve_for_downstream (fallback =
+#   proceed             — evidence sufficient (incl. prior dialog grounds the ask);
+#                         no mark / clarify / refuse — not an incomplete-input outcome
+#   unknown             — *residual only*: policy could not choose among clarify /
+#                         marked-default / refuse. Never user-facing. Downstream MUST
+#                         call UncertaintyPolicy.resolve_for_downstream (fallback =
 #                         honest_refusal + reason prefix). Do not treat as «не знаю»
 #                         prose — that would dump unclassified turns on the user.
 # Orthogonal to task_kind: ClarificationGatePolicy / GroundingPolicy feed signals;
@@ -136,6 +138,7 @@ UncertaintyDisposition = Literal[
     "clarification",
     "default_with_mark",
     "honest_refusal",
+    "proceed",
     "unknown",
 ]
 
@@ -144,6 +147,7 @@ ResolvedUncertaintyDisposition = Literal[
     "clarification",
     "default_with_mark",
     "honest_refusal",
+    "proceed",
 ]
 
 # --- Routing / execution (supervisor, researcher, critic) ---

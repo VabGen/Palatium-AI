@@ -117,3 +117,58 @@ def test_sanitize_collapses_space_underscore_aliases() -> None:
         )
     )
     assert refs == ("Договор_оказания_услуг_2.docx", "Договор_оказания_услуг.docx")
+
+
+def test_sanitize_collapses_markdown_bracket_aliases() -> None:
+    """LLM ``[Скан 1.pdf]`` must not duplicate the upload basename chip."""
+    refs = sanitize_source_refs(
+        (
+            "[Скан 1 _Приложение.pdf]",
+            "[Скан 2 _Приложение.pdf]",
+            "Скан_1__Приложение.pdf",
+            "Скан_2__Приложение.pdf",
+        )
+    )
+    assert refs == ("Скан_1__Приложение.pdf", "Скан_2__Приложение.pdf")
+
+
+def test_align_formatter_meta_does_not_stamp_fence_as_source_refs() -> None:
+    """Sticky rehydrate must not auto-chip PDFs on answers that never cited them."""
+    from palatium_ai.application.agents.formatter.parsing import align_formatter_meta
+    from palatium_ai.domain.agents.context_packet import ContextPacket
+    from palatium_ai.domain.agents.formatter import FormatterInput
+    from palatium_ai.domain.content.content_document import ContentDocument, DocumentMeta, ParagraphBlock
+    from palatium_ai.domain.mcp.models import ToolExecutionPlan
+
+    source = attachment_fence_source(attachment_id=_ID_A, filename="Скан_2__Приложение.pdf")
+    fenced = wrap_untrusted_tool_output("scan body", source=source)
+    document = ContentDocument(
+        locale="ru-RU",
+        blocks=(ParagraphBlock(text="Ваше имя — Геннадий."),),
+        meta=DocumentMeta(confidence=0.9, requires_review=False, source_refs=()),
+    )
+    aligned = align_formatter_meta(
+        document,
+        FormatterInput(
+            task_id="t1",
+            context_packet=ContextPacket(
+                task_id="t1",
+                user_text="как меня зовут?",
+                task_kind="knowledge_request",
+                route="researcher",
+                route_plan="answer",
+                requires_mcp=False,
+                candidate_capabilities=(),
+                execution_plan=ToolExecutionPlan(
+                    strategy="reason_only",
+                    requires_tool_call=False,
+                    rationale="memory",
+                ),
+                context_summary="name",
+                untrusted_context=fenced,
+            ),
+            worker_summary="name from memory",
+            response_locale="ru-RU",
+        ),
+    )
+    assert aligned.meta.source_refs == ()

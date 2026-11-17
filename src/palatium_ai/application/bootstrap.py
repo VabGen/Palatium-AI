@@ -373,7 +373,10 @@ def _build_attachment_runtime(
     read_service = build_attachment_read_service(settings, attachment_ports)
     # Same repository the read path uses: the registry of what this thread holds
     # is single-sourced, not a second store (050).
-    file_reference_resolver = AttachmentReferenceResolver(repository=attachment_ports.repository)
+    file_reference_resolver = AttachmentReferenceResolver(
+        repository=attachment_ports.repository,
+        blob_store=attachment_ports.blob_store,
+    )
     # ADR 0007: image parts are references; the blob store owns the bytes, so the
     # LLM adapter gets a source, not a copy of an upload. Built only when a vision
     # alias is configured — otherwise an image call stays a typed refusal.

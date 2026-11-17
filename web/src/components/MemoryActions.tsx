@@ -190,7 +190,9 @@ export function MemoryActions({
             />
           )}
           {mode === 'extract' && <p className="memory-hint">{t('memory.extractHint')}</p>}
-          {mode === 'clear' && <p className="memory-hint memory-hint--danger">{t('memory.clearHint')}</p>}
+          {mode === 'clear' && (
+            <p className="memory-hint memory-hint--danger">{t('memory.clearHint')}</p>
+          )}
 
           <button
             type="button"

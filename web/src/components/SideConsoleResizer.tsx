@@ -12,10 +12,7 @@ import {
   type RefObject,
 } from 'react';
 import { t } from '../i18n';
-import {
-  clampSideConsoleWidthPct,
-  SIDE_CONSOLE_WIDTH_DEFAULT,
-} from '../lib/sideConsoleWidth';
+import { clampSideConsoleWidthPct, SIDE_CONSOLE_WIDTH_DEFAULT } from '../lib/sideConsoleWidth';
 
 export type SideConsoleResizerProps = {
   workspaceRef: RefObject<HTMLElement | null>;
@@ -38,9 +35,7 @@ export function SideConsoleResizer({
 }: SideConsoleResizerProps) {
   const hitRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
-  const dragOrigin = useRef<{ startX: number; startPct: number; width: number } | null>(
-    null
-  );
+  const dragOrigin = useRef<{ startX: number; startPct: number; width: number } | null>(null);
 
   const applyClientX = useCallback(
     (clientX: number, origin: { startX: number; startPct: number; width: number }) => {
@@ -126,10 +121,7 @@ export function SideConsoleResizer({
   const valueNow = Math.round(widthPercent);
 
   return (
-    <div
-      className={`side-console-resizer${dragging ? ' is-active' : ''}`}
-      aria-hidden={false}
-    >
+    <div className={`side-console-resizer${dragging ? ' is-active' : ''}`} aria-hidden={false}>
       <div
         ref={hitRef}
         className="side-console-resizer__hit"

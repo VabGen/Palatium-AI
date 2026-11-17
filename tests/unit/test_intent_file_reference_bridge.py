@@ -45,6 +45,19 @@ def test_thread_has_files_reads_turn_payloads() -> None:
     assert AttachmentStickinessPolicy.thread_has_files(None) is False
 
 
+def test_intent_node_prefers_registry_has_thread_files_over_empty_dialog_payloads() -> None:
+    """Dialog payloads age out; registry flag must still open the thread_file axis."""
+    raw = (
+        '{"task_kind": "knowledge_request", "requires_mcp": true, '
+        '"file_reference": "thread_file", "attachment_scope": "single", '
+        '"confidence": 0.9, "reasoning": "r"}'
+    )
+    # Same as Intent seeing has_thread_files from graph state (registry), not dialog.
+    parsed = parse_classifier_output(raw, has_thread_files=True)
+    assert parsed.file_reference == "thread_file"
+    assert parsed.attachment_scope == "single"
+
+
 def test_axis_defaults_to_none() -> None:
     assert _intent().file_reference == FILE_REFERENCE_DEFAULT
 

@@ -9,11 +9,13 @@ requires clickable cards, even when Intent forgot requires_user_choice.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Literal, TypeGuard
 
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.content import (
+    ICON_NAME_SET,
     ActionSpec,
     CalloutBlock,
     DividerBlock,
@@ -104,6 +106,86 @@ class HitlInteractionPolicy:
         effective_user_choice = requires_user_choice and clarification_turn
         ignored_user_choice = requires_user_choice and not clarification_turn
 
+        early = cls._plan_passthrough_answer(
+            document,
+            requires_review=requires_review,
+            effective_user_choice=effective_user_choice,
+            ignored_user_choice=ignored_user_choice,
+            has_turn_attachments=has_turn_attachments,
+            task_kind=task_kind,
+            response_shape=response_shape,
+        )
+        if early is not None:
+            return early
+
+        menu_shaped = cls._is_menu_shaped(document)
+        interaction, actions, promoted_from = cls._resolve_choice_actions(
+            document,
+            selected_strategy=selected_strategy,
+            task_kind=task_kind,
+            effective_user_choice=effective_user_choice,
+            menu_shaped=menu_shaped,
+        )
+
+        choice_actions = actions if cls._is_choice_set(actions, interaction=interaction) else ()
+        required_choice = cls.requires_choice_mint(
+            document,
+            selected_strategy=selected_strategy,
+            task_kind=task_kind,
+            interaction=interaction,
+            requires_user_choice=effective_user_choice,
+            menu_shaped=menu_shaped,
+        )
+        force_structural = menu_shaped and not effective_user_choice and interaction in {"choice", "confirm"}
+        mint_quality_review = requires_review
+        reason = (
+            f"interaction={interaction}; choices={len(choice_actions)}; "
+            f"review={requires_review}; requires_user_choice={requires_user_choice}; "
+            f"clarification_turn={clarification_turn}; "
+            f"menu_shaped={menu_shaped}; promoted_from={promoted_from}; "
+            f"force_structural={force_structural}; required_choice={required_choice}"
+        )
+
+        missing = cls._plan_missing_choice_actions(
+            choice_actions=choice_actions,
+            required_choice=required_choice,
+            effective_user_choice=effective_user_choice,
+            menu_shaped=menu_shaped,
+            selected_strategy=selected_strategy,
+            task_kind=task_kind,
+            interaction=interaction,
+            mint_quality_review=mint_quality_review,
+            promoted_from=promoted_from,
+            force_structural=force_structural,
+            ignored_user_choice=ignored_user_choice,
+        )
+        if missing is not None:
+            return missing
+
+        return HitlCardPlan(
+            choice_actions=choice_actions,
+            mint_quality_review=mint_quality_review,
+            reason=reason,
+            menu_shaped=menu_shaped,
+            promoted_from=promoted_from,
+            force_structural=force_structural,
+            required_choice=required_choice,
+            ignored_user_choice=ignored_user_choice,
+        )
+
+    @classmethod
+    def _plan_passthrough_answer(
+        cls,
+        document: ContentDocument,
+        *,
+        requires_review: bool,
+        effective_user_choice: bool,
+        ignored_user_choice: bool,
+        has_turn_attachments: bool,
+        task_kind: str | None,
+        response_shape: str | None,
+    ) -> HitlCardPlan | None:
+        """Return a no-card plan when the document *is* the answer, not a picker."""
         # Upload-grounded turn without an Intent choice axis: do not promote
         # list/steps/actions into exclusive menus (Formatter may echo a prior
         # topic as bullets → fake HITL about the wrong file, 055).
@@ -148,8 +230,19 @@ class HitlInteractionPolicy:
                 required_choice=False,
                 ignored_user_choice=ignored_user_choice,
             )
+        return None
 
-        menu_shaped = cls._is_menu_shaped(document)
+    @classmethod
+    def _resolve_choice_actions(
+        cls,
+        document: ContentDocument,
+        *,
+        selected_strategy: ExecutionStrategy | str | None,
+        task_kind: str | None,
+        effective_user_choice: bool,
+        menu_shaped: bool,
+    ) -> tuple[str, tuple[ActionSpec, ...], PromotedFrom]:
+        """Resolve interaction mode + actions from document / structural promotion."""
         interaction = getattr(document.meta, "interaction", "none") or "none"
         if (effective_user_choice or menu_shaped) and interaction == "none":
             interaction = "choice"
@@ -158,6 +251,12 @@ class HitlInteractionPolicy:
         actions = tuple(document.actions)
         if actions:
             promoted_from = "actions"
+            # Formatter often emits ≥2 ActionSpec without flipping meta.interaction.
+            # Promote only when the turn *demands* a selector (Intent choice / menu
+            # shape) — not because task_kind is missing and clarification_turn is
+            # fail-closed True (that minted cards from untagged chrome, 055).
+            if interaction == "none" and len(actions) >= cls._MIN_CHOICE_OPTIONS and (effective_user_choice or menu_shaped):
+                interaction = "choice"
         else:
             actions, promoted_from = cls._promote_structural_choices(
                 document,
@@ -167,47 +266,49 @@ class HitlInteractionPolicy:
                 requires_user_choice=effective_user_choice,
                 menu_shaped=menu_shaped,
             )
+        return interaction, actions, promoted_from
 
-        choice_actions = actions if cls._is_choice_set(actions, interaction=interaction) else ()
-        required_choice = cls.requires_choice_mint(
-            document,
+    @classmethod
+    def _plan_missing_choice_actions(
+        cls,
+        *,
+        choice_actions: tuple[ActionSpec, ...],
+        required_choice: bool,
+        effective_user_choice: bool,
+        menu_shaped: bool,
+        selected_strategy: ExecutionStrategy | str | None,
+        task_kind: str | None,
+        interaction: str,
+        mint_quality_review: bool,
+        promoted_from: PromotedFrom,
+        force_structural: bool,
+        ignored_user_choice: bool,
+    ) -> HitlCardPlan | None:
+        """Handle required-choice turns that still lack mintable options."""
+        if choice_actions or not required_choice:
+            return None
+        # Rhetorical interaction=choice on an informational report (e.g. compare
+        # ending with "which version?") must not kill a usable answer. Fail-closed
+        # only when Intent/structure truly demand exclusive cards.
+        if cls._can_downgrade_rhetorical_choice(
+            requires_user_choice=effective_user_choice,
+            menu_shaped=menu_shaped,
             selected_strategy=selected_strategy,
             task_kind=task_kind,
             interaction=interaction,
-            requires_user_choice=effective_user_choice,
-            menu_shaped=menu_shaped,
-        )
-        force_structural = menu_shaped and not effective_user_choice and interaction in {"choice", "confirm"}
-        mint_quality_review = requires_review
-        reason = (
-            f"interaction={interaction}; choices={len(choice_actions)}; "
-            f"review={requires_review}; requires_user_choice={requires_user_choice}; "
-            f"clarification_turn={clarification_turn}; "
-            f"menu_shaped={menu_shaped}; promoted_from={promoted_from}; "
-            f"force_structural={force_structural}; required_choice={required_choice}"
-        )
-
-        if not choice_actions and required_choice:
-            # Rhetorical interaction=choice on an informational report (e.g. compare
-            # ending with "which version?") must not kill a usable answer. Fail-closed
-            # only when Intent/structure truly demand exclusive cards.
-            if cls._can_downgrade_rhetorical_choice(
-                requires_user_choice=effective_user_choice,
+        ):
+            return HitlCardPlan(
+                choice_actions=(),
+                mint_quality_review=mint_quality_review,
+                reason="interaction_downgraded_informational",
                 menu_shaped=menu_shaped,
-                selected_strategy=selected_strategy,
-                task_kind=task_kind,
-                interaction=interaction,
-            ):
-                return HitlCardPlan(
-                    choice_actions=(),
-                    mint_quality_review=mint_quality_review,
-                    reason="interaction_downgraded_informational",
-                    menu_shaped=menu_shaped,
-                    promoted_from=promoted_from,
-                    force_structural=False,
-                    required_choice=False,
-                    ignored_user_choice=ignored_user_choice,
-                )
+                promoted_from=promoted_from,
+                force_structural=False,
+                required_choice=False,
+                ignored_user_choice=ignored_user_choice,
+            )
+        # Structural exclusive menu we failed to lift — fail-closed (020).
+        if menu_shaped:
             return HitlCardPlan(
                 choice_actions=(),
                 mint_quality_review=False,
@@ -218,15 +319,16 @@ class HitlInteractionPolicy:
                 required_choice=True,
                 ignored_user_choice=ignored_user_choice,
             )
-
+        # Prose clarify / soft choice tag without options: keep required_choice so
+        # option synthesis can fill; Assembler must NOT mark this invalid.
         return HitlCardPlan(
-            choice_actions=choice_actions,
+            choice_actions=(),
             mint_quality_review=mint_quality_review,
-            reason=reason,
-            menu_shaped=menu_shaped,
+            reason="choice_options_missing",
+            menu_shaped=False,
             promoted_from=promoted_from,
-            force_structural=force_structural,
-            required_choice=required_choice,
+            force_structural=False,
+            required_choice=True,
             ignored_user_choice=ignored_user_choice,
         )
 
@@ -433,6 +535,31 @@ class HitlInteractionPolicy:
         labels, _source = cls._exclusive_option_labels_with_source(document)
         return labels
 
+    @staticmethod
+    def _is_icon_token(raw: object) -> TypeGuard[IconToken]:
+        """True when ``raw`` is a closed IconToken Literal (010)."""
+        return isinstance(raw, str) and raw in ICON_NAME_SET
+
+    @classmethod
+    def _coerce_icon_token(cls, raw: object) -> IconToken | None:
+        """Fail-closed: only closed IconToken Literals survive promotion (010)."""
+        if cls._is_icon_token(raw):
+            return raw
+        return None
+
+    @classmethod
+    def _pad_icons(
+        cls,
+        icons: Sequence[IconToken | None],
+        *,
+        count: int,
+    ) -> tuple[IconToken | None, ...]:
+        """Pad/truncate promoted icons to exactly ``count`` slots."""
+        _ = cls
+        if len(icons) >= count:
+            return tuple(icons[:count])
+        return (*icons, *((None,) * (count - len(icons))))
+
     @classmethod
     def _exclusive_option_icons(
         cls,
@@ -442,21 +569,19 @@ class HitlInteractionPolicy:
         count: int,
     ) -> tuple[IconToken | None, ...]:
         """Preserve row icons when promoting kv/callout menus into HITL actions."""
-        _ = cls
         if count <= 0:
             return ()
-        pad = tuple(None for _ in range(count))
         if source == "kv":
             kv_blocks = [block for block in document.blocks if isinstance(block, KeyValueBlock)]
             if len(kv_blocks) != 1:
-                return pad
-            icons = tuple(item.icon for item in kv_blocks[0].items[:count])
-            return icons + pad[len(icons) :]
+                return cls._pad_icons((), count=count)
+            icons: list[IconToken | None] = [cls._coerce_icon_token(item.icon) for item in kv_blocks[0].items[:count]]
+            return cls._pad_icons(icons, count=count)
         if source == "callouts":
             callouts = [block for block in document.blocks if isinstance(block, CalloutBlock)]
-            icons = tuple(block.icon for block in callouts[:count])
-            return icons + pad[len(icons) :]
-        return pad
+            icons = [cls._coerce_icon_token(block.icon) for block in callouts[:count]]
+            return cls._pad_icons(icons, count=count)
+        return cls._pad_icons((), count=count)
 
     @staticmethod
     def _choice_label_from_kv_item(item: KeyValueItem) -> str:
@@ -515,12 +640,12 @@ class HitlInteractionPolicy:
         # Formatter often emits exclusive topics as kv rows (short key + expanded value).
         # Static kv as the only selector violates 020 — promote to HITL cards.
         if len(kv_blocks) == 1 and not list_blocks and not step_blocks and cls._kv_looks_like_choice_menu(kv_blocks[0].items):
-            non_framing = [
+            non_kv_body = [
                 block
                 for block in document.blocks
                 if not isinstance(block, HeadingBlock | ParagraphBlock | DividerBlock | KeyValueBlock)
             ]
-            if not non_framing:
+            if not non_kv_body:
                 labels = tuple(
                     cls._choice_label_from_kv_item(item)
                     for item in kv_blocks[0].items
@@ -535,7 +660,7 @@ class HitlInteractionPolicy:
             for block in document.blocks
             if isinstance(block, CalloutBlock) and (block.title or block.body).strip()
         )
-        non_framing = [
+        non_callout_body = [
             block
             for block in document.blocks
             if not isinstance(block, HeadingBlock | ParagraphBlock | DividerBlock | CalloutBlock)
@@ -543,7 +668,7 @@ class HitlInteractionPolicy:
         if (
             len(callout_labels) >= cls._MIN_CHOICE_OPTIONS
             and len(callout_labels) <= cls._MAX_PROMOTED_OPTIONS
-            and not non_framing
+            and not non_callout_body
             and not list_blocks
             and not step_blocks
             and not kv_blocks

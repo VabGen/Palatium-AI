@@ -105,7 +105,9 @@ def _emit_assumption_mark_before_stream(task_input: FormatterInput) -> bool:
     prefix = UncertaintyPolicy.stream_prefix(task_input.uncertainty_disposition)
     if not prefix:
         return False
-    emit_structured_answer_delta(prefix.rstrip(), separator="")
+    # keep_whitespace: prefix ends with ``\n\n`` so the next chunk's ``##`` / list
+    # markers stay at column 0; default strip() would collapse that blank line.
+    emit_structured_answer_delta(prefix, separator="", keep_whitespace=True)
     return True
 
 

@@ -375,6 +375,34 @@ def test_answer_upload_clears_discrete_choice_about_prior_topic() -> None:
     assert effective.trust_prior_for_workers is False
 
 
+def test_answer_with_transformation_recovers_as_format() -> None:
+    """«красивое форматирование» must not re-run Researcher on the sticky file dump."""
+    dialog = _dialog_with_prior()
+    prior = "План\n• Завершение встречи (15:00–15:15)"
+    ctx = ContextualizerOutput(
+        rewritten_query="дай ответ в красивом форматировании",
+        continuation_kind="answer",
+        confidence=1.0,
+        refers_to_prior=True,
+        prior_assistant_excerpt=prior,
+        reasoning="format ask mislabeled as answer",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        confidence=0.9,
+        grounding="none",
+        transformation="restructure",
+        candidate_capabilities=("format",),
+        reasoning="layout transform of prior",
+    )
+    routing = ContinuityPolicy.resolve(contextualizer=ctx, dialog=dialog, raw_intent=raw)
+    assert routing.continuation_kind == "format"
+    assert routing.task_kind == "response_formatting"
+    assert routing.trust_prior_for_workers is True
+    assert routing.transformation == "restructure"
+
+
 def test_resolve_effective_user_text_keeps_raw_ask_on_upload() -> None:
     pinned = ContinuityPolicy.resolve_effective_user_text(
         raw_user_text="дай короткую сводку",
@@ -388,6 +416,44 @@ def test_resolve_effective_user_text_keeps_raw_ask_on_upload() -> None:
         has_turn_attachments=False,
     )
     assert follow == "Сводка причин роста цен на иван-чай"
+
+
+def test_resolve_effective_user_text_prefers_rewrite_for_hitl_envelope() -> None:
+    """Sticky fence must not pin the HITL machine envelope as the worker ask."""
+    from palatium_ai.domain.hitl.cards import HITLCardView, HITLOption
+    from palatium_ai.domain.hitl.choice_resume import ChoiceResumePolicy
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    card = HITLCardView(
+        card_id="card-1",
+        thread_id="thread-1",
+        task_id="task-1",
+        purpose="user_choice",
+        title="Pick",
+        options=(
+            HITLOption(
+                action_id="joke_work",
+                label="Работа и офис",
+                kind="custom",
+                style="primary",
+                action_token="tok",
+            ),
+        ),
+        risk_score=0.2,
+        status="pending",
+        created_at=now,
+        expires_at=now,
+    )
+    envelope = ChoiceResumePolicy.graph_user_text(ChoiceResumePolicy.selection_from_card(card, "joke_work"))
+    rewritten = "раскажи анекдот на тему\n[selected_option action_id=joke_work] Работа и офис"
+    assert (
+        ContinuityPolicy.resolve_effective_user_text(
+            raw_user_text=envelope,
+            rewritten_query=rewritten,
+            has_turn_attachments=True,
+        )
+        == rewritten
+    )
 
 
 def test_attachment_grounds_false_clarify_on_knowledge_request() -> None:
@@ -1057,6 +1123,64 @@ def test_rewrite_that_replaces_the_ask_is_pinned_back_to_the_user_turn() -> None
         user_text="покажи текст файла",
         rewritten="Кто является истцом в файле Кодекс корпоративной этики V2.0 ред 10.1?",
     )
+
+
+def test_spelling_fix_rewrite_preserves_continuity_ask() -> None:
+    """Single-edit typo («завут»→«зовут») must not demote answer→new_topic.
+
+    Regression: prefix-only match failed inside the 5-char window, Continuity
+    cleared prior, and Formatter painted ASSUMPTION_MARK on a dialog-grounded name.
+    """
+    raw = "как меня завут?"
+    rewritten = "Как меня зовут?"
+    assert ContinuityPolicy.rewrite_preserves_ask(user_text=raw, rewritten=rewritten)
+    ctx = ContextualizerOutput(
+        rewritten_query=rewritten,
+        continuation_kind="answer",
+        confidence=1.0,
+        refers_to_prior=True,
+        prior_assistant_excerpt="Привет, Геннадий!",
+        reasoning="name ask binds prior intro",
+        choice_slot_filled=False,
+    )
+    raw_intent = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        confidence=0.9,
+        grounding="optional",
+        reasoning="identity ask",
+    )
+    dialog = DialogTurnWindow(
+        thread_id="t-name-typo",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-name-typo",
+                role="user",
+                content="привет меня завут геннадий а тебя и раскажи о себе подробнее",
+                seq=0,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-name-typo",
+                role="assistant",
+                content="Привет, Геннадий!\nПривет! Я — Palatium AI.",
+                seq=1,
+                created_at=datetime.now(UTC),
+            ),
+        ),
+        limit=12,
+    )
+    routing = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=dialog,
+        raw_intent=raw_intent,
+        user_text=raw,
+    )
+    assert routing.continuation_kind == "answer"
+    assert routing.trust_prior_for_workers is True
+    assert routing.prior_context is not None
 
 
 def test_rewrite_enrichment_of_an_underspecified_ask_is_kept() -> None:

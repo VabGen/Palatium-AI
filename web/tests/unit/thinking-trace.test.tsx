@@ -5,9 +5,7 @@ import { ThinkingTrace } from '../../src/components/MessageChrome';
 
 describe('ThinkingTrace', () => {
   it('hides completed chrome when there is no detail to expand', () => {
-    const { container } = render(
-      <ThinkingTrace phaseLabel="Thinking" detail={null} complete />
-    );
+    const { container } = render(<ThinkingTrace phaseLabel="Thinking" detail={null} complete />);
     expect(container).toBeEmptyDOMElement();
   });
 

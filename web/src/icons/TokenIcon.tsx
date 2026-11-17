@@ -6,11 +6,7 @@ import dangerAnim from '../lottie/danger.json';
 import infoAnim from '../lottie/info.json';
 import successAnim from '../lottie/success.json';
 import warningAnim from '../lottie/warning.json';
-import {
-  GlyphInfo,
-  KIMI_TOKEN_GLYPHS,
-  type KimiGlyphProps,
-} from './kimiTokenGlyphs';
+import { GlyphInfo, KIMI_TOKEN_GLYPHS, type KimiGlyphProps } from './kimiTokenGlyphs';
 
 const TOKEN_MAP: Record<IconToken, ComponentType<KimiGlyphProps>> = KIMI_TOKEN_GLYPHS;
 

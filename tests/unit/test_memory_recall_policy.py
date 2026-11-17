@@ -6,10 +6,11 @@ from palatium_ai.domain.policies import MemoryRecallPolicy
 
 
 def test_social_recalls_preferences_only() -> None:
-    """Social turns personalise (name, tone) but never pull task facts."""
+    """Social turns personalise (name, tone) but never pull task facts or ask-pins."""
     decision = MemoryRecallPolicy.decide(task_kind="social_conversation", requires_mcp=False)
     assert decision.allowed is True
     assert decision.kinds == ("preference",)
+    assert decision.pin_kinds == ("preference",)
 
 
 def test_clarification_needed_still_recalls() -> None:
@@ -29,7 +30,45 @@ def test_capability_discovery_preference_only() -> None:
     decision = MemoryRecallPolicy.decide(task_kind="capability_discovery", requires_mcp=False)
     assert decision.allowed is True
     assert decision.kinds == ("preference",)
+    assert decision.pin_kinds == ("preference",)
     assert "preference" in decision.reason
+
+
+def test_new_topic_pin_hygiene_drops_stale_asks() -> None:
+    """Prior scratchpad asks must not ride a Continuity new_topic turn (RB-law leak class)."""
+    base = MemoryRecallPolicy.decide(task_kind="knowledge_request", requires_mcp=True)
+    assert base.pin_kinds is None
+    narrowed = MemoryRecallPolicy.apply_pin_hygiene(
+        base,
+        continuation_kind="new_topic",
+        trust_prior_for_workers=False,
+    )
+    assert narrowed.pin_kinds == ("preference",)
+    assert "new_topic" in narrowed.reason
+
+
+def test_turn_attachments_pin_hygiene_independent_of_continuation() -> None:
+    """A fresh upload fence is its own task — pinned prior asks are not standing orders."""
+    base = MemoryRecallPolicy.decide(task_kind="knowledge_request", requires_mcp=True)
+    narrowed = MemoryRecallPolicy.apply_pin_hygiene(
+        base,
+        continuation_kind="answer",
+        trust_prior_for_workers=True,
+        has_turn_attachments=True,
+    )
+    assert narrowed.pin_kinds == ("preference",)
+    assert "turn_attachments" in narrowed.reason
+
+
+def test_trusted_answer_keeps_pins_without_attachments() -> None:
+    base = MemoryRecallPolicy.decide(task_kind="knowledge_request", requires_mcp=False)
+    kept = MemoryRecallPolicy.apply_pin_hygiene(
+        base,
+        continuation_kind="answer",
+        trust_prior_for_workers=True,
+        has_turn_attachments=False,
+    )
+    assert kept.pin_kinds is None
 
 
 def test_recall_knowledge() -> None:

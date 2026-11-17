@@ -23,7 +23,7 @@ from palatium_ai.application.agents.formatter.prompts import (
 from palatium_ai.core.context.tokens import count_tokens
 from palatium_ai.domain.agents.context_packet import ContextPacket
 from palatium_ai.domain.agents.formatter import FormatterInput
-from palatium_ai.domain.content import ContentDocument, StepsBlock, TableBlock
+from palatium_ai.domain.content import ContentDocument, KeyValueBlock, StepsBlock, TableBlock
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
 
 #: Prompt-size ceilings in ``count_tokens`` estimates (~4 chars/token): schema path
@@ -153,6 +153,23 @@ def test_document_analysis_schema_example_is_dense() -> None:
     assert by_text.get("Рекомендации") == "check"
     lists = [block for block in document.blocks if block.type == "list"]
     assert all(item.icon is None for block in lists for item in block.items)
+
+
+def test_prompts_pin_kv_label_value_orientation() -> None:
+    """Structure maps must not teach content|part (screenshot: Суд…|Шапка)."""
+    for prompt in (FORMATTER_SYSTEM_PROMPT, FORMATTER_SCHEMA_PROMPT):
+        assert "Never invert" in prompt
+        assert "part|content" in prompt or "Часть | Содержание" in prompt
+
+
+def test_document_analysis_kv_example_keeps_short_labels() -> None:
+    """Few-shot kv rows: label is the short key, value carries the content."""
+    document = _document("document_analysis")
+    kvs = [block for block in document.blocks if isinstance(block, KeyValueBlock)]
+    assert kvs
+    for block in kvs:
+        for item in block.items:
+            assert len(item.label) <= len(item.value) or len(item.label) <= 40
 
 
 @pytest.mark.parametrize("label", [label for label, _ in MARKDOWN_SHAPE_EXAMPLES])

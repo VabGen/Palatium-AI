@@ -60,7 +60,11 @@ export function HistoryEmptySearchArt(props: SVGProps<SVGSVGElement>) {
         d="M95.045 34.402c0 3.116-.533 6.11-1.516 8.892a19.3 19.3 0 0 0-8.703-2.06c-10.697 0-19.367 8.67-19.367 19.36 0 .156 0 .306.005.462-13.496-1.389-24.02-12.791-24.02-26.654 0-14.802 11.996-26.804 26.798-26.804 14.8 0 26.803 12.002 26.803 26.804Z"
       />
       <path stroke="currentColor" strokeMiterlimit={10} d="M52.111 18.784s4.482-5.404 12.33-6.72" />
-      <path stroke="currentColor" strokeMiterlimit={10} d="M50.241 20.473s-1.85 2.155-3.005 5.326" />
+      <path
+        stroke="currentColor"
+        strokeMiterlimit={10}
+        d="M50.241 20.473s-1.85 2.155-3.005 5.326"
+      />
       <path
         stroke="currentColor"
         strokeMiterlimit={10}

@@ -175,20 +175,20 @@ class PresentationIconPolicy:
             case ParagraphBlock() if block.icon is not None:
                 return block.model_copy(update={"icon": None})
             case ListBlock():
-                items = tuple(cls._prune_list_item(item) for item in block.items)
-                if items == block.items:
+                list_items = tuple(cls._prune_list_item(item) for item in block.items)
+                if list_items == block.items:
                     return block
-                return block.model_copy(update={"items": items})
+                return block.model_copy(update={"items": list_items})
             case KeyValueBlock():
-                items = tuple(cls._prune_kv_item(item) for item in block.items)
-                if items == block.items:
+                kv_items = tuple(cls._prune_kv_item(item) for item in block.items)
+                if kv_items == block.items:
                     return block
-                return block.model_copy(update={"items": items})
+                return block.model_copy(update={"items": kv_items})
             case StepsBlock():
-                items = tuple(cls._prune_step_item(item) for item in block.items)
-                if items == block.items:
+                step_items = tuple(cls._prune_step_item(item) for item in block.items)
+                if step_items == block.items:
                     return block
-                return block.model_copy(update={"items": items})
+                return block.model_copy(update={"items": step_items})
             case _:
                 return block
 

@@ -75,6 +75,11 @@ class InteractionAssembler:
             )
             return AssembledInteraction(document=clean, plan=plan)
 
+        # Soft clarify without mintable options yet — keep framing; synthesis may fill.
+        # Do not strip actions here: attach may still promote document.actions.
+        if plan.reason == "choice_options_missing":
+            return AssembledInteraction(document=document, plan=plan)
+
         if plan.choice_actions:
             framed = HitlInteractionPolicy.document_with_choice_framing(
                 document,

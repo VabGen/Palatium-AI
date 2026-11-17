@@ -36,12 +36,30 @@ def test_uncertainty_disposition_matches_fixture(case: dict[str, object]) -> Non
     )
 
 
-def test_uncertainty_manifest_covers_four_dispositions_with_floor() -> None:
+def test_uncertainty_manifest_covers_five_dispositions_with_floor() -> None:
     counts = Counter(str(c["expected_disposition"]) for c in _cases())
-    expected = {"clarification", "default_with_mark", "honest_refusal", "unknown"}
+    expected = {"clarification", "default_with_mark", "honest_refusal", "proceed", "unknown"}
     assert set(counts) == expected
     for disposition, count in counts.items():
         assert count >= _MIN_PER_DISPOSITION, f"{disposition}: need ≥{_MIN_PER_DISPOSITION} fixtures (happy+edge), got {count}"
+
+
+def test_prior_grounds_skips_assumption_mark() -> None:
+    """Dialog-grounded identity ask must not paint ASSUMPTION_MARK (055 class)."""
+    decision = UncertaintyPolicy.decide(
+        UncertaintySignals(
+            task_kind="knowledge_request",
+            confidence=0.9,
+            grounding="optional",
+            has_prior_dialog=True,
+            prior_grounds_answer=True,
+            retrieval_empty=True,
+        )
+    )
+    assert decision.disposition == "proceed"
+    assert decision.reason == "prior_dialog_grounds"
+    assert not UncertaintyPolicy.requires_assumption_mark(decision.disposition)
+    assert UncertaintyPolicy.stream_prefix(decision.disposition) is None
 
 
 def test_dispositions_are_mutually_exclusive_on_out_of_scope() -> None:
@@ -80,7 +98,7 @@ def test_assumption_mark_survives_minimal_verbosity_budget() -> None:
         disposition="default_with_mark",
         verbosity_budget="minimal",
     )
-    body = f"{ASSUMPTION_MARK} нет хитов в базе; ответ по общим правилам."
+    body = f"{ASSUMPTION_MARK}\n\nнет хитов в базе; ответ по общим правилам."
     assert UncertaintyPolicy.assumption_mark_preserved(body, disposition="default_with_mark")
     trimmed = "нет хитов в базе; ответ по общим правилам."
     assert not UncertaintyPolicy.assumption_mark_preserved(trimmed, disposition="default_with_mark")
@@ -89,9 +107,18 @@ def test_assumption_mark_survives_minimal_verbosity_budget() -> None:
 
 def test_stream_prefix_before_first_chunk() -> None:
     """Mark must be available as a pre-stream prefix (not post-hoc on final body)."""
-    assert UncertaintyPolicy.stream_prefix("default_with_mark") == f"{ASSUMPTION_MARK} "
+    assert UncertaintyPolicy.stream_prefix("default_with_mark") == f"{ASSUMPTION_MARK}\n\n"
     assert UncertaintyPolicy.stream_prefix("honest_refusal") is None
     assert UncertaintyPolicy.stream_prefix(None) is None
+
+
+def test_ensure_assumption_mark_keeps_atx_heading_at_column_zero() -> None:
+    """Same-line glue leaves ``##`` literal; blank line preserves CommonMark ATX."""
+    body = "## Тезисный анализ Договора № 15/2026\n\nКлючевые риски."
+    marked = UncertaintyPolicy.ensure_assumption_mark(body, disposition="default_with_mark")
+    assert marked.startswith(f"{ASSUMPTION_MARK}\n\n")
+    assert "\n\n## Тезисный анализ" in marked
+    assert f"{ASSUMPTION_MARK} ##" not in marked
 
 
 def test_resolve_for_downstream_is_idempotent() -> None:

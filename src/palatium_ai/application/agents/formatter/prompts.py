@@ -177,10 +177,12 @@ _STRUCTURED_BLOCKS_RULE = """
   bold label and a colon — the UI turns these into a borderless label/value panel:
   - **Срок:** 10 рабочих дней
   Prefer this over plain paragraphs for fields like purpose, party, deadline, budget.
+  Orientation (hard): bold label = short key; after `:` = content. Never invert.
+  Outline maps: `- **Шапка:** суд и стороны` or `| Часть | Содержание |` table.
 - Nested lists: indent sub-points 2+ spaces (UI level); root uses `-`, nested reads as en-dash.
 - Steps: 2+ consecutive numbered items with bold title + body (one continuous list):
   1. **Подготовка:** собрать документы
-- Table: a GFM pipe table with a header separator row.
+- Table: a GFM pipe table with a header separator row; column 0 = attribute/part name.
 Use structured blocks whenever the content is comparison, process, or fielded metadata —
 never dump fielded facts as a wall of paragraphs.
 """
@@ -248,7 +250,10 @@ Write the user-facing answer: clean GitHub Flavored Markdown.
   "[attachment extraction truncated]" — once, factually.
 - content_generation → preserve line breaks, no callouts
 - document_generation → letter structure (# Title, ## Body, signature)
-- social_reply → 1-2 short paragraphs, no widgets; do not echo user_text
+- social_reply → 1-2 short paragraphs, no widgets. Compose a reply (final_text is
+  empty): greet; if THIS turn's user_text states the user's name / intro, address
+  them by that name once; answer who you are from WHO YOU ARE only. Never parrot
+  the full user_text; never claim a user-owned name as your own.
 - choice / confirm from format_hints → short framing + the matching HITL tag(s)
 
 ## RESPONSE SHAPE (input field response_shape; overrides style_hint structure)
@@ -260,7 +265,8 @@ Write the user-facing answer: clean GitHub Flavored Markdown.
   sentence for the takeaway. A comparison is always a table: bullets carry
   recommendations, not compared attributes.
 - document_analysis → ≥2 `##` sections each with a distinct `<icon name="…"/>`;
-  passport / terms / deadlines as key-value bold-label bullets (not prose);
+  passport / terms / deadlines as key-value bold-label bullets (short key left of
+  `:`); part→content as oriented kv or `| Часть | Содержание |` (never content|part);
   catalogues / compositions as unordered bullets (`- **Title** body`), never
   numbered process steps; requirements as nested lists; risks as `> [!WARNING]`;
   advice (when supported) closes with `<icon name="check"/>` heading + checklist
@@ -358,6 +364,10 @@ Keep real line breaks inside `content` (encode as JSON `\\n`) — indentation an
 structure stay human-readable. Never minify Python/HTML/JS into a single scrolling
 line. Section headings above a code fence use icon `document` (not `chart`).
 
+### kv.items / table columns (orientation)
+- `label` = short key / part name; `value` = content. Never invert. Outline maps:
+  same rule, or `table` headers part|content (attribute in column 0).
+
 ### list.style / steps
 - Process / plan in order → one `steps` block (title+body). `status` only for real
   progress (omit otherwise). Parallel points, catalogues, compositions,
@@ -398,7 +408,9 @@ line. Section headings above a code fence use icon `document` (not `chart`).
 - plain_text → ParagraphBlock(s) as-is, no headings/icons/sections.
 - content_generation → preserve shape (paragraphs), no forced structure.
 - document_generation → letter structure (title + body).
-- social_reply → 1-2 short ParagraphBlocks.
+- social_reply → 1-2 short ParagraphBlocks. Acknowledge a name/intro from THIS
+  turn's user_text once; answer who you are from WHO YOU ARE only; never parrot
+  the full ask; never claim a user-owned name as your own.
 - choice / confirm from format_hints → short framing blocks + `actions` entries
   (clickable ActionSpec, never a text menu).
 
@@ -410,11 +422,13 @@ line. Section headings above a code fence use icon `document` (not `chart`).
   `paragraph` for the takeaway. A comparison is always a table: `list` blocks carry
   recommendations, not compared attributes.
 - document_analysis → ≥2 `heading` sections each with a distinct semantic `icon`;
-  passport / terms / deadlines as `kv`; catalogues / compositions as unordered
-  `list` with `emphasis` (never `steps`); requirements as nested `list` (`level`);
-  risks as `callout` (warning/danger); advice (when supported) closes with
-  `heading`(`icon`=`check`) + unordered checklist (`icon`=`check` on items) —
-  never one paragraph dump and never number-badge chrome for inventories.
+  passport / terms / deadlines as `kv` (short `label`, content `value`); part→content
+  maps as oriented `kv` or `table` part|content (never content|part); catalogues /
+  compositions as unordered `list` with `emphasis` (never `steps`); requirements as
+  nested `list` (`level`); risks as `callout` (warning/danger); advice (when
+  supported) closes with `heading`(`icon`=`check`) + unordered checklist
+  (`icon`=`check` on items) — never one paragraph dump and never number-badge
+  chrome for inventories.
 - inventory → ONE unordered `list` (≥2 items); never `steps`, never sibling
   `paragraph` dumps that should have been bullets.
 - plan → one `steps` block (≥2 items); never ordered `list` / plain paragraphs.

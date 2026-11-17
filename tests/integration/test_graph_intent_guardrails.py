@@ -147,11 +147,11 @@ async def test_graph_process_full_pipeline_fake_llm() -> None:
 @pytest.mark.integration()
 @pytest.mark.asyncio()
 async def test_graph_social_phatic_skips_researcher() -> None:
-    """Social greeting: skip Researcher; Critic + Formatter LLM (2026 format_only).
+    """Social greeting: skip Researcher; Critic passthrough; Formatter LLM.
 
     Canned ack_only templates are eval/cassette-only (execution_planner, ack_reply).
-    Live social goes through Critic quality gate then Formatter — not the P0.1
-    Intent→ack short-circuit.
+    Live social uses format_only + CriticPolicy.social_phatic_passthrough (no
+    quality HITL on greetings) then Formatter — not the P0.1 Intent→ack short-circuit.
     """
     intent_json = (
         '{"task_kind": "social_conversation", "requires_mcp": false, '
@@ -191,7 +191,7 @@ async def test_graph_social_phatic_skips_researcher() -> None:
     assert result.output is not None
     assert result.output.title == "Hello!"
     assert len(unused_researcher.calls) == 0
-    assert len(critic_llm.calls) == 1
+    assert len(critic_llm.calls) == 0
     assert len(formatter_llm.calls) >= 1
     assert len(llm.calls) == 1
 

@@ -43,6 +43,10 @@ PRESERVING_STYLE_HINTS: frozenset[str] = frozenset(
 _TRUNCATION_MARKERS = (
     "[attachment extraction truncated]",
     "[attachment body truncated]",
+    "[attachment context truncated",
+    "[file text truncated",
+    "[worker truncated",
+    "[mcp truncated",
 )
 _TRAILING_ELLIPSIS = re.compile(r"[…]\s*$")
 
@@ -75,9 +79,15 @@ def render_worker_document(
     worker_confidence: float | None,
 ) -> WorkerRenderDecision:
     """Render the worker draft without an LLM, or name why the LLM path must own it."""
-    source = (task_input.worker_summary or "").strip()
+    from palatium_ai.domain.policies.worker_prose import WorkerProsePolicy
+
+    source = WorkerProsePolicy.user_visible(task_input.worker_summary or "").strip()
     if not source:
         return WorkerRenderDecision(document=None, reason="empty_source")
+    # Structured wire format is not GFM — fall back to Formatter LLM rather than
+    # painting JSON braces as paragraphs (JSON-bleed class, 055).
+    if source.lstrip().startswith("{") and '"summary"' in source[:200].lower():
+        return WorkerRenderDecision(document=None, reason="composition_required")
     if worker_confidence is None or worker_confidence < MIN_PIPELINE_CONFIDENCE:
         return WorkerRenderDecision(document=None, reason="low_confidence")
     style_hint: FormatterStyleHint = resolve_style_hint(task_input)
