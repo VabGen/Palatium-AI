@@ -82,7 +82,7 @@ def test_parse_ignores_an_invented_axis_value() -> None:
 
 
 def test_continuity_forces_a_worker_owned_knowledge_request_for_a_thread_file() -> None:
-    """Explicit singular scope keeps Intent's storage axis (not bare auto)."""
+    """Explicit singular scope + doc-role cue keeps Intent's storage axis (not bare auto)."""
     effective = ContinuityPolicy.resolve(
         contextualizer=None,
         dialog=_dialog(with_attachment=True),
@@ -91,6 +91,7 @@ def test_continuity_forces_a_worker_owned_knowledge_request_for_a_thread_file() 
             attachment_scope="single",
             task_kind="response_formatting",
         ),
+        user_text="перечитай документ ещё раз",
     )
 
     assert effective.file_reference == "thread_file"
@@ -120,6 +121,7 @@ def test_axis_survives_a_low_risk_route_snapshot() -> None:
             attachment_scope="all",
             task_kind="knowledge_request",
         ),
+        user_text="сравни оба файла",
     )
 
     assert effective.file_reference == "thread_file"

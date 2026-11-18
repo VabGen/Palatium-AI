@@ -78,7 +78,10 @@ def test_user_text_reaches_the_model_inside_the_data_envelope() -> None:
     message = build_formatter_user_message(payload)
 
     body = _envelope_body(message)
-    assert body["final_text"] == "Сравни два договора"
+    # No worker draft: the stimulus is the ask, never presented as the answer body
+    # (``final_text`` stays empty so the composer writes instead of echoing — 055).
+    assert body["user_text"] == "Сравни два договора"
+    assert body["final_text"] == ""
     assert "Сравни два договора" not in FORMATTER_SCHEMA_PROMPT
 
 

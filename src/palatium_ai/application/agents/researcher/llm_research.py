@@ -10,11 +10,16 @@ from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from palatium_ai.application.agents.researcher.config import (
+    SUMMARY_MAX_CHARS,
     researcher_completion_budget,
     researcher_llm_config,
 )
 from palatium_ai.application.agents.researcher.outcomes import failure_output
-from palatium_ai.application.agents.researcher.parsing import parse_researcher_output
+from palatium_ai.application.agents.researcher.parsing import (
+    parse_researcher_output,
+    score_mcp_tool_confidence,
+    unwrap_read_attachment_text,
+)
 from palatium_ai.application.agents.researcher.prompts import (
     RESEARCHER_SYSTEM_PROMPT,
     RESEARCHER_UNGROUNDED_SYSTEM_NOTE,
@@ -25,8 +30,11 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentOutput
 from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutput
+from palatium_ai.domain.content.page_markers import strip_page_markers
 from palatium_ai.domain.llm.models import DocumentPart, ImagePart
+from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
+from palatium_ai.domain.policies.researcher_observation import ResearcherObservationPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.application.tools.executor import ToolExecutor
@@ -54,6 +62,9 @@ async def run_llm_research(
     document_parts: tuple[DocumentPart, ...] = (),
     project_agents_md: str = "",
 ) -> AgentOutput:
+    sealed = _try_seal_attachment_fence(task_input, task_id=task_id, confidence_threshold=config.confidence_threshold)
+    if sealed is not None:
+        return sealed
     skill_references = await hydrate_skill_references(
         catalog_text=skill_catalog,
         user_text=task_input.context_packet.user_text,
@@ -127,6 +138,7 @@ async def run_llm_research(
             error="LLM stage failed in researcher agent",
         )
 
+    fence_excerpt = _fence_excerpt(task_input)
     if grounding_degraded:
         output = ResearcherOutput(
             summary=output.summary,
@@ -135,9 +147,14 @@ async def run_llm_research(
             grounding_satisfied=False,
             grounding_degraded=True,
             cannot_answer_without_source=False,
+            evidence_excerpt=fence_excerpt,
         )
         # ``grounding`` is a validated Literal (never empty), so it is passed as-is.
         agent_metrics.record_grounding_degraded(task_input.context_packet.grounding)
+    elif fence_excerpt:
+        # Synthesis over the uploaded fence: quotes of requisites/PII inside it are
+        # citations, not leaks — Critic gets the same body as an allowed source (020).
+        output = output.model_copy(update={"evidence_excerpt": fence_excerpt})
 
     requires_review = output.confidence < config.confidence_threshold
     status: Literal["success", "failure", "partial"] = "partial" if requires_review else "success"
@@ -150,3 +167,64 @@ async def run_llm_research(
         confidence=output.confidence,
         output=output,
     )
+
+
+def _try_seal_attachment_fence(
+    task_input: ResearcherInput,
+    *,
+    task_id: UUID,
+    confidence_threshold: float,
+) -> AgentOutput | None:
+    """Deterministic OCR seal for this-turn fences (same SoT as MCP read_attachment).
+
+    Capability ∩ response_shape — not phrase lists in the prompt (055). Analysis
+    shapes never seal even when verbatim was mistagged.
+    """
+    if not FileReferencePolicy.seals_thread_file_body(
+        candidate_capabilities=task_input.context_packet.candidate_capabilities,
+        response_shape=task_input.context_packet.response_shape,
+    ):
+        return None
+    fence = (task_input.context_packet.untrusted_context or "").strip()
+    if not fence:
+        return None
+    # A truncated / empty-OCR fence is not a deliverable: the observation path must
+    # re-read from storage instead of sealing a partial body (065).
+    if ResearcherObservationPolicy.evidence_incomplete(fence):
+        return None
+    body = strip_page_markers(unwrap_read_attachment_text(fence)).strip()
+    if not body:
+        return None
+    if len(body) > SUMMARY_MAX_CHARS:
+        body = body[:SUMMARY_MAX_CHARS].rstrip() + "…"
+    scored = score_mcp_tool_confidence(is_error=False, summary_chars=len(body))
+    confidence = max(confidence_threshold, scored)
+    output = ResearcherOutput(
+        summary=body,
+        confidence=confidence,
+        sources_used=("attachment:fence",),
+        grounding_satisfied=True,
+        evidence_excerpt=body,
+    )
+    agent_metrics.record_grounding_satisfied()
+    status: Literal["success", "failure", "partial"] = "partial" if confidence < confidence_threshold else "success"
+    logger.info(
+        "researcher.seal_attachment_fence",
+        task_id=str(task_id),
+        body_chars=len(body),
+    )
+    return AgentOutput(task_id=task_id, status=status, confidence=confidence, output=output)
+
+
+def _fence_excerpt(task_input: ResearcherInput) -> str:
+    """This turn's uploaded fence as evidence for constitution PII checks (020).
+
+    Bounded by ``EVIDENCE_EXCERPT_MAX_CHARS`` so a long contract still counts as a
+    legitimate source without unbounded state (065).
+    """
+    from palatium_ai.domain.agents.researcher import EVIDENCE_EXCERPT_MAX_CHARS
+
+    fence = (task_input.context_packet.untrusted_context or "").strip()
+    if not fence:
+        return ""
+    return fence[:EVIDENCE_EXCERPT_MAX_CHARS]

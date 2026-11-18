@@ -27,6 +27,10 @@ class CriticInput(BaseModel):
     classification_reasoning: str = Field(min_length=1)
     worker_summary: str | None = None
     selected_strategy: ExecutionStrategy = "reason_only"
+    #: Worker evidence bodies this turn (MCP read_attachment / fenced upload). A PII
+    #: value quoted from evidence is a legitimate citation, not an invented leak —
+    #: without it, summarizing a contract with a phone number forces a revision loop.
+    evidence_excerpts: tuple[str, ...] = ()
     continuation_kind: str | None = None
     user_input_chars: int = Field(default=0, ge=0)
     worker_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -34,6 +38,9 @@ class CriticInput(BaseModel):
     #: constitution checks and judge evidence — without them, a name recall looks
     #: like an invented leak (055).
     memory_hints: tuple[str, ...] = ()
+    #: Continuity prior / last assistant excerpt — reflection loop needs the source
+    #: ask context, not only ``worker_summary`` (Context Circulation 2026).
+    prior_context: str | None = Field(default=None, max_length=8_000)
     #: §4 resolved disposition. Justified ``honest_refusal`` is policy success
     #: (Critic passthrough); bare refusal without a trigger invokes the judge.
     uncertainty_disposition: ResolvedUncertaintyDisposition | None = None

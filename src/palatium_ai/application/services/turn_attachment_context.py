@@ -14,6 +14,7 @@ from palatium_ai.domain.attachments.context import AttachmentTurnContext
 
 RehydrateFn = Callable[[Sequence[UUID]], Awaitable[str]]
 ClearPendingFn = Callable[[], Awaitable[None]]
+NamesThreadFileFn = Callable[[str], Awaitable[bool]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,11 +24,16 @@ class TurnAttachmentContext:
     ``primed`` is the context the turn entry already built. Rehydrating exactly those
     ids must reuse it: a second read of the same rows and blobs inside one turn buys
     nothing and showed up in the logs as a duplicated ``build_turn_context`` call (P5).
+
+    ``names_thread_file`` re-probes the attachment registry against an ask string —
+    used after Contextualizer rewrite / HITL choice resume so ``thread_file_named``
+    is not stuck on the raw envelope that never contained a filename (055).
     """
 
     rehydrate: RehydrateFn | None = None
     clear_pending: ClearPendingFn | None = None
     primed: AttachmentTurnContext | None = None
+    names_thread_file: NamesThreadFileFn | None = None
 
 
 _current: ContextVar[TurnAttachmentContext | None] = ContextVar(

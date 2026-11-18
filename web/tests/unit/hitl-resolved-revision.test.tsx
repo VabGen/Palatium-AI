@@ -164,7 +164,7 @@ describe('HitlCards resolved event', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Договор_2\.docx/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /Договор_2\.docx/ }));
     expect(await screen.findByText('Выбираем…')).toBeTruthy();
     expect(screen.queryByText('Сохраняем…')).toBeNull();
 

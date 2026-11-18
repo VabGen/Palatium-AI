@@ -261,6 +261,8 @@ def critic_to_agent_input(
             "user_input_chars": str(task_input.user_input_chars),
             "worker_confidence": ("" if task_input.worker_confidence is None else str(task_input.worker_confidence)),
             "memory_hints_json": json.dumps(list(task_input.memory_hints), ensure_ascii=False),
+            "evidence_excerpts_json": json.dumps(list(task_input.evidence_excerpts), ensure_ascii=False),
+            "prior_context": task_input.prior_context or "",
             "_task_id": task_input.task_id,
             "_thread_id": thread_id,
         },

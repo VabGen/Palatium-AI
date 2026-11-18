@@ -63,14 +63,17 @@ from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.agents.user_choice_intent import UserChoiceIntentPolicy
 from palatium_ai.domain.memory.budget import DEFAULT_PROMPT_BUDGET
 from palatium_ai.domain.policies.clarification import CLARIFY_MIN_CONFIDENCE, ClarificationGatePolicy
+from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.transform import TransformPolicy
 from palatium_ai.domain.policies.types import (
+    ATTACHMENT_FOCUS_DEFAULT,
     ATTACHMENT_SCOPE_DEFAULT,
     FILE_REFERENCE_DEFAULT,
     GROUNDING_DEFAULT,
     RESPONSE_SHAPE_DEFAULT,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
     TRANSFORMATION_DEFAULT,
+    AttachmentFocus,
     AttachmentScope,
     ContinuationKind,
     FileReferenceKind,
@@ -555,15 +558,18 @@ class ContinuityPolicy:
         holds (resolved in code, not by the model). Intent's ``file_reference`` is
         history-blind and advisory: Continuity promotes storage re-read only on
         code evidence (named) or on Intent's *explicit* plurality axis
-        (``attachment_scope`` ∈ {single, all}). Bare ``thread_file``+``auto`` is
-        demoted so dialog prior answers instead of a multi-file interrupt (055).
-        A fenced upload turn still owns its own file (``has_turn_attachments``).
+        (``attachment_scope`` ∈ {single, all}) **and** a structural file-identity
+        engagement in the ask (doc-role / name-pointer). Bare ``thread_file``+``auto``
+        and Intent-only ``single``/``all`` over chat-text paste are demoted so dialog
+        prior answers instead of a multi-file interrupt (055). A fenced upload turn
+        still owns its own file (``has_turn_attachments``).
         """
         snap = _ResolveSnapshot.from_inputs(contextualizer=contextualizer, raw_intent=raw_intent)
         cls._apply_file_reference_axis(
             snap,
             thread_file_named=thread_file_named,
             has_turn_attachments=has_turn_attachments,
+            user_text=user_text,
         )
         assistant_prior = cls._assistant_prior_after_rewrite_gate(
             snap,
@@ -621,8 +627,9 @@ class ContinuityPolicy:
         *,
         thread_file_named: bool,
         has_turn_attachments: bool,
+        user_text: str | None = None,
     ) -> None:
-        """Promote named thread files; demote Intent-only ``thread_file``+``auto``."""
+        """Promote named thread files; demote Intent-only storage re-reads without evidence."""
         if thread_file_named:
             snap.file_reference = "thread_file"
             if snap.kind == "clarify":
@@ -630,13 +637,23 @@ class ContinuityPolicy:
                 # a clarification turn would never dispatch the storage read (055).
                 snap.kind = "answer"
             return
-        if (
-            snap.file_reference == "thread_file"
-            and not has_turn_attachments
-            and snap.attachment_scope not in _EXPLICIT_FILE_SCOPES
-        ):
+        if snap.file_reference != "thread_file" or has_turn_attachments:
+            return
+        # Intent said the ask is *not* about uploads — never keep a storage re-read
+        # from a bare LLM guess (paste-text analysis with prior dialog files, 055).
+        if snap.attachment_focus == "none":
+            snap.file_reference = FILE_REFERENCE_DEFAULT
+            return
+        if snap.attachment_scope not in _EXPLICIT_FILE_SCOPES:
             # Evidence-first file axis: Intent alone + auto scope cannot force a
             # storage re-read / file-choice card (living assistant — dialog first).
+            snap.file_reference = FILE_REFERENCE_DEFAULT
+            return
+        # Explicit singular/all without a named file still needs a structural
+        # file-identity cue («документ» / «файл» / «название»). Otherwise a
+        # history-blind Intent ``single`` over pasted chat text (or a correction
+        # that merely *mentions* «договор») re-mints the same choice card (055).
+        if not FileReferencePolicy.ask_engages_file_identity(user_text or ""):
             snap.file_reference = FILE_REFERENCE_DEFAULT
 
     @classmethod
@@ -673,7 +690,15 @@ class ContinuityPolicy:
         has_turn_attachments: bool,
         user_text: str | None,
     ) -> EffectiveRoutingIntent:
-        """Clarify / Intent fallback when format and answer continuity did not own the turn."""
+        """Clarify / Intent fallback when format and answer continuity did not own the turn.
+
+        ``prior_context`` stays on the intent — it is dialog text, not worker evidence:
+        Critic/Formatter read it for context circulation, while workers go through
+        ``resolved_worker_prior_assistant_content``, which honours
+        ``trust_prior_for_workers=False``. The trust axis, not the excerpt's presence,
+        is what stopped Researcher answering a self-contained paste against a stale
+        file refusal (055).
+        """
         gate_prior = bool(assistant_prior and assistant_prior.strip()) or bool(dialog is not None and dialog.turns)
         gate_user = (user_text or "").strip()
         if snap.kind == "clarify":
@@ -698,6 +723,20 @@ class ContinuityPolicy:
                 has_attachment_context=has_turn_attachments,
                 user_text=gate_user,
             )
+        # Optional retrieval against an empty corpus after a long file dialog
+        # degrades into «нет данных в материалах» over a paste-in-ask. required
+        # stays required (retrieve-or-refuse). none stays none.
+        # Only demote for substantive self-contained payloads (paste-in-ask).
+        # Short asks and named thread-file re-reads must keep Intent grounding so
+        # ExecutionPlanner can still file_reread / degrade instead of silent none.
+        grounding = snap.grounding
+        grounding_reason = snap.grounding_reason
+        if grounding == "optional" and snap.file_reference != "thread_file" and len(gate_user) >= SUBSTANTIVE_USER_PAYLOAD_CHARS:
+            grounding = "none"
+            grounding_reason = (
+                f"{(grounding_reason or '').rstrip()}; "
+                "continuity→none (self-contained; user text / parametric knowledge is evidence)"
+            )[:500]
         return cls._finalize(
             task_kind=snap.raw_task,
             requires_mcp=snap.requires_mcp,
@@ -709,8 +748,8 @@ class ContinuityPolicy:
             trust_prior_for_workers=False,
             reasoning=f"continuity={snap.kind}; trust intent: {snap.intent_reasoning}",
             confidence=snap.confidence,
-            grounding=snap.grounding,
-            grounding_reason=snap.grounding_reason,
+            grounding=grounding,
+            grounding_reason=grounding_reason,
             transformation=snap.transformation,
             response_shape=snap.response_shape,
             file_reference=snap.file_reference,
@@ -763,6 +802,24 @@ class ContinuityPolicy:
         ):
             snap.kind = "format"
             return "recovered format from transformation axis"
+        # Short follow-up after a substantive turn: Contextualizer often marks
+        # answer+!refers (history-blind). Leaving trust=False cleared prior and,
+        # with grounding=required, empty search_knowledge replaced a correct
+        # stream with «нет данных…» while the shelf still held the files (055).
+        # Long self-contained pastes stay independent (SUBSTANTIVE threshold).
+        # Named / file-identity asks keep !refers so storage re-read owns the turn.
+        if (
+            snap.kind == "answer"
+            and not snap.refers_to_prior
+            and not snap.choice_slot_filled
+            and snap.file_reference != "thread_file"
+            and user_text is not None
+            and 0 < len(user_text.strip()) < SUBSTANTIVE_USER_PAYLOAD_CHARS
+            and bool((assistant_prior or "").strip())
+            and not FileReferencePolicy.ask_engages_file_identity(user_text)
+        ):
+            snap.refers_to_prior = True
+            return "recovered short follow-up over prior"
         return None
 
     @staticmethod
@@ -961,6 +1018,7 @@ class _ResolveSnapshot:
     response_shape: ResponseShape
     file_reference: FileReferenceKind
     attachment_scope: AttachmentScope
+    attachment_focus: AttachmentFocus
     intent_reasoning: str
     confidence: float
     choice_slot_filled: bool
@@ -989,6 +1047,7 @@ class _ResolveSnapshot:
             response_shape=(raw_intent.response_shape if raw_intent is not None else RESPONSE_SHAPE_DEFAULT),
             file_reference=raw_intent.file_reference if raw_intent is not None else FILE_REFERENCE_DEFAULT,
             attachment_scope=(raw_intent.attachment_scope if raw_intent is not None else ATTACHMENT_SCOPE_DEFAULT),
+            attachment_focus=(raw_intent.attachment_focus if raw_intent is not None else ATTACHMENT_FOCUS_DEFAULT),
             intent_reasoning=raw_intent.reasoning if raw_intent is not None else "no intent",
             confidence=float(raw_intent.confidence) if raw_intent is not None else 1.0,
             choice_slot_filled=bool(contextualizer.choice_slot_filled) if contextualizer is not None else False,

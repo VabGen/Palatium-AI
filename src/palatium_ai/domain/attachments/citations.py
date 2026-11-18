@@ -78,6 +78,26 @@ def attachment_ids_by_label(untrusted_context: str) -> dict[str, str]:
     return {label: next(iter(ids)) for label, ids in ids_by_label.items() if len(ids) == 1}
 
 
+def attachment_ids_from_untrusted_context(untrusted_context: str) -> tuple[str, ...]:
+    """Ordered unique attachment UUIDs from fence ``source=attachment:<uuid>:…`` headers.
+
+    Used by Researcher JIT re-read when the turn already carries truncated/NOTICE
+    fences: identity is in the fence itself, so we must not wait for a name-based
+    thread resolver (Context Circulation 2026, 055/070).
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for _filename, attachment_id in _fence_entries(untrusted_context):
+        aid = (attachment_id or "").strip().lower()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        ordered.append(aid)
+        if len(ordered) >= _MAX_REFS:
+            break
+    return tuple(ordered)
+
+
 def _labelled_fences(untrusted_context: str) -> list[tuple[str, str]]:
     """``(label, full attachment id)`` per fence, first-seen order."""
     entries = _fence_entries(untrusted_context)
@@ -236,4 +256,9 @@ def _parse_ref_parts(label: str) -> tuple[str, str] | None:
     return filename, id8
 
 
-__all__ = ["attachment_ids_by_label", "citation_refs_from_untrusted_context", "sanitize_source_refs"]
+__all__ = [
+    "attachment_ids_by_label",
+    "attachment_ids_from_untrusted_context",
+    "citation_refs_from_untrusted_context",
+    "sanitize_source_refs",
+]

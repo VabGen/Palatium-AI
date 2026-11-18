@@ -14,6 +14,7 @@ import type {
   HitlStepUpChallenge,
 } from '../types/contentDocument';
 import type { MessageKey } from '../i18n/messages';
+import { InlineMarkdown } from './InlineMarkdown';
 
 const HITL_STATUS_KEYS = {
   pending: 'hitl.status.pending',
@@ -132,8 +133,10 @@ function HitlCard({
     if (explicit) {
       return <TokenIcon token={explicit} size={16} />;
     }
-    if (isChoice && /\.\w{2,5}$/i.test(option.label.trim())) {
-      return <AttachmentFileIcon kind={attachmentFileKind(option.label.trim())} size={20} />;
+    // Strip GFM emphasis so ``**file.docx**`` still gets a file glyph (055).
+    const plainLabel = option.label.replace(/\*+/g, '').trim();
+    if (isChoice && /\.\w{2,5}$/i.test(plainLabel)) {
+      return <AttachmentFileIcon kind={attachmentFileKind(plainLabel)} size={20} />;
     }
     return null;
   }
@@ -242,31 +245,61 @@ function HitlCard({
   // Big Tech / Cloudscape: show consequence, not ops floats. Numeric risk stays
   // server-side for TTL/escalation; UI only surfaces a qualitative chip when high.
   const showElevatedRisk = (isTool || isReview) && local.risk_score >= 0.7;
-  const showMeta = !isChoice && (showElevatedRisk || pending);
+  // Review cards stay a slim action strip under the answer — no duplicate kicker,
+  // no TTL line unless risk is elevated (TTL still enforced server-side).
+  const showMeta = isReview
+    ? showElevatedRisk
+    : !isChoice && (showElevatedRisk || pending);
+  const showKicker = !isReview;
+  const bodyText = local.body?.trim() ?? '';
+  // Short action labels → segmented chips; file names / long prose → list rows.
+  const choiceLayout =
+    isChoice &&
+    local.options.length > 0 &&
+    local.options.length <= 4 &&
+    local.options.every(option => {
+      const plain = option.label.replace(/\*+/g, '').trim();
+      return plain.length <= 42 && !/\.\w{2,5}$/i.test(plain);
+    })
+      ? 'chips'
+      : 'list';
+  const choiceHintId = isChoice ? `hitl-choice-hint-${local.card_id}` : undefined;
 
   return (
     <section
-      className={`hitl-card status-${local.status}${purposeClass ? ` ${purposeClass}` : ''}`}
+      className={`hitl-card status-${local.status}${purposeClass ? ` ${purposeClass}` : ''}${
+        isChoice ? ` hitl-choice-${choiceLayout}` : ''
+      }`}
+      data-choice-count={isChoice ? local.options.length : undefined}
       aria-live="polite"
     >
       <header className="hitl-header">
-        <Mark size={18} className="hitl-mark" />
+        <Mark size={isReview || isChoice ? 16 : 18} className="hitl-mark" />
         <div>
-          <p className="hitl-kicker">
-            {isChoice
-              ? t('hitl.kicker.choice')
-              : isTool
-                ? t('hitl.kicker.tool')
-                : t('hitl.kicker.review')}
-          </p>
-          <h3>{local.title}</h3>
-          {local.body &&
-            local.body.split('\n\n').map((paragraph, index) => (
-              <p key={index} className={index > 0 ? 'hitl-quote' : undefined}>
-                {paragraph}
-              </p>
-            ))}
-          {isChoice && pending && <p className="hitl-choice-hint">{t('hitl.choiceHint')}</p>}
+          {showKicker ? (
+            <p className="hitl-kicker">
+              {isChoice
+                ? t('hitl.kicker.choice')
+                : isTool
+                  ? t('hitl.kicker.tool')
+                  : t('hitl.kicker.review')}
+            </p>
+          ) : null}
+          <h3>
+            <InlineMarkdown text={local.title} />
+          </h3>
+          {bodyText
+            ? bodyText.split('\n\n').map((paragraph, index) => (
+                <p key={index} className={index > 0 ? 'hitl-quote' : undefined}>
+                  <InlineMarkdown text={paragraph} />
+                </p>
+              ))
+            : null}
+          {isChoice && pending ? (
+            <p id={choiceHintId} className="sr-only">
+              {t('hitl.choiceHint')}
+            </p>
+          ) : null}
         </div>
       </header>
 
@@ -275,11 +308,12 @@ function HitlCard({
           {showElevatedRisk ? (
             <span className="hitl-risk-chip">{t('hitl.riskElevated')}</span>
           ) : null}
-          {pending ? (
+          {pending && !isReview ? (
             <span>{t('hitl.expires', { time: formatDateTime(local.expires_at) })}</span>
-          ) : (
+          ) : null}
+          {!pending ? (
             <span className="hitl-status">{hitlStatusLabel(local.status)}</span>
-          )}
+          ) : null}
         </div>
       ) : null}
 
@@ -339,22 +373,29 @@ function HitlCard({
       ) : pending ? (
         <div
           className={`hitl-options${isChoice ? ' hitl-options-choice' : ''}`}
-          role="group"
+          role={isChoice ? 'radiogroup' : 'group'}
           aria-label={isChoice ? t('hitl.choicesLabel') : t('hitl.actionsLabel')}
+          aria-describedby={choiceHintId}
         >
           {local.options.map(option => (
             <button
               key={option.action_id}
               type="button"
-              className={`action-card action-${option.style}${isChoice ? ' action-choice' : ''}`}
+              role={isChoice ? 'radio' : undefined}
+              aria-checked={isChoice ? busyAction === option.action_id : undefined}
+              className={`action-card action-${option.style}${isChoice ? ' action-choice' : ''}${
+                busyAction === option.action_id ? ' is-busy' : ''
+              }`}
               disabled={busyAction !== null}
               onClick={() => void choose(option.action_id, option.action_token)}
             >
               {optionLeading(option)}
-              <span>
-                {busyAction === option.action_id
-                  ? hitlBusyLabel(local.purpose, stepUpPending !== null)
-                  : option.label}
+              <span className="action-choice-label">
+                {busyAction === option.action_id ? (
+                  hitlBusyLabel(local.purpose, stepUpPending !== null)
+                ) : (
+                  <InlineMarkdown text={option.label} />
+                )}
               </span>
             </button>
           ))}

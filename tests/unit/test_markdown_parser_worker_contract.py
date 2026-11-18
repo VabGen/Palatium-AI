@@ -11,6 +11,7 @@ from palatium_ai.domain.content import (
     KeyValueBlock,
     ListBlock,
 )
+from palatium_ai.domain.content.content_document import NESTED_ITEM_PREFIX
 from palatium_ai.domain.mcp.models import ToolExecutionPlan
 
 
@@ -75,5 +76,9 @@ def test_nested_bullet_is_flattened_with_marker() -> None:
     bullet_list = next(block for block in doc.blocks if isinstance(block, ListBlock))
     texts = [item.text for item in bullet_list.items]
     assert texts[0] == "первый"
-    assert texts[1] == "· вложенный"
+    # Typed nesting: GFM indent lands on ListItem.level; the legacy "· " text prefix
+    # is decode-only (NESTED_ITEM_PREFIX), never emitted alongside a level.
+    assert texts[1] == "вложенный"
+    assert bullet_list.items[1].level == 1
+    assert NESTED_ITEM_PREFIX not in texts[1]
     assert texts[2] == "второй"

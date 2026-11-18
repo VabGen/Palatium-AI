@@ -170,12 +170,43 @@ class _RecordingLogger:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, dict[str, object]]] = []
+        self.levels: list[tuple[str, str]] = []
 
     def warning(self, event: str, **kwargs: object) -> None:
         self.events.append((event, kwargs))
+        self.levels.append(("warning", event))
+
+    def debug(self, event: str, **kwargs: object) -> None:
+        self.events.append((event, kwargs))
+        self.levels.append(("debug", event))
 
     def info(self, event: str, **kwargs: object) -> None:
         self.events.append((event, kwargs))
+        self.levels.append(("info", event))
+
+
+@pytest.mark.asyncio()
+async def test_empty_thread_is_not_a_warning_on_every_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the per-turn file-name probe logged WARNING on a fresh thread.
+
+    The resolver runs before routing on every ask to catch paraphrased file names, so a
+    dialog that holds no files yet (every greeting, every first question) produced a
+    ``resolve_failed`` WARNING and drowned the genuine refusals (040).
+    """
+    import palatium_ai.application.services.attachment_reference_resolver as module
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(module, "logger", recorder)
+    resolver = AttachmentReferenceResolver(repository=_FakeRepository([]))
+
+    resolution = await resolver.resolve(user_id="user-1", thread_id="thread-1", hint_text="привет")
+
+    assert resolution.status == "no_candidates"
+    assert resolution.reason == "thread_has_no_files"
+    assert ("warning", "attachment_reference.resolve_failed") not in recorder.levels
+    assert ("debug", "attachment_reference.resolve_failed") in recorder.levels
 
 
 @pytest.mark.asyncio()

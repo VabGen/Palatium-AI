@@ -40,7 +40,9 @@ async def test_memory_save_requires_hitl_before_write(
     assert isinstance(card, HITLCardView)
     assert card.task_id.startswith(MEM_SAVE_TASK_PREFIX)
     assert card.purpose == "mcp_tool_approval"
-    assert "save_memory" in card.title
+    # Consequence copy, not the wire tool name (055: users never read ``save_memory``).
+    assert card.title == "Save to memory?"
+    assert card.body
 
     # Not written yet
     hits_before = await port.search(namespace=user_namespace("user-1"), query="Russian", limit=4)

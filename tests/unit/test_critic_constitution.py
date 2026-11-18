@@ -250,3 +250,50 @@ async def test_deterministic_pii_still_escalates_when_scanner_fires() -> None:
     assert result.requires_review is True
     assert result.output is not None
     assert result.output.violations == ("no_pii_echo_without_permission",)
+
+
+@pytest.mark.asyncio()
+async def test_requisite_quoted_from_worker_evidence_is_not_a_leak() -> None:
+    """Summarizing the user's own contract with its contact is a citation (020, 060)."""
+    llm = FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok", "violations": []}')
+    evidence = "ДОГОВОР № 15/2026. Контакт для претензий: claims@example.com. Срок оплаты 10 дней."
+
+    result = await run_critic(
+        CriticInput(
+            task_id="t-const-evidence",
+            context_packet=_research_packet(),
+            classification_confidence=0.9,
+            classification_reasoning="knowledge",
+            worker_summary="Рекомендации: зафиксировать срок оплаты 10 дней и адрес претензий claims@example.com.",
+            selected_strategy="reason_only",
+            evidence_excerpts=(evidence,),
+        ),
+        llm,
+    )
+
+    assert result.requires_review is False
+    assert result.output is not None
+    assert result.output.violations == ()
+
+
+@pytest.mark.asyncio()
+async def test_same_contact_without_evidence_still_escalates() -> None:
+    """The evidence axis must not blanket-allow contacts the turn never contained."""
+    llm = FakeLLMPort('{"accuracy_score": 9, "safety_score": 9, "requires_review": false, "summary": "ok", "violations": []}')
+
+    result = await run_critic(
+        CriticInput(
+            task_id="t-const-no-evidence",
+            context_packet=_research_packet(),
+            classification_confidence=0.9,
+            classification_reasoning="knowledge",
+            worker_summary="Рекомендации: писать на claims@example.com.",
+            selected_strategy="reason_only",
+            evidence_excerpts=(),
+        ),
+        llm,
+    )
+
+    assert result.requires_review is True
+    assert result.output is not None
+    assert result.output.violations == ("no_pii_echo_without_permission",)

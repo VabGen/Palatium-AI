@@ -64,13 +64,13 @@ async def grade_with_judge(
         "rubric": _rubric_for(case),
         "judge_prompt_version": JUDGE_PROMPT_VERSION,
     }
-    messages = (
+    messages = [
         ChatMessage(role="system", content=W9_JUDGE_SYSTEM),
         ChatMessage(role="user", content=json.dumps(payload_obj, ensure_ascii=False)),
-    )
-    raw = await llm.chat(messages)
+    ]
+    raw = (await llm.generate(messages, temperature=0.0, response_format="json_object")).content
     try:
-        payload = loads_llm_json(raw if isinstance(raw, str) else str(raw))
+        payload = loads_llm_json(raw)
     except json.JSONDecodeError, ValueError, TypeError:
         return failed(0.0, details="judge returned non-JSON")
     if not isinstance(payload, dict):

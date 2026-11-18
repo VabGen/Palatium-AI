@@ -14,6 +14,8 @@ DialogRole = Literal["user", "assistant", "system"]
 
 # L2 payload key: UUID refs only (no OCR dump — 065 budget). Super Brain SB1.
 ATTACHMENT_IDS_PAYLOAD_KEY = "attachment_ids"
+# Optional display names aligned with attachment_ids (UI hydrate / history shelf).
+ATTACHMENT_NAMES_PAYLOAD_KEY = "attachment_names"
 
 
 def parse_turn_attachment_ids(payload: dict[str, Any] | None) -> tuple[UUID, ...]:
@@ -38,9 +40,18 @@ def parse_turn_attachment_ids(payload: dict[str, Any] | None) -> tuple[UUID, ...
     return tuple(out)
 
 
-def attachment_ids_payload(attachment_ids: list[UUID] | tuple[UUID, ...]) -> dict[str, object]:
-    """Build dialog turn payload fragment for attachment refs."""
-    return {ATTACHMENT_IDS_PAYLOAD_KEY: [str(aid) for aid in attachment_ids]}
+def attachment_ids_payload(
+    attachment_ids: list[UUID] | tuple[UUID, ...],
+    *,
+    attachment_names: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    """Build dialog turn payload fragment for attachment refs (+ optional filenames)."""
+    payload: dict[str, object] = {ATTACHMENT_IDS_PAYLOAD_KEY: [str(aid) for aid in attachment_ids]}
+    if attachment_names:
+        names = [name.strip() for name in attachment_names if name and str(name).strip()]
+        if names:
+            payload[ATTACHMENT_NAMES_PAYLOAD_KEY] = names
+    return payload
 
 
 class DialogTurn(BaseModel):

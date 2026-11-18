@@ -41,6 +41,15 @@ def test_system_prompt_fences_recall_as_untrusted_data() -> None:
     assert "inside either block" in prompt
 
 
+def test_system_prompt_separates_scope_from_kind() -> None:
+    """Namespace tier is its own axis: a contact stays a ``fact`` shared with the org."""
+    prompt = MEMORY_KEEPER_SYSTEM_PROMPT
+    assert "Scope mapping" in prompt
+    assert '"scope":"user"|"org"|"thread"' in prompt
+    # A kind is never stretched to imply sharing (060: no ``entity`` pseudo-type).
+    assert "never encoded in kind" in prompt
+
+
 def _input(existing: tuple[str, ...], transcript: str = "user: hi") -> AgentInput:
     return AgentInput(
         task_id=uuid.uuid4(),

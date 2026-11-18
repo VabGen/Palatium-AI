@@ -1,4 +1,5 @@
-# Observability overlay (P1-7). Opt-in — merged on top of the main stack:
+# Observability overlay (P1-7). Merged on top of the main stack by `make up-full`
+# and `make obs-up`; manually:
 #
 #   docker compose --env-file env/.env \
 #     -f docker-compose.yml \
@@ -8,6 +9,15 @@
 # file), not this overlay's folder. Wrong `./prometheus/...` creates empty
 # host *directories* named like config files → mkdirat "file exists" / Loki
 # "is a directory". Always run from repo root with paths under deploy/observability/.
+#
+# Grafana defaults to 3001, not 3000: Langfuse owns 3000 in the same full stack
+# (`LANGFUSE_PUBLISH_PORT`), and two services cannot bind one host port. The old
+# default made the overlay unusable next to Langfuse — Docker refused to start.
+#
+# Memory: prometheus 256 + alertmanager 96 + grafana 256 + loki 256 = 864 MiB of the
+# VM budget, asserted together with the Langfuse ceilings by
+# tests/unit/test_container_hardening.py::test_observability_is_profile_gated_*.
+# promtail (96 MiB) is profile-gated (`logs-shipper`) and never in `up-full`.
 #
 # Everything binds to 127.0.0.1 only (020: no perimeter exposure).
 # Two environments, one config:
@@ -42,6 +52,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Ceilings are part of one VM budget (082): without one, the VM-wide OOM killer
+    # picks the largest RSS and takes postgres into crash-recovery. Sized from the
+    # daemon's resident RSS with the scrape set of this repo (35 MiB at one scrape
+    # interval), not from a round number: TSDB growth and ad-hoc queries need the rest.
+    mem_limit: 256m
     healthcheck:
       # Real readiness probe (busybox wget is present in the official image).
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready"]
@@ -61,6 +76,8 @@ services:
     volumes:
       - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - palatium_alertmanager:/alertmanager
+    # 15 MiB resident; the ceiling is a guard, not a sizing.
+    mem_limit: 96m
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/ready"]
       interval: 30s
@@ -78,7 +95,7 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       # Dashboards/datasources are provisioned from files, not clicked in the UI.
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/palatium-overview.json
-      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3001}
       # The corporate network answers grafana.com with HTTP 451, so every outbound
       # catalog/update/telemetry call is switched off. Left on, each boot tries to
       # install or refresh the image's preinstalled plugins and logs a 451 per
@@ -98,22 +115,22 @@ services:
       GF_PLUGINS_PREINSTALL_DISABLED: "true"
       GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED: "true"
     ports:
-      - "127.0.0.1:${GRAFANA_PUBLISH_PORT:-3000}:3000"
+      - "127.0.0.1:${GRAFANA_PUBLISH_PORT:-3001}:3000"
     volumes:
-      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Mount the two *used* subdirectories, not their parent. Mounting the whole
+      # /etc/grafana/provisioning read-only and then tmpfs-ing plugins/ + alerting/
+      # is impossible on this daemon: tmpfs cannot create its mountpoint inside a
+      # read-only bind mount ("mkdirat ... alerting: read-only file system"), so
+      # Grafana never started at all. With per-directory mounts the image's own
+      # empty plugins/ + alerting/ stay in place — Grafana finds them and stays quiet.
+      # (A committed `.gitkeep` placeholder is not an option: the provisioning reader
+      # logs "file has invalid suffix '.gitkeep' (.yaml,.yml,.json accepted), skipping".)
+      - ./deploy/observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./deploy/observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - palatium_grafana:/var/lib/grafana
-    # Grafana opens every subdirectory of the provisioning path at boot and logs
-    # "Failed to read plugin/alerting provisioning files ... no such file or
-    # directory" for the ones that are absent. There is nothing to put in either:
-    # the dashboards use core panels only, and alerting rules live in
-    # deploy/observability/prometheus/alerts/ and route through Alertmanager.
-    # An empty tmpfs creates the two directories without shipping a placeholder
-    # *file* — a `.gitkeep` would be picked up by the reader instead and logged as
-    # "file has invalid suffix '.gitkeep' (.yaml,.yml,.json accepted), skipping".
-    tmpfs:
-      - /etc/grafana/provisioning/plugins
-      - /etc/grafana/provisioning/alerting
+    # 72 MiB resident with both provisioned dashboards; the rest is query headroom.
+    mem_limit: 256m
     depends_on:
       prometheus:
         condition: service_healthy
@@ -133,6 +150,8 @@ services:
     volumes:
       - ./deploy/observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - palatium_loki:/loki
+    # 54 MiB resident while ingesting; compaction needs the headroom below.
+    mem_limit: 256m
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3100/ready"]
       interval: 30s
@@ -143,17 +162,29 @@ services:
   promtail:
     image: grafana/promtail:3.3.2
     restart: unless-stopped
+    # Opt-in (`--profile logs-shipper`), never part of `make up-full`:
+    # log shipping is host-specific. It reads the Docker *daemon's* log directory,
+    # and on Docker Desktop for Windows that path lives inside the WSL VM, not on
+    # the Windows host. Bind-mounted from here it resolves to an empty host
+    # directory, so the container stays healthy and ships nothing — a silent
+    # "logs are collected" that is not true. On a Linux host run it explicitly.
+    profiles: ["logs-shipper"]
     command: -config.file=/etc/promtail/config.yml
     volumes:
       # Container stdout/stderr == structlog JSON (040 correlation by trace_id).
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - ./deploy/observability/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
       - palatium_promtail:/positions
+    mem_limit: 96m
     depends_on:
       loki:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9080/ready"]
+      # promtail ships no wget/curl (unlike prometheus/loki, which are busybox-based):
+      # the previous `wget --spider` probe could never exec, so a perfectly healthy
+      # shipper reported "unhealthy" for 50+ consecutive checks. /dev/tcp is a bash
+      # builtin — same "HTTP listener answers on 9080" signal, no dependency added.
+      test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/9080' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

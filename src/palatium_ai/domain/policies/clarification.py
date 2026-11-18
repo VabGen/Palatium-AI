@@ -101,8 +101,7 @@ class ClarificationGatePolicy:
         # that must still retrieve→refuse, not invent (W10 3b). Compose stays none.
         if output.grounding == "required":
             return output
-        ask = user_text.strip()
-        if not ask.endswith("?"):
+        if not cls._looks_like_fact_ask(output, user_text=user_text):
             return output
         caps = {c.strip().lower() for c in output.candidate_capabilities}
         if caps & {"compose", "draft", "format", "expand", "shorten", "rewrite"}:
@@ -136,8 +135,29 @@ class ClarificationGatePolicy:
             return False
         if output.underspecification_kind != "discrete_choice" and not output.requires_user_choice:
             return False
+        # Axis-driven: a complete fact ask on an empty thread is not a product-slot
+        # menu. Punctuation (``?``) is not a router (055).
+        return cls._looks_like_fact_ask(output, user_text=user_text)
+
+    @staticmethod
+    def _looks_like_fact_ask(output: IntentClassifierOutput, *, user_text: str) -> bool:
+        """True when axes say this is a grounded knowledge ask, not compose/format.
+
+        Uses Intent axes only — never surface heuristics like ``endswith("?")``.
+        """
         ask = user_text.strip()
-        return bool(ask) and ask.endswith("?")
+        if not ask:
+            return False
+        caps = {c.strip().lower() for c in output.candidate_capabilities}
+        if caps & {"compose", "draft", "format", "expand", "shorten", "rewrite"}:
+            return False
+        if output.grounding in {"required", "optional"}:
+            return True
+        if output.task_kind in {"knowledge_request", "tool_execution", "clarification_needed"}:
+            return bool(caps & {"retrieve", "search", "knowledge", "user_choice"}) or (
+                output.underspecification_kind == "discrete_choice" or output.requires_user_choice
+            )
+        return False
 
     @classmethod
     def _demote(

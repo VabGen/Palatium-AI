@@ -22,6 +22,22 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from palatium_ai.domain.attachments.policies import supported_document_extensions
+from palatium_ai.domain.policies.types import (
+    RESPONSE_SHAPE_DEFAULT,
+    VERBATIM_EXTRACTION_CAPABILITY,
+    ResponseShape,
+)
+
+#: Explicit answer forms that require synthesis over a document — never seal OCR.
+#: ``prose`` / ``auto`` stay seal-eligible when Intent tagged verbatim_extraction.
+_SYNTHESIS_RESPONSE_SHAPES: Final[frozenset[str]] = frozenset(
+    {
+        "document_analysis",
+        "plan",
+        "comparison_table",
+        "inventory",
+    }
+)
 
 #: Outcome of one reference resolution attempt.
 FileReferenceStatus = Literal["resolved", "ambiguous", "no_candidates", "no_match"]
@@ -239,41 +255,31 @@ class FileReferencePolicy:
         if not scoped:
             return FileReferenceResolution(status="no_candidates", reason="thread_has_no_files")
 
-        requested = _normalize_name(filename)
-        if requested:
-            exact = [item for item in scoped if _normalize_name(item.filename) == requested]
-            if len(exact) == 1:
-                return _resolved(exact[0], reason="explicit_filename")
-            display_requested = " ".join((filename or "").split())
-            return FileReferenceResolution(
-                status="no_match" if not exact else "ambiguous",
-                candidates=names if not exact else tuple(item.filename for item in exact),
-                requested_name=display_requested,
-                reason="explicit_filename_unmatched" if not exact else "explicit_filename_ambiguous",
-            )
+        explicit = _resolve_explicit_filename(scoped, filename=filename, names=names)
+        if explicit is not None:
+            return explicit
 
-        matched = FileReferencePolicy.match_names(scoped, hint_text=hint_text)
-        if len(matched) == 1:
-            return _resolved(matched[0], reason="name_in_turn_text")
-        if len(matched) > 1:
-            matched_names = tuple(item.filename for item in matched)
-            return FileReferenceResolution(
-                status="ambiguous",
-                candidates=matched_names,
-                reason="several_names_in_turn_text",
-            )
+        by_name = _resolution_from_matches(
+            FileReferencePolicy.match_names(scoped, hint_text=hint_text),
+            single_reason="name_in_turn_text",
+            multi_reason="several_names_in_turn_text",
+        )
+        if by_name is not None:
+            return by_name
 
         # Topical ask against derived/OCR text («файл про иван-чай» → ht_1-5.webp):
-        # only when previews were loaded; uniqueness still fail-closed (020).
-        content_matched = FileReferencePolicy.match_content(scoped, hint_text=hint_text)
-        if len(content_matched) == 1:
-            return _resolved(content_matched[0], reason="content_in_turn_text")
-        if len(content_matched) > 1:
-            return FileReferenceResolution(
-                status="ambiguous",
-                candidates=tuple(item.filename for item in content_matched),
-                reason="several_content_matches",
+        # only when the ask structurally engages a file identity (doc-role) *and*
+        # previews were loaded. Bare topical follow-ups («подробнее о Управление
+        # доступом») or general KB asks must not bind an older thread file whose
+        # OCR happens to share tokens (cross-file bleed / false grounding, 055).
+        if FileReferencePolicy.ask_engages_file_identity(hint_text):
+            by_content = _resolution_from_matches(
+                FileReferencePolicy.match_content(scoped, hint_text=hint_text),
+                single_reason="content_in_turn_text",
+                multi_reason="several_content_matches",
             )
+            if by_content is not None:
+                return by_content
 
         if _names_foreign_document(scoped, hint_text=hint_text):
             # The ask named a document the dialog does not hold: reading the dialog's
@@ -341,6 +347,26 @@ class FileReferencePolicy:
         }:
             return True
         return resolution.status == "no_match" and bool((resolution.requested_name or "").strip())
+
+    @staticmethod
+    def seals_thread_file_body(
+        *,
+        candidate_capabilities: tuple[str, ...],
+        response_shape: ResponseShape | str = RESPONSE_SHAPE_DEFAULT,
+    ) -> bool:
+        """True when the OCR/extracted body *is* the user-facing answer.
+
+        Intent tags ``verbatim_extraction`` for extract / OCR / full-text asks.
+        Defense-in-depth (055): an explicit synthesis ``response_shape``
+        (document_analysis / plan / comparison_table / inventory) blocks seal even
+        if the capability was mistagged — otherwise recommendations dump the file.
+        Shared SoT for storage re-read, this-turn fence reason_only, Formatter, Critic.
+        """
+        caps = {cap.strip().lower() for cap in candidate_capabilities}
+        if VERBATIM_EXTRACTION_CAPABILITY not in caps:
+            return False
+        shape = str(response_shape or RESPONSE_SHAPE_DEFAULT).strip().casefold()
+        return shape not in _SYNTHESIS_RESPONSE_SHAPES
 
     @staticmethod
     def refusal_message(resolution: FileReferenceResolution) -> str:
@@ -461,13 +487,28 @@ class FileReferencePolicy:
                 weak.append(item)
         if strong:
             return strong
-        # A lone leading-title hit on a multi-token stem is ordinary prose
-        # («подписали договор…» ≠ «Договор_оказания_услуг.docx»). Keep weak
-        # matches only when they disambiguate siblings («Скан» → card) or when
-        # the stem itself is a single substantive token (055).
-        if len(weak) == 1 and _stem_substantive_token_count(_normalize_name(_strip_extension(weak[0].filename))) >= 2:
-            return []
-        return weak
+        # Weak leading-title hits on multi-word titles are ordinary prose
+        # («подписали договор…» ≠ «Договор_оказания_услуг.docx»). With *several*
+        # such siblings the old path returned them all → ``several_names_in_turn_text``
+        # → Continuity promoted a file-choice card over pasted chat text (055 /
+        # living assistant). Keep weak matches for short single-token stems and for
+        # digit-sibling families («Скан» → card among Скан 1 / Скан 2).
+        return [item for item in weak if _keep_weak_leading_title(_normalize_name(_strip_extension(item.filename)))]
+
+    @staticmethod
+    def ask_engages_file_identity(hint_text: str) -> bool:
+        """True when the ask structurally points at a file identity via a doc-role.
+
+        Closed role set only (``файл`` / ``документ`` / ``file`` / ``doc``) — not
+        name-pointers: prose like «извлеки названия компаний» must not look like a
+        storage re-read (055 / paste-text false card). Name-pointers still lift
+        *leading-title* hits inside ``match_names``; Continuity uses this gate for
+        Intent-only ``thread_file``+``single``/``all`` without code-named evidence.
+        """
+        haystack = _normalize_text(hint_text[:_HINT_SCAN_CHARS])
+        if not haystack:
+            return False
+        return any(word in _DOC_ROLE_TOKENS or _token_extends_doc_role(word) for word in _name_words(haystack))
 
 
 def _resolved(candidate: FileRefCandidate, *, reason: str) -> FileReferenceResolution:
@@ -479,6 +520,53 @@ def _resolved(candidate: FileRefCandidate, *, reason: str) -> FileReferenceResol
         candidates=(candidate.filename,),
         reason=reason,
     )
+
+
+def _resolve_explicit_filename(
+    scoped: Sequence[FileRefCandidate],
+    *,
+    filename: str,
+    names: tuple[str, ...],
+) -> FileReferenceResolution | None:
+    """Step 1 of ``resolve``: exact normalized name from an explicit ``filename``."""
+    requested = _normalize_name(filename)
+    if not requested:
+        return None
+    exact = [item for item in scoped if _normalize_name(item.filename) == requested]
+    if len(exact) == 1:
+        return _resolved(exact[0], reason="explicit_filename")
+    display_requested = " ".join((filename or "").split())
+    if not exact:
+        return FileReferenceResolution(
+            status="no_match",
+            candidates=names,
+            requested_name=display_requested,
+            reason="explicit_filename_unmatched",
+        )
+    return FileReferenceResolution(
+        status="ambiguous",
+        candidates=tuple(item.filename for item in exact),
+        requested_name=display_requested,
+        reason="explicit_filename_ambiguous",
+    )
+
+
+def _resolution_from_matches(
+    matched: Sequence[FileRefCandidate],
+    *,
+    single_reason: str,
+    multi_reason: str,
+) -> FileReferenceResolution | None:
+    """Map 0/1/N name-or-content hits to None / resolved / ambiguous."""
+    if len(matched) == 1:
+        return _resolved(matched[0], reason=single_reason)
+    if len(matched) > 1:
+        return FileReferenceResolution(
+            status="ambiguous",
+            candidates=tuple(item.filename for item in matched),
+            reason=multi_reason,
+        )
+    return None
 
 
 def _strip_extension(filename: str) -> str:
@@ -627,6 +715,31 @@ def _leading_title_introduced_in_ask(haystack_words: Sequence[str], stem: str) -
 def _stem_substantive_token_count(stem: str) -> int:
     """How many discriminating title tokens the stem carries (digits count)."""
     return sum(1 for word in _name_words(stem) if _run_word_is_substantive(word))
+
+
+def _keep_weak_leading_title(stem: str) -> bool:
+    """Whether a bare leading-title hit is enough to name this file weakly.
+
+    * Single-token stems (``Обращение.docx``): the lead *is* the title.
+    * Digit-sibling families (``Скан 1 …`` / ``Скан 2 …``): the shared alphabetic
+      lead plus an immediate digit marks a named subset card.
+    * Multi-word titles without that pattern (``Договор оказания услуг``): a bare
+      lead in prose is not a file reference (055 / paste-text false card).
+    """
+    if _stem_substantive_token_count(stem) < 2:
+        return True
+    return _is_digit_sibling_family_stem(stem)
+
+
+def _is_digit_sibling_family_stem(stem: str) -> bool:
+    """True when the stem is ``<lead> <digit> …`` (sibling family sharing ``lead``)."""
+    words = _name_words(stem)
+    if len(words) < 2:
+        return False
+    lead = words[0]
+    if lead.isdigit() or len(lead) < _MIN_NAME_MATCH_CHARS:
+        return False
+    return words[1].isdigit()
 
 
 def _name_run_matches(haystack_words: Sequence[str], stem: str) -> bool:

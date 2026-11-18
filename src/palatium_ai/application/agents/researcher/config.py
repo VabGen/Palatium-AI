@@ -49,6 +49,11 @@ SUMMARY_MAX_CHARS = 8_000
 #: Floor for ``platform.read_attachment`` output; the global knob may still raise it.
 #: Kept below the turn's attachment budget (24k) so one document fits one prompt (065).
 READ_ATTACHMENT_OUTPUT_MAX_CHARS = 12_000
+#: Upper bound on map calls for one long document (cost guard, 080). Beyond it the
+#: document is read in wider slices rather than in more calls.
+CHUNKED_SYNTHESIS_MAX_CHUNKS = 8
+#: Per-chunk note ceiling: map extracts facts, the reduce call writes prose.
+CHUNK_NOTE_MAX_TOKENS = 600
 RESEARCHER_DEFAULT_MAX_TOKENS = 2_048
 RESEARCHER_GENERATION_MAX_TOKENS = 4_096
 

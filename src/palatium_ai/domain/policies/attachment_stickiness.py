@@ -26,11 +26,11 @@ from pydantic import BaseModel, Field
 
 from palatium_ai.domain.policies.grounding import GroundingPolicy
 from palatium_ai.domain.policies.transform import TransformPolicy
-from palatium_ai.domain.policies.types import GROUNDING_DEFAULT, TRANSFORMATION_DEFAULT
+from palatium_ai.domain.policies.types import FILE_REFERENCE_DEFAULT, GROUNDING_DEFAULT, TRANSFORMATION_DEFAULT
 
 if TYPE_CHECKING:
     from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
-    from palatium_ai.domain.policies.types import ContinuationKind, GroundingMode, TransformationKind
+    from palatium_ai.domain.policies.types import ContinuationKind, FileReferenceKind, GroundingMode, TransformationKind
 
 RehydrateSource = Literal["user_prior", "message_binding", "none"]
 
@@ -101,6 +101,7 @@ class AttachmentStickinessPolicy:
         adaptive_grounding_enabled: bool = False,
         transformation: TransformationKind | str = TRANSFORMATION_DEFAULT,
         choice_slot_filled: bool = False,
+        file_reference: FileReferenceKind | str = FILE_REFERENCE_DEFAULT,
     ) -> AttachmentRehydrateDecision:
         """After Continuity: optionally re-fence dialog-bound attachments for format.
 
@@ -116,10 +117,19 @@ class AttachmentStickinessPolicy:
 
         A closed HITL choice slot is fulfilled from ``rewritten_query``; re-fencing
         sticky uploads turned the pick into an attachment-grounded menu echo (055).
+        When Continuity already promoted ``file_reference=thread_file`` (named ask
+        recovered from the rewrite), keep pending so a failed resolve can still
+        retry — do not clear the session fence out from under storage re-read.
         """
         if has_turn_attachments:
             return AttachmentRehydrateDecision(reason="already_fenced", rehydrate_source="none")
         if choice_slot_filled:
+            if str(file_reference) == "thread_file":
+                return AttachmentRehydrateDecision(
+                    clear_pending=False,
+                    reason="keep_pending:choice_slot_thread_file",
+                    rehydrate_source="none",
+                )
             return AttachmentRehydrateDecision(
                 clear_pending=True,
                 reason="clear_pending:choice_slot_filled",
@@ -145,6 +155,14 @@ class AttachmentStickinessPolicy:
         kind = str(continuation_kind)
         file_bound = trust_prior_for_workers and (kind == "format" or (kind == "answer" and refers_to_prior))
         if not file_bound:
+            # Named thread-file re-read owns identity via storage, not sticky OCR —
+            # still keep session pending so a resolve miss can retry (055).
+            if str(file_reference) == "thread_file":
+                return AttachmentRehydrateDecision(
+                    clear_pending=False,
+                    reason="keep_pending:thread_file",
+                    rehydrate_source="none",
+                )
             # New topic / social / creative / demoted false format — drop sticky.
             return AttachmentRehydrateDecision(
                 clear_pending=True,

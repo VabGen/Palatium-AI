@@ -14,9 +14,10 @@ from palatium_ai.domain.agents.context_weaver import ContextWeaverInput
 from palatium_ai.domain.agents.workflow_policy import WorkflowExecutionPolicy
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
 from palatium_ai.domain.mcp.models import ExecutionPlanBundle, ToolExecutionPlan
+from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.grounding import GroundingPolicy
 from palatium_ai.domain.policies.parallel_workers import ParallelWorkerPolicy
-from palatium_ai.domain.policies.types import CONTENT_GENERATION_CAPABILITY, TaskKind
+from palatium_ai.domain.policies.types import CONTENT_GENERATION_CAPABILITY, ExecutionStrategy, TaskKind
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.supervisor import WorkerRoute
@@ -119,7 +120,13 @@ class ExecutionPlanner:
         # never reaches a worker that cannot call tools; the gate documents that the
         # plan and the route are one decision, not two (055).
         if task_input.route == "researcher" and _file_reread_requested(task_input) and is_file_reread_enabled(user_id_var.get()):
-            return _file_reread_plan(plural=task_input.attachment_scope == "all")
+            return _file_reread_plan(
+                plural=task_input.attachment_scope == "all",
+                seal=FileReferencePolicy.seals_thread_file_body(
+                    candidate_capabilities=task_input.candidate_capabilities,
+                    response_shape=task_input.response_shape,
+                ),
+            )
 
         route_plan = _route_local_plan(task_input.route, executable_kind, task_input.requires_mcp)
         if route_plan is not None:
@@ -177,15 +184,25 @@ def _file_reread_requested(task_input: ContextWeaverInput) -> bool:
     return task_input.file_reference == "thread_file"
 
 
-def _file_reread_plan(*, plural: bool = False) -> ToolExecutionPlan:
-    """Direct owner-scoped storage read; the reference is resolved in the worker path.
+def _file_reread_plan(*, plural: bool = False, seal: bool = False) -> ToolExecutionPlan:
+    """Owner-scoped storage read; the reference is resolved in the worker path.
 
     ``plural`` marks an explicit "every file of this dialog" ask: identity is still
     resolved in the application layer, but the step covers the whole set and the
     worker issues one read per file instead of a single read and a wrong summary.
+
+    ``seal`` (Intent ``verbatim_extraction``): the OCR body *is* the answer
+    (``direct_tool_call``). Otherwise ``retrieve_then_reason`` — read then synthesize
+    recommendations / summary / analysis so Formatter does not dump the raw file.
     """
+    strategy: ExecutionStrategy = "direct_tool_call" if seal else "retrieve_then_reason"
+    seal_note = (
+        " Intent tagged verbatim_extraction: seal the extracted body as the answer."
+        if seal
+        else " Synthesize the answer over the retrieved body (do not dump the raw file)."
+    )
     return ToolExecutionPlan(
-        strategy="direct_tool_call",
+        strategy=strategy,
         capability="attachments",
         server_name="platform",
         tool_name="read_attachment",
@@ -193,6 +210,7 @@ def _file_reread_plan(*, plural: bool = False) -> ToolExecutionPlan:
         rationale=(
             "Thread file re-read: the ask targets files already uploaded in this dialog; "
             "read their owner-scoped bodies from storage instead of claiming they are missing."
+            + seal_note
             + (
                 " The ask covers the whole set: read every file, one call per file, and answer over the combined evidence."
                 if plural

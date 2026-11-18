@@ -32,9 +32,9 @@ from palatium_ai.domain.llm.json_codec import LLMJSONError
 from palatium_ai.domain.llm.response_parser import compact_validation_error, parse_llm_response
 from palatium_ai.domain.policies import CriticPolicy
 from palatium_ai.domain.policies.constitution import Constitution, ConstitutionViolation, PrincipleId
+from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
-from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
 if TYPE_CHECKING:
     from palatium_ai.domain.agents.agent_config import AgentConfig
@@ -60,6 +60,7 @@ class CriticAgent(BaseAgent):
             "user_input_chars",
             "worker_confidence",
             "memory_hints_json",
+            "prior_context",
         ]
 
     def get_available_tools(self) -> list[str]:
@@ -85,7 +86,9 @@ class CriticAgent(BaseAgent):
         allowed_sources = (
             task_input.context_packet.user_text,
             task_input.context_packet.untrusted_context or "",
+            task_input.prior_context or "",
             *task_input.memory_hints,
+            *task_input.evidence_excerpts,
         )
         deterministic = Constitution.check(
             draft=task_input.worker_summary,
@@ -108,7 +111,6 @@ class CriticAgent(BaseAgent):
                 )
                 return self._finalize(input=input, output=output, deterministic=deterministic)
 
-        caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
         gate = CriticPolicy.decide(
             selected_strategy=task_input.selected_strategy,
             task_kind=task_input.context_packet.task_kind,
@@ -121,7 +123,10 @@ class CriticAgent(BaseAgent):
             user_input_chars=task_input.user_input_chars,
             worker_confidence=task_input.worker_confidence,
             has_attachment_context=bool((task_input.context_packet.untrusted_context or "").strip()),
-            verbatim_requested=VERBATIM_EXTRACTION_CAPABILITY in caps,
+            verbatim_requested=FileReferencePolicy.seals_thread_file_body(
+                candidate_capabilities=task_input.context_packet.candidate_capabilities,
+                response_shape=task_input.context_packet.response_shape,
+            ),
             uncertainty_disposition=(task_input.uncertainty_disposition or task_input.context_packet.uncertainty_disposition),
             uncertainty_reason=(task_input.uncertainty_reason or task_input.context_packet.uncertainty_reason or None),
         )
@@ -152,6 +157,7 @@ class CriticAgent(BaseAgent):
                         # Neutral LLM-facing name (055): internal field names are
                         # echoed verbatim by the model into user prose.
                         "attached_files": task_input.context_packet.untrusted_context,
+                        "previous_answer": task_input.prior_context,
                         "memory_hints": list(task_input.memory_hints),
                         "classification_confidence": task_input.classification_confidence,
                         "classification_reasoning": task_input.classification_reasoning,

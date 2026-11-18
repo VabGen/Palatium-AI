@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import importlib.util
 import io
+import json
 import re
 import sys
 
@@ -363,6 +364,166 @@ def test_launch_targets_probe_the_backends_they_just_started() -> None:
         assert "attachments_probe.py" in recipe, (
             f"{target!r} starts the attachment containers without reporting which backends the API will actually use"
         )
+
+
+#: A compose model as `docker compose config --format json` renders it: `mem_limit` is
+#: bytes as a *string*, and one-shot jobs declare none at all.
+_COMPOSE_MODEL = {
+    "services": {
+        "api": {"mem_limit": "1024m"},
+        "postgres": {"mem_limit": "1073741824"},
+        "silo-init": {"mem_limit": None},
+        "silo-init-no-key": {},
+    }
+}
+
+
+def _probe_stub(compose_code: int, compose_out: str, mem_total: str) -> tuple[list[list[str]], object]:
+    """Record the commands a `vm-budget` run issues and answer them like Docker would."""
+    seen: list[list[str]] = []
+
+    def probe(command: list[str]) -> tuple[int, str]:
+        seen.append(list(command))
+        return (compose_code, compose_out) if command[:2] == ["docker", "compose"] else (0, mem_total)
+
+    return seen, probe
+
+
+def test_vm_budget_is_silent_when_the_ceilings_fit_the_vm(capsys) -> None:
+    """No news is the normal outcome: a fitting stack must not print a warning at all."""
+    mod = _load_helper_module()
+    _, probe = _probe_stub(0, json.dumps(_COMPOSE_MODEL), "8589934592\n")
+
+    assert mod.vm_budget(Path("env/.env"), "", probe=probe) == 0
+    assert capsys.readouterr().out == "", "a launch that fits must stay quiet"
+
+
+def test_vm_budget_tolerates_the_daemon_overhead(capsys) -> None:
+    """Regression: the documented-good VM must not be reported as too small.
+
+    `memory=13GB` reports ~12.6 GiB of MemTotal while the full stack's ceilings total
+    13.0 GiB, and that configuration runs. Comparing the two strictly made every healthy
+    `make up-full` print a warning — the same "warn when nothing is wrong" failure this
+    helper replaced.
+    """
+    mod = _load_helper_module()
+    ceilings = {"services": {name: {"mem_limit": "512m"} for name in ("a", "b", "c", "d", "e", "f")}}  # 3 GiB
+    _, probe = _probe_stub(0, json.dumps(ceilings), str(int(3 * 1024 * 1024 * 1024 * 0.99)))
+
+    assert mod.vm_budget(Path("env/.env"), "", probe=probe) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_vm_budget_warns_with_the_measured_numbers(capsys) -> None:
+    """The message must carry *this* launch's sum and *this* VM, plus a derived target."""
+    mod = _load_helper_module()
+    ceilings = {"services": {name: {"mem_limit": "1024m"} for name in ("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")}}
+    _, probe = _probe_stub(0, json.dumps(ceilings), str(7 * 1024**3))
+
+    assert mod.vm_budget(Path("env/.env"), "", probe=probe) == 0
+    message = capsys.readouterr().out
+
+    assert "10.0 GiB" in message, "the sum of this launch's ceilings must be named"
+    assert "7.0 GiB" in message, "the actual VM size must be named"
+    assert "memory=10GB" in message, "the suggested target must be derived from the ceilings"
+    assert ".wslconfig" in message, "the note must say where the VM size is set"
+
+
+def test_vm_budget_passes_the_launch_flags_to_compose(tmp_path: Path) -> None:
+    """The sum must come from the same compose model the launch uses, not from a copy."""
+    mod = _load_helper_module()
+    env_file = tmp_path / ".env"
+    seen, probe = _probe_stub(0, json.dumps(_COMPOSE_MODEL), "8589934592")
+
+    mod.vm_budget(
+        env_file,
+        "--profile observability -f docker-compose.yml -f docker-compose.attachments-s3.yml",
+        probe=probe,
+    )
+
+    assert seen[0] == [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env_file),
+        "--profile",
+        "observability",
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.attachments-s3.yml",
+        "config",
+        "--format",
+        "json",
+    ], "the overlays and profiles of the launch must reach `compose config`"
+    assert seen[1] == ["docker", "info", "--format", "{{.MemTotal}}"], "the VM size comes from the engine"
+
+
+def test_vm_budget_never_blocks_the_launch(capsys) -> None:
+    """Advisory, not a gate: a stopped engine or a broken model is `compose up`'s story."""
+    mod = _load_helper_module()
+    down_seen, down = _probe_stub(1, "", "")
+    broken = _probe_stub(0, "{not json", "8589934592")
+
+    assert mod.vm_budget(Path("env/.env"), "", probe=down) == 0
+    assert mod.vm_budget(Path("env/.env"), "", probe=broken[1]) == 0
+    assert down_seen, "the probe must at least be attempted"
+    assert capsys.readouterr().out == "", "an unreadable engine is not this helper's error to report"
+
+
+def test_up_full_checks_the_vm_instead_of_claiming_it() -> None:
+    """The note used to be an unconditional `echo` claiming a 7.7 GiB VM on a 12 GiB one."""
+    recipes = _target_recipes()
+    recipe = recipes.get("up-full")
+    assert recipe, "target 'up-full' disappeared from the Makefile"
+    text = "\n".join(recipe)
+
+    assert "make_helpers.py vm-budget" in text, "up-full no longer compares the ceilings with the VM"
+    assert "does not" not in text, "the unconditional claim about the VM size is back"
+
+    budget_at = [index for index, line in enumerate(recipe) if "make_helpers.py vm-budget" in line]
+    launch_at = [index for index, line in enumerate(recipe) if "up -d" in line]
+    assert budget_at, "up-full no longer compares the ceilings with the VM"
+    assert launch_at, "up-full no longer launches the stack"
+    assert budget_at[0] < launch_at[0], "the operator must see the verdict before the build starts"
+
+
+def test_up_full_and_obs_up_load_the_metric_stack_overlay() -> None:
+    """`--profile observability` is not the metric stack.
+
+    Prometheus/Alertmanager/Grafana/Loki are defined in
+    ``deploy/observability/compose.observability.yml``, which compose never reads unless a
+    target passes ``-f``. Until 2026-11-18 neither ``up-full`` nor ``obs-up`` did: the
+    profile-only launch left the old containers as orphans, ``down --remove-orphans``
+    deleted them, and a "full" stack showed up without Grafana — though nothing had ever
+    been removed from the repository.
+    """
+    makefile = _MAKEFILE.read_text(encoding="utf-8")
+    assert "OBS_OVERLAY := -f deploy/observability/compose.observability.yml" in makefile, (
+        "the observability overlay must be declared once, next to FULL_FLAGS"
+    )
+
+    recipes = _target_recipes()
+    for target in ("up-full", "obs-up", "obs-down"):
+        recipe = recipes.get(target)
+        assert recipe, f"target '{target}' disappeared from the Makefile"
+        assert any("$(OBS_OVERLAY)" in line for line in recipe), (
+            f"'{target}' does not load the observability overlay: `--profile observability` alone starts only Langfuse v3"
+        )
+
+    # `-f docker-compose.yml` must come first: the project directory (and with it the
+    # relative `env/.env` and the palatium-ai project name) is taken from the first file.
+    for target in ("obs-up", "obs-down"):
+        line = next(line for line in recipes[target] if "$(OBS_OVERLAY)" in line)
+        assert line.index("-f docker-compose.yml") < line.index("$(OBS_OVERLAY)"), (
+            f"'{target}' must name the base compose file before the overlay"
+        )
+
+    # In `up-full` the base file arrives via FULL_FLAGS, so the overlay goes last.
+    up_full_line = next(line for line in recipes["up-full"] if "$(OBS_OVERLAY)" in line)
+    assert up_full_line.index("$(FULL_FLAGS)") < up_full_line.index("$(OBS_OVERLAY)"), (
+        "up-full must keep the probe-produced base files first and the overlay last"
+    )
 
 
 def test_the_overlay_files_are_not_auto_loaded() -> None:

@@ -151,6 +151,64 @@ def _memory_hints_after_dialog_correction(
     return DialogCorrectionPolicy.filter_superseded_texts(memory_hints, window.turns)
 
 
+async def _probe_names_thread_file(text: str) -> bool:
+    """True when the turn's attachment resolver says ``text`` names a thread file."""
+    ask = text.strip()
+    if not ask:
+        return False
+    attach_ctx = get_turn_attachment_context()
+    if attach_ctx is None or attach_ctx.names_thread_file is None:
+        return False
+    try:
+        return bool(await attach_ctx.names_thread_file(ask))
+    except Exception:  # probe is an optimisation; never fail the turn (030.8)
+        logger.exception("attachment.names_thread_file_probe_failed")
+        return False
+
+
+def _prior_user_ask_for_file_inherit(window: DialogTurnWindow) -> str | None:
+    """Most recent non-HITL user ask — candidate identity for a short follow-up."""
+    for turn in reversed(window.turns):
+        if turn.role != "user":
+            continue
+        text = turn.content.strip()
+        if not text or "HITL_CHOICE_RESUME" in text:
+            continue
+        return text
+    return None
+
+
+async def _resolve_thread_file_named_for_continuity(
+    *,
+    entry_named: bool,
+    rewritten: str,
+    choice_slot_filled: bool,
+    raw_ask: str,
+    window: DialogTurnWindow,
+) -> bool:
+    """Re-probe filename identity after Contextualizer / choice resume (055).
+
+    Entry ``thread_file_named`` is computed from the raw envelope. HITL choice
+    resume and Contextualizer rewrites put the file title in ``rewritten_query``;
+    without a second probe Continuity never promotes storage re-read and the
+    worker answers «файл не приложен» while the shelf still lists the doc.
+    """
+    if entry_named and not choice_slot_filled:
+        return True
+    probes: list[str] = []
+    rewritten_ask = rewritten.strip()
+    if rewritten_ask and rewritten_ask != raw_ask:
+        probes.append(rewritten_ask)
+    if choice_slot_filled:
+        prior = _prior_user_ask_for_file_inherit(window)
+        if prior and prior not in probes:
+            probes.append(prior)
+    for probe in probes:
+        if await _probe_names_thread_file(probe):
+            return True
+    return entry_named
+
+
 async def _apply_sticky_attachment_rehydrate(
     *,
     routing_intent: EffectiveRoutingIntent,
@@ -172,6 +230,7 @@ async def _apply_sticky_attachment_rehydrate(
         adaptive_grounding_enabled=is_adaptive_grounding_enabled(user_id_var.get()),
         transformation=routing_intent.transformation,
         choice_slot_filled=choice_slot_filled,
+        file_reference=routing_intent.file_reference,
     )
     agent_metrics.record_attachment_sticky(action=rehydrate.reason)
     # Not `attachment.build_turn_context`: that name is the traced span of the actual
@@ -303,14 +362,43 @@ async def continuation_node(
         output = getattr(result, "output", None)
         rewritten = output.rewritten_query if output is not None else selectors.resolved_user_text(state)
         raw_user = state.get("user_text")
+        raw_ask = (raw_user if isinstance(raw_user, str) else "").strip()
+        slot_filled_for_sticky = bool(getattr(output, "choice_slot_filled", False)) if output is not None else False
+        thread_file_named = await _resolve_thread_file_named_for_continuity(
+            entry_named=bool(state.get("thread_file_named")),
+            rewritten=rewritten,
+            choice_slot_filled=slot_filled_for_sticky,
+            raw_ask=raw_ask,
+            window=window,
+        )
         routing_intent = resolve_routing_intent(
             contextualizer=output,
             dialog=window,
             raw_intent=raw_intent,
             has_turn_attachments=entry_has_attachments,
             user_text=raw_user if isinstance(raw_user, str) else None,
-            thread_file_named=bool(state.get("thread_file_named")),
+            thread_file_named=thread_file_named,
         )
+        # Short follow-up after a named-file ask: Continuity recovers refers, but the
+        # raw ask has no filename. Inherit the prior user ask so storage re-read and
+        # effective_user_text keep the identity Continuity cannot invent (055).
+        rewritten_for_effective = rewritten
+        if "recovered short follow-up over prior" in routing_intent.reasoning and routing_intent.file_reference != "thread_file":
+            prior_file_ask = _prior_user_ask_for_file_inherit(window)
+            if prior_file_ask and await _probe_names_thread_file(prior_file_ask):
+                thread_file_named = True
+                # Keep raw_ask as Continuity user_text (rewrite-gate). Identity comes
+                # only from thread_file_named; the prior ask is folded into effective
+                # text so Researcher hint_text still carries the filename (055).
+                routing_intent = resolve_routing_intent(
+                    contextualizer=output,
+                    dialog=window,
+                    raw_intent=raw_intent,
+                    has_turn_attachments=entry_has_attachments,
+                    user_text=raw_user if isinstance(raw_user, str) else None,
+                    thread_file_named=True,
+                )
+                rewritten_for_effective = f"{prior_file_ask}\n{raw_ask}".strip()
         # Prefer Continuity trust over raw Contextualizer refers_to_prior — recovery of
         # false new_topic sets trust without rewriting the frozen Contextualizer output.
         rehydrate_refers = (
@@ -318,7 +406,6 @@ async def continuation_node(
             if routing_intent.continuation_kind in {"answer", "format"}
             else bool(output.refers_to_prior if output is not None else False)
         )
-        slot_filled_for_sticky = bool(getattr(output, "choice_slot_filled", False)) if output is not None else False
         untrusted_context = await _apply_sticky_attachment_rehydrate(
             routing_intent=routing_intent,
             refers_to_prior=rehydrate_refers,
@@ -328,10 +415,9 @@ async def continuation_node(
             choice_slot_filled=slot_filled_for_sticky,
         )
 
-        raw_ask = (raw_user if isinstance(raw_user, str) else "").strip()
         effective_user_text = ContinuityPolicy.resolve_effective_user_text(
             raw_user_text=raw_ask,
-            rewritten_query=rewritten,
+            rewritten_query=rewritten_for_effective,
             has_turn_attachments=entry_has_attachments,
         )
         if not entry_has_attachments and rewritten.strip() and raw_ask and effective_user_text == raw_ask != rewritten.strip():
@@ -382,6 +468,7 @@ async def continuation_node(
             "effective_user_text": effective_user_text,
             "routing_intent": routing_intent,
             "untrusted_context": untrusted_context,
+            "thread_file_named": thread_file_named,
         }
         if classification is not None and raw_intent is not None:
             update["classification"] = classification.model_copy(update={"output": raw_intent})
@@ -541,11 +628,16 @@ async def attachment_selection_node(
         return cast("AgentGraphState", {"formatted": outcome.result})
     if outcome.status != "prepared":
         return cast("AgentGraphState", {})
+    # Rebuild citeable parts from *post-selection* blocks so Map-Reduce / pick
+    # cannot leave stale entry-time document_parts as a second conflicting SoT (065).
+    from palatium_ai.domain.policies.document_parts import document_parts_from_blocks
+
     return cast(
         "AgentGraphState",
         {
             "attachment_context": AttachmentTurnContext(blocks=outcome.blocks),
             "untrusted_context": outcome.fenced_text,
+            "document_parts": document_parts_from_blocks(outcome.blocks),
         },
     )
 
@@ -938,7 +1030,7 @@ async def parallel_workers_node(
         research_input = ResearcherInput(
             task_id=snapshot.task_id,
             context_packet=base_packet.model_copy(update={"execution_plan": research_plan}),
-            prior_context=selectors.resolved_prior_assistant_content(state),
+            prior_context=selectors.resolved_worker_prior_assistant_content(state),
             mcp_tool_output_max_chars=selectors.prompt_budget(state).mcp_tool_output_max_chars,
             revision_feedback=selectors.resolved_revision_feedback(state),
         )

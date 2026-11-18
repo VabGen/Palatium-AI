@@ -55,13 +55,15 @@ class ProductQualityCase(BaseModel, frozen=True):
         tags = tuple(str(t) for t in tags_raw) if isinstance(tags_raw, list) else ()
         turns_raw = raw.get("turns") or []
         turns = tuple(t for t in turns_raw if isinstance(t, dict)) if isinstance(turns_raw, list) else ()
+        case_input = raw.get("input")
+        case_context = raw.get("context")
         return cls(
             id=case_id,
             suite=suite,
-            agent=agent,  # type: ignore[arg-type]
+            agent=agent,
             scenario=scenario,
-            input=raw.get("input") if isinstance(raw.get("input"), dict) else {},
-            context=raw.get("context") if isinstance(raw.get("context"), dict) else {},
+            input=case_input if isinstance(case_input, dict) else {},
+            context=case_context if isinstance(case_context, dict) else {},
             expected=expected,
             grader=grader_raw,  # type: ignore[arg-type]
             needs_judge=bool(raw.get("needs_judge", grader_raw == "rule_then_judge")),

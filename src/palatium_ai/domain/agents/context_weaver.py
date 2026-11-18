@@ -42,7 +42,8 @@ class ContextWeaverInput(BaseModel):
     grounding_reason: str = Field(default="", max_length=500)
     # Presentation axis carried to the Formatter; never used by ExecutionPlanner.
     response_shape: ResponseShape = Field(default=RESPONSE_SHAPE_DEFAULT)
-    # ``thread_file`` → planner binds a direct platform.read_attachment call (070).
+    # ``thread_file`` → planner binds platform.read_attachment (070); strategy is
+    # seal (direct_tool_call) only for verbatim_extraction, else retrieve_then_reason.
     file_reference: FileReferenceKind = Field(default=FILE_REFERENCE_DEFAULT)
     # Plurality of a thread-file ask: ``all`` means "every file of this dialog", which
     # the worker expands into one read per file (resolved in code, never by the LLM).

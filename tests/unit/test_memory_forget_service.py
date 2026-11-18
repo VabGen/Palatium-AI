@@ -49,7 +49,9 @@ async def test_memory_forget_requires_hitl_before_delete(
     assert isinstance(card, HITLCardView)
     assert card.task_id.startswith(MEM_FORGET_TASK_PREFIX)
     assert card.purpose == "mcp_tool_approval"
-    assert "forget_memory" in card.title
+    # Consequence copy, not the wire tool name (055: users never read ``forget_memory``).
+    assert card.title == "Forget this memory?"
+    assert card.body
 
     hits_before = await port.search(namespace=user_namespace("user-1"), query="Russian", limit=4)
     assert hits_before

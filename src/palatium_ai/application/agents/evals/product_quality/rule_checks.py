@@ -95,8 +95,13 @@ def grade_field_preservation(text: str, expected: dict[str, Any]) -> GradeResult
     return None
 
 
-def grade_rules(text: str, expected: dict[str, Any]) -> GradeResult:
-    """Rule-first gate: contain / not-contain / structure / field preservation."""
+def grade_rules(text: str, expected: object) -> GradeResult:
+    """Rule-first gate: contain / not-contain / structure / field preservation.
+
+    ``expected`` is taken as ``object`` on purpose: the same helper grades cases decoded
+    straight from JSON in eval scripts, so the shape check is a real boundary guard, not a
+    type-system formality.
+    """
     if not isinstance(expected, dict):
         return failed(0.0, details="expected must be an object")
 

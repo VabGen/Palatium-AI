@@ -76,13 +76,13 @@ class MemoryOpWorker:
 
     async def _run_claimed(self, record: MemoryOpRecord) -> None:
         try:
-            if record.kind == "promote_entry":
-                await self._handle_promote(record)
-            elif record.kind == "clear_user_graph":
-                await self._handle_clear_graph(record)
-            else:
-                msg = f"unknown memory op kind={record.kind}"
-                raise ValueError(msg)
+            # ``MemoryOpRecord.kind`` is validated to ``MemoryOpKind`` at the row
+            # boundary, so this match is exhaustive by contract — no dead branch.
+            match record.kind:
+                case "promote_entry":
+                    await self._handle_promote(record)
+                case "clear_user_graph":
+                    await self._handle_clear_graph(record)
             await self._queue.complete(record.id)
         except Exception as exc:  # noqa: BLE001  # failed op is marked; worker continues
             logger.error(

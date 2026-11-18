@@ -7,20 +7,24 @@ from palatium_ai.domain.hitl.copy import HitlCopyPolicy
 
 def test_review_copy_russian() -> None:
     copy = HitlCopyPolicy.review(locale="ru-RU", confidence=0.5)
-    assert copy.title == "Требуется проверка"
-    assert "Контроль качества" in copy.body
+    assert copy.title == "Проверьте ответ"
+    assert copy.body == ""
+    assert "Контроль качества" not in copy.body
     assert "0.50" not in copy.body
     labels = {opt.action_id: opt.label for opt in copy.options}
     assert labels["approve"] == "Подтвердить"
-    assert labels["reject"] == "Отклонить и переработать"
+    assert labels["reject"] == "Переработать"
     assert copy.options[0].icon == "check"
 
 
 def test_review_copy_english_default() -> None:
     copy = HitlCopyPolicy.review(locale="en-US", confidence=0.5, document_title="Draft")
-    assert copy.title == "Draft"
+    # Document title is not chrome — answer is already above the card.
+    assert copy.title == "Review this answer"
+    assert copy.body == ""
     labels = {opt.action_id: opt.label for opt in copy.options}
     assert labels["approve"] == "Approve"
+    assert labels["reject"] == "Revise"
 
 
 def test_review_copy_und_locale_follows_cyrillic_prose() -> None:
@@ -30,8 +34,8 @@ def test_review_copy_und_locale_follows_cyrillic_prose() -> None:
         confidence=0.5,
         prose_hint="Обзор предоставленных документов",
     )
-    assert copy.title == "Требуется проверка"
-    assert "Контроль качества" in copy.body
+    assert copy.title == "Проверьте ответ"
+    assert copy.body == ""
     assert copy.options[0].label == "Подтвердить"
 
 

@@ -100,7 +100,13 @@ class AttachmentReferenceResolver:
         if not candidates and attachments:
             resolution = resolution.model_copy(update={"reason": "thread_files_not_readable"})
         if resolution.status != "resolved":
-            logger.warning(
+            # This resolver runs on *every* turn (the paraphrased-file-name probe), so a
+            # thread with no files yet is the ordinary case, not an incident: logging it
+            # at WARNING put a "failure" line on every greeting and buried the genuine
+            # refusals. Only a mismatch against existing rows is actionable (040, 055).
+            empty_thread = resolution.status == "no_candidates" and resolution.reason == "thread_has_no_files" and not attachments
+            log_failure = logger.debug if empty_thread else logger.warning
+            log_failure(
                 "attachment_reference.resolve_failed",
                 thread_id=scoped_thread,
                 status=resolution.status,

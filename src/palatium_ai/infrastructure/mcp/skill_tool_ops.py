@@ -62,8 +62,9 @@ async def skill_manage(
     writable, action, skill_name, content = gate
     if action == "delete":
         return await _delete_skill(writable, skill_name=skill_name)
+    # ``writable`` is also the read port (WritableSkillCatalogPort extends the read
+    # protocol): same object answers "does it exist", so the None-check cannot be lost.
     return await _upsert_skill(
-        catalog,
         writable,
         action=action,
         skill_name=skill_name,
@@ -109,8 +110,7 @@ def _prepare_manage(
 
 
 async def _upsert_skill(
-    catalog: SkillCatalogPort,
-    writable: WritableSkillCatalogPort,
+    catalog: WritableSkillCatalogPort,
     *,
     action: str,
     skill_name: str,
@@ -123,7 +123,7 @@ async def _upsert_skill(
         return _error_result(f"skill not found: {skill_name} (use action=create)")
 
     try:
-        summary = writable.upsert_skill(name=skill_name, content=content)
+        summary = catalog.upsert_skill(name=skill_name, content=content)
     except ValueError as exc:
         return _error_result(str(exc))
     except OSError as exc:

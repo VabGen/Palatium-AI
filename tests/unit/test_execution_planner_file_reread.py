@@ -33,14 +33,46 @@ def _input(**overrides: object) -> ContextWeaverInput:
 
 
 @pytest.mark.asyncio()
-async def test_thread_file_binds_direct_read_attachment() -> None:
+async def test_thread_file_binds_read_then_reason_by_default() -> None:
+    """Analysis / summary / recommendations re-read: synthesize, do not dump the file."""
     bundle = await ExecutionPlanner(capability_index=None).build(_input())
 
     step = bundle.steps[0]
-    assert step.strategy == "direct_tool_call"
+    assert step.strategy == "retrieve_then_reason"
     assert step.requires_tool_call is True
     assert (step.server_name, step.tool_name) == ("platform", "read_attachment")
     assert bundle.requires_tool_call is True
+    assert "Synthesize" in (step.rationale or "")
+
+
+@pytest.mark.asyncio()
+async def test_verbatim_thread_file_seals_direct_tool_call() -> None:
+    """Intent ``verbatim_extraction`` keeps the OCR body as the answer (W10.2)."""
+    from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
+
+    bundle = await ExecutionPlanner(capability_index=None).build(_input(candidate_capabilities=(VERBATIM_EXTRACTION_CAPABILITY,)))
+
+    step = bundle.steps[0]
+    assert step.strategy == "direct_tool_call"
+    assert (step.server_name, step.tool_name) == ("platform", "read_attachment")
+    assert "verbatim_extraction" in (step.rationale or "")
+
+
+@pytest.mark.asyncio()
+async def test_analysis_shape_blocks_seal_even_with_verbatim_tag() -> None:
+    """Defense-in-depth: mistagged capability must not dump the file under analysis."""
+    from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
+
+    bundle = await ExecutionPlanner(capability_index=None).build(
+        _input(
+            candidate_capabilities=(VERBATIM_EXTRACTION_CAPABILITY,),
+            response_shape="document_analysis",
+        )
+    )
+
+    step = bundle.steps[0]
+    assert step.strategy == "retrieve_then_reason"
+    assert step.tool_name == "read_attachment"
 
 
 @pytest.mark.asyncio()
@@ -54,7 +86,7 @@ async def test_sticky_fence_does_not_suppress_thread_file_reread() -> None:
 
     step = bundle.steps[0]
     assert (step.server_name, step.tool_name) == ("platform", "read_attachment")
-    assert step.strategy == "direct_tool_call"
+    assert step.strategy == "retrieve_then_reason"
     assert step.requires_tool_call is True
 
 

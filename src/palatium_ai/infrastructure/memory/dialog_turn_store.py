@@ -78,14 +78,19 @@ class PostgresDialogTurnStore:
             if safe_keep >= len(seqs):
                 return 0
             cutoff_seq = seqs[0] if safe_keep == 0 else seqs[safe_keep]
+            # RETURNING instead of ``rowcount``: the async Result protocol does not
+            # expose it, and the deleted rows are the exact count we must report.
             deleted = await session.execute(
-                delete(DialogTurnORM).where(
+                delete(DialogTurnORM)
+                .where(
                     DialogTurnORM.thread_id == thread_id,
                     DialogTurnORM.seq >= cutoff_seq,
                 )
+                .returning(DialogTurnORM.id)
             )
+            removed = len(deleted.all())
             await session.commit()
-            return int(deleted.rowcount or 0)
+            return removed
 
     async def _resolve_session_id(self, session: AsyncSession, *, thread_id: str) -> object | None:
         result = await session.execute(select(SessionORM.id).where(SessionORM.thread_id == thread_id))

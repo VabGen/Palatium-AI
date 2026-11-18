@@ -504,7 +504,7 @@ export const ru = {
   // --- HITL-карточки (`components/HitlCards.tsx`, `lib/hitl.ts`) ---
   'hitl.kicker.choice': 'Выберите один вариант',
   'hitl.kicker.tool': 'Нужно ваше разрешение',
-  'hitl.kicker.review': 'Требуется проверка',
+  'hitl.kicker.review': 'Проверьте ответ',
   'hitl.choiceHint': 'Нажмите одну из карточек, чтобы продолжить.',
   'hitl.stepUpHint': 'Для этого действия нужно подтвердить личность.',
   'hitl.riskLabel': 'Риск',
@@ -1300,7 +1300,7 @@ export const en: Record<MessageKey, string> = {
 
   'hitl.kicker.choice': 'Choose one',
   'hitl.kicker.tool': 'Your permission needed',
-  'hitl.kicker.review': 'Review required',
+  'hitl.kicker.review': 'Review this answer',
   'hitl.choiceHint': 'Click one option card to continue.',
   'hitl.stepUpHint': 'This action needs an identity check first.',
   'hitl.riskLabel': 'Risk',

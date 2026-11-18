@@ -28,9 +28,10 @@ from palatium_ai.domain.mcp.models import ToolExecutionPlan
 
 #: Prompt-size ceilings in ``count_tokens`` estimates (~4 chars/token): schema path
 #: 1471 → 1771 (W6) → 1866 (W7) → ~2100 (kimi-answer-formatting document_analysis
-#: few-shot, 2026-11-11); legacy similarly. Ceiling = measured + small buffer.
-_SCHEMA_PROMPT_TOKEN_CEILING = 2500
-_LEGACY_PROMPT_TOKEN_CEILING = 2600
+#: few-shot, 2026-11-11) → ~2600 (response_shape axis, 2026-11-17); legacy similarly.
+#: Ceiling = measured + small buffer.
+_SCHEMA_PROMPT_TOKEN_CEILING = 2700
+_LEGACY_PROMPT_TOKEN_CEILING = 2800
 #: Examples are illustrative, not the bulk of the instructions.
 _EXAMPLES_SHARE_CEILING = 0.30
 

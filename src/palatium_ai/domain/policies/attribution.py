@@ -30,6 +30,15 @@ _CURRENT_SESSION_CLAIM = re.compile(
     r")[^.?!\n]*[.?!]?",
     flags=re.UNICODE | re.IGNORECASE,
 )
+#: File-inventory / re-read refusals also say «в этом диалоге», but that is
+#: dialog *attachment* state — not a medium-recall frame. Rewriting them stopped
+#: at the ``.`` inside ``.pdf`` and turned the refusal into
+#: «Из сохранённой памяти….pdf», «ht_1-5.webp»… (055 / living assistant).
+_STRUCTURAL_DIALOG_FILE_STATE = re.compile(
+    r"[Вв]\s+этом\s+диалоге\s+"
+    r"(?:несколько\s+(?:подходящих\s+)?файлов|нет\s+загруженных\s+файлов)",
+    flags=re.UNICODE,
+)
 #: Wire-format provenance stamp. Clients must not render it as a file chip
 #: (see ``displaySourceRefs`` / ``isInternalSourceRef`` in ``web/src/lib/attachments.ts``).
 MEMORY_SOURCE_MARKER = "from memory"
@@ -53,7 +62,7 @@ class AttributionPolicy:
         changed = False
         new_blocks: list[object] = []
         for block in document.blocks:
-            if isinstance(block, ParagraphBlock) and _CURRENT_SESSION_CLAIM.search(block.text):
+            if isinstance(block, ParagraphBlock) and cls._claim_needs_rewrite(block.text):
                 text = cls._rewrite_claim(block.text)
                 new_blocks.append(block.model_copy(update={"text": text}))
                 changed = True
@@ -61,9 +70,11 @@ class AttributionPolicy:
             if isinstance(block, CalloutBlock):
                 body = block.body or ""
                 title = block.title or ""
-                if _CURRENT_SESSION_CLAIM.search(body) or _CURRENT_SESSION_CLAIM.search(title):
-                    new_body = cls._rewrite_claim(body) if _CURRENT_SESSION_CLAIM.search(body) else body
-                    new_title = _CURRENT_SESSION_CLAIM.sub("", title).strip() or block.title
+                body_needs = cls._claim_needs_rewrite(body)
+                title_needs = cls._claim_needs_rewrite(title)
+                if body_needs or title_needs:
+                    new_body = cls._rewrite_claim(body) if body_needs else body
+                    new_title = (_CURRENT_SESSION_CLAIM.sub("", title).strip() or block.title) if title_needs else block.title
                     new_blocks.append(block.model_copy(update={"body": new_body, "title": new_title}))
                     changed = True
                     continue
@@ -77,8 +88,17 @@ class AttributionPolicy:
         meta = document.meta.model_copy(update={"source_refs": refs})
         return document.model_copy(update={"blocks": tuple(new_blocks), "meta": meta})
 
+    @classmethod
+    def _claim_needs_rewrite(cls, text: str) -> bool:
+        """True only for false session frames — not structural file-inventory lines."""
+        if not text or _STRUCTURAL_DIALOG_FILE_STATE.search(text):
+            return False
+        return _CURRENT_SESSION_CLAIM.search(text) is not None
+
     @staticmethod
     def _rewrite_claim(text: str) -> str:
+        if _STRUCTURAL_DIALOG_FILE_STATE.search(text):
+            return text
         rewritten = _CURRENT_SESSION_CLAIM.sub(_MEMORY_REPLACEMENT_RU, text).strip()
         return rewritten or _MEMORY_REPLACEMENT_RU
 

@@ -48,8 +48,11 @@ class _CostReportingLLM:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        verbosity: object = None,
+        reasoning_effort: object = None,
     ) -> LLMCompletion:
         _ = messages, temperature, max_tokens, response_format, response_model, timeout_seconds
+        _ = verbosity, reasoning_effort
         self.calls += 1
         return LLMCompletion(
             content="ok",
@@ -68,8 +71,11 @@ class _CostReportingLLM:
         response_format: LLMResponseFormat | None = None,
         response_model: object = None,
         timeout_seconds: float | None = None,
+        verbosity: object = None,
+        reasoning_effort: object = None,
     ) -> AsyncIterator[LLMStreamDelta]:  # pragma: no cover - unused by these tests
         _ = messages, model, temperature, max_tokens, response_format, response_model, timeout_seconds
+        _ = verbosity, reasoning_effort
         yield LLMStreamDelta(content="ok")
 
 

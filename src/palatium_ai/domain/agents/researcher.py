@@ -17,6 +17,9 @@ WorkerKind = Literal["researcher", "coder", "analyst"]
 
 # Stable failure when planned MCP args cannot be built/validated.
 RESEARCHER_TOOL_ARGS_INVALID = "researcher_tool_args_invalid"
+# Upper bound for the evidence excerpt handed to Critic as an allowed PII source.
+# It mirrors the file-body ceiling, so a full contract still fits (020).
+EVIDENCE_EXCERPT_MAX_CHARS = 24_000
 # Thread file re-read: the reference could not be resolved to exactly one owner file.
 # Retrying cannot change the thread's contents — the graph must not revise on this.
 ATTACHMENT_REFERENCE_UNRESOLVED = "attachment_reference_unresolved"
@@ -55,6 +58,11 @@ class ResearcherOutput(BaseModel):
     grounding_satisfied: bool = False
     grounding_degraded: bool = False
     cannot_answer_without_source: bool = False
+    #: Bounded excerpt of the evidence this answer was written over (MCP body / fence).
+    #: It is a *turn input* for the constitution (020): a contract number or phone the
+    #: user asked us to summarize is a legitimate quote, not an invented PII leak.
+    #: Never streamed to the client — only Critic consumes it as an allowed source.
+    evidence_excerpt: str = Field(default="", max_length=EVIDENCE_EXCERPT_MAX_CHARS)
 
 
 class ResearcherTaskResult(TaskResult):

@@ -97,12 +97,23 @@ def test_rename_project_not_found(projects_client: tuple[TestClient, AsyncMock])
     assert response.status_code == 404
 
 
+class _SessionServiceStub:
+    """Only the access guard ``patch_session`` calls.
+
+    A bare ``AsyncMock`` cannot serve this name: Mock reserves ``assert*`` for its own
+    assertion helpers and raises ``AttributeError`` on the router's method.
+    """
+
+    async def assert_thread_access(self, **_kwargs: object) -> None:
+        return None
+
+
 @pytest.fixture()
 def pin_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, AsyncMock]:
     app = FastAPI()
     app.include_router(sessions.router, prefix="/api/sessions")
     service = AsyncMock()
-    resources = SimpleNamespace(project_service=service, session_service=AsyncMock())
+    resources = SimpleNamespace(project_service=service, session_service=_SessionServiceStub())
     monkeypatch.setattr(sessions, "get_app_resources", lambda _app: resources)
     monkeypatch.setattr(
         sessions,

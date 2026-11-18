@@ -61,3 +61,39 @@ def test_w101_attribution_rewrites_this_dialog_frame() -> None:
     assert "этом диалоге" not in text.casefold()
     assert "сохранённой памяти" in text.casefold()
     assert MEMORY_SOURCE_MARKER in out.meta.source_refs
+
+
+def test_attribution_preserves_file_inventory_refusal_with_pdf_dot() -> None:
+    """Live UX: memory rewrite must not eat «В этом диалоге несколько файлов: ….pdf».
+
+    The session-claim regex stopped at the extension dot and left
+    «Из сохранённой памяти….pdf», «ht_1-5.webp» — a false memory filename (055).
+    """
+    from palatium_ai.domain.policies.file_reference import FileReferencePolicy, FileReferenceResolution
+
+    refusal = FileReferencePolicy.refusal_message(
+        FileReferenceResolution(
+            status="ambiguous",
+            reason="several_thread_files",
+            candidates=("Заявка_сведения_СЭД.pdf", "ht_1-5.webp"),
+        )
+    )
+    doc = ContentDocument(
+        schema_version=1,
+        locale="ru-RU",
+        title=None,
+        blocks=(ParagraphBlock(type="paragraph", text=refusal),),
+        actions=(),
+        meta=DocumentMeta(confidence=1.0, requires_review=False, source_refs=()),
+    )
+    out = AttributionPolicy.rewrite_false_current_session(
+        doc,
+        memory_hints=("факт из medium, не про файлы диалога",),
+    )
+    text = " ".join(b.text for b in out.blocks if isinstance(b, ParagraphBlock))
+    assert text == refusal
+    assert "сохранённой памяти" not in text.casefold()
+    assert "Заявка_сведения_СЭД.pdf" in text
+    assert "ht_1-5.webp" in text
+    # Marker still records that medium hints were present this turn.
+    assert MEMORY_SOURCE_MARKER in out.meta.source_refs

@@ -50,7 +50,7 @@ def normalize_agent_schema(
     """Best-effort W8.1 field aliases — does not invent a second logging stack."""
     from palatium_ai.core.logging.agent_schema import normalize_agent_log_fields
 
-    return normalize_agent_log_fields(dict(event_dict))  # type: ignore[return-value]
+    return normalize_agent_log_fields(dict(event_dict))
 
 
 def redact_observability_strings(

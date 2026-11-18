@@ -70,6 +70,22 @@ def test_cleared_prior_context_does_not_fall_back_to_dialog() -> None:
 
 def test_untrusted_context_blocks_prior_even_if_intent_had_prior() -> None:
     """Fence for file B owns the turn — prior about file A must not reach workers."""
+    from palatium_ai.domain.agents.intent import IntentClassifierOutput, IntentTaskResult
+
+    classification = IntentTaskResult(
+        task_id="t1",
+        agent_role="intent_classifier",
+        status="success",
+        confidence=0.9,
+        output=IntentClassifierOutput(
+            task_kind="knowledge_request",
+            requires_mcp=False,
+            candidate_capabilities=("retrieve",),
+            confidence=0.9,
+            reasoning="file ask",
+            attachment_focus="current_uploads",
+        ),
+    )
     state = cast(
         "AgentGraphState",
         {
@@ -77,6 +93,7 @@ def test_untrusted_context_blocks_prior_even_if_intent_had_prior() -> None:
             "user_text": "Что в этом файле?",
             "untrusted_context": _FENCE_FILE_B,
             "dialog_window": _dialog_with_file_a_answer(),
+            "classification": classification,
             "routing_intent": EffectiveRoutingIntent(
                 task_kind="knowledge_request",
                 continuation_kind="answer",
@@ -88,6 +105,46 @@ def test_untrusted_context_blocks_prior_even_if_intent_had_prior() -> None:
     )
     assert resolved_prior_assistant_content(state) is None
     assert resolved_worker_summary(state) is None
+
+
+def test_attachment_focus_none_preserves_prior() -> None:
+    """Upload present but ask disowns files — dialog prior must still reach workers."""
+    from palatium_ai.domain.agents.intent import IntentClassifierOutput, IntentTaskResult
+
+    classification = IntentTaskResult(
+        task_id="t1",
+        agent_role="intent_classifier",
+        status="success",
+        confidence=0.9,
+        output=IntentClassifierOutput(
+            task_kind="knowledge_request",
+            requires_mcp=False,
+            candidate_capabilities=("retrieve",),
+            confidence=0.9,
+            reasoning="identity ask beside upload",
+            attachment_focus="none",
+        ),
+    )
+    state = cast(
+        "AgentGraphState",
+        {
+            "task_id": "t1",
+            "user_text": "Как меня зовут?",
+            "untrusted_context": _FENCE_FILE_B,
+            "dialog_window": _dialog_with_file_a_answer(),
+            "classification": classification,
+            "routing_intent": EffectiveRoutingIntent(
+                task_kind="knowledge_request",
+                continuation_kind="answer",
+                prior_context="Пользователя зовут Алексей.",
+                trust_prior_for_workers=True,
+                reasoning="attachment_focus=none keeps prior",
+            ),
+        },
+    )
+    prior = resolved_prior_assistant_content(state)
+    assert prior is not None
+    assert "Алексей" in prior
 
 
 def test_trusted_prior_still_flows_without_attachments() -> None:

@@ -890,7 +890,9 @@ async def test_request_quarantine_restore_mints_hitl_card() -> None:
 
     assert card.task_id.startswith("att-restore-")
     assert card.purpose == "mcp_tool_approval"
-    assert "attachment_quarantine_restore" in card.title
+    # Consequence-first copy, never the wire tool id (020: MCP ids stay in audit).
+    assert card.title == "Restore this file?"
+    assert "attachment_quarantine_restore" not in card.title
 
 
 async def test_request_quarantine_restore_allows_rejected_injection() -> None:

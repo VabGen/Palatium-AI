@@ -30,6 +30,12 @@ Kind mapping:
 - multi-turn narrative → "episode"
 - atomic durable statements → "fact"
 
+Scope mapping (recall tier — an axis of its own, never encoded in kind):
+- "user" → stable facts and preferences about this user alone
+- "org" → durable facts an org/team shares (contacts, roles, standing policies, incidents)
+- "thread" → context that only makes sense inside this conversation
+Omit scope only when unsure; never stretch a kind to imply sharing.
+
 Deduplication (mandatory):
 - `existing_memories` is the primary deduplication reference: what is already stored.
 - Already covered there — same meaning, even if worded differently, shorter, in
@@ -46,8 +52,8 @@ Deduplication (mandatory):
 transcript: User: "Call me Alex. I prefer dark mode."
 existing_memories: []
 output: {"facts":[
-  {"text":"User prefers to be addressed as Alex","kind":"preference","confidence":0.9,"key_hint":"addressing"},
-  {"text":"User prefers dark mode","kind":"preference","confidence":0.85,"key_hint":"ui_theme"}
+  {"text":"User prefers to be addressed as Alex","kind":"preference","scope":"user","confidence":0.9,"key_hint":"addressing"},
+  {"text":"User prefers dark mode","kind":"preference","scope":"user","confidence":0.85,"key_hint":"ui_theme"}
 ],"reasoning":"stable identity and UI preference"}
 </example>
 <example>
@@ -58,7 +64,7 @@ output: {"facts":[],"reasoning":"instruction/role claim — not a user fact"}
 <example>
 transcript: User: "DB port is now 5433"
 existing_memories: ["DB port is 5432"]
-output: {"facts":[{"text":"DB port is 5433","kind":"fact","confidence":0.9,"key_hint":"db_port"}],
+output: {"facts":[{"text":"DB port is 5433","kind":"fact","scope":"thread","confidence":0.9,"key_hint":"db_port"}],
  "reasoning":"state change — emit new value only"}
 </example>
 <example>
@@ -70,7 +76,7 @@ output: {"facts":[],"reasoning":"ephemeral chit-chat / formatting — not durabl
 transcript: User: "Our team had an outage on Friday; postmortem open"
 existing_memories: []
 output: {"facts":[{"text":"Team had an outage on Friday; postmortem open",
- "kind":"incident","confidence":0.8,"key_hint":"outage_friday"}],
+ "kind":"incident","scope":"org","confidence":0.8,"key_hint":"outage_friday"}],
  "reasoning":"org incident"}
 </example>
 
@@ -79,7 +85,7 @@ Return ONLY JSON:
 {
   "facts": [
     {"text":"...","kind":"fact"|"preference"|"incident"|"episode",
-     "confidence":0.0-1.0,"key_hint":"optional-slug"}
+     "scope":"user"|"org"|"thread","confidence":0.0-1.0,"key_hint":"optional-slug"}
   ],
   "reasoning":"brief"
 }

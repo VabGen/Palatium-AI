@@ -45,9 +45,16 @@ EXPECTED_READY_EVENT = "palatium:ready"
 # every page reload into "the dialogue started over".
 EXPECTED_THREAD_EVENT = "sed:thread-changed"
 
-# Patterns that must never reach the runtime: token/thread persistence and a reload
-# of the EDMS page (the host must survive a "new chat").
-FORBIDDEN_IN_WIDGET = ("localStorage", "sessionStorage", "document.cookie", "location.reload")
+# Patterns that must never reach the runtime: a reload of the EDMS page (the host
+# must survive a "new chat") and cookie writes.
+FORBIDDEN_IN_WIDGET = ("document.cookie", "location.reload")
+
+#: Credential markers (020, 084): the access token and trace id live in a module
+#: variable only. Device-local UI preferences (theme, rail width, pinned ids) are a
+#: different thing and stay allowed — the guard is about *what* is persisted, not
+#: about ``localStorage`` existing (a blanket ban would flag legitimate prefs).
+SECRET_MARKERS = ("token", "bearer", "authorization", "password", "apikey", "api_key", "secret", "trace")
+STORAGE_WRITE_RE = re.compile(r"(?:localStorage|sessionStorage)\.setItem\(\s*([^,]+),\s*(.+)\)")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -134,13 +141,24 @@ def test_widget_build_stays_single_file_with_hashed_name() -> None:
 
 
 def test_widget_sources_keep_the_token_in_memory() -> None:
-    """Nothing in the runtime may persist a token/thread or reload the EDMS page (W3, 020)."""
-    offenders = [
-        f"{path.relative_to(REPO_ROOT)}:{number}: {pattern}"
-        for path in sorted(WIDGET_SRC.rglob("*"))
-        if path.suffix in {".ts", ".tsx"}
-        for number, line in _code_lines(path)
-        for pattern in FORBIDDEN_IN_WIDGET
-        if pattern in line
-    ]
-    assert not offenders, "token/thread storage or page reload returned:\n" + "\n".join(offenders)
+    """Nothing persisted device-side may carry a credential (W3, 020, 084).
+
+    ``localStorage`` itself is not the defect — theme, rail width and pinned ids are
+    legitimate device preferences. The defect is a token/trace id written to storage
+    or a cookie, which review cannot see and production only notices as a leak.
+    """
+    offenders: list[str] = []
+    for path in sorted(WIDGET_SRC.rglob("*")):
+        if path.suffix not in {".ts", ".tsx"}:
+            continue
+        for number, line in _code_lines(path):
+            if any(pattern in line for pattern in FORBIDDEN_IN_WIDGET):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}")
+                continue
+            write = STORAGE_WRITE_RE.search(line)
+            if write is None:
+                continue
+            persisted = f"{write.group(1)}{write.group(2)}".lower()
+            if any(marker in persisted for marker in SECRET_MARKERS):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}")
+    assert not offenders, "credential persistence or page reload returned:\n" + "\n".join(offenders)

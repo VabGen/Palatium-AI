@@ -99,9 +99,12 @@ Also decide:
     pasted text, or it is general knowledge. Also "none" when has_thread_files=false.
   Do NOT set "thread_file" when the ask is answerable from what you can see in the text;
   this axis routes to a storage read of the user's own file.
-  Continuity keeps ``thread_file`` only with code-named evidence or with an *explicit*
-  attachment_scope of "single"/"all". Bare thread_file+auto is demoted to dialog prior —
-  so never set thread_file for pasted chat prose («текст в чате», «что я написал выше»).
+  Continuity keeps ``thread_file`` only with code-named evidence or with *explicit*
+  attachment_scope "single"/"all" **and** a doc-role cue («файл»/«документ»). Bare
+  thread_file+auto and Intent-only single over chat paste are demoted — so never set
+  thread_file / single for pasted chat prose («текст в чате», multi-task paste analysis,
+  «что я написал выше»), even when has_thread_files=true and the paste shares a word
+  with an upload title («договор» ≠ Договор_*.docx).
 - attachment_scope (which files the ask targets; also applies to a thread-file ask):
   • "auto" — DEFAULT: no explicit plurality; a general ask («сделай выжимку», «план по
     документам») covers every eligible file.
@@ -232,8 +235,13 @@ Examples (input → output axes; reasoning omitted):
 - {"text":"перечитай документ","has_prior_dialog":true,"has_thread_files":false} →
   knowledge_request, grounding="optional", file_reference="none"
 - {"text":"текст который передал в чат","has_prior_dialog":true,"has_thread_files":true} →
-  knowledge_request, file_reference="none", grounding="optional"
+  knowledge_request, file_reference="none", attachment_focus="none", grounding="optional"
   (dialog prose / pasted message — not an upload; do not ask which file to re-read)
+- {"text":"1. Выдели тезисы: … 3. Извлеки даты: … подписала договор с ООО…",
+  "has_prior_dialog":true,"has_thread_files":true} →
+  knowledge_request, file_reference="none", attachment_scope="auto",
+  attachment_focus="none"
+  (multi-task paste; word «договор» in prose is not a thread-file ask)
 - {"text":"предложи несколько тем на выбор","has_prior_dialog":false} → clarification_needed,
   requires_user_choice=true, underspecification_kind="discrete_choice",
   candidate_capabilities=["user_choice"], grounding="none"

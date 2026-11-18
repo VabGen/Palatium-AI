@@ -56,8 +56,8 @@ AUDIT_PROMPT_REVISIONS: tuple[PromptRevision, ...] = (
     PromptRevision(
         prompt_id="memory_keeper.system",
         relative_path="application/agents/memory_keeper/prompts.py",
-        sha256="710637e62ffed0a1caa7d02eeaa84f902660d2f8968960dacbdf72348a17077f",
-        changed_on="2026-11-16",
+        sha256="6c3623a5e79dbc81ec085b7313516818a359c870214fd3b28f79a50143675fca",
+        changed_on="2026-11-17",
         adr_or_eval="golden_manifest:memory_keeper + tests/unit/test_memory_keeper_prompt.py",
     ),
     PromptRevision(
@@ -77,16 +77,16 @@ AUDIT_PROMPT_REVISIONS: tuple[PromptRevision, ...] = (
     PromptRevision(
         prompt_id="researcher.system",
         relative_path="application/agents/researcher/prompts.py",
-        sha256="6fe503b4452755ffcbf2d3026fb2c5503e624ccfb51cf07564e409d79fc83a98",
-        changed_on="2026-11-16",
-        adr_or_eval="golden_manifest:researcher + tests/unit/test_researcher_full_deliverable.py",
+        sha256="e94904ef7f18e8d501b7e0df78e6c7a1f48c387153c9be6c9836ab7c0ba06bc0",
+        changed_on="2026-11-17",
+        adr_or_eval="golden_manifest:researcher + tests/unit/test_document_synthesis_policy.py",
     ),
     PromptRevision(
         prompt_id="intent_classifier.system",
         relative_path="application/agents/intent_classifier/prompts.py",
-        sha256="4ae41a95e1436ef4e20262bf14b6f9fcf0c77aa78b0cf9bcaa76f3826df50e99",
-        changed_on="2026-11-16",
-        adr_or_eval="golden_manifest:intent_classifier + tests/unit/test_intent_classifier.py",
+        sha256="696eb730e0c0830ce81ad90b1c86fc4d29c15db848816db665647a53b69ad9b4",
+        changed_on="2026-11-17",
+        adr_or_eval="golden_manifest:intent_classifier + tests/unit/test_intent_file_reference_bridge.py",
     ),
     PromptRevision(
         prompt_id="option_synthesizer.system",

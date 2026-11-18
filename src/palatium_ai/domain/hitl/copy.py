@@ -124,6 +124,32 @@ _TOOL_INTENTS: Final[dict[tuple[str, str], _ToolIntent]] = {
         body_ru="Статус доверия к записи в памяти будет обновлён.",
         body_en="The trust status of this memory entry will be updated.",
     ),
+    ("platform", "attachment_analyze"): _ToolIntent(
+        title_ru="Разобрать файл?",
+        title_en="Analyze this file?",
+        body_ru="Ассистент прочитает файл и посчитает данные локально.",
+        body_en="The assistant will read the file and compute over it locally.",
+        approve_ru="Разобрать",
+        approve_en="Analyze",
+        deny_ru="Отмена",
+        deny_en="Cancel",
+    ),
+    ("platform", "attachment_quarantine_restore"): _ToolIntent(
+        title_ru="Восстановить файл?",
+        title_en="Restore this file?",
+        body_ru=(
+            "Файл был заблокирован: в нём нашли инструкции для ассистента. "
+            "Восстановление вернёт его в обработку — только если вы проверили содержимое."
+        ),
+        body_en=(
+            "This file was blocked because it contained instructions aimed at the assistant. "
+            "Restoring returns it to processing — only if you have checked the content."
+        ),
+        approve_ru="Восстановить",
+        approve_en="Restore",
+        deny_ru="Оставить заблокированным",
+        deny_en="Keep blocked",
+    ),
 }
 
 _PREVIEW_FIELD_RE: Final[re.Pattern[str]] = re.compile(
@@ -232,19 +258,21 @@ class HitlCopyPolicy:
         document_title: str | None = None,
         prose_hint: str | None = None,
     ) -> HitlReviewCopy:
-        # confidence stays in the signature for callers / metrics; body is
-        # consequence-first (no ops floats — Cloudscape / ChatGPT pattern).
+        # confidence / document_title stay for callers / metrics; chrome is
+        # consequence-first for the human (Cloudscape / ChatGPT): short ask +
+        # actions. No "quality gate" / ops jargon in the body — the answer is
+        # already visible above the card (020 HITL UI, 055).
         _ = confidence
-        title = (document_title or "").strip()
-        if _use_cyrillic_copy(locale, title, prose_hint):
+        _ = document_title
+        if _use_cyrillic_copy(locale, prose_hint):
             return HitlReviewCopy(
-                title=title or "Требуется проверка",
-                body=("Контроль качества отметил этот ответ. Подтвердите, чтобы оставить его, или отклоните для переработки."),
+                title="Проверьте ответ",
+                body="",
                 options=_review_options_ru(),
             )
         return HitlReviewCopy(
-            title=title or "Review required",
-            body=("Quality gate flagged this answer. Approve to keep it, or reject to regenerate."),
+            title="Review this answer",
+            body="",
             options=_review_options_en(),
         )
 
@@ -350,7 +378,7 @@ def _review_options_ru() -> tuple[HITLOption, ...]:
         ),
         HITLOption(
             action_id="reject",
-            label="Отклонить и переработать",
+            label="Переработать",
             kind="reject",
             style="danger",
             icon="x",
@@ -369,7 +397,7 @@ def _review_options_en() -> tuple[HITLOption, ...]:
         ),
         HITLOption(
             action_id="reject",
-            label="Reject & revise",
+            label="Revise",
             kind="reject",
             style="danger",
             icon="x",

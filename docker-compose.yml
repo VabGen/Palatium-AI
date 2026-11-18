@@ -338,7 +338,12 @@ services:
           'cypher-shell -a bolt://127.0.0.1:7687 -u "$${NEO4J_AUTH%%/*}" -p "$${NEO4J_AUTH#*/}" "RETURN 1;"',
         ]
       interval: 10s
-      timeout: 10s
+      # cypher-shell spawns a JVM per probe: 5.7 s measured on an idle container, and
+      # over 10 s during the simultaneous cold start of `make up-full` — the probe then
+      # timed out, neo4j went "unhealthy", and `api` (condition: service_healthy) was
+      # never created while the database was serving bolts fine. 30 s still catches a
+      # hung server (12 retries), it just stops measuring JVM startup as an outage.
+      timeout: 30s
       retries: 12
       start_period: 45s
 
@@ -458,6 +463,14 @@ services:
       TIER_DEEP_API_KEY: ${QWEN_API_KEY}
       TIER_DEEP_API_BASE: ${QWEN_BASE_URL}
       TIER_DEEP_TIMEOUT: "120"
+
+      # Chat vision (LLM_VISION_MODEL=vision-tier) + OCR gateway alias.
+      # Point TIER_VISION_MODEL at a vision-capable upstream id when the corporate
+      # gateway exposes one; until then same OpenAI-compat generative endpoint.
+      TIER_VISION_MODEL: "${TIER_VISION_MODEL:-openai/generative-model}"
+      TIER_VISION_API_KEY: ${QWEN_API_KEY}
+      TIER_VISION_API_BASE: ${QWEN_BASE_URL}
+      TIER_VISION_TIMEOUT: "120"
 
     depends_on:
       # Prisma opens ``LITELLM_DB_URL`` before port 4000 exists: a cold container runs
@@ -704,8 +717,12 @@ services:
       test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1" ]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 30s
+      # 30 s + 12 x 10 s (150 s) was enough when `up-full` started three containers; with
+      # the metric stack it is not: on a cold, loaded 12 GiB VM ClickHouse takes minutes to
+      # answer /ping, compose gives up with "dependency clickhouse failed to start", and
+      # langfuse-web is never created — for a database that is merely initializing.
+      retries: 24
+      start_period: 60s
     security_opt:
       - no-new-privileges:true
 

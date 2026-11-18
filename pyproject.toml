@@ -255,6 +255,12 @@ filterwarnings = [
     "ignore::DeprecationWarning:neo4j.*",
     "ignore:.*asyncio\\.(get|set)_event_loop_policy.*:DeprecationWarning",
     "ignore:.*asyncio\\.(AbstractEventLoopPolicy|WindowsSelectorEventLoopPolicy|DefaultEventLoopPolicy).*:DeprecationWarning",
+    # litellm builds a `ReadOnly` TypedDict for its GitHub Copilot authenticator at
+    # import time (lazy provider registry, hit by any provider dispatch). The
+    # pydantic notice about not protecting ReadOnly items is emitted from vendored
+    # code we do not own and cannot change — 017 triage: exclude the vendor path,
+    # keep the global "error" policy for everything we write.
+    "ignore:(Item|Extra items).* on TypedDict class .* using the `ReadOnly` qualifier:UserWarning",
 ]
 markers = [
     "live: hits a real LLM / network; opt-in via PALATIUM_LIVE_EVAL=1",

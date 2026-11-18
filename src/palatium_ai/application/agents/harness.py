@@ -51,6 +51,7 @@ from palatium_ai.domain.policies.subagent_context import (
     context_char_len,
     context_ratio,
 )
+from palatium_ai.domain.policies.types import AgentRole
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -744,7 +745,7 @@ class Harness:
         agent: BaseAgent,
         output: AgentOutput,
         *,
-        role: str,
+        role: AgentRole,
     ) -> tuple[AgentOutput, str]:
         """Schema gate then agent.verify (W8.4 before LLM-judge)."""
         mismatch = check_agent_output_schema(
@@ -994,6 +995,7 @@ def _prompt_version_for_role(role: str) -> str:
     from palatium_ai.application.agents.evals.constitution_hash import prompt_file_version
 
     agents_root = Path(__file__).resolve().parent
+    candidates: tuple[Path, ...]
     if role == "context_enricher":
         candidates = (
             agents_root / "context_enricher" / "continuation" / "prompts.py",

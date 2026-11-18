@@ -158,7 +158,8 @@ async def _run(
 
 
 @pytest.mark.asyncio()
-async def test_resolved_reference_reads_the_file_without_an_arguments_llm_call() -> None:
+async def test_resolved_reference_reads_the_file_then_synthesizes() -> None:
+    """Analysis re-read: deterministic args, then one synthesis — never a body dump."""
     output, llm, registry = await _run(_FakeResolver(_resolved()))
 
     assert output.status == "success"
@@ -169,11 +170,41 @@ async def test_resolved_reference_reads_the_file_without_an_arguments_llm_call()
     assert call.arguments["attachment_id"] == str(_ATTACHMENT_ID)
     # Actor identity is bound from the agent context, never authored by the model (020).
     assert call.arguments["user_id"] == "actor-user"
-    # Deterministic arguments + unwrapped body — no synthesis LLM (W10.2).
-    assert llm.calls == []
+    # Non-verbatim ask: exactly one synthesis call over the body (055).
+    assert len(llm.calls) == 1
     assert "UNTRUSTED_TOOL_OUTPUT" not in output.output.summary
     assert "read_attachment" not in output.output.summary
+    assert "Требования к системе" not in output.output.summary
+
+
+@pytest.mark.asyncio()
+async def test_verbatim_reference_seals_the_body_without_synthesis() -> None:
+    """Extract / OCR ask keeps the deterministic seal — no synthesis LLM (W10.2)."""
+    from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
+
+    packet = _packet_from_raw(
+        {
+            "user_text": "дай полный текст файла из этого чата",
+            "task_kind": "knowledge_request",
+            "route": "researcher",
+            "requires_mcp": True,
+            "requires_tool_call": True,
+            "selected_strategy": "direct_tool_call",
+            "server_name": "platform",
+            "tool_name": "read_attachment",
+            "route_plan": "thread file re-read from storage",
+            "candidate_capabilities": [VERBATIM_EXTRACTION_CAPABILITY],
+        },
+        "verbatim-task",
+    )
+    output, llm, registry = await _run(_FakeResolver(_resolved()), packet=packet)
+
+    assert registry.calls, "read_attachment must be invoked"
+    assert output.status == "success"
+    assert isinstance(output.output, ResearcherOutput)
+    assert llm.calls == []
     assert "Требования к системе" in output.output.summary
+    assert "read_attachment" not in output.output.summary
 
 
 @pytest.mark.asyncio()

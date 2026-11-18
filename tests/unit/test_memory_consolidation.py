@@ -118,12 +118,14 @@ async def test_sleep_time_routes_preference_user_and_entity_org() -> None:
             {
                 "text": "User prefers tables for agendas",
                 "kind": "preference",
+                "scope": "user",
                 "confidence": 0.91,
                 "key_hint": "pref-tables",
             },
             {
                 "text": "Acme legal contact is Ivanova",
-                "kind": "entity",
+                "kind": "fact",
+                "scope": "org",
                 "confidence": 0.88,
                 "key_hint": "acme-legal",
             },
@@ -165,6 +167,7 @@ async def test_sleep_time_routes_preference_user_and_entity_org() -> None:
     assert user_hits
     assert user_hits[0]["kind"] == "preference"
     assert org_hits
-    assert org_hits[0]["kind"] == "entity"
+    # Sharing tier travels in scope; the content type stays truthful (a contact is a fact).
+    assert org_hits[0]["kind"] == "fact"
     assert thread_hits
     assert thread_hits[0]["kind"] == "fact"

@@ -12,6 +12,10 @@ from palatium_ai.application.tools.mcp import MCPToolCallOutcome
 from palatium_ai.core.logging.redact import redact_text
 from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutput
 from palatium_ai.domain.llm.json_codec import LLMJSONError, loads_llm_json
+from palatium_ai.domain.mcp.platform_schemas import (
+    PlatformReadAttachmentOutput,
+    PlatformSearchKnowledgeOutput,
+)
 from palatium_ai.domain.memory.tool_output import (
     compress_worker_context,
     wrap_untrusted_tool_output,
@@ -223,12 +227,29 @@ def merge_attachment_read_outcomes(outcomes: tuple[MCPToolCallOutcome, ...]) -> 
 
 def _attachment_fence(raw: str) -> str:
     """Extract ``fenced_text`` from a read_attachment envelope, else keep ``raw``."""
+    parsed = parse_read_attachment_output(raw)
+    if parsed is not None:
+        return parsed.fenced_text or raw
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return raw
     fence = payload.get("fenced_text") if isinstance(payload, dict) else None
     return fence if isinstance(fence, str) and fence else raw
+
+
+def parse_read_attachment_output(raw: str) -> PlatformReadAttachmentOutput | None:
+    """Validate ``read_attachment`` JSON against the frozen output envelope (070)."""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return PlatformReadAttachmentOutput.model_validate(payload)
+    except Exception:  # noqa: BLE001  # malformed tool JSON degrades to raw fence path
+        return None
 
 
 def unwrap_read_attachment_text(raw: str) -> str:
@@ -259,7 +280,14 @@ def _strip_attachment_markers(text: str) -> str:
 
 
 def mcp_payload_is_empty(raw: str) -> bool:
-    """True when the tool sent no text or a JSON object with hit_count 0."""
+    """True when the tool sent no text or a search envelope with ``hit_count`` 0.
+
+    Emptiness is a *search* contract: only a payload that actually carries
+    ``hit_count``/``hits`` may be read as "nothing found". Other tool envelopes
+    (``graph_query`` rows, attachment bodies, web results) previously validated
+    against the search model with its ``hit_count=0`` default and were silently
+    dropped as empty (055).
+    """
     text = raw.strip()
     if not text:
         return True
@@ -269,9 +297,13 @@ def mcp_payload_is_empty(raw: str) -> bool:
         return False
     if not isinstance(payload, dict):
         return False
-    hit_count = payload.get("hit_count")
-    # bool is an int subclass; True must not count as hit_count 0.
-    return type(hit_count) is int and hit_count == 0
+    if "hit_count" not in payload and "hits" not in payload:
+        return False
+    try:
+        typed = PlatformSearchKnowledgeOutput.model_validate_json(text)
+    except Exception:  # noqa: BLE001  # malformed search envelope is not evidence
+        return False
+    return typed.hit_count == 0
 
 
 def summarize_mcp_content(

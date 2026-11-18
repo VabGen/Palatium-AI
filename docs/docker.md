@@ -39,7 +39,11 @@ docker compose --profile docker-mcp --profile docker-api up -d --build
 | `mcp-analytics` | 8081 | MCP stub Analytics (профиль `docker-mcp`) |
 | `api` | 8000 | FastAPI + agents (профиль `docker-api`) |
 | `/ui/` | 8000 | Production chat UI, собранный из `web/` перед build |
-| `langfuse` | 3000 | Observability (профиль `observability`) |
+| `langfuse` | 3000 | Observability: Langfuse v3 UI (профиль `observability`) |
+| `grafana` | 3001 | Observability: дашборды (`up-full` / `make obs-up`) |
+| `prometheus` | 9090 | Observability: метрики и правила алертов |
+| `loki` | 3100 | Observability: логи (приёмник; shipper — см. §6) |
+| `alertmanager` | 9093 | Observability: маршрутизация алертов |
 
 > **`docker-compose.override.yml`** отключает MCP/API в Docker по умолчанию.
 > Без профилей `docker-mcp` / `docker-api` эти сервисы **не поднимаются** —
@@ -434,13 +438,15 @@ TIER_FRONTIER_API_BASE: ${ANTHROPIC_BASE_URL}
 Профиль `observability` поднимает Langfuse v3 = `clickhouse` + `langfuse-web` +
 `langfuse-worker` (+ `minio`/`silo-init` как хранилище трасс).
 
-**Память — главное ограничение.** Заявленные лимиты: core ~6016 MiB (postgres, redis,
-neo4j, litellm, api, minio, MCP) и observability ещё ~3328 MiB. Вместе ~9.1 GiB, поэтому
-`make up-full` требует VM не меньше ~9.1 GiB: поднимите `memory=12GB` в
-`%USERPROFILE%\.wslconfig` и перезапустите Docker Desktop. На дефолтной VM (~7.7 GiB)
-сработает VM-wide OOM killer — и первым он снимет самый крупный RSS (postgres уйдёт в
-crash-recovery). Именно поэтому профиль не входит в `make up`, а не «для чистоты».
-Этот бюджет закреплён тестом `tests/unit/test_container_hardening.py`.
+**Память — главное ограничение.** Потолки заданы `mem_limit` в `docker-compose.yml`
+(Langfuse) и в `deploy/observability/compose.observability.yml` (метрик-стек: 864 MiB), и
+их сумма — бюджет против RAM Docker-VM, а не тюнинг: на меньшей VM срабатывает VM-wide
+OOM killer, и первым он снимает самый крупный RSS (postgres уходит в crash-recovery).
+Именно поэтому профиль не входит в `make up`, а не «для чистоты». Сумму сверяет
+`tests/unit/test_container_hardening.py`, а `make up-full` на старте сравнивает её с
+фактическим размером VM (`scripts/make_helpers.py vm-budget`) и печатает, до скольких
+гигабайт её поднять; рабочий размер в `%USERPROFILE%\.wslconfig` —
+`memory=13GB` + перезапуск Docker Desktop (потолки `up-full` = 13024 MiB).
 
 ### Ожидание готовности в `make up` / `make up-full` / `make rebuild-app`
 
@@ -468,11 +474,15 @@ S3-хранилище, clamd или API не ответили за отведё�
 # Если том уже существовал — создайте вручную:
 docker compose exec postgres psql -U postgres -c "CREATE DATABASE langfuse;"
 
-# Поднять только observability (поверх уже работающего стека)
+# Поднять только observability (поверх уже работающего стека):
+# Langfuse v3 + Prometheus/Grafana/Loki/Alertmanager
 make obs-up
 # или вручную
-docker compose --env-file env/.env --profile observability up -d minio silo-init clickhouse langfuse-web langfuse-worker
-# UI: http://localhost:3000
+docker compose --env-file env/.env -f docker-compose.yml -f deploy/observability/compose.observability.yml `
+  --profile observability up -d minio silo-init clickhouse langfuse-web langfuse-worker `
+  prometheus alertmanager grafana loki
+# Langfuse: http://localhost:3000 · Grafana: http://localhost:3001
+# Prometheus: http://localhost:9090 · Loki: http://localhost:3100
 
 # Остановить (тома Langfuse/ClickHouse сохраняются; minio не трогаем — он общий с вложениями)
 make obs-down
@@ -493,11 +503,26 @@ docker compose --env-file env/.env --profile mcp-gateway up -d
 
 ### Observability stack (Prometheus / Grafana / Loki / Alertmanager)
 
+Живёт отдельным compose-оверлеем `deploy/observability/compose.observability.yml`:
+в `docker-compose.yml` его нет, поэтому `--profile observability` сам по себе поднимает
+только Langfuse v3. С 2026-11-18 оверлей включён в `make up-full` и `make obs-up`; раньше
+его надо было подключать вручную, и Grafana «пропадала» после каждого `up-full`.
+
 ```powershell
+# как часть полного стека
+make up-full
+
+# только метрик-стек (Langfuse уже работает)
 docker compose --env-file env/.env `
   -f docker-compose.yml `
-  -f deploy/observability/compose.observability.yml up -d
+  -f deploy/observability/compose.observability.yml up -d prometheus alertmanager grafana loki
 ```
+
+Grafana слушает **3001** (3000 занят Langfuse — два сервиса не могут делить один
+host-порт). Promtail в набор не входит: он читает лог-каталог Docker-демона, а на
+Docker Desktop for Windows этот путь лежит внутри WSL-VM — смонтированный с хоста он
+пуст, контейнер «healthy» и молча ничего не отправляет. На Linux-хосте он поднимается
+явно: `--profile logs-shipper up -d promtail`.
 
 Детали и SLO — [`../deploy/observability/README.md`](../deploy/observability/README.md)
 и [`../deploy/observability/SLO.md`](../deploy/observability/SLO.md).

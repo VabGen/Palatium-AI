@@ -19,3 +19,4 @@ MEMORY_KEEPER_CONFIG = AgentConfig(
 
 MAX_EXISTING_MEMORIES = 20
 MEMORY_KINDS = frozenset({"preference", "fact", "incident", "episode"})
+MEMORY_SCOPES = frozenset({"user", "org", "thread"})

@@ -4290,6 +4290,52 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
   background: var(--bg-elevated);
   box-shadow: none;
 }
+/*
+ * Quality-review: compact action strip under the answer (ZONE_BODY), not a
+ * second essay panel. Brand Book Color System — stroke/canvas only; spacing
+ * from --space-*.
+ */
+.hitl-card.hitl-review {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+.hitl-card.hitl-review .hitl-header {
+  flex: 1 1 10rem;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+.hitl-card.hitl-review .hitl-header h3 {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.hitl-card.hitl-review .hitl-mark {
+  margin-top: 0;
+}
+.hitl-card.hitl-review .hitl-meta {
+  flex: 1 1 100%;
+  margin: 0;
+  order: 3;
+}
+.hitl-card.hitl-review .hitl-options {
+  flex: 0 1 auto;
+  margin: 0;
+  gap: var(--space-1);
+}
+.hitl-card.hitl-review .hitl-options .action-card {
+  padding: 7px 12px;
+  min-height: 34px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+.hitl-card.hitl-review .hitl-resolved {
+  margin: 0;
+  font-size: 13px;
+}
 /* Widget typography: sentence case always — never ALL CAPS kickers. */
 .hitl-kicker {
   margin: 0 0 2px;
@@ -4310,42 +4356,116 @@ body.is-side-console-resizing .shell.is-artifact-open .shell-workspace > .file-p
   line-height: 18px;
   color: var(--kimi-labels-quaternary);
 }
-.hitl-options-choice {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+/*
+ * user_choice — 2026 Big Tech pattern (Claude / ChatGPT / Linear):
+ * compact prompt + segmented chips; no instructional essay under the title.
+ * Brand Book Color System + kimi-widget radii (outer 12 → inner 8).
+ */
+.hitl-card.hitl-choice {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--kimi-fill-f1) 65%, var(--bg-elevated));
+}
+.hitl-card.hitl-choice .hitl-header {
+  align-items: center;
+  gap: var(--space-2);
+}
+.hitl-card.hitl-choice .hitl-header h3 {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.hitl-card.hitl-choice .hitl-mark {
+  margin-top: 0;
+  color: var(--kimi-labels-secondary);
+}
+.hitl-card.hitl-choice .hitl-kicker {
+  margin-bottom: 0;
+}
+.hitl-options-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
 }
 .hitl-card.hitl-choice .hitl-options .action-card,
 .action-card.action-choice {
   flex: 1 1 auto;
-  width: 100%;
-  justify-content: flex-start;
-  text-align: left;
-  min-height: 48px;
-  padding: 12px 14px;
-  border-radius: 10px;
+  width: auto;
+  max-width: 100%;
+  justify-content: center;
+  text-align: center;
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
   border: 1px solid var(--stroke);
-  background: var(--kimi-fill-f1);
+  background: var(--bg-elevated);
   color: var(--kimi-labels-primary);
-  gap: 10px;
+  gap: var(--space-2);
+  box-shadow: none;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
     transform var(--duration-press) var(--ease-out);
+}
+.hitl-card.hitl-choice-chips .action-choice {
+  flex: 1 1 calc(50% - var(--space-2));
+  min-width: 7.5rem;
+}
+.hitl-card.hitl-choice-chips[data-choice-count='3'] .action-choice {
+  flex: 1 1 calc(33.333% - var(--space-2));
+  min-width: 6.5rem;
+}
+.hitl-card.hitl-choice-chips[data-choice-count='4'] .action-choice {
+  flex: 1 1 calc(50% - var(--space-2));
+}
+.hitl-card.hitl-choice-list .action-choice {
+  flex: 1 1 100%;
+  justify-content: flex-start;
+  text-align: left;
+  min-height: 40px;
+  padding: 10px 12px;
+}
+.hitl-card.hitl-choice .action-choice-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 @media (hover: hover) and (pointer: fine) {
   .action-card.action-choice:hover:not(:disabled) {
     border-color: var(--stroke-strong);
-    background: var(--kimi-fill-f1-hover);
+    background: var(--kimi-inverse-surface);
+    color: var(--kimi-inverse-label);
     transform: translateY(-1px);
+  }
+  .action-card.action-choice:hover:not(:disabled) .token-icon,
+  .action-card.action-choice:hover:not(:disabled) svg {
+    color: inherit;
   }
 }
 .action-card.action-choice:active:not(:disabled) {
-  transform: scale(0.99);
+  transform: scale(0.98);
+}
+.action-card.action-choice.is-busy,
+.action-card.action-choice[aria-checked='true'] {
+  background: var(--kimi-inverse-surface);
+  color: var(--kimi-inverse-label);
+  border-color: transparent;
 }
 .action-card.action-choice:focus-visible {
   outline: 2px solid var(--kimi-labels-primary);
   outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .action-card.action-choice,
+  .action-card.action-choice:hover:not(:disabled),
+  .action-card.action-choice:active:not(:disabled) {
+    transition: none;
+    transform: none;
+  }
 }
 .hitl-dev-gap {
   margin-top: 10px;
@@ -5456,8 +5576,11 @@ button.history-sidebar__project-row.is-active {
     grid-template-columns: 1fr;
   }
 
-  .hitl-options-choice {
-    grid-template-columns: 1fr;
+  .hitl-card.hitl-choice-chips .action-choice,
+  .hitl-card.hitl-choice-chips[data-choice-count='3'] .action-choice,
+  .hitl-card.hitl-choice-chips[data-choice-count='4'] .action-choice {
+    flex: 1 1 100%;
+    min-width: 0;
   }
 }
 

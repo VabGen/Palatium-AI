@@ -57,13 +57,14 @@ def test_settings_gate_reads_the_attachments_key(monkeypatch: pytest.MonkeyPatch
     assert is_file_reread_enabled("anyone") is False
 
 
-def test_dark_by_default_without_configuration() -> None:
-    """Absent configuration must not enable a new tool-dispatch path (020 fail-closed).
+def test_cutover_by_default_without_configuration() -> None:
+    """Absent configuration enables thread-file re-read (Context Circulation 2026).
 
     Asserts the declared default, not the resolved value: ``tests/conftest.py`` seeds
     ``os.environ`` from ``env/.env.example``, so a resolved Settings object would
-    assert on the example file instead of on the code default.
+    assert on the example file instead of on the code default. Rollback remains
+    ``ATTACHMENTS_FILE_REREAD_PCT=0``.
     """
     from palatium_ai.core.config.attachments import AttachmentConfig
 
-    assert AttachmentConfig.model_fields["file_reread_pct"].default == 0
+    assert AttachmentConfig.model_fields["file_reread_pct"].default == 100

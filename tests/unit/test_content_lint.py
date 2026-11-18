@@ -180,12 +180,30 @@ def test_missing_section_icons_on_analysis() -> None:
         locale="ru-RU",
         blocks=(
             HeadingBlock(text="A"),
-            ParagraphBlock(text="Тело."),
+            ParagraphBlock(text="Тело A."),
+            HeadingBlock(text="B", icon="search"),
+            ParagraphBlock(text="Тело B."),
+            HeadingBlock(text="C", icon="search"),
+            ParagraphBlock(text="Тело C."),
         ),
         meta=DocumentMeta(confidence=0.9, kind="analysis"),
     )
     findings = ContentLint.run(document).findings
     assert any(f.rule_id == "missing_section_icons" for f in findings)
+
+
+def test_missing_section_icons_ignores_a_single_titled_answer() -> None:
+    """One heading is a title, not sections: chrome would be noise (golden-set gate)."""
+    document = ContentDocument(
+        locale="ru-RU",
+        blocks=(
+            HeadingBlock(text="Итоги встречи"),
+            ParagraphBlock(text="Встреча перенесена на 15:00."),
+        ),
+        meta=DocumentMeta(confidence=0.9, kind="report"),
+    )
+    findings = ContentLint.run(document).findings
+    assert all(f.rule_id != "missing_section_icons" for f in findings)
 
 
 def test_missing_section_icons_allows_plain_later_headings() -> None:

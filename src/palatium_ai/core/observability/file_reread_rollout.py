@@ -7,9 +7,9 @@
 Formatter contract rollout (``formatter_rollout.py``), so the canary ramp and the
 rollback need no deploy:
 
-    0   → off for every caller (dark default; the one-variable rollback)
+    0   → off for every caller (one-variable rollback)
     5   → sticky ~5% of users (canary)
-    100 → every caller (full cutover)
+    100 → every caller (default cutover; Context Circulation 2026)
 
 Sticky per user: replicas are never mixed by hand, so a rolling update cannot flip
 a dialog onto the re-read path mid-conversation.

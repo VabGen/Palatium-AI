@@ -75,6 +75,20 @@ model_list:
     model_info:
       access_groups: ["default"]
 
+  # ============================================================
+  # VISION — chat image_parts (ADR 0007) + attachment OCR gateway
+  # Alias must match LLM_VISION_MODEL / ATTACHMENTS_IMAGE_OCR_MODEL.
+  # No text-tier fallback: a text model would ignore the image (0007).
+  # ============================================================
+  - model_name: vision-tier
+    litellm_params:
+      model: os.environ/TIER_VISION_MODEL
+      api_key: os.environ/TIER_VISION_API_KEY
+      api_base: os.environ/TIER_VISION_API_BASE
+      timeout: os.environ/TIER_VISION_TIMEOUT
+    model_info:
+      access_groups: ["default"]
+
 router_settings:
   # P2.12: pick the lowest-latency deployment when a model_name has replicas.
   # With one deployment per tier this is a no-op until ops add api_base replicas.

@@ -63,7 +63,13 @@ def test_name_recall_across_trimmed_dialog_keeps_identity_pin() -> None:
 
     assert "геннадий" in block.casefold()
     assert block.index("геннадий") < block.index(_ASK)
-    assert block.startswith("user: ")
+    # The pin is prepended as a synthetic ``user:`` turn. A correction guard may be the
+    # very first line (instruction-first, when the window redacted a superseded claim) —
+    # that chrome is not a turn, so assert on the pin line, not on line zero.
+    pin_line = next(line for line in block.splitlines() if "геннадий" in line.casefold())
+    assert pin_line.startswith("user: ")
+    if not block.startswith("user: "):
+        assert block.startswith("(dialog_policy:")
 
 
 def test_name_pin_not_duplicated_when_still_in_window() -> None:

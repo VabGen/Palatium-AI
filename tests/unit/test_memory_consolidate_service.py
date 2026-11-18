@@ -63,7 +63,9 @@ async def test_memory_extract_requires_hitl_before_enqueue(
     )
     assert isinstance(card, HITLCardView)
     assert card.task_id.startswith(MEM_EXTRACT_TASK_PREFIX)
-    assert "extract_transcript_memories" in card.title
+    # Consequence copy, not the wire tool name (055: users never read the MCP id).
+    assert card.title == "Extract facts from this chat?"
+    assert card.body
     assert consolidation.jobs == []
 
     outcome = await service.execute_after_approval(task_id=card.task_id)

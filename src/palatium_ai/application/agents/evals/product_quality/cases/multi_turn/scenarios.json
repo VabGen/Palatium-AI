@@ -58,6 +58,30 @@
         "must_not_contain": ["iris.old"]
       },
       "tags": ["researcher", "multi_turn", "correction"]
+    },
+    {
+      "id": "mt-researcher-recs-followup-01",
+      "agent": "researcher",
+      "scenario": "analysis_ask_stays_analysis_on_followup",
+      "input": { "user_text": "Я просил рекомендации по этому договору, а не пересказ текста." },
+      "context": {},
+      "turns": [
+        {
+          "role": "user",
+          "content": "Договор: пункт 7.3 — поставка за 45 календарных дней; пункт 9.1 — пеня 0,1% за день; пункт 12 — право Германии. Дай рекомендации по рискам."
+        },
+        { "role": "user", "content": "Спасибо." },
+        { "role": "user", "content": "Я просил рекомендации по этому договору, а не пересказ текста." }
+      ],
+      "expected": {
+        "must_contain": ["45"],
+        "must_not_contain": [
+          "пункт 7.3 — поставка за 45 календарных дней; пункт 9.1 — пеня 0,1% за день; пункт 12 — право Германии"
+        ]
+      },
+      "needs_judge": true,
+      "grader": "rule_then_judge",
+      "tags": ["researcher", "multi_turn", "synthesis", "no-dump"]
     }
   ]
 }

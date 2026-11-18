@@ -76,6 +76,12 @@ BUDGETED_SERVICES = (*CEILING_REQUIRED, "minio", "mcp-edms", "mcp-analytics")
 # exactly how the VM-wide OOM killer gets invoked — and how Postgres lands in crash-recovery.
 OBSERVABILITY_SERVICES = ("clickhouse", "langfuse-web", "langfuse-worker")
 
+# Metric stack from deploy/observability/compose.observability.yml. It *is* part of
+# `make up-full` (unlike promtail), so its ceilings join the same budget as Langfuse:
+# 864 MiB combined. They were absent until 2026-11-18 — unbounded Grafana/Loki next to
+# a 12 GiB VM is the same VM-wide OOM risk as an unbounded ClickHouse.
+METRICS_SERVICES = ("prometheus", "alertmanager", "grafana", "loki")
+
 # Langfuse v3 runs two Node processes whose heap must be sized *explicitly*: V8 derives
 # its old space from the cgroup ceiling, and both containers were observed crash-looping
 # at ~376 MB of a ~392 MB heap ("Reached heap limit Allocation failed") while their
@@ -87,9 +93,11 @@ LANGFUSE_HEAP_FLOOR_MIB = {"langfuse-web": 2048, "langfuse-worker": 512}
 # and native buffers; a heap that equals its cgroup dies before the GC can help.
 V8_NON_HEAP_HEADROOM_BYTES = 256 * _MIB
 
-# Docker VM size at which core + observability can peak together; rounded up to the
-# practical `memory=12GB` in %USERPROFILE%\.wslconfig.
-OBSERVABILITY_VM_FLOOR_MIB = 12 * 1024
+# Docker VM size at which core + Langfuse + the metric stack can peak together; rounded
+# up to the practical `memory=13GB` in %USERPROFILE%\.wslconfig. 13024 MiB of ceilings
+# (12160 + 864) do not fit the 12 GB VM, so the old floor described a stack that could
+# only run without the metric overlay.
+OBSERVABILITY_VM_FLOOR_MIB = 13 * 1024
 
 
 def _compose() -> dict[str, Any]:
@@ -119,6 +127,18 @@ def _observability_service(name: str) -> dict[str, Any]:
     service = services[name]
     assert isinstance(service, dict), f"service {name!r} must be a mapping"
     return service
+
+
+def _overlay_ceiling_bytes(service_name: str) -> int:
+    """The declared ceiling of a service in the observability overlay, or fail."""
+    service = _observability_service(service_name)
+    assert "mem_limit" in service, (
+        f"{service_name} has no mem_limit; a runaway there is reaped by the VM-wide killer, "
+        "and postgres is the largest RSS it finds"
+    )
+    limit = _memory_bytes(service["mem_limit"])
+    assert limit > 0, f"{service_name} mem_limit must be positive"
+    return limit
 
 
 def _postgres_setting(key: str) -> str:
@@ -239,9 +259,30 @@ def test_observability_service_declares_a_memory_ceiling(service_name: str) -> N
     assert _ceiling_bytes(service_name) > 0
 
 
+@pytest.mark.parametrize("service_name", METRICS_SERVICES)
+def test_metric_stack_service_declares_a_memory_ceiling(service_name: str) -> None:
+    """An unbounded Grafana/Loki in `up-full` is the same VM-wide risk as ClickHouse."""
+    assert _overlay_ceiling_bytes(service_name) > 0
+
+
+def test_promtail_is_opt_in_and_never_part_of_up_full() -> None:
+    """Log shipping reads the Docker daemon's log directory, which is host-specific.
+
+    On Docker Desktop for Windows ``/var/lib/docker/containers`` is a path inside the
+    WSL VM: bind-mounted from the Windows host it becomes an empty directory, so the
+    container is healthy, ships nothing, and Loki silently has no application logs.
+    A profile keeps the honest failure (nothing started) instead of the silent one.
+    """
+    service = _observability_service("promtail")
+    assert [str(profile) for profile in service.get("profiles", [])] == ["logs-shipper"], (
+        "promtail must stay behind --profile logs-shipper; `make up-full` must not start it"
+    )
+    assert _overlay_ceiling_bytes("promtail") > 0
+
+
 def test_observability_is_profile_gated_because_it_cannot_fit_the_default_vm() -> None:
-    """`make up-full` adds the observability ceilings on top of the core ones — past the
-    default Docker VM.
+    """`make up-full` adds the observability + metric ceilings on top of the core ones — past
+    the default Docker VM.
 
     Three things must stay true, and none of them is visible from the YAML alone: the
     default launch fits the default VM (so the profile gate is a memory decision, not
@@ -251,7 +292,8 @@ def test_observability_is_profile_gated_because_it_cannot_fit_the_default_vm() -
     """
     core_mib = sum(_ceiling_bytes(name) for name in BUDGETED_SERVICES) // _MIB
     observability_mib = sum(_ceiling_bytes(name) for name in OBSERVABILITY_SERVICES) // _MIB
-    combined_mib = core_mib + observability_mib
+    metrics_mib = sum(_overlay_ceiling_bytes(name) for name in METRICS_SERVICES) // _MIB
+    combined_mib = core_mib + observability_mib + metrics_mib
 
     assert core_mib <= DOCKER_VM_TOTAL_MIB, f"default launch {core_mib} MiB exceeds the default VM"
     assert combined_mib > DOCKER_VM_TOTAL_MIB, (
@@ -259,8 +301,8 @@ def test_observability_is_profile_gated_because_it_cannot_fit_the_default_vm() -
         "reconsider the profile gate in docker-compose.yml"
     )
     assert combined_mib <= OBSERVABILITY_VM_FLOOR_MIB, (
-        f"core {core_mib} + observability {observability_mib} = {combined_mib} MiB exceeds the "
-        f"documented {OBSERVABILITY_VM_FLOOR_MIB} MiB floor: raise the floor or lower a ceiling"
+        f"core {core_mib} + observability {observability_mib} + metrics {metrics_mib} = {combined_mib} MiB "
+        f"exceeds the documented {OBSERVABILITY_VM_FLOOR_MIB} MiB floor: raise the floor or lower a ceiling"
     )
 
 
@@ -510,26 +552,39 @@ def test_litellm_declares_auth_cache_and_proxy_topology() -> None:
     )
 
 
-def test_grafana_provisioning_dirs_exist_without_placeholder_files() -> None:
-    """Grafana opens *every* subdirectory of its provisioning path and logs an error per missing one.
+def test_grafana_mounts_only_the_provisioning_dirs_it_uses() -> None:
+    """Mounting the whole provisioning tree read-only and tmpfs-ing the rest cannot boot.
 
-    ``/etc/grafana/provisioning/{plugins,alerting}`` have nothing to declare here: the shipped
-    dashboards use core panels only, and alerting rules live in ``prometheus/alerts/`` and route
-    through Alertmanager. A ``.gitkeep`` is not a workaround — the provisioning reader globs the
-    directory and logs "file has invalid suffix '.gitkeep' (.yaml,.yml,.json accepted), skipping".
-    An empty tmpfs creates the directory with no file to trip over.
+    Grafana opens *every* subdirectory of ``/etc/grafana/provisioning`` and logs an error
+    per missing one, so the overlay mounted the parent and created ``plugins``/``alerting``
+    as empty tmpfs. Docker rejects that: tmpfs cannot create its mountpoint inside a
+    read-only bind mount — ``mkdirat .../alerting: read-only file system`` — so the
+    container never started. Per-directory mounts leave the image's own empty ``plugins``
+    and ``alerting`` in place: nothing is missing, nothing is shadowed, and no placeholder
+    file exists to be parsed as a rule.
     """
     grafana = _observability_service("grafana")
-    tmpfs = [str(entry) for entry in grafana.get("tmpfs", [])]
+    volumes = [str(volume) for volume in grafana.get("volumes", [])]
+    targets = [volume.split(":")[1] for volume in volumes if volume.count(":") >= 2]
 
-    for directory in ("/etc/grafana/provisioning/plugins", "/etc/grafana/provisioning/alerting"):
-        assert directory in tmpfs, f"{directory} must exist in the container, or Grafana logs 'no such file or directory'"
+    assert "/etc/grafana/provisioning" not in targets, (
+        "the whole provisioning tree cannot be mounted read-only: the empty subdirectories Grafana "
+        "expects then cannot be provided at all"
+    )
+    for used in ("datasources", "dashboards"):
+        assert f"/etc/grafana/provisioning/{used}" in targets, (
+            f"/etc/grafana/provisioning/{used} must be bind-mounted or provisioning silently does nothing"
+        )
+    assert not grafana.get("tmpfs"), (
+        "tmpfs over a path inside the read-only provisioning mount fails at container create time "
+        "(read-only file system); the image already ships those directories"
+    )
 
     provisioning = REPO_ROOT / "deploy" / "observability" / "grafana" / "provisioning"
     placeholders = sorted(path.name for path in provisioning.rglob("*") if path.is_file() and not path.suffix)
     assert not placeholders, (
         f"extensionless placeholder files {placeholders} under provisioning/ are read by Grafana and logged as "
-        "'file has invalid suffix ... skipping' — create the directory with a tmpfs mount instead"
+        "'file has invalid suffix ... skipping' — leave the image's directories alone instead"
     )
 
 

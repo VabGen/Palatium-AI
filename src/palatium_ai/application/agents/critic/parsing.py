@@ -33,6 +33,11 @@ def _decode_memory_hints(raw: str | None) -> tuple[str, ...]:
     return tuple(str(hint) for hint in parsed if str(hint).strip())
 
 
+def _decode_evidence_excerpts(raw: str | None) -> tuple[str, ...]:
+    """Worker evidence bodies — allowed PII sources for the constitution (020)."""
+    return _decode_memory_hints(raw)
+
+
 def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
     from palatium_ai.domain.agents.execution import ExecutionStrategy
 
@@ -58,6 +63,7 @@ def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
         except ValueError:
             worker_confidence = None
 
+    prior = (input_context.get("prior_context") or "").strip() or None
     return CriticInput(
         task_id=input_context.get("_task_id", packet.task_id),
         context_packet=packet,
@@ -69,4 +75,6 @@ def decode_critic_input(input_context: dict[str, str]) -> CriticInput:
         user_input_chars=user_input_chars,
         worker_confidence=worker_confidence,
         memory_hints=_decode_memory_hints(input_context.get("memory_hints_json")),
+        prior_context=prior,
+        evidence_excerpts=_decode_evidence_excerpts(input_context.get("evidence_excerpts_json")),
     )

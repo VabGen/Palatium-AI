@@ -82,6 +82,76 @@ def test_rehydrate_clears_pending_when_choice_slot_filled() -> None:
     assert decision.reason == "clear_pending:choice_slot_filled"
 
 
+def test_rehydrate_keeps_pending_for_untrusted_thread_file_ask() -> None:
+    """Named-file ask with trust=False must not wipe sticky before storage re-read."""
+    doc_id = uuid4()
+    window = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(
+                thread_id="t1",
+                role="user",
+                content="вот договор",
+                payload=attachment_ids_payload((doc_id,)),
+                seq=0,
+            ),
+            DialogTurn(
+                thread_id="t1",
+                role="assistant",
+                content="Кратко по договору…",
+                seq=1,
+            ),
+        ),
+    )
+    decision = AttachmentStickinessPolicy.decide_rehydrate(
+        continuation_kind="answer",
+        refers_to_prior=False,
+        has_turn_attachments=False,
+        dialog=window,
+        prior_context=None,
+        trust_prior_for_workers=False,
+        file_reference="thread_file",
+    )
+    assert decision.clear_pending is False
+    assert decision.reason == "keep_pending:thread_file"
+
+
+def test_rehydrate_keeps_pending_when_choice_slot_targets_thread_file() -> None:
+    """Format/analysis pick after «файл договор» must not wipe sticky before re-read."""
+    doc_id = uuid4()
+    window = DialogTurnWindow(
+        thread_id="t1",
+        turns=(
+            DialogTurn(
+                thread_id="t1",
+                role="user",
+                content="файл договор",
+                payload=attachment_ids_payload((doc_id,)),
+                seq=0,
+            ),
+            DialogTurn(
+                thread_id="t1",
+                role="assistant",
+                content="Выберите формат анализа…",
+                seq=1,
+            ),
+        ),
+    )
+    decision = AttachmentStickinessPolicy.decide_rehydrate(
+        continuation_kind="answer",
+        refers_to_prior=True,
+        has_turn_attachments=False,
+        dialog=window,
+        prior_context="Выберите формат анализа…",
+        trust_prior_for_workers=False,
+        choice_slot_filled=True,
+        file_reference="thread_file",
+    )
+    assert decision.clear_pending is False
+    assert decision.attachment_ids == ()
+    assert decision.reason == "keep_pending:choice_slot_thread_file"
+
+
 def test_rehydrate_clears_pending_when_format_not_trusted() -> None:
     """False format after Continuity demote must not re-fence sticky PDF."""
     doc_id = uuid4()

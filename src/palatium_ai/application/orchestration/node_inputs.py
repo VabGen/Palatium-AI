@@ -70,7 +70,16 @@ def build_researcher_input(
     snapshot: OrchestrationSnapshot,
     state: AgentGraphState,
 ) -> ResearcherInput:
-    """Собирает вход для Researcher."""
+    """Собирает вход для Researcher.
+
+    When Continuity withholds trust on prior, drop the dialog window too: assistant
+    turns about an earlier file otherwise become false evidence for a self-contained
+    paste-in-ask (055). Identity/prefs still arrive via ``memory_hints``.
+    """
+    routing = selectors.routing_intent(state)
+    dialog = state.get("dialog_window")
+    if routing is not None and not routing.trust_prior_for_workers:
+        dialog = None
     return ResearcherInput(
         task_id=snapshot.task_id,
         context_packet=snapshot.context_packet(
@@ -78,11 +87,11 @@ def build_researcher_input(
             fallback_strategy="reason_only",
             fallback_rationale="Researcher requires a context packet before execution.",
         ),
-        prior_context=selectors.resolved_prior_assistant_content(state),
+        prior_context=selectors.resolved_worker_prior_assistant_content(state),
         mcp_tool_output_max_chars=selectors.prompt_budget(state).mcp_tool_output_max_chars,
         revision_feedback=selectors.resolved_revision_feedback(state),
         # SB3: budgeted identity/task hints (not a dump — clip via state recall budget).
-        dialog_window=state.get("dialog_window"),
+        dialog_window=dialog,
         memory_hints=selectors.memory_hints(state),
     )
 
@@ -142,6 +151,8 @@ def build_critic_input(
         user_input_chars=len(selectors.resolved_user_text(state)),
         worker_confidence=selectors.resolved_worker_confidence(state),
         memory_hints=selectors.memory_hints(state),
+        prior_context=selectors.resolved_prior_assistant_content(state),
+        evidence_excerpts=selectors.resolved_evidence_excerpts(state),
         uncertainty_disposition=disposition,
         uncertainty_reason=unc_reason,
     )

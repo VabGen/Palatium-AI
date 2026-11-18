@@ -156,7 +156,17 @@ class MemoryFactPersistenceService:
 
 
 def _resolve_fact_scope(*, fact: MemoryFactCandidate, job: MemoryExtractJob) -> tuple[str, str]:
-    """Map fact kind to MCP namespace_kind + scope_id (same routing as consolidation worker)."""
+    """Map a candidate's sharing tier to MCP namespace_kind + scope_id (060).
+
+    ``scope`` is its own axis (who the memory is shared with); ``kind`` is only the
+    content type. Legacy payloads without ``scope`` keep the kind-based routing.
+    """
+    if fact.scope == "user" and job.user_id:
+        return "user", job.user_id.strip()
+    if fact.scope == "org" and job.org_id:
+        return "org", job.org_id.strip()
+    if fact.scope == "thread":
+        return "thread", job.thread_id.strip()
     if job.user_id and fact.kind == "preference":
         return "user", job.user_id.strip()
     if job.org_id and fact.kind == "incident":

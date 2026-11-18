@@ -16,6 +16,7 @@ Usage (stdlib-only, so `--no-project` keeps it out of the project venv):
   uv run --no-project python scripts/make_helpers.py init-env [--env-file env/.env]
   uv run --no-project python scripts/make_helpers.py env-get LITELLM_MASTER_KEY [--env-file env/.env]
   uv run --no-project python scripts/make_helpers.py require-key LITELLM_MASTER_KEY
+  uv run --no-project python scripts/make_helpers.py vm-budget --compose-args "--profile … -f …"
   uv run --no-project python scripts/make_helpers.py verify
   uv run --no-project python scripts/make_helpers.py models [--env-file env/.env]
   uv run --no-project python scripts/make_helpers.py chat --model tier-mid [--prompt "Say OK"]
@@ -28,12 +29,14 @@ import ctypes
 import io
 import json
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -160,6 +163,133 @@ def require_key(env_file: Path, key: str) -> int:
         return 0
     print(f"❌ {key} not set in {env_file}", file=sys.stderr)
     return 1
+
+
+# ── Docker VM budget ────────────────────────────────────────────────────────────
+# Per-container `mem_limit` protects the neighbours only while the *sum* may peak inside
+# the Docker VM; past that the VM-wide OOM killer fires and picks the largest RSS, which
+# is postgres (incident in tests/unit/test_container_hardening.py). So the launch note is
+# a comparison, not a slogan: it used to be an unconditional `echo "does not fit (~7.7 GiB)"`
+# and kept claiming that on a 12 GiB VM — a warning nobody can trust teaches operators to
+# ignore the real one. Both sides come from the machine (`docker info`) and from the launch
+# itself (`docker compose config`, i.e. exactly the flags `up` will use), so a ceiling bump
+# or a bigger VM needs no edit in the Makefile.
+_VM_PROBE_TIMEOUT_SECONDS = 60.0
+_MEMORY_UNITS = {"": 1, "b": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
+_MEMORY_RE = re.compile(r"(\d+)([bkmg]?)b?")
+_MIB = 1024 * 1024
+
+#: Ceilings are per-container maxima, not simultaneous reservations. A `memory=13GB` VM
+#: reports ~12.6 GiB of MemTotal while the full stack's ceilings total 13.0 GiB, and that
+#: configuration runs (verified on this host) — the peaks do not coincide and the daemon
+#: itself lives inside the VM. So a few percent of overshoot is not a finding; the warning
+#: exists for a real shortfall, where the 7.7 GiB default VM missed by ~4 GiB.
+_VM_SHORTFALL_TOLERANCE = 0.05
+
+#: ``(returncode, stdout)`` — the probe abstraction the tests substitute.
+Probe = Callable[[Sequence[str]], tuple[int, str]]
+
+
+def _memory_bytes(value: object) -> int:
+    """Compose/`docker info` memory syntax: a byte count or ``512m`` / ``1g``."""
+    text = str(value).strip().lower()
+    if text.isdigit():
+        return int(text)
+    match = _MEMORY_RE.fullmatch(text)
+    if match is None:
+        raise ValueError(f"unparsable memory value: {value!r}")
+    return int(match.group(1)) * _MEMORY_UNITS[match.group(2)]
+
+
+def compose_ceilings(payload: object) -> dict[str, int]:
+    """``service -> mem_limit`` from the rendered compose model, in bytes.
+
+    Services without a ceiling are omitted rather than defaulted to zero: they are the
+    one-shot jobs (`silo-init`, `memory-consolidate`), not containers that hold memory
+    for the life of the stack.
+    """
+    services = payload.get("services") if isinstance(payload, dict) else None
+    if not isinstance(services, dict):
+        return {}
+    ceilings: dict[str, int] = {}
+    for name, service in services.items():
+        if isinstance(service, dict) and service.get("mem_limit") is not None:
+            ceilings[str(name)] = _memory_bytes(service["mem_limit"])
+    return ceilings
+
+
+def _format_mib(mib: int) -> str:
+    """GiB above a gigabyte — the unit `%USERPROFILE%.wslconfig` is written in."""
+    return f"{mib} MiB" if mib < 1024 else f"{mib / 1024:.1f} GiB"
+
+
+def _run_probe(command: Sequence[str]) -> tuple[int, str]:
+    """Run one probe and never raise: a stopped engine is an unanswered question here.
+
+    ``docker compose up`` is the step that owns engine errors and prints them with full
+    context; duplicating them from an advisory helper only adds noise before the real one.
+    """
+    try:
+        completed = subprocess.run(  # noqa: S603  # fixed argv, no shell; flags come from the Makefile
+            list(command),
+            capture_output=True,
+            text=True,
+            timeout=_VM_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, str(exc)
+    return completed.returncode, completed.stdout
+
+
+def _print_vm_shortfall(required_mib: int, vm_bytes: int) -> None:
+    """Say the two numbers and the fix; the required VM is derived, never copied."""
+    needed_gib = -(-required_mib // 1024)
+    print(
+        f"  note: the memory ceilings of this launch total {_format_mib(required_mib)}, "
+        f"but the Docker VM has {_format_mib(vm_bytes // _MIB)}."
+    )
+    print(
+        f"        Give it at least {needed_gib} GB before `up`: set `memory={needed_gib}GB` "
+        "in %USERPROFILE%\\.wslconfig and restart Docker Desktop, or the VM-wide OOM "
+        "killer fires (usually at postgres)."
+    )
+
+
+def vm_budget(env_file: Path, compose_args: str, probe: Probe | None = None) -> int:
+    """Warn only when the launch's ceilings demonstrably exceed the Docker VM.
+
+    Advisory on purpose, and `0` on every path: the sum of ceilings is the worst case,
+    and knowingly running the stack below it is the operator's call — not a reason for
+    ``make up-full`` to refuse to start. An unreadable engine or config also stays silent.
+    """
+    run = _run_probe if probe is None else probe
+    config_code, rendered = run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            str(env_file),
+            *shlex.split(compose_args),
+            "config",
+            "--format",
+            "json",
+        ]
+    )
+    info_code, total = run(["docker", "info", "--format", "{{.MemTotal}}"])
+    if config_code != 0 or info_code != 0:
+        return 0
+    try:
+        ceilings = compose_ceilings(json.loads(rendered))
+        vm_bytes = _memory_bytes(total)
+    except json.JSONDecodeError, ValueError:
+        return 0
+
+    required = sum(ceilings.values())
+    if required <= vm_bytes * (1 + _VM_SHORTFALL_TOLERANCE):
+        return 0
+    _print_vm_shortfall(-(-required // _MIB), vm_bytes)
+    return 0
 
 
 #: Same set the menu's "Check endpoints" uses, and the ones the docs list per profile.
@@ -291,6 +421,14 @@ def _build_parser() -> argparse.ArgumentParser:
     require_parser.add_argument("key", help="variable name that must be present")
     require_parser.add_argument("--env-file", default=str(_DEFAULT_ENV_FILE), help="env file to read")
 
+    vm_parser = subparsers.add_parser("vm-budget", help="warn when the launch's ceilings exceed the Docker VM")
+    vm_parser.add_argument("--env-file", default=str(_DEFAULT_ENV_FILE), help="env file for compose interpolation")
+    vm_parser.add_argument(
+        "--compose-args",
+        default="",
+        help="profiles and -f overlays, exactly as the launching target passes them",
+    )
+
     subparsers.add_parser("verify", help="GET every health endpoint and report OK/FAIL")
 
     init_parser = subparsers.add_parser("init-env", help="create the env file from the template")
@@ -326,6 +464,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "require-key":
         return require_key(Path(args.env_file), args.key)
+
+    if args.command == "vm-budget":
+        return vm_budget(Path(args.env_file), str(args.compose_args))
 
     if args.command == "verify":
         return verify_endpoints()

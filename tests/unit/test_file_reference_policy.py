@@ -375,6 +375,43 @@ def test_doc_role_plus_leading_title_names_multi_token_thread_file() -> None:
     assert FileReferencePolicy.promotes_thread_file_reread(full_stem) is True
 
 
+def test_seals_thread_file_body_only_for_verbatim_extraction() -> None:
+    """Recommendations / summary re-reads must synthesize; only extract seals the OCR."""
+    from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
+
+    assert FileReferencePolicy.seals_thread_file_body(candidate_capabilities=()) is False
+    assert FileReferencePolicy.seals_thread_file_body(candidate_capabilities=("summarize",)) is False
+    assert (
+        FileReferencePolicy.seals_thread_file_body(
+            candidate_capabilities=(VERBATIM_EXTRACTION_CAPABILITY,),
+        )
+        is True
+    )
+
+
+def test_synthesis_response_shape_blocks_verbatim_seal() -> None:
+    """Document analysis / plan / comparison / inventory never dump the raw file."""
+    from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
+
+    caps = (VERBATIM_EXTRACTION_CAPABILITY,)
+    for shape in ("document_analysis", "plan", "comparison_table", "inventory"):
+        assert (
+            FileReferencePolicy.seals_thread_file_body(
+                candidate_capabilities=caps,
+                response_shape=shape,
+            )
+            is False
+        ), shape
+    for shape in ("auto", "prose"):
+        assert (
+            FileReferencePolicy.seals_thread_file_body(
+                candidate_capabilities=caps,
+                response_shape=shape,
+            )
+            is True
+        ), shape
+
+
 def test_only_a_named_reference_promotes_the_turn_to_a_storage_read() -> None:
     """``single_thread_file`` is a convenience pick, not evidence the ask is about it."""
     only = _candidate("СФУТ 9.03-2025.pdf")
@@ -448,3 +485,37 @@ def test_content_preview_stays_ambiguous_when_two_files_share_topic_tokens() -> 
     assert resolution.status == "ambiguous"
     assert resolution.reason == "several_content_matches"
     assert set(resolution.candidates) == {"a.webp", "b.webp"}
+
+
+def test_topical_followup_without_file_identity_does_not_bind_older_thread_file() -> None:
+    """Live: after СФОТ upload, «подробнее о Управление доступом» must not re-read Госархив."""
+    sfot = _candidate(
+        "СФОТ_Банки.pdf",
+        search_text="СФОТ банки. Раздел 4. Управление доступом к информационным ресурсам.",
+    )
+    archive = _candidate(
+        "Заявка_Госархив_Могилев.docx",
+        search_text="Заявка Госархив. Управление доступом к фондам и читальному залу.",
+    )
+    resolution = FileReferencePolicy.resolve(
+        [sfot, archive],
+        hint_text="подробнее о Управление доступом",
+    )
+    assert resolution.status == "ambiguous"
+    assert resolution.reason == "several_thread_files"
+    assert FileReferencePolicy.promotes_thread_file_reread(resolution) is False
+
+
+def test_general_kb_ask_does_not_promote_via_content_probe() -> None:
+    """Live: general / KB ask must not ground on an older thread file via OCR tokens."""
+    archive = _candidate(
+        "Заявка_Госархив_Могилев.docx",
+        search_text="двухфакторная аутентификация обязательна для удалённого доступа",
+    )
+    other = _candidate("СФОТ_Банки.pdf", search_text="политика паролей и MFA")
+    resolution = FileReferencePolicy.resolve(
+        [archive, other],
+        hint_text="Что такое двухфакторная аутентификация?",
+    )
+    assert FileReferencePolicy.promotes_thread_file_reread(resolution) is False
+    assert resolution.reason == "several_thread_files"

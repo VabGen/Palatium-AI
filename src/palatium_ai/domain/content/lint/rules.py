@@ -188,7 +188,17 @@ class EmptySection:
 
 #: Kinds expected to carry dense section chrome (kimi-answer-formatting F2).
 _DENSE_KINDS = frozenset({"analysis", "report", "guide"})
+#: Below this the document is a short answer with a title, not a sectioned document:
+#: both dense-kind rules key off the same threshold so they cannot disagree.
 _MIN_DENSE_HEADINGS = 3
+
+
+def _sectioned_headings(document: ContentDocument) -> list[tuple[int, HeadingBlock]]:
+    """Headings of a *sectioned* document, or an empty list when it is too short."""
+    if document.meta.kind not in _DENSE_KINDS:
+        return []
+    headings = [(index, block) for index, block in enumerate(document.blocks) if isinstance(block, HeadingBlock)]
+    return headings if len(headings) >= _MIN_DENSE_HEADINGS else []
 
 
 class SparseAnalysisStructure:
@@ -202,10 +212,7 @@ class SparseAnalysisStructure:
         document: ContentDocument,
         prose: tuple[tuple[int, str], ...],
     ) -> list[LintFinding]:
-        if document.meta.kind not in _DENSE_KINDS:
-            return []
-        headings = sum(1 for block in document.blocks if isinstance(block, HeadingBlock))
-        if headings < _MIN_DENSE_HEADINGS:
+        if not _sectioned_headings(document):
             return []
         has_kv = any(isinstance(block, KeyValueBlock) for block in document.blocks)
         has_nested = any(
@@ -227,20 +234,13 @@ class MissingSectionIcons:
         document: ContentDocument,
         prose: tuple[tuple[int, str], ...],
     ) -> list[LintFinding]:
-        if document.meta.kind not in _DENSE_KINDS:
+        headings = _sectioned_headings(document)
+        if not headings:
             return []
-        for index, block in enumerate(document.blocks):
-            if isinstance(block, HeadingBlock):
-                if block.icon is None:
-                    return [
-                        LintFinding(
-                            rule_id=self.rule_id,
-                            severity=self.severity,
-                            block_index=index,
-                        )
-                    ]
-                return []
-        return []
+        index, lead = headings[0]
+        if lead.icon is not None:
+            return []
+        return [LintFinding(rule_id=self.rule_id, severity=self.severity, block_index=index)]
 
 
 RULES: tuple[Rule, ...] = (

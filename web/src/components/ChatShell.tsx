@@ -43,6 +43,7 @@ import type {
 } from '../types/contentDocument';
 import { isDocumentRevision } from '../lib/revision';
 import { fieldsFromFormatterResult, hydratePendingHitlCards } from '../lib/hitl';
+import { hydrateUserTurn } from '../lib/hydrateUserTurn';
 import { looksLikeExclusiveMenu } from '../lib/exclusiveMenu';
 import { markFirstVisualStart, measureFirstVisual } from '../lib/firstVisual';
 import { pendingPhaseForNode } from '../lib/pendingOrb';
@@ -1044,10 +1045,22 @@ export function ChatShell() {
         const restored: ChatMessage[] = [];
         for (const turn of turns) {
           if (turn.role === 'user') {
+            const payload =
+              turn.payload && typeof turn.payload === 'object' && !Array.isArray(turn.payload)
+                ? (turn.payload as Record<string, unknown>)
+                : null;
+            const hydrated = await hydrateUserTurn(turn.content, payload, userId, orgId);
+            // Empty text after stripping a corrupt HITL resume — still keep the
+            // turn when files are present; otherwise skip the machine shell.
+            if (!hydrated.text && hydrated.attachmentNames.length === 0) {
+              continue;
+            }
             restored.push({
               id: turn.id ?? crypto.randomUUID(),
               role: 'user',
-              text: turn.content,
+              text: hydrated.text,
+              attachmentIds: hydrated.attachmentIds,
+              attachmentNames: hydrated.attachmentNames,
             });
             continue;
           }

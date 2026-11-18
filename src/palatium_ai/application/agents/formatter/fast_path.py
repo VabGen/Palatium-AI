@@ -21,13 +21,13 @@ from palatium_ai.core.observability.metrics import agent_metrics
 from palatium_ai.domain.agents.formatter import FormatterInput, FormatterTaskResult
 from palatium_ai.domain.content.markdown_blocks import plain_paragraph_count
 from palatium_ai.domain.memory.tool_output import contains_untrusted_tool_output
+from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.formatter_fast_path import (
     FormatterFastPathPolicy,
     FormatterPassthroughSignals,
 )
 from palatium_ai.domain.policies.locale import ReplyLocalePolicy
 from palatium_ai.domain.policies.types import (
-    VERBATIM_EXTRACTION_CAPABILITY,
     ExecutionStrategy,
     TaskKind,
 )
@@ -194,9 +194,11 @@ def _passthrough_signals(
         restructure_requested=task_kind == "response_formatting",
         shape_requested=task_input.context_packet.response_shape != "auto",
         underspecification_kind=task_input.underspecification_kind,
-        # Intent extract tag OR sealed singular ``read_attachment`` body (W10 att_partial).
-        verbatim_requested=(
-            VERBATIM_EXTRACTION_CAPABILITY in caps or task_input.context_packet.execution_plan.strategy == "direct_tool_call"
+        # Shared seal SoT: capability ∩ response_shape (FileReferencePolicy). Analysis
+        # shapes never inherit a verbatim dump even if capability was mistagged (055).
+        verbatim_requested=FileReferencePolicy.seals_thread_file_body(
+            candidate_capabilities=tuple(caps),
+            response_shape=task_input.context_packet.response_shape,
         ),
         # Structured GFM already painted / ready — do not brand-rewrite via LLM.
         # Untrusted envelopes stay on the LLM path (020) even when shape-preserving.

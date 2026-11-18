@@ -29,8 +29,8 @@ UNCERTAINTY_REVISIONS: tuple[UncertaintyRevision, ...] = (
     UncertaintyRevision(
         case_id="uncertainty.manifest",
         relative_path="tests/fixtures/uncertainty/manifest.json",
-        sha256="65cba5ad2b8a6a5dd59cb983a74273f4399c8ba99bf61392d769e29be7ff0039",
-        changed_on="2026-11-16",
+        sha256="b70238002894a55458985f779d23dcee76589b7f0a71bc8ab73d9a2f373761d5",
+        changed_on="2026-11-17",
     ),
 )
 

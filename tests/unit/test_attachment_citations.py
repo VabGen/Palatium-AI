@@ -7,6 +7,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from palatium_ai.domain.attachments.citations import (
+    attachment_ids_from_untrusted_context,
     citation_refs_from_untrusted_context,
     sanitize_source_refs,
 )
@@ -63,6 +64,21 @@ def test_legacy_filename_only_source_still_parses() -> None:
 def test_empty_untrusted_has_no_citations() -> None:
     assert citation_refs_from_untrusted_context("") == ()
     assert citation_refs_from_untrusted_context("   ") == ()
+
+
+def test_attachment_ids_from_untrusted_context_ordered_unique() -> None:
+    """JIT re-read reads UUIDs from fence headers without a name resolver."""
+    a = wrap_untrusted_tool_output(
+        "… [attachment body truncated] …",
+        source=attachment_fence_source(attachment_id=_ID_A, filename="a.pdf"),
+    )
+    b = wrap_untrusted_tool_output(
+        "full b",
+        source=attachment_fence_source(attachment_id=_ID_B, filename="b.pdf"),
+    )
+    ids = attachment_ids_from_untrusted_context(f"{a}\n\n{b}\n\n{a}")
+    assert ids == (str(_ID_A), str(_ID_B))
+    assert attachment_ids_from_untrusted_context("") == ()
 
 
 def test_sanitize_source_refs_drops_uuids_pages_and_duplicate_hash_chips() -> None:

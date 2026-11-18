@@ -794,7 +794,14 @@ class IntentHitlFlow:
         if assembled.document is not None:
             document = assembled.document
 
-        soft = self._deliver_soft_clarify_without_options(formatted, document, plan)
+        soft = self._deliver_soft_clarify_without_options(
+            formatted,
+            document,
+            plan,
+            task_kind=task_kind,
+            has_attachments=has_turn_attachments,
+            has_prior=bool((prior_context or "").strip()),
+        )
         if soft is not None:
             return soft
 
@@ -931,11 +938,19 @@ class IntentHitlFlow:
         formatted: FormatterTaskResult,
         document: ContentDocument,
         plan: HitlCardPlan,
+        *,
+        task_kind: str | None = None,
+        has_attachments: bool = False,
+        has_prior: bool = False,
     ) -> FormatterTaskResult | None:
-        """Synthesis could not fill a soft clarify — deliver framing as an open ask.
+        """Synthesis could not fill a soft clarify — disposition by SoftClarifyPolicy.
 
-        Never a red formatter_output_invalid beside usable prose (020 / 055).
+        Answerable asks (knowledge + attachments/prior) must not ship as a successful
+        open clarify ask; they deliver as non-interactive prose (partial) so the
+        client does not treat a missing menu as a finished clarification (055).
         """
+        from palatium_ai.domain.policies.soft_clarify import SoftClarifyPolicy
+
         if plan.reason != "choice_options_missing" or plan.choice_actions:
             return None
         document = document.model_copy(
@@ -944,6 +959,21 @@ class IntentHitlFlow:
                 "meta": document.meta.model_copy(update={"interaction": "none"}),
             }
         )
+        answerable = SoftClarifyPolicy.prefer_answer_path(
+            task_kind=task_kind,
+            has_attachments=has_attachments,
+            has_prior=has_prior,
+        )
+        if answerable:
+            return formatted.model_copy(
+                update={
+                    "output": document,
+                    "hitl_cards": (),
+                    "status": "partial",
+                    "error": None,
+                    "requires_review": False,
+                }
+            )
         return formatted.model_copy(
             update={
                 "output": document,

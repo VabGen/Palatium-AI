@@ -8,6 +8,7 @@ import asyncio
 import time
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from palatium_ai.application.agents.researcher.llm_research import run_llm_research
 from palatium_ai.application.agents.researcher.mcp_path import McpPathDeps, execute_mcp_capability
@@ -29,9 +30,11 @@ from palatium_ai.core.observability.tracing import traceable
 from palatium_ai.domain.agents.base import BaseAgent
 from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentInput, AgentOutput
-from palatium_ai.domain.agents.researcher import ResearcherOutput
+from palatium_ai.domain.agents.researcher import ResearcherInput, ResearcherOutput
 from palatium_ai.domain.llm.models import DocumentPart, ImagePart
 from palatium_ai.domain.mcp.discovery_policy import McpDiscoveryPolicy
+from palatium_ai.domain.mcp.models import ToolExecutionPlan
+from palatium_ai.domain.policies.researcher_observation import ResearcherObservationPolicy
 
 if TYPE_CHECKING:
     from palatium_ai.application.services.attachment_reference_resolver import (
@@ -116,6 +119,7 @@ class ResearcherAgent(BaseAgent):
             org_id=(input.context.get("_org_id") or "").strip() or None,
         )
 
+        task_input = self._maybe_force_attachment_read(task_input)
         execution_plan = task_input.context_packet.execution_plan
         mcp_gate = McpDiscoveryPolicy.should_attempt_tool_execution(
             requires_mcp=task_input.context_packet.requires_mcp,
@@ -146,6 +150,8 @@ class ResearcherAgent(BaseAgent):
                     task_input,
                     context,
                     input.task_id,
+                    image_parts=input.image_parts,
+                    document_parts=input.document_parts,
                 )
             except Exception:
                 logger.exception("uncovered MCP path error", task_id=str(input.task_id))
@@ -207,22 +213,20 @@ class ResearcherAgent(BaseAgent):
         self,
         mcp_result: AgentOutput,
         *,
-        task_input: object,
+        task_input: ResearcherInput,
         context: AgentContext,
         skill_catalog: str,
-        task_id: object,
+        task_id: UUID,
         image_parts: tuple[ImagePart, ...] = (),
         document_parts: tuple[DocumentPart, ...] = (),
         project_agents_md: str = "",
     ) -> AgentOutput | None:
         """Empty MCP → stub (flag off), degrade LLM (optional), or clarification (required)."""
         from palatium_ai.application.agents.researcher.outcomes import required_empty_clarification_output
-        from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT, ResearcherInput
+        from palatium_ai.domain.agents.researcher import MCP_EMPTY_RESULT
         from palatium_ai.domain.policies.grounding import GroundingPolicy
 
         if mcp_result.error_message != MCP_EMPTY_RESULT:
-            return None
-        if not isinstance(task_input, ResearcherInput):
             return None
         enabled = is_adaptive_grounding_enabled(context.user_id)
         decision = GroundingPolicy.decide_empty_retrieval(
@@ -257,7 +261,7 @@ class ResearcherAgent(BaseAgent):
             )
             agent_metrics.record_grounding_required_empty()
             question = GroundingPolicy.required_empty_clarification(user_text)
-            result = required_empty_clarification_output(task_id, question=question)  # type: ignore[arg-type]
+            result = required_empty_clarification_output(task_id, question=question)
             agent_metrics.record_grounding_latency(
                 mode=mode,
                 degraded=True,
@@ -280,7 +284,7 @@ class ResearcherAgent(BaseAgent):
             context=context,
             skill_catalog=skill_catalog,
             project_agents_md=project_agents_md,
-            task_id=task_id,  # type: ignore[arg-type]
+            task_id=task_id,
             agent_role=self._config.role,
             grounding_degraded=True,
             image_parts=image_parts,
@@ -302,3 +306,44 @@ class ResearcherAgent(BaseAgent):
         )
         judge_task.add_done_callback(lambda _t: None)
         return result
+
+    @staticmethod
+    def _maybe_force_attachment_read(task_input: ResearcherInput) -> ResearcherInput:
+        """Truncated/NOTICE fences must not stay on reason_only dump (JIT re-read, 065)."""
+        from palatium_ai.domain.policies.file_reference import FileReferencePolicy
+
+        plan = task_input.context_packet.execution_plan
+        already = plan.server_name == "platform" and plan.tool_name == "read_attachment"
+        if not ResearcherObservationPolicy.should_force_read_plan(
+            attached_files=task_input.context_packet.untrusted_context,
+            already_direct_read=already,
+        ):
+            return task_input
+        seal = FileReferencePolicy.seals_thread_file_body(
+            candidate_capabilities=task_input.context_packet.candidate_capabilities,
+            response_shape=task_input.context_packet.response_shape,
+        )
+        forced = ToolExecutionPlan(
+            strategy="direct_tool_call" if seal else "retrieve_then_reason",
+            capability="attachments",
+            server_name="platform",
+            tool_name="read_attachment",
+            requires_tool_call=True,
+            rationale=(
+                "Observation policy: attachment evidence is truncated or missing text; "
+                "JIT platform.read_attachment instead of answering from a head/tail dump."
+                + (
+                    " Intent tagged verbatim_extraction: seal the body."
+                    if seal
+                    else " Synthesize over the full body after the re-read."
+                )
+            ),
+        )
+        packet = task_input.context_packet.model_copy(update={"execution_plan": forced, "requires_mcp": True})
+        logger.info(
+            "researcher.force_attachment_read",
+            task_id=task_input.task_id,
+            prior_strategy=plan.strategy,
+            seal=seal,
+        )
+        return task_input.model_copy(update={"context_packet": packet})

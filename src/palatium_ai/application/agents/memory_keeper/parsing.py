@@ -9,13 +9,14 @@ import math
 
 from typing import cast
 
-from palatium_ai.application.agents.memory_keeper.config import MEMORY_KINDS
+from palatium_ai.application.agents.memory_keeper.config import MEMORY_KINDS, MEMORY_SCOPES
 from palatium_ai.core.types.coerce import coerce_float
 from palatium_ai.domain.agents.memory_keeper import (
     MemoryFactCandidate,
     MemoryKeeperInput,
     MemoryKeeperOutput,
     MemoryKind,
+    MemoryScope,
 )
 from palatium_ai.domain.llm.json_codec import loads_llm_json
 
@@ -47,12 +48,16 @@ def parse_memory_keeper_output(raw: str) -> MemoryKeeperOutput:
         if not text:
             continue
         kind_raw = str(item.get("kind", "fact")).strip().lower()
-        # Soft-migrate pre-060 extract labels onto MemoryType (060).
+        # Soft-migrate pre-060 extract labels onto MemoryType (060). ``entity`` is a
+        # durable fact about an org/person — its sharing tier belongs to ``scope``.
         if kind_raw == "entity":
-            kind_raw = "incident"
+            kind_raw = "fact"
         elif kind_raw == "summary":
             kind_raw = "episode"
         kind = cast("MemoryKind", kind_raw if kind_raw in MEMORY_KINDS else "fact")
+        scope_raw = item.get("scope")
+        scope_key = scope_raw.strip().lower() if isinstance(scope_raw, str) else ""
+        scope = cast("MemoryScope", scope_key) if scope_key in MEMORY_SCOPES else None
         confidence = _clamp_confidence(coerce_float(item.get("confidence", 0.0)))
         key_hint_raw = item.get("key_hint")
         key_hint = str(key_hint_raw)[:128] if isinstance(key_hint_raw, str) and key_hint_raw.strip() else None
@@ -60,6 +65,7 @@ def parse_memory_keeper_output(raw: str) -> MemoryKeeperOutput:
             MemoryFactCandidate(
                 text=text[:2000],
                 kind=kind,
+                scope=scope,
                 confidence=confidence,
                 key_hint=key_hint,
             )

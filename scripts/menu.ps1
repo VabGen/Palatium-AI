@@ -59,8 +59,10 @@ function Invoke-ComposeAttachments {
 
 function Invoke-ComposeObservability {
     param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Rest)
-    docker compose --env-file $envFile --profile docker-mcp --profile docker-api `
-        --profile attachments --profile attachments-s3 --profile observability @Rest
+    # The metric stack lives in its own overlay; `--profile observability` alone only
+    # resolves Langfuse v3 from docker-compose.yml.
+    docker compose --env-file $envFile -f docker-compose.yml -f deploy/observability/compose.observability.yml `
+        --profile observability @Rest
 }
 
 # Full-launch flags come from the probe so this menu and the Makefile cannot drift (010).
@@ -153,8 +155,8 @@ $menu = @(
     @{ Type = "item";  Text = "Logs  clamav";           Hint = "-f";                     Key = "attach-logs-av" }
     @{ Type = "item";  Text = "Logs  minio";            Hint = "-f";                     Key = "attach-logs-s3" }
     @{ Type = "group"; Text = "OBSERVABILITY  (Langfuse v3 + ClickHouse)" }
-    @{ Type = "item";  Text = "Start observability";    Hint = "profile observability";   Key = "obs-up" }
-    @{ Type = "item";  Text = "Stop observability";     Hint = "stop langfuse+clickhouse"; Key = "obs-down" }
+    @{ Type = "item";  Text = "Start observability";    Hint = "langfuse + prometheus/grafana/loki"; Key = "obs-up" }
+    @{ Type = "item";  Text = "Stop observability";     Hint = "stop langfuse+clickhouse+metrics";   Key = "obs-down" }
     @{ Type = "item";  Text = "Logs  langfuse";         Hint = "-f";                      Key = "obs-logs" }
     @{ Type = "item";  Text = "Open Langfuse UI";       Hint = ":3000";                   Key = "obs-ui" }
     @{ Type = "group"; Text = "UTILITIES" }
@@ -277,17 +279,21 @@ try {
             "start-full"   {
                 $fullArgs = Get-FullComposeArgs
                 if (-not $fullArgs) { break }
-                $composeArgs = @("--profile", "observability") + $fullArgs
+                # The metric stack (Prometheus/Grafana/Loki/Alertmanager) is a separate
+                # overlay — `--profile observability` alone starts only Langfuse v3.
+                $composeArgs = @("--profile", "observability") + $fullArgs + `
+                    @("-f", "deploy/observability/compose.observability.yml")
                 Invoke-WithSpinner -Title "Starting full stack (+observability)..." -ArgumentList @($root, $envFile, $composeArgs) -Action {
                     param($rootDir, $envFileArg, $composeFlagArgs)
                     Set-Location $rootDir
                     docker compose --env-file $envFileArg @composeFlagArgs up -d --build
                 }
                 Write-AttachmentsMode -Full
+                # Same check as `make up-full`: measure, do not announce a fixed number.
+                & $Uv run --no-project python scripts/make_helpers.py vm-budget --env-file $envFile `
+                    --compose-args ($composeArgs -join " ")
                 Write-Host ""
-                Write-Host "  note: observability peak (clickhouse 2048 + langfuse 768 + worker 512 MiB)" -ForegroundColor $C_MUTE
-                Write-Host "  does not fit the default Docker VM (~7.7 GiB). Raise 'memory=12GB' in" -ForegroundColor $C_MUTE
-                Write-Host "  %USERPROFILE%\.wslconfig and restart Docker Desktop, or the OOM killer fires." -ForegroundColor $C_MUTE
+                Write-Host "  Langfuse http://localhost:3000 · Grafana http://localhost:3001 · Prometheus http://localhost:9090" -ForegroundColor $C_MUTE
             }
             "rebuild-app"  {
                 Invoke-Compose build api mcp-edms mcp-analytics
@@ -360,8 +366,8 @@ try {
             "attach-probe" { & $Uv run --no-project python scripts/attachments_probe.py }
             "attach-logs-av" { Invoke-ComposeExtra "attachments" logs -f clamav }
             "attach-logs-s3" { Invoke-ComposeExtra "attachments-s3" logs -f minio }
-            "obs-up"       { Invoke-ComposeObservability up -d minio silo-init clickhouse langfuse-web langfuse-worker }
-            "obs-down"     { Invoke-ComposeObservability stop langfuse-web langfuse-worker clickhouse }
+            "obs-up"       { Invoke-ComposeObservability up -d minio silo-init clickhouse langfuse-web langfuse-worker prometheus alertmanager grafana loki }
+            "obs-down"     { Invoke-ComposeObservability stop langfuse-web langfuse-worker clickhouse prometheus alertmanager grafana loki }
             "obs-logs"     { Invoke-ComposeObservability logs -f langfuse-web langfuse-worker }
             "obs-ui"       { Start-Process "http://localhost:3000" }
             "shell"        { Invoke-Compose exec api sh }

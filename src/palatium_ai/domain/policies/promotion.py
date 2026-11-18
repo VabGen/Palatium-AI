@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from palatium_ai.domain.memory.promotion import PromotionCandidate, PromotionThresholds
 from palatium_ai.domain.memory.scoring import ImportanceInputs, compute_importance, recency_score
@@ -14,6 +15,18 @@ from palatium_ai.domain.policies.origin_ceiling import OriginCeilingPolicy
 # Durable prefs (name, locale, likes) are promote-eligible on write — no wait for
 # reconsolidation bumps. Episodic facts still need ``min_access_frequency``.
 _PREFERENCE_PROMOTE_KINDS: frozenset[str] = frozenset({"preference"})
+
+#: Why a candidate is not promoted. ``ok`` = eligible; ``pii_hold`` and
+#: ``quarantined`` are terminal states a human must clear (020), the rest are waits.
+PromotionBlockReason = Literal[
+    "ok",
+    "already_promoted",
+    "empty_text",
+    "access",
+    "quarantined",
+    "pii_hold",
+    "importance",
+]
 
 
 class PromotionPolicy:
@@ -27,6 +40,43 @@ class PromotionPolicy:
         return thresholds.min_access_frequency
 
     @staticmethod
+    def block_reason(
+        candidate: PromotionCandidate,
+        *,
+        thresholds: PromotionThresholds,
+        now: datetime | None = None,
+        origin_ceiling: bool = True,
+    ) -> PromotionBlockReason:
+        """Typed gate outcome — a bool would force callers to re-derive *why* (F3, 055).
+
+        ``pii_hold`` says "waiting for a human", not "nothing to do": the row is a
+        standing decision, so the batch aggregates it once instead of logging per row.
+        """
+        if candidate.promoted_at is not None:
+            return "already_promoted"
+        if not candidate.text.strip():
+            return "empty_text"
+        min_access = PromotionPolicy.required_access_frequency(
+            candidate.kind,
+            thresholds=thresholds,
+        )
+        trust: MemoryTrust = coerce_memory_trust(candidate.trust) or "inferred"
+        if origin_ceiling:
+            if trust == "quarantined":
+                return "quarantined"
+            if trust == "inferred" and candidate.contains_pii:
+                return "pii_hold"
+            # Inferred rows need corroboration (reconsolidation bumps) before L4.
+            if trust == "inferred" and int(candidate.access_frequency) < int(thresholds.min_access_frequency):
+                return "access"
+        if candidate.access_frequency < min_access:
+            return "access"
+        importance = PromotionPolicy.effective_importance(candidate, now=now)
+        if importance < thresholds.min_importance:
+            return "importance"
+        return "ok"
+
+    @staticmethod
     def should_promote(
         candidate: PromotionCandidate,
         *,
@@ -34,23 +84,15 @@ class PromotionPolicy:
         now: datetime | None = None,
         origin_ceiling: bool = True,
     ) -> bool:
-        if candidate.promoted_at is not None:
-            return False
-        if not candidate.text.strip():
-            return False
-        min_access = PromotionPolicy.required_access_frequency(
-            candidate.kind,
-            thresholds=thresholds,
+        return (
+            PromotionPolicy.block_reason(
+                candidate,
+                thresholds=thresholds,
+                now=now,
+                origin_ceiling=origin_ceiling,
+            )
+            == "ok"
         )
-        if candidate.access_frequency < min_access:
-            return False
-        if origin_ceiling and not PromotionPolicy.origin_ceiling_allows(
-            candidate,
-            min_access_frequency=thresholds.min_access_frequency,
-        ):
-            return False
-        importance = PromotionPolicy.effective_importance(candidate, now=now)
-        return importance >= thresholds.min_importance
 
     @staticmethod
     def origin_ceiling_allows(

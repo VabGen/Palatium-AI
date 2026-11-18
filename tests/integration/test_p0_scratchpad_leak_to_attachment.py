@@ -27,6 +27,7 @@ from palatium_ai.domain.attachments.citations import citation_refs_from_untruste
 from palatium_ai.domain.memory.namespaces import user_namespace
 from palatium_ai.domain.memory.scratchpad import ScratchpadSlot, SessionScratchpad
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
+from palatium_ai.domain.policies.composer_mode import ComposerMode
 from palatium_ai.domain.ports.document_parser import ParsedDocument, ParsedPage
 from palatium_ai.infrastructure.hitl.memory_store import InMemoryHitlCardStore
 from palatium_ai.infrastructure.memory.in_memory_store import InMemoryMemoryPort
@@ -262,6 +263,9 @@ async def _capture_states(intent: IntentService) -> list[dict[str, Any]]:
         # AttachmentContext arrives with the fenced turn body (P0): the double must
         # accept it, otherwise the process() call fails before the graph is reached.
         attachment_context: object | None = None,
+        # Composer mode / memory switch ride on the same turn contract.
+        composer_mode: ComposerMode | None = None,
+        use_memory: bool = True,
         exclude_trailing_user: bool = True,
         trace_id: str | None = None,
     ) -> object:
@@ -275,6 +279,8 @@ async def _capture_states(intent: IntentService) -> list[dict[str, Any]]:
             revision_feedback=revision_feedback,
             untrusted_context=untrusted_context,
             attachment_context=attachment_context,  # type: ignore[arg-type]
+            composer_mode=composer_mode,
+            use_memory=use_memory,
             exclude_trailing_user=exclude_trailing_user,
             trace_id=trace_id,
         )

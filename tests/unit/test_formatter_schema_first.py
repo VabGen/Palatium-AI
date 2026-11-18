@@ -42,8 +42,9 @@ class _StubHarness:
         response_format: LLMResponseFormat | None = None,
         response_model: type[BaseModel] | None = None,
         max_tokens: int | None = None,
+        verbosity: object = None,
     ) -> LLMCompletion:
-        _ = config, messages, max_tokens
+        _ = config, messages, max_tokens, verbosity
         self.calls.append({"response_format": response_format, "response_model": response_model})
         item = self._responses.pop(0)
         if isinstance(item, Exception):
@@ -60,8 +61,10 @@ class _StubHarness:
         response_model: type[BaseModel] | None = None,
         on_delta: object = None,
         max_tokens: int | None = None,
+        verbosity: object = None,
     ) -> LLMCompletion:
         """Same scripted response, delivered incrementally so the scanner can paint."""
+        _ = verbosity
         completion = await self.call_llm(
             config,
             messages,

@@ -4,6 +4,21 @@
 # Кросс-платформенный: Linux, macOS, WSL, Git Bash, Windows (scoop install make).
 # ==============================================================================
 
+# ==============================================================================
+# 1. применить лимит памяти VM: Quit Docker Desktop (трей) ->
+#    wsl --shutdown
+# 2. сверить лимит (ожидаемо ~13 GB: потолки up-full = 13024 MiB)
+#    docker info --format "{{.MemTotal}}"
+# 3. снять остатки проекта + старые orphan-контейнеры
+#    make down
+#    docker compose --env-file env/.env down --remove-orphans
+# 4. поднять ВЕСЬ стек (api + MCP + AV + S3 + memory jobs + Langfuse + Prometheus/Grafana/Loki)
+#    make up-full
+# 5. проверка
+#    make ps
+#    make verify
+# ==============================================================================
+
 ENV_FILE ?= env/.env
 # `?=` alone is not enough: it treats a *defined but empty* environment variable as a
 # deliberate override. An exported `ENV_FILE=` then silently drops `--env-file` from every
@@ -34,6 +49,12 @@ PY_HELPER := $(UV) run --no-project python
 # env/.env (scanner disabled, filesystem blob), which is pinned by
 # tests/unit/test_make_helpers.py::test_every_api_recreating_target_loads_the_attachment_overlays.
 FULL_FLAGS = $(shell $(PY_HELPER) scripts/attachments_probe.py --compose-args)
+
+# Метрик-стек (Prometheus/Grafana/Loki/Alertmanager) живёт отдельным оверлеем, а НЕ в
+# docker-compose.yml: `--profile observability` в базовом файле = только Langfuse v3.
+# До этого `up-full` его не подключал, и Grafana «пропадала» при каждом запуске, хотя
+# из проекта ничего не удалялось. Порядок `-f` = порядок слияния: оверлей последним.
+OBS_OVERLAY := -f deploy/observability/compose.observability.yml
 
 # No POSIX tools on the critical path: `grep`/`cut`/`tr` are absent from a stock Windows
 # PATH, which made this empty and `require-key` refuse `models`/`test-tier` (see make_helpers).
@@ -70,14 +91,17 @@ up: ## Собрать и запустить всё, КРОМЕ observability (AP
 	@$(PY_HELPER) scripts/attachments_probe.py --wait 420 --env-file $(ENV_FILE)
 	@echo "✓ http://localhost:8000/docs"
 
-up-full: ## Собрать и запустить ВЕСЬ стек, включая observability (Langfuse v3 + ClickHouse)
-	@echo "  note: observability peak (clickhouse 2048 + langfuse-web 768 + worker 512) does not"
-	@echo "        fit the default Docker VM (~7.7 GiB) — raise it in %USERPROFILE%\.wslconfig"
-	@echo "        (memory=12GB) and restart Docker Desktop first, or the OOM killer will fire."
-	docker compose --env-file $(ENV_FILE) --profile observability $(FULL_FLAGS) up -d --build
+# Память проверяется, а не объявляется: помощник сравнивает сумму `mem_limit` из того же
+# compose-набора, что пойдёт в `up`, с фактическим размером Docker VM (`docker info`) и
+# говорит только когда потолки НЕ влезают. Раньше здесь стоял безусловный `echo` про
+# «~7.7 GiB» — он врал на машине с 12 GiB и приучал игнорировать предупреждение.
+# Инвариант бюджета: tests/unit/test_container_hardening.py::test_memory_ceilings_fit_inside_the_docker_vm.
+up-full: ## Собрать и запустить ВЕСЬ стек: api + MCP + AV + S3 + memory jobs + Langfuse + Prometheus/Grafana/Loki
+	@$(PY_HELPER) scripts/make_helpers.py vm-budget --env-file $(ENV_FILE) --compose-args "--profile observability $(FULL_FLAGS) $(OBS_OVERLAY)"
+	docker compose --env-file $(ENV_FILE) --profile observability $(FULL_FLAGS) $(OBS_OVERLAY) up -d --build
 	@$(PY_HELPER) scripts/attachments_probe.py --mode --full --env-file $(ENV_FILE)
 	@$(PY_HELPER) scripts/attachments_probe.py --wait 420 --env-file $(ENV_FILE)
-	@echo "✓ API http://localhost:8000/docs · Langfuse http://localhost:3000"
+	@echo "✓ API http://localhost:8000/docs · Langfuse http://localhost:3000 · Grafana http://localhost:3001 · Prometheus http://localhost:9090"
 
 # Readiness BEFORE `verify`: a fresh api needs ~60 s (entrypoint alembic + uvicorn
 # bootstrap) and `verify` has no retry of its own. Running it first printed
@@ -92,18 +116,18 @@ rebuild-app: ## Пересобрать и перезапустить api + MCP-�
 	@$(PY_HELPER) scripts/make_helpers.py verify
 	@echo "✓ api + mcp-edms + mcp-analytics + memory-consolidate пересобраны и перезапущены"
 
-obs-up: ## Поднять observability (Langfuse v3 + ClickHouse + worker + store)
-	docker compose --env-file $(ENV_FILE) --profile observability up -d minio silo-init clickhouse langfuse-web langfuse-worker
-	@echo "✓ Langfuse http://localhost:3000"
+obs-up: ## Поднять observability: Langfuse v3 + ClickHouse + store + Prometheus/Grafana/Loki
+	docker compose --env-file $(ENV_FILE) -f docker-compose.yml $(OBS_OVERLAY) --profile observability up -d minio silo-init clickhouse langfuse-web langfuse-worker prometheus alertmanager grafana loki
+	@echo "✓ Langfuse http://localhost:3000 · Grafana http://localhost:3001 · Prometheus http://localhost:9090"
 
 obs-down: ## Остановить observability (store minio не трогаем — он общий с вложениями)
-	docker compose --env-file $(ENV_FILE) --profile observability stop langfuse-web langfuse-worker clickhouse
+	docker compose --env-file $(ENV_FILE) -f docker-compose.yml $(OBS_OVERLAY) --profile observability stop langfuse-web langfuse-worker clickhouse prometheus alertmanager grafana loki
 
-down: ## Остановить
-	$(COMPOSE) down
+down: ## Остановить (+ убрать контейнеры observability-оверлея, которых нет в базовом файле)
+	$(COMPOSE) down --remove-orphans
 
 reset: ## Остановить + удалить volumes (DESTRUCTIVE)
-	$(COMPOSE) down -v
+	$(COMPOSE) down -v --remove-orphans
 
 ps: ## Статус сервисов
 	$(COMPOSE) ps

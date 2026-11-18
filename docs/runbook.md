@@ -38,8 +38,10 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api up 
 # Всё, кроме observability: API + MCP + вложения (AV/S3) — дефолтный запуск
 make up
 
-# Полная сборка и запуск, включая observability (Langfuse v3 + ClickHouse)
-#   требует VM ≥ ~9.1 GiB (см. `make up-full` и docs/docker.md)
+# Полная сборка и запуск, включая observability:
+#   Langfuse v3 + ClickHouse + Prometheus/Grafana/Loki/Alertmanager
+#   бюджет памяти VM сверяется на старте: не влезает — напечатает, до чего её поднять
+#   (docs/docker.md §6)
 make up-full
 
 # Пересобрать и перезапустить только api + MCP (инфра не трогается)
@@ -76,7 +78,7 @@ docker compose --env-file env/.env --profile docker-mcp --profile docker-api dow
 | **Host** | `docker compose up -d postgres redis neo4j litellm` + `dev-up.ps1` | Ежедневная разработка (hot-reload) |
 | **Docker** | `docker compose --profile docker-mcp --profile docker-api up -d` | CI, демо, prod-like (без вложений) |
 | **Docker + вложения** | `make up` (меню: STACK → *Start stack*) | Дефолтный запуск: AV/S3-путь вложений «из коробки» (§16.8) + promote-петля `memory-jobs` (иначе L3 не наполняется). Обязателен при `ATTACHMENTS_BLOB_BACKEND=minio` — без store API падает на boot |
-| **Docker + вложения + observability** | `make up-full` (меню: STACK → *Start full stack*) | Трассировка Langfuse v3; требует VM ≥ ~9.1 GiB (§16.10) |
+| **Docker + вложения + observability** | `make up-full` (меню: STACK → *Start full stack*) | Langfuse v3 (трассы) + Prometheus/Grafana/Loki (метрики и логи); бюджет памяти VM сверяется на старте (§16.10) |
 | **Gateway** | `.\scripts\dev-up.ps1 -WithGateway` | Тест политик MCP |
 
 **Правило:** не смешивать. Host и Docker MCP конфликтуют на портах 8080/8081/8000.
@@ -1024,10 +1026,51 @@ docker logs --tail 50 palatium-ai-langfuse-web-1
 Если OOM повторяется **при явном heap 2 GiB** — это утечка или аномально тяжёлый ingest:
 нужен heap snapshot, а не очередное увеличение потолка (050).
 
-> Сумма потолков core + observability (~11.9 GiB) не влезает в дефолтную Docker-VM
-> (7884 MiB): `make up-full` требует VM ≥ 12 GiB (`%USERPROFILE%\.wslconfig`,
-> `memory=12GB`). На меньшей VM потолок `langfuse-web` не спасает — срабатывает
-> OOM-killer всей VM и выбирает самый крупный RSS (обычно Postgres).
+> Потолки core + observability вместе не влезают в дефолтную Docker-VM: `make up-full`
+> сверяет их сумму с фактическим размером VM и печатает, до какого размера её поднять
+> (`%USERPROFILE%\.wslconfig`, `memory=13GB` — потолки `up-full` = 13024 MiB). Бюджет
+> закреплён `tests/unit/test_container_hardening.py::test_memory_ceilings_fit_inside_the_docker_vm`.
+> На меньшей VM потолок `langfuse-web` не спасает — срабатывает OOM-killer всей VM и
+> выбирает самый крупный RSS (обычно Postgres).
+
+---
+
+### 3.21. После `make up-full` нет Grafana / Prometheus / Loki / Promtail
+
+**Симптом:** Docker Desktop показывает 14 контейнеров (api, MCP, minio, langfuse, clickhouse
+и инфраструктура), Grafana отсутствует. Ранее эти контейнеры существовали, а `down`
+писал `Found orphan containers (... grafana-1, loki-1, promtail-1, prometheus-1,
+alertmanager-1)`.
+
+**Причина:** метрик-стек никуда не делся и никогда не жил в `docker-compose.yml` — он в
+отдельном оверлее `deploy/observability/compose.observability.yml`. `--profile observability`
+в базовом файле — это только Langfuse v3 (`clickhouse`, `langfuse-web`, `langfuse-worker`).
+`make up-full` профиль добавлял, а оверлей — нет; контейнеры от ручных запусков оставались
+как orphans и исчезали при первом `down --remove-orphans`.
+
+**Фикс (с 2026-11-18 оверлей уже включён в `up-full` и `make obs-up`):**
+
+```powershell
+make up-full
+# Grafana http://localhost:3001 · Prometheus http://localhost:9090
+```
+
+На ветке без этого изменения — подключить оверлей явно:
+
+```powershell
+docker compose --env-file env/.env `
+  -f docker-compose.yml `
+  -f deploy/observability/compose.observability.yml up -d prometheus alertmanager grafana loki
+```
+
+Два ограничения, которые не лечатся перезапуском:
+
+* **Порт.** Grafana и Langfuse оба хотели 3000; `GRAFANA_PUBLISH_PORT=3001` в `env/.env`
+  (обновлён во всех шаблонах). С прежним значением `up` падал на bind.
+* **Promtail.** Читает `/var/lib/docker/containers` — на Docker Desktop for Windows это
+  путь внутри WSL-VM, поэтому с хоста монтируется пустой каталог: контейнер healthy и
+  молча ничего не отправляет. Он вынесен в профиль `logs-shipper` и в `up-full` не входит;
+  на Linux-хосте — `docker compose ... --profile logs-shipper up -d promtail`.
 
 ---
 
@@ -1509,7 +1552,11 @@ Write-Host "Report saved: diag-report.txt" -ForegroundColor Green
 | 5432 | Postgres | Docker |
 | 6379 | Redis | Docker |
 | 7474 / 7687 | Neo4j | Docker |
-| 3000 | Langfuse | Docker (profile) |
+| 3000 | Langfuse | Docker (profile `observability`) |
+| 3001 | Grafana | Docker (`up-full` / `make obs-up`, loopback) |
+| 9090 | Prometheus | Docker (то же, loopback) |
+| 9093 | Alertmanager | Docker (то же, loopback) |
+| 3100 | Loki | Docker (то же, loopback) |
 | 9000 / 9001 | S3-хранилище вложений + консоль | Docker (profile `attachments-s3`, loopback) |
 | 3310 | clamd (AV) для вложений | Docker (profile `attachments`, loopback) |
 
@@ -1595,7 +1642,7 @@ HITL-карточку. По умолчанию выключена (`ATTACHMENTS_
 | `ATTACHMENTS_PDF_FIGURE_MAX_PAGES` | `8` | soft-cap vision-вызовов на фигуры |
 | `ATTACHMENTS_ANALYSIS_BACKEND` | `disabled` | `disabled` \| `local` (G15 ADA: dataframe summary CSV/XLSX под HITL) |
 | `ATTACHMENTS_PII_POLICY` | `tag` | G06: `tag` (только флаг) \| `mask` (редакция в `safe_text`) \| `reject` (`pii_detected`) |
-| `ATTACHMENTS_FILE_REREAD_PCT` | `0` | 055/070: покрытие повторного чтения файла из треда. `0` — выключено (**откат одной переменной**), `1..99` — sticky-canary по `hash8(user_id)`, `100` — все вызовы. См. §16.11 |
+| `ATTACHMENTS_FILE_REREAD_PCT` | `100` | 055/070: покрытие повторного чтения файла из треда. Default cutover `100`. `0` — выключено (**откат одной переменной**), `1..99` — sticky-canary по `hash8(user_id)`. См. §16.11 |
 
 > Хранилище: `minio` — любой S3-совместимый endpoint. Собственные реестры MinIO
 > **не отдают образы анонимно** — проверено 2026-09: Docker Hub `minio/minio` → denied,
@@ -2148,7 +2195,7 @@ uv run --no-project python scripts/attachments_probe.py --preflight-image   # т
 |---|---|---|
 | `0` | путь выключен, ход идёт прежним маршрутом | **откат**: правка одной переменной, без деплоя |
 | `5` | ~5% пользователей (sticky) | canary |
-| `100` | все вызовы | полный cutover |
+| `100` | все вызовы (**default cutover**, Context Circulation 2026) | полный cutover |
 
 Рампа без деплоя: `5 → 25 → 50 → 100`. Метрика исхода резолва —
 `palatium_attachment_read_total{kind="reference_resolved|reference_ambiguous|..."}`
@@ -2167,6 +2214,11 @@ uv run --no-project python scripts/attachments_probe.py --preflight-image   # т
 
 - карточка не появилась → ожидаемо, если запрос называет чужой документ
   (`names_foreign_document` / `no_match`): это **fail-closed**, читать другой файл нельзя;
+- карточка на **вставленном тексте чата** (paste analysis) при уже лежащих в треде
+  `Договор_*.docx` — **баг**, не фича: слабый lead «договор» не должен
+  `promotes_thread_file_reread`, а Continuity demote'ит Intent-only `single`
+  без doc-role cue (`FileReferencePolicy` / `ContinuityPolicy`, regression
+  `test_paste_text_not_file_choice` / acceptance gate);
 - карточка есть, ответ не сработал → смотреть `hitl.choice` (одноразовость,
   TTL) и `attachment_reference.resolve` c `mode="explicit"`.
 

@@ -17,7 +17,11 @@ class LoggingConfig(BaseConfig):
     file: str | None = Field(default=None, validation_alias="LOG_FILE")
     json_file: str | None = Field(default=None, validation_alias="LOG_JSON_FILE")
     filter_modules: str = Field(default="", validation_alias="LOG_FILTER_MODULES")
+    # ``neo4j`` is suppressed because the driver logs every Bolt handshake, routing
+    # decision and PING/PONG at DEBUG on the ``neo4j`` logger; with LOG_LEVEL=DEBUG the
+    # turn's own spans drown in driver chatter (040). Driver failures still surface as
+    # WARNING/ERROR and as exceptions from the adapter, so nothing is hidden.
     suppress_modules: str = Field(
-        default="urllib3,asyncio,httpx,httpcore,openai,LiteLLM,litellm",
+        default="urllib3,asyncio,httpx,httpcore,openai,LiteLLM,litellm,neo4j",
         validation_alias="LOG_SUPPRESS_MODULES",
     )

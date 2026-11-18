@@ -70,9 +70,12 @@ async def test_create_and_resolve_card() -> None:
     assert card.risk_score == pytest.approx(0.6)
     assert card.token_nonce
     assert card.owner_user_id == ACTOR
-    # R3.4: the review card names the gate *and* the confidence that tripped it,
-    # so a read-only answer never looks like an unexplained write approval.
-    assert "confidence 0.40" in card.body
+    # Consequence-first chrome (020 HITL UI): a short human ask + actions above the
+    # already-visible answer. No ops floats or "quality gate" jargon in the body.
+    assert card.title == "Review this answer"
+    assert card.body == ""
+    assert [opt.action_id for opt in card.options] == ["approve", "reject"]
+    assert card.purpose == "quality_review"
 
     result = await _do_resolve(service, card, _resolve(card))
     assert result.replayed is False

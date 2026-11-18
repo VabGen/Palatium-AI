@@ -202,9 +202,15 @@ def resolved_prior_assistant_content(state: AgentGraphState) -> str | None:
     ``None`` after ContinuityPolicy clears prior on a new upload. Falling back to the
     last assistant turn would re-inject the previous file's answer next to the new
     fence (cross-file bleed, 055). Turn fences in ``untrusted_context`` own evidence
-    for the same reason.
+    for the same reason — but only while uploads are *in scope* for the ask. With
+    ``attachment_focus=none`` (or social/clarify detach) the fence is withheld from
+    prompts, so prior must still flow for dialog/identity asks (Context Circulation).
+
+    ``trust_prior_for_workers=False`` does not silence the excerpt here — Critic and
+    Formatter still need dialog continuity (context circulation). Workers read prior
+    through ``resolved_worker_prior_assistant_content``, which honours the trust axis.
     """
-    if has_attachment_context(state):
+    if has_attachment_context(state) and _uploads_in_scope(state):
         return None
     intent = routing_intent(state)
     if intent is not None:
@@ -227,6 +233,19 @@ def resolved_prior_assistant_content(state: AgentGraphState) -> str | None:
         max_chars=max_chars,
         label="prior",
     )
+
+
+def resolved_worker_prior_assistant_content(state: AgentGraphState) -> str | None:
+    """Prior as worker evidence; withheld when Continuity distrusts it (055).
+
+    ``trust_prior_for_workers=False`` means the turn stands on its own: a leftover
+    clarify-slot excerpt must not reach a worker as ``previous_answer``, or a
+    self-contained paste answers against a stale refusal.
+    """
+    intent = routing_intent(state)
+    if intent is not None and not intent.trust_prior_for_workers:
+        return None
+    return resolved_prior_assistant_content(state)
 
 
 def resolved_continuation_kind(state: AgentGraphState) -> ContinuationKind | None:
@@ -391,6 +410,18 @@ def resolved_worker_confidence(state: AgentGraphState) -> float | None:
     if execution is None:
         return None
     return float(execution.confidence)
+
+
+def resolved_evidence_excerpts(state: AgentGraphState) -> tuple[str, ...]:
+    """Evidence bodies the worker wrote this answer over (turn inputs for 020).
+
+    Critic needs them as allowed PII sources: a contract phone number the user asked
+    us to summarize is a quotation, not an invented leak (constitution article).
+    """
+    execution = state.get("execution")
+    output = getattr(execution, "output", None) if execution is not None else None
+    excerpt = str(getattr(output, "evidence_excerpt", "") or "").strip()
+    return (excerpt,) if excerpt else ()
 
 
 def resolved_critic_summary(state: AgentGraphState) -> str | None:

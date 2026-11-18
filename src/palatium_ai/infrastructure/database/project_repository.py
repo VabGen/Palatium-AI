@@ -109,11 +109,15 @@ class PostgresProjectRepository:
         """Delete owned project; ``False`` when missing or not owned."""
         async with self._session_factory() as session:
             await set_rls_user_scope(session, user_id)
+            # RETURNING instead of ``rowcount``: the async Result protocol does not
+            # expose rowcount, and "did the row exist" is exactly the returned row.
             result = await session.execute(
-                delete(ProjectORM).where(
+                delete(ProjectORM)
+                .where(
                     ProjectORM.id == project_id,
                     ProjectORM.user_id == user_id,
                 )
+                .returning(ProjectORM.id)
             )
             await session.commit()
-            return (result.rowcount or 0) > 0
+            return result.first() is not None

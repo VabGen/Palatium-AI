@@ -12,19 +12,19 @@
   "max_subagent_depth_global": 2,
   "context_ratios": {
     "context_enricher->researcher": {
-      "actual_context_ratio": 1.42,
-      "max_context_ratio": 1.42,
-      "notes": "measured 2026-11-10 via agent_bridge+minimal ContextPacket (reason_only); ratio=size regression guard (isolation=allow-list assert)"
+      "actual_context_ratio": 1.38,
+      "max_context_ratio": 1.38,
+      "notes": "measured 2026-11-17 via agent_bridge+minimal ContextPacket (reason_only) after composer_mode joined the packet schema; ratio=size regression guard (isolation=allow-list assert)"
     },
     "context_enricher->coder": {
-      "actual_context_ratio": 1.25,
-      "max_context_ratio": 1.25,
-      "notes": "measured 2026-11-10 via agent_bridge+minimal ContextPacket; ratio=size regression guard (isolation=allow-list assert)"
+      "actual_context_ratio": 1.23,
+      "max_context_ratio": 1.23,
+      "notes": "measured 2026-11-17 via agent_bridge+minimal ContextPacket after composer_mode joined the packet schema; ratio=size regression guard (isolation=allow-list assert)"
     },
     "context_enricher->analyst": {
-      "actual_context_ratio": 1.25,
-      "max_context_ratio": 1.25,
-      "notes": "measured 2026-11-10 via agent_bridge+minimal ContextPacket; ratio=size regression guard (isolation=allow-list assert)"
+      "actual_context_ratio": 1.23,
+      "max_context_ratio": 1.23,
+      "notes": "measured 2026-11-17 via agent_bridge+minimal ContextPacket after composer_mode joined the packet schema; ratio=size regression guard (isolation=allow-list assert)"
     }
   },
   "routes": {

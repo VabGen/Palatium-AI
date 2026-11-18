@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import cast
 from uuid import uuid4
 
+from palatium_ai.application.orchestration.selectors import resolved_worker_prior_assistant_content
+from palatium_ai.application.orchestration.state import AgentGraphState
 from palatium_ai.domain.agents.intent import IntentClassifierOutput
 from palatium_ai.domain.memory.contextualizer import ContextualizerOutput
 from palatium_ai.domain.memory.turns import DialogTurn, DialogTurnWindow
 from palatium_ai.domain.policies import ContinuityPolicy
+from palatium_ai.domain.policies.continuity import EffectiveRoutingIntent
+
+
+def _worker_prior(effective: EffectiveRoutingIntent) -> str | None:
+    """Prior as a worker sees it (the trust axis), independent of the intent excerpt."""
+    return resolved_worker_prior_assistant_content(cast("AgentGraphState", {"routing_intent": effective}))
 
 
 def _dialog_with_prior() -> DialogTurnWindow:
@@ -127,6 +136,149 @@ def test_answer_without_refers_to_prior_trusts_intent() -> None:
     assert effective.task_kind == "social_conversation"
     assert effective.suppress_intent_hitl is False
     assert effective.trust_prior_for_workers is False
+    # Dialog text may stay on the intent (critic/formatter circulation); workers see none.
+    assert _worker_prior(effective) is None
+
+
+def test_short_followup_recovers_refers_over_prior() -> None:
+    """«я просил тезисный анализ» must trust prior, not empty required search.
+
+    Live: after a named-file analysis stream flipped to «нет данных», the short
+    follow-up kept answer+!refers → Continuity cleared prior → grounding=required
+    empty search emitted GroundingPolicy.required_empty_clarification (055).
+    """
+    dialog = _dialog_with_prior()
+    ctx = ContextualizerOutput(
+        rewritten_query="я просил тезисный анализ",
+        continuation_kind="answer",
+        confidence=0.9,
+        refers_to_prior=False,
+        prior_assistant_excerpt="Тезисный анализ договора…",
+        reasoning="independent restatement",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        grounding="required",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="needs sources",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=dialog,
+        raw_intent=raw,
+        user_text="я просил тезисный анализ",
+    )
+    assert effective.trust_prior_for_workers is True
+    assert effective.prior_context is not None
+    assert effective.grounding == "optional"
+    assert "short follow-up" in effective.reasoning
+
+
+def test_named_thread_file_keeps_optional_grounding_when_untrusted() -> None:
+    """Self-contained named-file ask must not demote optional→none (file_reread path)."""
+    ctx = ContextualizerOutput(
+        rewritten_query="тезисный анализ файла договор",
+        continuation_kind="answer",
+        confidence=0.95,
+        refers_to_prior=False,
+        prior_assistant_excerpt="Ранее по заявке…",
+        reasoning="new file ask",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=True,
+        grounding="optional",
+        candidate_capabilities=("retrieve",),
+        confidence=0.9,
+        reasoning="file analysis",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=_dialog_with_prior(),
+        raw_intent=raw,
+        user_text="тезисный анализ файла договор",
+        thread_file_named=True,
+    )
+    assert effective.file_reference == "thread_file"
+    assert effective.trust_prior_for_workers is False
+    assert _worker_prior(effective) is None
+    assert effective.grounding == "optional"
+
+
+def test_self_contained_paste_withholds_prior_from_workers_and_demotes_grounding() -> None:
+    """Inline multi-task paste after a file dialog must not hand prior refusal to workers.
+
+    Live: Contextualizer labels answer+!refers_to_prior, but Continuity keeps
+    ``assistant_prior`` on the intent for dialog circulation. Researcher then saw
+    ``previous_answer=«материалы отсутствуют»`` + empty search_knowledge and replaced
+    a correct stream with a PDF-grounded refusal (055). The trust axis now gates the
+    worker view (``resolved_worker_prior_assistant_content``), not the excerpt itself.
+    """
+    dialog = DialogTurnWindow(
+        thread_id="t-paste",
+        turns=(
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-paste",
+                role="user",
+                content="сделай анализ заявки",
+                seq=0,
+                created_at=datetime.now(UTC),
+            ),
+            DialogTurn(
+                id=uuid4(),
+                thread_id="t-paste",
+                role="assistant",
+                content=(
+                    "Анализ заявки Госархива Могилевской области…\n"
+                    "На основе предоставленных материалов невозможно выделить 5 ключевых выводов…"
+                ),
+                seq=1,
+                created_at=datetime.now(UTC),
+            ),
+        ),
+        limit=12,
+    )
+    paste = (
+        "Проанализируй следующий текст и выдели 5 ключевых выводов: "
+        '"Глобальный рынок электромобилей растёт быстрее прогнозов аналитиков, '
+        "и крупные автопроизводители пересматривают инвестиционные программы на "
+        'ближайшее десятилетие…"\n'
+        "Перефразируй абзац своими словами, сохранив факты и цифры, но убрав "
+        "канцелярит и повторы.\n"
+        "Извлеки даты и имена из текста о ТехноСфере и договоре с ООО Инновации, "
+        "оформив результат списком без лишних комментариев."
+    )
+    assert len(paste) >= 400
+    ctx = ContextualizerOutput(
+        rewritten_query="Выполни три задачи на основе текстов в текущем сообщении",
+        continuation_kind="answer",
+        confidence=1.0,
+        refers_to_prior=False,
+        prior_assistant_excerpt=("На основе предоставленных материалов невозможно выделить 5 ключевых выводов…"),
+        reasoning="self-contained paste; prior refusal was a hallucination",
+    )
+    raw = IntentClassifierOutput(
+        task_kind="knowledge_request",
+        requires_mcp=False,
+        candidate_capabilities=(),
+        grounding="optional",
+        grounding_reason="analysis and extraction based on provided text",
+        confidence=0.95,
+        reasoning="three text-processing tasks; evidence in the prompt",
+    )
+    effective = ContinuityPolicy.resolve(
+        contextualizer=ctx,
+        dialog=dialog,
+        raw_intent=raw,
+        user_text=paste,
+    )
+    assert effective.trust_prior_for_workers is False
+    assert _worker_prior(effective) is None
+    assert effective.grounding == "none"
+    assert "self-contained" in effective.grounding_reason
 
 
 def test_format_forces_response_formatting() -> None:

@@ -80,8 +80,9 @@ def test_incomplete_icon_prefix_held() -> None:
 
 def test_flush_stream_tail_maps_emoji() -> None:
     preview, buffered = flush_stream_tail("📋")
-    assert '<icon name="document"/>' in buffered
-    assert '<icon name="document"/>' in preview
+    # Clipboard pictograph maps to the list icon (EMOJI_TO_ICON SoT), never left raw.
+    assert '<icon name="list"/>' in buffered
+    assert '<icon name="list"/>' in preview
     assert strip_icon_tokens(buffered) == ""
 
 

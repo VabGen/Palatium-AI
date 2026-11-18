@@ -62,5 +62,8 @@ class WorkflowExecutionPolicy:
         executable = cls.executable_task_kind(task_kind, requires_mcp=requires_mcp)
         base = default_plans.get(executable) or default_plans["clarification_needed"]
         if task_kind == "multi_step_workflow":
-            return f"multi_step_workflow is not decomposable yet; collapse to single worker pass as {executable}. {base}"
+            return (
+                "multi_step_workflow is not decomposable: Intent must not select it; "
+                f"safety net collapses to a single worker pass as {executable}. {base}"
+            )
         return base

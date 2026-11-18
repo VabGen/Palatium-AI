@@ -13,6 +13,8 @@ from uuid import UUID
 from langgraph.types import interrupt
 
 from palatium_ai.application.agents.researcher.config import (
+    CHUNK_NOTE_MAX_TOKENS,
+    CHUNKED_SYNTHESIS_MAX_CHUNKS,
     READ_ATTACHMENT_OUTPUT_MAX_CHARS,
     SUMMARY_MAX_CHARS,
     researcher_completion_budget,
@@ -30,7 +32,10 @@ from palatium_ai.application.agents.researcher.parsing import (
     score_mcp_tool_confidence,
     summarize_mcp_content,
 )
-from palatium_ai.application.agents.researcher.prompts import RESEARCHER_SYSTEM_PROMPT
+from palatium_ai.application.agents.researcher.prompts import (
+    RESEARCHER_CHUNK_MAP_PROMPT,
+    RESEARCHER_SYSTEM_PROMPT,
+)
 from palatium_ai.application.services.tool_argument_builder import (
     ToolArgumentBuilder,
     ToolArgumentBuildError,
@@ -48,6 +53,7 @@ from palatium_ai.domain.agents.contracts import AgentContext
 from palatium_ai.domain.agents.messages import AgentOutput
 from palatium_ai.domain.agents.researcher import (
     ATTACHMENT_REFERENCE_UNRESOLVED,
+    EVIDENCE_EXCERPT_MAX_CHARS,
     MCP_EMPTY_RESULT,
     MCP_SERVER_UNAVAILABLE,
     MCP_TOOL_ERROR,
@@ -55,7 +61,7 @@ from palatium_ai.domain.agents.researcher import (
     ResearcherInput,
     ResearcherOutput,
 )
-from palatium_ai.domain.llm.models import ChatMessage
+from palatium_ai.domain.llm.models import ChatMessage, DocumentPart, ImagePart
 from palatium_ai.domain.mcp.models import MCPToolDescriptor
 from palatium_ai.domain.mcp.tool_policy import (
     classify_risk_tier,
@@ -63,12 +69,13 @@ from palatium_ai.domain.mcp.tool_policy import (
     requires_interrupt_before_call,
     resolve_platform_pin,
 )
-from palatium_ai.domain.memory.tool_output import strip_untrusted_tool_output
+from palatium_ai.domain.memory.tool_output import strip_untrusted_tool_output, wrap_untrusted_tool_output
+from palatium_ai.domain.policies.document_synthesis import DocumentSynthesisPolicy
 from palatium_ai.domain.policies.file_reference import FileReferencePolicy
 from palatium_ai.domain.policies.hop_budget import HopBudgetPolicy
 from palatium_ai.domain.policies.prompt_assembly import PromptAssemblyParts, PromptAssemblyPolicy
+from palatium_ai.domain.policies.researcher_observation import ResearcherObservationPolicy
 from palatium_ai.domain.policies.retrieval import RetrievalPolicy
-from palatium_ai.domain.policies.types import VERBATIM_EXTRACTION_CAPABILITY
 
 if TYPE_CHECKING:
     from palatium_ai.application.services.attachment_reference_resolver import (
@@ -172,6 +179,8 @@ async def _execute_plural_read(
     task_uuid: UUID,
     *,
     allow_unpinned: bool = False,
+    image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
 ) -> AgentOutput:
     """Read N thread files, then synthesize once over the merged fences.
 
@@ -212,7 +221,89 @@ async def _execute_plural_read(
     if not outcomes:
         return failure_output(task_uuid, summary=None, error=MCP_TOOL_ERROR)
     merged = merge_attachment_read_outcomes(tuple(outcomes))
-    return await mcp_outcome_to_output(deps, task_input, merged, server_name, tool_name, task_uuid)
+    return await mcp_outcome_to_output(
+        deps,
+        task_input,
+        merged,
+        server_name,
+        tool_name,
+        task_uuid,
+        image_parts=image_parts,
+        document_parts=document_parts,
+    )
+
+
+async def _observation_reread_hop(
+    deps: McpPathDeps,
+    task_input: ResearcherInput,
+    context: AgentContext,
+    task_uuid: UUID,
+    *,
+    prior_tool: tuple[str, str],
+    image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
+) -> AgentOutput | None:
+    """Second hop: storage re-read when the first evidence body was truncated (065).
+
+    Tool-result clearing: only the second hop body is synthesized — the first truncated
+    payload is dropped (Anthropic tool-result clearing pattern).
+    """
+    mcp_registry = deps.mcp_registry
+    descriptor = await fetch_mcp_descriptor(deps, mcp_registry, _PLATFORM_SERVER, _READ_ATTACHMENT_TOOL, task_input.task_id)
+    if descriptor is None:
+        return None
+    args_or_failure = await _build_file_reread_arguments(deps, task_input, context, _READ_ATTACHMENT_TOOL, task_uuid)
+    if isinstance(args_or_failure, AgentOutput):
+        return None
+    # Raise the slice for the second hop so middle-of-doc asks can land.
+    arguments = dict(args_or_failure)
+    try:
+        current_max = int(str(arguments.get("max_chars") or "32000"))
+    except ValueError:
+        current_max = 32_000
+    arguments["max_chars"] = str(min(max(current_max * 2, 48_000), 100_000))
+    approval_failure = ensure_mcp_hitl_approval(
+        deps,
+        task_input,
+        _PLATFORM_SERVER,
+        _READ_ATTACHMENT_TOOL,
+        descriptor,
+        arguments,
+        task_uuid,
+    )
+    if approval_failure is not None:
+        return None
+    outcome_or_failure = await invoke_mcp_tool(
+        deps,
+        task_input,
+        context,
+        _PLATFORM_SERVER,
+        _READ_ATTACHMENT_TOOL,
+        arguments,
+        mcp_registry,
+        task_uuid,
+        allow_unpinned=resolve_platform_pin(descriptor, server_name=_PLATFORM_SERVER) is None,
+    )
+    if isinstance(outcome_or_failure, AgentOutput):
+        return None
+    logger.info(
+        "researcher.observation_reread_hop",
+        task_id=str(task_uuid),
+        prior_tool=f"{prior_tool[0]}.{prior_tool[1]}",
+        max_chars=arguments.get("max_chars"),
+    )
+    return await mcp_outcome_to_output(
+        deps,
+        task_input,
+        outcome_or_failure,
+        _PLATFORM_SERVER,
+        _READ_ATTACHMENT_TOOL,
+        task_uuid,
+        image_parts=image_parts,
+        document_parts=document_parts,
+        # Drop first-hop body from the synthesis prompt (tool-result clearing).
+        clear_attached_files=True,
+    )
 
 
 async def _build_file_reread_arguments(
@@ -224,12 +315,25 @@ async def _build_file_reread_arguments(
 ) -> dict[str, object] | AgentOutput:
     """Deterministic args for a thread file re-read (070, 020).
 
-    The model never picks the file: ``attachment_id`` comes from the owner-scoped
-    repository through ``AttachmentReferenceResolver``. Any failure here is a typed
-    refusal with a user-facing reason — never a guess, never an invented id.
+    The model never picks the file. Prefer UUIDs already present in this turn's
+    truncated/NOTICE fences (JIT, Context Circulation); otherwise resolve via
+    ``AttachmentReferenceResolver``. Any failure is a typed refusal — never a guess.
     """
-    resolver = deps.file_reference_resolver
+    from palatium_ai.domain.attachments.citations import attachment_ids_from_untrusted_context
+
     user_id = (context.user_id or "").strip()
+    fence_ids = attachment_ids_from_untrusted_context(task_input.context_packet.untrusted_context)
+    if fence_ids and user_id:
+        # Same-turn truncated fence already names the file — skip name-based resolve.
+        logger.info(
+            "researcher.file_reference_from_fence",
+            task_id=task_input.task_id,
+            attachment_id=fence_ids[0],
+            fence_count=len(fence_ids),
+        )
+        return {"attachment_id": fence_ids[0], "user_id": user_id}
+
+    resolver = deps.file_reference_resolver
     if resolver is None or not user_id or not context.thread_id:
         logger.warning(
             "researcher.file_reference_unavailable",
@@ -317,6 +421,9 @@ async def execute_mcp_capability(
     task_input: object,
     context: AgentContext,
     task_uuid: UUID,
+    *,
+    image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
 ) -> AgentOutput | None:
     task_input = _require_researcher_input(task_input)
     mcp_registry = deps.mcp_registry
@@ -358,6 +465,8 @@ async def execute_mcp_capability(
             mcp_registry,
             task_uuid,
             allow_unpinned=resolve_platform_pin(descriptor, server_name=server_name) is None,
+            image_parts=image_parts,
+            document_parts=document_parts,
         )
 
     args_or_failure = await build_mcp_tool_arguments(deps, task_input, context, server_name, tool_name, descriptor, task_uuid)
@@ -383,7 +492,34 @@ async def execute_mcp_capability(
     if isinstance(outcome_or_failure, AgentOutput):
         return outcome_or_failure
 
-    return await mcp_outcome_to_output(deps, task_input, outcome_or_failure, server_name, tool_name, task_uuid)
+    first = await mcp_outcome_to_output(
+        deps,
+        task_input,
+        outcome_or_failure,
+        server_name,
+        tool_name,
+        task_uuid,
+        image_parts=image_parts,
+        document_parts=document_parts,
+    )
+    # Bounded observation loop (max 2 hops): truncated fence/tool body → JIT re-read.
+    raw_probe = mcp_joined_text(outcome_or_failure)
+    if not ResearcherObservationPolicy.needs_tool_reread(
+        attached_files=task_input.context_packet.untrusted_context,
+        tool_result=raw_probe,
+        completed_hops=1,
+    ):
+        return first
+    second = await _observation_reread_hop(
+        deps,
+        task_input,
+        context,
+        task_uuid,
+        prior_tool=(server_name, tool_name),
+        image_parts=image_parts,
+        document_parts=document_parts,
+    )
+    return second if second is not None else first
 
 
 async def resolve_mcp_tool_binding(
@@ -616,6 +752,10 @@ async def mcp_outcome_to_output(
     server_name: str,
     tool_name: str,
     task_uuid: UUID,
+    *,
+    image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
+    clear_attached_files: bool = False,
 ) -> AgentOutput:
     from palatium_ai.application.agents.researcher.parsing import (
         merge_attachment_read_outcomes,
@@ -645,12 +785,14 @@ async def mcp_outcome_to_output(
         )
         return soft_empty_output(task_uuid, error=MCP_EMPTY_RESULT)
     source = f"mcp:{server_name}.{tool_name}"
-    # Singular thread-file re-read: the document body *is* the answer. Plural
-    # ``attachment_scope=all`` still synthesizes. Skipping singular synthesis
-    # stops the LLM inventing «файл пуст» over a real fence (W10.2).
+    # Singular ``read_attachment``: seal only when the plan/capability says the body
+    # *is* the answer (verbatim_extraction → direct_tool_call). Analysis asks use
+    # retrieve_then_reason and must synthesize — otherwise Formatter dumps the
+    # whole contract into chat (055). Plural ``attachment_scope=all`` always
+    # synthesizes. Sealing still blocks «файл пуст» over a real fence (W10.2).
     if server_name == _PLATFORM_SERVER and tool_name == _READ_ATTACHMENT_TOOL:
         body = unwrap_read_attachment_text(raw)
-        if task_input.context_packet.attachment_scope != _PLURAL_READ_SCOPE:
+        if task_input.context_packet.attachment_scope != _PLURAL_READ_SCOPE and _verbatim_requested(task_input):
             return _verbatim_mcp_output(
                 body,
                 source=source,
@@ -673,6 +815,9 @@ async def mcp_outcome_to_output(
         tool_name=tool_name,
         source=source,
         task_uuid=task_uuid,
+        image_parts=image_parts,
+        document_parts=document_parts,
+        clear_attached_files=clear_attached_files,
     )
 
 
@@ -685,18 +830,35 @@ async def synthesize_mcp_output(
     tool_name: str,
     source: str,
     task_uuid: UUID,
+    image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
+    clear_attached_files: bool = False,
 ) -> AgentOutput:
     """Second agent-loop step: the tool body stays in the prompt, the model writes summary."""
+    body = mcp_joined_text(outcome)
+    budget_chars = researcher_tool_output_budget(
+        server_name=server_name,
+        tool_name=tool_name,
+        default_max_chars=task_input.mcp_tool_output_max_chars,
+    )
     fenced = summarize_mcp_content(
         outcome,
-        max_chars=researcher_tool_output_budget(
-            server_name=server_name,
-            tool_name=tool_name,
-            default_max_chars=task_input.mcp_tool_output_max_chars,
-        ),
+        max_chars=budget_chars,
         server_name=server_name,
         tool_name=tool_name,
     )
+    # A document longer than one prompt is read part by part, never from its first
+    # 12k chars only — otherwise recommendations describe the wrong section (065).
+    notes = await _map_evidence_notes(
+        deps,
+        task_input,
+        body,
+        budget_chars=budget_chars,
+        source=source,
+        task_uuid=task_uuid,
+    )
+    evidence_excerpt = (notes or fenced)[:EVIDENCE_EXCERPT_MAX_CHARS]
+    tool_result = wrap_untrusted_tool_output(notes, source=f"{source}:notes") if notes else fenced
     llm_config = researcher_llm_config(
         deps.config,
         strategy=task_input.context_packet.execution_plan.strategy,
@@ -705,7 +867,14 @@ async def synthesize_mcp_output(
     try:
         completion = await deps.harness.call_llm(
             llm_config,
-            _synthesis_messages(task_input, tool_result=fenced, source=source),
+            _synthesis_messages(
+                task_input,
+                tool_result=tool_result,
+                source=source,
+                image_parts=image_parts,
+                document_parts=document_parts,
+                clear_attached_files=clear_attached_files,
+            ),
             response_format="json_object",
             max_tokens=researcher_completion_budget(task_input.context_packet.candidate_capabilities),
         )
@@ -722,6 +891,7 @@ async def synthesize_mcp_output(
         grounding_satisfied=True,
         grounding_degraded=False,
         cannot_answer_without_source=False,
+        evidence_excerpt=evidence_excerpt,
     )
     agent_metrics.record_grounding_satisfied()
     status: Literal["success", "failure", "partial"] = (
@@ -736,8 +906,13 @@ async def synthesize_mcp_output(
 
 
 def _verbatim_requested(task_input: ResearcherInput) -> bool:
-    caps = {item.strip().lower() for item in task_input.context_packet.candidate_capabilities}
-    return VERBATIM_EXTRACTION_CAPABILITY in caps
+    """Shared seal SoT (capability ∩ response_shape) — same as fence reason_only."""
+    from palatium_ai.domain.policies.file_reference import FileReferencePolicy
+
+    return FileReferencePolicy.seals_thread_file_body(
+        candidate_capabilities=task_input.context_packet.candidate_capabilities,
+        response_shape=task_input.context_packet.response_shape,
+    )
 
 
 def _verbatim_mcp_output(
@@ -767,6 +942,7 @@ def _verbatim_mcp_output(
         confidence=confidence,
         sources_used=(source,),
         grounding_satisfied=True,
+        evidence_excerpt=body,
     )
     agent_metrics.record_grounding_satisfied()
     status: Literal["success", "failure", "partial"] = "partial" if confidence < confidence_threshold else "success"
@@ -778,9 +954,94 @@ def _verbatim_mcp_output(
     )
 
 
-def _synthesis_messages(task_input: ResearcherInput, *, tool_result: str, source: str) -> list[ChatMessage]:
+async def _map_evidence_notes(
+    deps: McpPathDeps,
+    task_input: ResearcherInput,
+    body: str,
+    *,
+    budget_chars: int,
+    source: str,
+    task_uuid: UUID,
+) -> str | None:
+    """Read a document longer than one prompt in bounded slices (map step).
+
+    ``None`` means "not sharded": the caller keeps the single-pass prompt, so a map
+    failure degrades to the previous behaviour instead of failing the turn (035).
+    """
+    if not DocumentSynthesisPolicy.needs_chunking(body_chars=len(body), budget_chars=budget_chars):
+        return None
+    chunks = DocumentSynthesisPolicy.plan(
+        body,
+        budget_chars=budget_chars,
+        max_chunks=CHUNKED_SYNTHESIS_MAX_CHUNKS,
+    )
+    llm_config = researcher_llm_config(
+        deps.config,
+        strategy=task_input.context_packet.execution_plan.strategy,
+        composer_mode=task_input.context_packet.composer_mode,
+    )
+    notes: list[str] = []
+    for chunk in chunks:
+        payload = json.dumps(
+            {
+                "user_ask": task_input.context_packet.user_text,
+                "response_shape": task_input.context_packet.response_shape,
+                "part": f"{chunk.index + 1}/{len(chunks)}",
+                "content": body[chunk.start : chunk.end],
+            },
+            ensure_ascii=False,
+        )
+        messages = [
+            ChatMessage(role="system", content=RESEARCHER_CHUNK_MAP_PROMPT),
+            ChatMessage(role="user", content=payload),
+        ]
+        try:
+            completion = await deps.harness.call_llm(
+                llm_config,
+                messages,
+                max_tokens=CHUNK_NOTE_MAX_TOKENS,
+            )
+        except Exception:
+            logger.exception(
+                "researcher.chunk_map_failed",
+                task_id=str(task_uuid),
+                part=chunk.index + 1,
+                source=source,
+            )
+            return None
+        note = completion.content.strip()
+        if note:
+            notes.append(f"[part {chunk.index + 1}/{len(chunks)}]\n{note}")
+    if not notes:
+        return None
+    agent_metrics.record_transform(kind="chunked_synthesis")
+    logger.info(
+        "researcher.chunked_synthesis",
+        task_id=str(task_uuid),
+        parts=len(chunks),
+        body_chars=len(body),
+        source=source,
+    )
+    return "\n\n".join(notes)
+
+
+def _synthesis_messages(
+    task_input: ResearcherInput,
+    *,
+    tool_result: str,
+    source: str,
+    image_parts: tuple[ImagePart, ...] = (),
+    document_parts: tuple[DocumentPart, ...] = (),
+    clear_attached_files: bool = False,
+) -> list[ChatMessage]:
     """Same researcher JSON contract as the dialog path; evidence is the MCP payload."""
     memory_hints = list(task_input.memory_hints[:4])
+    dialog_block = ""
+    if task_input.dialog_window is not None:
+        dialog_block = task_input.dialog_window.as_prompt_block(max_chars=6_000)
+        if dialog_block == "(no prior turns)":
+            dialog_block = ""
+    attached = "" if clear_attached_files else task_input.context_packet.untrusted_context
     payload = {
         "user_text": task_input.context_packet.user_text,
         "task_kind": task_input.context_packet.task_kind,
@@ -788,7 +1049,7 @@ def _synthesis_messages(task_input: ResearcherInput, *, tool_result: str, source
         "candidate_capabilities": list(task_input.context_packet.candidate_capabilities),
         "route_plan": task_input.context_packet.route_plan,
         "context_summary": task_input.context_packet.context_summary,
-        "attached_files": task_input.context_packet.untrusted_context,
+        "attached_files": attached,
         "previous_answer": task_input.prior_context,
         "revision_feedback": task_input.revision_feedback,
         "user_facts": memory_hints,
@@ -800,7 +1061,10 @@ def _synthesis_messages(task_input: ResearcherInput, *, tool_result: str, source
         PromptAssemblyParts(
             system_identity=RESEARCHER_SYSTEM_PROMPT,
             memory_block=memory_block,
+            dialog_block=dialog_block,
             user_content=json.dumps(payload, ensure_ascii=False),
+            image_parts=image_parts,
+            document_parts=() if clear_attached_files else document_parts,
         )
     )
     return list(assembled.messages)

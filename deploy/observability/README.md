@@ -21,26 +21,57 @@ deploy/observability/
 
 ## Run
 
+This overlay is part of `make up-full` and `make obs-up` (since 2026-11-18). The two
+files must be passed together — `--profile observability` on the base file alone starts
+only Langfuse v3, because Prometheus/Grafana/Loki/Alertmanager are defined *here*.
+
 ```bash
 # 1. Grafana refuses to start without an admin password (no default password in git).
 #    Add these to env/.env (gitignored):
 #      GRAFANA_ADMIN_PASSWORD=<local-only-password>
 #
 # 2. Start the full stack + observability overlay:
+make up-full
+# equivalent, manual:
 docker compose --env-file env/.env \
   -f docker-compose.yml \
   -f deploy/observability/compose.observability.yml \
-  up -d --build
+  --profile observability up -d --build
 ```
 
 | Service | URL | Notes |
 |---|---|---|
 | Prometheus | http://localhost:9090 | targets: `/targets`, rules: `/rules` |
 | Alertmanager | http://localhost:9093 | default receiver is a no-op — see below |
-| Grafana | http://localhost:3000 | *Overview* + *Adaptive Grounding* |
+| Grafana | http://localhost:3001 | *Overview* + *Adaptive Grounding*; 3000 belongs to Langfuse |
 | Loki | http://localhost:3100 | query via Grafana Explore |
+| Promtail | — | opt-in: `--profile logs-shipper`, Linux hosts only (see below) |
 
 Everything binds to `127.0.0.1` only (020: nothing exposed on the perimeter).
+
+### Memory budget
+
+The five containers declare `mem_limit` (prometheus 256 + alertmanager 96 + grafana 256 +
+loki 256 = 864 MiB, promtail 96 MiB when enabled) and that sum is part of the VM budget
+asserted by `tests/unit/test_container_hardening.py`. Unbounded, a runaway Grafana/Loki is
+reaped by the *VM-wide* OOM killer, which picks the largest RSS — postgres. `make up-full`
+therefore checks the ceilings against `docker info` before starting (`memory=13GB` in
+`%USERPROFILE%\.wslconfig` on a 16 GB dev host).
+
+### Promtail is opt-in, and host-specific
+
+Promtail reads the Docker daemon's container-log directory
+(`/var/lib/docker/containers`). On Docker Desktop for Windows that path lives inside the
+WSL VM, not on the Windows host: bind-mounted from the host it is an empty directory, so
+the container is healthy and ships nothing while Loki looks like it is collecting logs.
+A profile makes that failure honest — nothing starts — instead of silent. Run it
+explicitly on a Linux host where the path exists:
+
+```bash
+docker compose --env-file env/.env -f docker-compose.yml \
+  -f deploy/observability/compose.observability.yml \
+  --profile logs-shipper up -d promtail
+```
 
 ## The `/metrics` scrape token
 
@@ -97,8 +128,10 @@ Alertmanager's `null` type. Uncomment a real receiver in `alertmanager.yml`
 4. **TLS / auth.** This stack speaks plain HTTP on loopback. Terminate TLS and put
    it behind your ingress/auth proxy outside local dev.
 5. **Log shipping is host-specific.** Promtail reads `/var/lib/docker/containers`
-   directly (no Docker socket — that socket is root-equivalent). On a host where
-   the Docker root differs, adjust the bind mount in the overlay.
+   directly (no Docker socket — that socket is root-equivalent) and is therefore opt-in
+   behind `--profile logs-shipper`. On Docker Desktop for Windows that path sits inside
+   the WSL VM, so the mount is empty and only the profile keeps that failure visible;
+   on a host where the Docker root differs, adjust the bind mount.
 
 ## Troubleshooting
 

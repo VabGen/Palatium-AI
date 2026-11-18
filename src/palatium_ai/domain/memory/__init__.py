@@ -29,6 +29,7 @@ from .scoring import (
 from .scratchpad import ScratchpadSlot, ScratchpadSlotKind, SessionScratchpad
 from .turns import (
     ATTACHMENT_IDS_PAYLOAD_KEY,
+    ATTACHMENT_NAMES_PAYLOAD_KEY,
     DialogRole,
     DialogTurn,
     DialogTurnWindow,
@@ -48,6 +49,7 @@ from .types import (
 
 __all__ = [
     "ATTACHMENT_IDS_PAYLOAD_KEY",
+    "ATTACHMENT_NAMES_PAYLOAD_KEY",
     "DEFAULT_PROMPT_BUDGET",
     "MEMORY_EXPLICIT_WRITE_KEY",
     "MEMORY_ORIGIN_KEY",

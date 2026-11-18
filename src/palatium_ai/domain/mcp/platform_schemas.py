@@ -7,6 +7,8 @@ Stubs import this module for tools/list pins; Host executes via PlatformToolHand
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from palatium_ai.domain.mcp.external_schemas import pinned_input_schema
@@ -331,6 +333,36 @@ PLATFORM_SKILL_REFERENCE_SCHEMA = pinned_input_schema(PlatformSkillReferenceInpu
 PLATFORM_SKILL_MANAGE_SCHEMA = pinned_input_schema(PlatformSkillManageInput)
 PLATFORM_READ_ATTACHMENT_SCHEMA = pinned_input_schema(PlatformReadAttachmentInput)
 
+
+class PlatformReadAttachmentOutput(BaseModel):
+    """Frozen envelope for ``mcp:platform.read_attachment`` results (output validate, 070)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    tool: Literal["read_attachment"] = "read_attachment"
+    attachment_id: str = Field(min_length=36, max_length=36)
+    filename: str = Field(default="", max_length=512)
+    mime_type: str = Field(default="", max_length=255)
+    truncated: bool = False
+    offset: int = Field(default=0, ge=0)
+    total_chars: int = Field(default=0, ge=0)
+    ocr_applied: bool = False
+    ocr_cached: bool = False
+    ocr_engine: str = Field(default="", max_length=64)
+    extract_status: str = Field(default="", max_length=64)
+    notice: str | None = None
+    fenced_text: str = Field(default="", max_length=600_000)
+
+
+class PlatformSearchKnowledgeOutput(BaseModel):
+    """Minimal frozen envelope for ``search_knowledge`` hit payloads (output validate)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    hit_count: int = Field(default=0, ge=0)
+    hits: tuple[dict[str, object], ...] = ()
+
+
 __all__ = [
     "PLATFORM_EXPLAIN_BELIEF_SCHEMA",
     "PLATFORM_EXTRACT_TRANSCRIPT_MEMORIES_SCHEMA",
@@ -354,8 +386,10 @@ __all__ = [
     "PlatformMemoryAuditInput",
     "PlatformMemoryVerifyInput",
     "PlatformReadAttachmentInput",
+    "PlatformReadAttachmentOutput",
     "PlatformSaveMemoryInput",
     "PlatformSearchKnowledgeInput",
+    "PlatformSearchKnowledgeOutput",
     "PlatformSearchMemoryInput",
     "PlatformSkillManageInput",
     "PlatformSkillReferenceInput",

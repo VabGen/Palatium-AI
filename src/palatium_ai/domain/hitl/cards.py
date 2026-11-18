@@ -162,7 +162,7 @@ def default_review_options() -> tuple[HITLOption, ...]:
         ),
         HITLOption(
             action_id="reject",
-            label="Reject & revise",
+            label="Revise",
             kind="reject",
             style="danger",
             icon="x",

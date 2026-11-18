@@ -270,6 +270,21 @@ class IntentService:
             return {}
         return {PENDING_ATTACHMENT_IDS_KEY: self._serialize_pending_attachment_ids(attachment_ids)}
 
+    @staticmethod
+    def _user_turn_attachment_payload(
+        attachment_ids: Sequence[UUID] | None,
+        turn_attachments: AttachmentTurnContext,
+    ) -> dict[str, object] | None:
+        """Persist UUID refs + display names for UI hydrate after thread switch."""
+        if not attachment_ids:
+            return None
+        names_by_id = {block.attachment_id: block.filename for block in turn_attachments.blocks}
+        names = tuple(names_by_id[aid] for aid in attachment_ids if aid in names_by_id)
+        return attachment_ids_payload(
+            tuple(attachment_ids),
+            attachment_names=names or None,
+        )
+
     def _bind_turn_attachment_context(
         self,
         *,
@@ -314,7 +329,19 @@ class IntentService:
         async def _clear() -> None:
             await self._clear_pending_attachments(thread_id=thread_id)
 
-        return TurnAttachmentContext(rehydrate=_rehydrate, clear_pending=_clear, primed=primed)
+        async def _names_thread_file(text: str) -> bool:
+            return await self._graph_runner._names_thread_file(
+                text=text,
+                thread_id=thread_id,
+                user_id=user_id,
+            )
+
+        return TurnAttachmentContext(
+            rehydrate=_rehydrate,
+            clear_pending=_clear,
+            primed=primed,
+            names_thread_file=_names_thread_file,
+        )
 
     @traceable(name="intent_service.classify")
     async def classify(
@@ -591,8 +618,9 @@ class IntentService:
                     **self._attachment_context_patch(resolved_attachments),
                 },
             )
+            turn_attachments = await attachment_task
             if self._dialog_turn_store is not None:
-                payload = attachment_ids_payload(tuple(resolved_attachments)) if resolved_attachments else None
+                payload = self._user_turn_attachment_payload(resolved_attachments, turn_attachments)
                 await self._dialog_turn_store.append_turn(
                     thread_id=thread_id,
                     role="user",
@@ -600,7 +628,6 @@ class IntentService:
                     task_id=resolved_task_id,
                     payload=payload,
                 )
-            turn_attachments = await attachment_task
             untrusted_context = turn_attachments.fenced_text
         except BaseException:
             if not attachment_task.done():
@@ -802,8 +829,9 @@ class IntentService:
                     **self._attachment_context_patch(resolved_attachments),
                 },
             )
+            turn_attachments = await attachment_task
             if self._dialog_turn_store is not None:
-                payload = attachment_ids_payload(tuple(resolved_attachments)) if resolved_attachments else None
+                payload = self._user_turn_attachment_payload(resolved_attachments, turn_attachments)
                 await self._dialog_turn_store.append_turn(
                     thread_id=thread_id,
                     role="user",
@@ -811,7 +839,6 @@ class IntentService:
                     task_id=resolved_task_id,
                     payload=payload,
                 )
-            turn_attachments = await attachment_task
             untrusted = turn_attachments.fenced_text
         except BaseException:
             if not attachment_task.done():

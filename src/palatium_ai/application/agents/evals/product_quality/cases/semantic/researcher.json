@@ -81,6 +81,23 @@
       "input": { "user_text": "Is HTTP GET considered a safe method? Answer yes or no and name the method." },
       "expected": { "must_contain": ["yes", "GET"], "must_not_contain": ["POST is safe"] },
       "tags": ["researcher", "semantic"]
+    },
+    {
+      "id": "sem-researcher-11",
+      "agent": "researcher",
+      "scenario": "recommendations_not_verbatim_dump",
+      "input": {
+        "user_text": "Contract excerpt: \"Clause 7.3: The Supplier shall deliver within 45 calendar days. Clause 9.1: Penalty is 0.1% per day. Clause 12: Governing law is Germany.\" Give me recommendations on the risks."
+      },
+      "expected": {
+        "must_contain": ["45"],
+        "must_not_contain": [
+          "Clause 7.3: The Supplier shall deliver within 45 calendar days. Clause 9.1: Penalty is 0.1% per day. Clause 12: Governing law is Germany."
+        ]
+      },
+      "needs_judge": true,
+      "grader": "rule_then_judge",
+      "tags": ["researcher", "semantic", "synthesis", "no-dump"]
     }
   ]
 }

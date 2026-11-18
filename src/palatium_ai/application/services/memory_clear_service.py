@@ -41,7 +41,7 @@ async def _audit(event: str, *, conversation_id: str, metadata: dict[str, str]) 
             metadata=metadata,
         )
     except Exception as exc:  # noqa: BLE001  # audit is best-effort; clear must proceed (040)
-        logger.warning("memory_clear.audit_failed", event=event, error=str(exc))
+        logger.warning("memory_clear.audit_failed", audit_event=event, error=str(exc))
 
 
 class MemoryClearService:

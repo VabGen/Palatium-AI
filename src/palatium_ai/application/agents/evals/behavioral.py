@@ -88,6 +88,28 @@ def refresh_policy() -> dict[str, Any]:
     return policy
 
 
+def _integer(raw: dict[str, Any], key: str, *, fallback_key: str | None = None) -> int:
+    """Integer baseline field; a missing/non-integer value is a baseline bug, not a default."""
+    value = raw.get(key)
+    if value is None and fallback_key is not None:
+        value = raw.get(fallback_key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"behavioral.json {key} must be an integer, got {value!r}"
+        raise ValueError(msg)
+    return value
+
+
+def _number(raw: dict[str, Any], key: str, *, fallback_key: str | None = None) -> float:
+    """Numeric baseline field (int or float). ``None`` stays a caller-level decision."""
+    value = raw.get(key)
+    if value is None and fallback_key is not None:
+        value = raw.get(fallback_key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f"behavioral.json {key} must be numeric, got {value!r}"
+        raise ValueError(msg)
+    return float(value)
+
+
 def route_budget(route_id: str) -> RouteBudget:
     payload = load_behavioral_baseline()
     routes = payload["routes"]
@@ -95,8 +117,8 @@ def route_budget(route_id: str) -> RouteBudget:
     if not isinstance(raw, dict):
         msg = f"missing behavioral baseline route: {route_id}"
         raise KeyError(msg)
-    actual_steps = int(raw.get("actual_steps", raw["max_steps"]))
-    actual_handoffs = int(raw.get("actual_handoffs", raw["max_handoffs"]))
+    actual_steps = _integer(raw, "actual_steps", fallback_key="max_steps")
+    actual_handoffs = _integer(raw, "actual_handoffs", fallback_key="max_handoffs")
     channel = str(raw.get("cost_channel") or "cassette_unmeasured")
     raw_actual_cost = raw.get("actual_cost_usd", raw.get("max_cost_usd"))
     raw_max_cost = raw.get("max_cost_usd")
@@ -106,14 +128,14 @@ def route_budget(route_id: str) -> RouteBudget:
         max_cost: float | None = None
         channel = "cassette_unmeasured"
     else:
-        actual_cost = float(raw_actual_cost)
-        max_cost = float(raw_max_cost)
+        actual_cost = _number(raw, "actual_cost_usd", fallback_key="max_cost_usd")
+        max_cost = _number(raw, "max_cost_usd")
     return RouteBudget(
         actual_steps=actual_steps,
         actual_handoffs=actual_handoffs,
-        max_steps=int(raw["max_steps"]),
-        max_handoffs=int(raw["max_handoffs"]),
-        max_subagent_depth=int(raw["max_subagent_depth"]),
+        max_steps=_integer(raw, "max_steps"),
+        max_handoffs=_integer(raw, "max_handoffs"),
+        max_subagent_depth=_integer(raw, "max_subagent_depth"),
         actual_cost_usd=actual_cost,
         max_cost_usd=max_cost,
         cost_channel=channel,
@@ -131,8 +153,8 @@ def context_ratio_budgets() -> tuple[ContextRatioBudget, ...]:
         if not isinstance(raw, dict) or "->" not in key:
             continue
         parent, child = key.split("->", 1)
-        actual = float(raw.get("actual_context_ratio", raw["max_context_ratio"]))
-        ceiling = float(raw["max_context_ratio"])
+        actual = _number(raw, "actual_context_ratio", fallback_key="max_context_ratio")
+        ceiling = _number(raw, "max_context_ratio")
         rows.append(
             ContextRatioBudget(
                 parent_role=parent.strip(),

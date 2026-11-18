@@ -170,8 +170,12 @@ def test_invalid_closed_block_is_skipped_without_losing_the_rest() -> None:
     assert frames[0].index == 1
 
 
-def test_block_with_ragged_table_is_not_painted_as_a_typed_frame() -> None:
-    """Cross-field invariants are not JSON Schema; a broken block must not paint typed."""
+def test_ragged_table_row_is_padded_to_a_valid_frame() -> None:
+    """Cross-field invariants are not JSON Schema: a short row is padded, not invented.
+
+    ``["3"]`` under two columns becomes ``("3", "")`` so the painted frame and the
+    final document agree — an empty cell is a repair, not fabricated content.
+    """
     raw = json.dumps(
         {
             "blocks": [
@@ -185,9 +189,12 @@ def test_block_with_ragged_table_is_not_painted_as_a_typed_frame() -> None:
     )
     frames = PartialDocumentScanner().feed(raw)
 
-    # No prose and no typed block: painting it would promise a document that the
-    # final contract rejects.
-    assert frames == []
+    assert len(frames) == 1
+    block = frames[0].block
+    assert isinstance(block, TableBlock)
+    assert block.rows == (("1", "2"), ("3", ""))
+    # Invariant that makes painting safe: the same frame passes the document contract.
+    ContentDocument.model_validate({"locale": "en-US", "blocks": [block], "meta": {"confidence": 1}})
 
 
 def test_typed_frame_validation_matches_document_validation() -> None:

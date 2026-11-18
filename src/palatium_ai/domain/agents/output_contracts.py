@@ -40,7 +40,7 @@ ROLE_OUTPUT_TYPES: Final[dict[AgentRole, tuple[type[BaseModel], ...]]] = {
 
 def check_agent_output_schema(
     *,
-    role: str,
+    role: AgentRole,
     payload: BaseModel | None,
     status: str,
 ) -> SchemaMismatchReason | None:
@@ -53,7 +53,7 @@ def check_agent_output_schema(
         return None
     if payload is None:
         return "missing_output"
-    expected = ROLE_OUTPUT_TYPES.get(role)  # type: ignore[arg-type]
+    expected = ROLE_OUTPUT_TYPES.get(role)
     if expected is None:
         return "unregistered_role"
     if isinstance(payload, expected):

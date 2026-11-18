@@ -161,15 +161,17 @@ class MemoryPromotionService:
         return outcome
 
     async def _try_promote(self, candidate: PromotionCandidate) -> PromoteOutcome:
-        if not PromotionPolicy.should_promote(
+        reason = PromotionPolicy.block_reason(
             candidate,
             thresholds=self._thresholds,
             origin_ceiling=self._origin_ceiling,
-        ):
-            if self._origin_ceiling and not PromotionPolicy.origin_ceiling_allows(
-                candidate,
-                min_access_frequency=self._thresholds.min_access_frequency,
-            ):
+        )
+        if reason != "ok":
+            # A PII row under the origin ceiling is a standing human decision, not a
+            # normal wait: surface it as its own outcome so a batch can aggregate it (F3).
+            if reason == "pii_hold":
+                return "blocked_pii"
+            if self._origin_ceiling and reason == "quarantined":
                 agent_metrics.record_memory_origin_ceiling(action="promote_blocked")
             return "skipped"
         # Claim before the graph write: listing then writing is a read-then-write pair, and

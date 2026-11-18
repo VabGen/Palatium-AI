@@ -31,7 +31,6 @@ from palatium_ai.domain.policies.types import (
     CONTENT_GENERATION_CAPABILITY,
     DOCUMENT_GENERATION_CAPABILITY,
     SUBSTANTIVE_USER_PAYLOAD_CHARS,
-    VERBATIM_EXTRACTION_CAPABILITY,
 )
 from palatium_ai.domain.policies.untrusted_content import (
     budget_untrusted_text,
@@ -388,10 +387,16 @@ def _style_hint_from_capabilities_and_shape(
     source: str,
 ) -> FormatterStyleHint:
     """Capability tags and worker body shape — last resort after turn/transform axes."""
-    caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
+    from palatium_ai.domain.policies.file_reference import FileReferencePolicy
+
     # Extract / full-text asks: worker body is the deliverable — do not brand-restructure.
-    if VERBATIM_EXTRACTION_CAPABILITY in caps:
+    # Shared seal SoT (capability ∩ response_shape); analysis shapes never seal (055).
+    if FileReferencePolicy.seals_thread_file_body(
+        candidate_capabilities=task_input.context_packet.candidate_capabilities,
+        response_shape=task_input.context_packet.response_shape,
+    ):
         return "plain_text"
+    caps = {cap.strip().lower() for cap in task_input.context_packet.candidate_capabilities}
     if DOCUMENT_GENERATION_CAPABILITY in caps:
         return "document_generation"
     if CONTENT_GENERATION_CAPABILITY in caps:
